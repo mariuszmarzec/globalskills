@@ -357,6 +357,52 @@ Execute a test prompt.
 
 # DAILY STARTUP
 
+## Option A: Unified Script (Recommended)
+
+Create `~/.aicode/aicode`:
+
+```bash
+#!/bin/bash
+# aicode - Start AI dev environment and launch OpenCode
+
+# Ensure Ollama is running
+if ! pgrep -x "ollama" > /dev/null; then
+    nohup ollama serve > /tmp/ollama.log 2>&1 &
+    sleep 3
+fi
+
+# Ensure LiteLLM is running
+if ! pgrep -f "litellm" > /dev/null; then
+    nohup litellm --config ~/litellm/config.yaml --port 4000 > /tmp/litellm.log 2>&1 &
+    sleep 3
+fi
+
+# Launch OpenCode
+exec opencode "$@"
+```
+
+Make executable:
+
+```bash
+chmod +x ~/.aicode/aicode
+```
+
+Add alias to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+alias aicode='~/.aicode/aicode'
+```
+
+Usage:
+
+```bash
+aicode          # starts services (if needed) + launches opencode
+aicode .        # opens current directory
+aicode [args]   # passes args to opencode
+```
+
+## Option B: Manual Steps
+
 1. Start Ollama
 
 2. Start LiteLLM
