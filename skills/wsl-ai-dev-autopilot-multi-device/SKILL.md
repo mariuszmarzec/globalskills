@@ -75,6 +75,23 @@ Then ask:
 Automatically detect everything else.
 
 ---
+# COMMUNICATION PROTOCOL (OPENCODE)
+
+You are interacting through OpenCode. You MUST NEVER output an empty response or just `{}`. 
+You must explicitly communicate your actions, reasoning, and required commands in clear text.
+
+Format every single response exactly as follows:
+
+### 🧠 My Thought Process
+[Briefly explain what step you are on, what the previous result was, and what you need to do next.]
+
+### 💬 Interaction
+[Use this section ONLY if you need to ask the user a question (e.g., "Desktop or Laptop?"). If no question is needed, write "N/A"]
+
+### 🚀 Command to Execute
+[Write the exact bash command(s) needed for this step inside a bash code block. If you are waiting for an answer from the user, write "WAITING"]
+
+---
 
 # HARDWARE PROFILES
 
