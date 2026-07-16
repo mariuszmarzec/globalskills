@@ -2,15 +2,15 @@
 
 ```yaml
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop and adaptive Zen-to-Local fallback routing.
-version: 1.4.0
+description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing (zen-auto, zen, local-coder).
+version: 1.5.0
 platform: wsl2
-tags: [autopilot, ai, wsl, ollama, litellm, opencode, copilot]
+tags: [autopilot, ai, wsl, ollama, litellm, opencode, copilot, multi-model]
 ```
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing multiple models to the OpenCode TUI, allowing the user to select primary cloud (with fallback), strictly cloud, or strictly local models.
 
 ## Architecture
 
@@ -18,40 +18,43 @@ This skill guides an AI agent through the complete installation and validation o
 OpenCode Client
         │
         ▼
-LiteLLM (Router & Fallback Manager)
+LiteLLM (Router & Proxy - Port 4000)
         │
-        ├── OpenCode Zen (Primary - Big Pickle)
-        │
-        └── Ollama (Fallback - Qwen Local)
+        ├── Model: "zen-auto"   (Primary: OpenCode Zen -> Fallback: Local)
+        ├── Model: "zen"        (Strictly OpenCode Zen)
+        └── Model: "local-coder"(Strictly Local Ollama)
                     │
                     ▼
                Local Models
+
 ```
 
 # Execution Rules
 
-- Execute sequentially.
-- Never skip a step.
-- Never assume success.
-- Every step MUST finish with a successful healthcheck.
-- If a healthcheck fails:
-  - Enter Self-Healing mode.
-  - Retry up to three times.
-  - If still failing, stop and explain the root cause.
-- Never overwrite an existing working configuration without creating a backup.
+* Execute sequentially.
+* Never skip a step.
+* Never assume success.
+* Every step MUST finish with a successful healthcheck.
+* If a healthcheck fails:
+* Enter Self-Healing mode.
+* Retry up to three times.
+* If still failing, stop and explain the root cause.
+
+
+* Never overwrite an existing working configuration without creating a backup.
 
 # Success Criteria
 
-- WSL2 operational
-- Ubuntu packages installed
-- Node.js installed
-- Python installed
-- Ollama installed and responding
-- LiteLLM installed and responding
-- Local models installed
-- OpenCode configured
-- Test prompt succeeds
-- Fallback routing verified
+* WSL2 operational
+* Ubuntu packages installed
+* Node.js installed
+* Python installed
+* Ollama installed and responding
+* LiteLLM installed and responding with multiple models available
+* Local models installed
+* OpenCode configured to see all LiteLLM proxy models
+* Test prompt succeeds
+* Fallback routing verified
 
 # User Interaction Policy
 
@@ -74,27 +77,32 @@ Question for the user or N/A.
 
 COMMAND TO EXECUTE:
 Exact bash commands or WAITING.
+
 ```
 
 # Hardware Profiles
 
 ## Desktop
 
-- CPU: AMD Ryzen 9 5900X
-- RAM: 32 GB
-- GPU: RTX 3070 8 GB
-- Recommended:
-  - qwen3-coder:14b
-  - qwen3:14b
+* CPU: AMD Ryzen 9 5900X
+* RAM: 32 GB
+* GPU: RTX 3070 8 GB
+* Recommended local model:
+* `qwen3-coder:14b`
+* `qwen3:14b`
+
+
 
 ## Laptop
 
-- CPU: Intel i7-7700HQ
-- RAM: 16 GB
-- GPU: GTX 1050 Ti 4 GB
-- Recommended:
-  - qwen2.5-coder:7b
-  - qwen2.5:7b
+* CPU: Intel i7-7700HQ
+* RAM: 16 GB
+* GPU: GTX 1050 Ti 4 GB
+* Recommended local model:
+* `qwen2.5-coder:7b`
+* `qwen2.5:7b`
+
+
 
 > Never install 14B models on the laptop unless explicitly requested.
 
@@ -102,44 +110,22 @@ Exact bash commands or WAITING.
 
 ## Agent Decision Policy
 
-- Agent selects the best model.
-- LiteLLM handles routing, retries, fallbacks and OpenAI-compatible API abstraction.
-
-## Model Selection Policy
-
-1. OpenCode Zen
-2. Best local coding model
-
-Desktop fallback:
-- qwen3-coder:14b
-
-Laptop fallback:
-- qwen2.5-coder:7b
+* Agent selects the best local model based on the hardware profile.
+* Agent configures LiteLLM to expose 3 distinct choices: `zen-auto`, `zen`, and `local-coder`.
 
 ## Detection Policy
 
 Automatically detect:
 
-- CPU
-- RAM
-- GPU
-- Disk space
-- WSL version
-- Ubuntu version
-- Node
-- Python
-- Ollama
-- LiteLLM
+* CPU, RAM, GPU, Disk space
+* WSL version, Ubuntu version
+* Node, Python, Ollama, LiteLLM
 
 Ask the user only if automatic detection is impossible.
 
 ## Idempotency & Self-Healing
 
-- Safe to rerun.
-- Never reinstall healthy software.
-- Verify first.
-- Repair only if necessary.
-- Retry failed steps up to 3 times.
+* Safe to rerun. Verify first. Repair only if necessary. Retry failed steps up to 3 times.
 
 # Installation Steps
 
@@ -149,6 +135,7 @@ Ask the user only if automatic detection is impossible.
 
 ```bash
 sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip
+
 ```
 
 **Healthcheck**
@@ -157,125 +144,149 @@ sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip 
 curl --version
 git --version
 python3 --version
+
 ```
 
 ## Step 2 — Install Node.js
 
 ```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+curl -o- [https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh](https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh) | bash
 source ~/.bashrc
 nvm install --lts
 nvm use --lts
+
 ```
 
-Healthcheck:
+**Healthcheck:**
 
 ```bash
 node -v
 npm -v
+
 ```
 
 ## Step 3 — Install OpenCode
 
-Follow the current official installation instructions.
+Follow the current official installation instructions for OpenCode.
 
-Healthcheck:
+**Healthcheck:**
 
 ```bash
 opencode --help
+
 ```
 
 ## Step 4 — Install Ollama
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+curl -fsSL [https://ollama.com/install.sh](https://ollama.com/install.sh) | sh
+
 ```
 
-Healthcheck:
+**Healthcheck:**
 
 ```bash
 ollama --version
+
 ```
 
 ## Step 5 — Start Ollama
 
 ```bash
 ollama serve
+
 ```
 
-Healthcheck:
+**Healthcheck:**
 
 ```bash
 curl http://localhost:11434/api/tags
+
 ```
 
 ## Step 6 — Install Local Models
 
-Desktop
+Desktop:
 
 ```bash
 ollama pull qwen3-coder:14b
+
 ```
 
-Laptop
+Laptop:
 
 ```bash
 ollama pull qwen2.5-coder:7b
+
 ```
 
-Healthcheck
+**Healthcheck:**
 
 ```bash
 ollama list
+
 ```
 
 ## Step 7 — Install LiteLLM
 
 ```bash
 pip3 install litellm
+
 ```
 
-Healthcheck
+**Healthcheck:**
 
 ```bash
 litellm --help
+
 ```
 
 ## Step 8 — Configure LiteLLM
 
-Create:
+*Agent Note: Adjust the `local-coder` model name in the YAML below based on the downloaded model from Step 6 (`qwen3-coder:14b` vs `qwen2.5-coder:7b`).*
 
-```text
-~/litellm/config.yaml
-```
+Create file: `~/litellm/config.yaml`
 
 ```yaml
 model_list:
-  - model_name: default-model
+  # 1. Zen Auto (Cloud primary with local fallback)
+  - model_name: zen-auto
     litellm_params:
       model: opencode/big-pickle
-      api_base: https://api.opencode.com/v1
+      api_base: [https://api.opencode.com/v1](https://api.opencode.com/v1)
       api_key: os.environ/OPENCODE_API_KEY
 
-  - model_name: local-fallback
+  # 2. Zen Strict (Cloud only, no fallback)
+  - model_name: zen
+    litellm_params:
+      model: opencode/big-pickle
+      api_base: [https://api.opencode.com/v1](https://api.opencode.com/v1)
+      api_key: os.environ/OPENCODE_API_KEY
+
+  # 3. Local Coder (Ollama only, bypasses cloud completely)
+  - model_name: local-coder
     litellm_params:
       model: ollama/qwen2.5-coder:7b
       api_base: http://localhost:11434
 
 router_settings:
   fallbacks:
-    - {"default-model": ["local-fallback"]}
+    - {"zen-auto": ["local-coder"]}
   allowed_fails: 1
   context_window_fallbacks:
-    - {"default-model": ["local-fallback"]}
+    - {"zen-auto": ["local-coder"]}
+
 ```
 
-Healthcheck
+**Healthcheck:**
 
 ```bash
 litellm --config ~/litellm/config.yaml --port 4000 &
 curl http://localhost:4000/v1/models
+
 ```
+
+*Verify that `zen-auto`, `zen`, and `local-coder` are all returned in the JSON response.*
 
 ## Step 9 — Configure OpenCode
 
@@ -283,15 +294,22 @@ curl http://localhost:4000/v1/models
 
 ```json
 {
-  "model": "default-model",
   "api_base": "http://localhost:4000",
-  "api_key": "dummy-key"
+  "api_key": "dummy-key",
+  "model": "zen-auto",
+  "custom_models": [
+    "zen-auto",
+    "zen",
+    "local-coder"
+  ]
 }
+
 ```
 
-Healthcheck:
+*Note: This ensures the TUI will display all three models fetched from LiteLLM.*
 
-Execute a test prompt.
+**Healthcheck:**
+Execute a test prompt to verify connection.
 
 # Daily Startup Script
 
@@ -312,22 +330,26 @@ if ! pgrep -f "litellm" > /dev/null; then
 fi
 
 exec opencode "$@"
+
 ```
 
 ```bash
+mkdir -p ~/.aicode
 chmod +x ~/.aicode/aicode
-alias aicode='~/.aicode/aicode'
+echo "alias aicode='~/.aicode/aicode'" >> ~/.bashrc
+source ~/.bashrc
+
 ```
 
 # Final Validation
 
 Verify:
 
-- Ollama responds
-- LiteLLM responds
-- Primary routing works
-- Fallback routing works
+* Ollama responds.
+* LiteLLM responds and exposes all 3 models (`zen-auto`, `zen`, `local-coder`).
+* Primary routing works.
+* Fallback routing works on `zen-auto`.
 
 Only then report:
 
-> Installation completed successfully.
+> Installation completed successfully. You can now choose between `zen-auto`, `zen`, or `local-coder` directly in the OpenCode UI.
