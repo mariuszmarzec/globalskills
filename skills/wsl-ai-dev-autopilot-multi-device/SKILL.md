@@ -1,12 +1,9 @@
-# WSL AI Dev Autopilot Skill
-
-```yaml
+---
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing (zen-auto, zen, local-coder).
-version: 1.5.0
-platform: wsl2
-tags: [autopilot, ai, wsl, ollama, litellm, opencode, copilot, multi-model]
-```
+description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing (zen-auto, zen, local-coder). Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, and OpenCode.
+---
+
+# WSL AI Dev Autopilot Skill
 
 # Purpose
 
@@ -39,6 +36,8 @@ LiteLLM (Router & Proxy - Port 4000)
 * Enter Self-Healing mode.
 * Retry up to three times.
 * If still failing, stop and explain the root cause.
+* This skill is only active when explicitly invoked for environment setup, installation, or repair.
+* Do not apply these rules to normal coding conversations.
 
 
 * Never overwrite an existing working configuration without creating a backup.
@@ -66,10 +65,10 @@ Do not continue until answered. Detect everything else automatically.
 
 # Communication Protocol for OpenCode
 
-Every response must follow:
+During installation steps, prefer:
 
 ```text
-MY THOUGHT PROCESS:
+STATUS:
 Explain current step, previous result and next action.
 
 INTERACTION:

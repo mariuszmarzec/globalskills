@@ -1,3 +1,8 @@
+---
+name: globalskills-repository
+description: Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository.
+---
+
 # Global Skills Repository
 
 ## Purpose
