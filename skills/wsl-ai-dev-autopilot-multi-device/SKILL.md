@@ -1,13 +1,13 @@
 ---
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing (zen-auto, zen, local-coder). Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, and OpenCode.
+description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing (big-pickle, zen models, local-coder). Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, and OpenCode.
 ---
 
 # WSL AI Dev Autopilot Skill
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing multiple models to the OpenCode TUI, allowing the user to select primary cloud (with fallback), strictly cloud, or strictly local models.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing multiple models to the OpenCode TUI, allowing the user to select cloud models (with fallback), strictly cloud, or strictly local models.
 
 ## Architecture
 
@@ -17,12 +17,17 @@ OpenCode Client
         ▼
 LiteLLM (Router & Proxy - Port 4000)
         │
-        ├── Model: "zen-auto"   (Primary: OpenCode Zen -> Fallback: Local)
-        ├── Model: "zen"        (Strictly OpenCode Zen)
-        └── Model: "local-coder"(Strictly Local Ollama)
-                    │
-                    ▼
-               Local Models
+        ├── OpenCode Zen Models (Cloud)
+        │   ├── big-pickle (Free)
+        │   ├── claude-sonnet-4-5
+        │   ├── claude-haiku-4-5
+        │   ├── gpt-5.2
+        │   ├── gpt-5.1-codex
+        │   └── deepseek-v4-flash-free (Free)
+        │
+        └── Local Ollama Models
+            ├── gemma4 (gemma4:12b)
+            └── local-coder (Fallback)
 
 ```
 
@@ -110,7 +115,7 @@ Exact bash commands or WAITING.
 ## Agent Decision Policy
 
 * Agent selects the best local model based on the hardware profile.
-* Agent configures LiteLLM to expose 3 distinct choices: `zen-auto`, `zen`, and `local-coder`.
+* Agent configures LiteLLM to expose multiple models: OpenCode Zen cloud models + local Ollama models.
 
 ## Detection Policy
 
@@ -242,50 +247,92 @@ litellm --help
 
 ## Step 8 — Configure LiteLLM
 
-*Agent Note: Adjust the `local-coder` model name in the YAML below based on the downloaded model from Step 6 (`qwen3-coder:14b` vs `qwen2.5-coder:7b`).*
+*Agent Note: Adjust the `local-coder` and `gemma4` model names in the YAML below based on the downloaded model from Step 6.*
 
 Create file: `~/litellm/config.yaml`
 
 ```yaml
 model_list:
-  # 1. Zen Auto (Cloud primary with local fallback)
-  - model_name: zen-auto
+  # === OpenCode Zen Models ===
+  - model_name: big-pickle
     litellm_params:
-      model: opencode/big-pickle
-      api_base: [https://api.opencode.com/v1](https://api.opencode.com/v1)
+      model: openai/big-pickle
+      api_base: https://opencode.ai/zen/v1/chat/completions
       api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
 
-  # 2. Zen Strict (Cloud only, no fallback)
-  - model_name: zen
+  - model_name: claude-sonnet-4-5
     litellm_params:
-      model: opencode/big-pickle
-      api_base: [https://api.opencode.com/v1](https://api.opencode.com/v1)
+      model: openai/claude-sonnet-4-5
+      api_base: https://opencode.ai/zen/v1/messages
       api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
 
-  # 3. Local Coder (Ollama only, bypasses cloud completely)
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: openai/claude-haiku-4-5
+      api_base: https://opencode.ai/zen/v1/messages
+      api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
+
+  - model_name: gpt-5.2
+    litellm_params:
+      model: openai/gpt-5.2
+      api_base: https://opencode.ai/zen/v1/responses
+      api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
+
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: openai/gpt-5.1-codex
+      api_base: https://opencode.ai/zen/v1/responses
+      api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
+
+  - model_name: deepseek-v4-flash-free
+    litellm_params:
+      model: openai/deepseek-v4-flash-free
+      api_base: https://opencode.ai/zen/v1/chat/completions
+      api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 16384
+
+  # === Local Ollama Models ===
+  - model_name: gemma4
+    litellm_params:
+      model: ollama/gemma4:12b
+      api_base: http://localhost:11434
+      api_key: "ollama-local"
+      max_tokens: 4096
+      extra_body:
+        num_ctx: 8192
+
   - model_name: local-coder
     litellm_params:
-      model: ollama/qwen2.5-coder:7b
+      model: ollama/gemma4:12b
       api_base: http://localhost:11434
+      api_key: "ollama-local"
+      max_tokens: 4096
+      extra_body:
+        num_ctx: 8192
 
 router_settings:
   fallbacks:
-    - {"zen-auto": ["local-coder"]}
+    - {"big-pickle": ["local-coder"]}
   allowed_fails: 1
-  context_window_fallbacks:
-    - {"zen-auto": ["local-coder"]}
 
+general_settings:
+  master_key: "sk-12345678"
+  completion_model: big-pickle
 ```
 
 **Healthcheck:**
 
 ```bash
 litellm --config ~/litellm/config.yaml --port 4000 &
-curl http://localhost:4000/v1/models
-
+curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678"
 ```
 
-*Verify that `zen-auto`, `zen`, and `local-coder` are all returned in the JSON response.*
+*Verify that all models are returned: big-pickle, claude-sonnet-4-5, claude-haiku-4-5, gpt-5.2, gpt-5.1-codex, deepseek-v4-flash-free, gemma4, local-coder.*
 
 ## Step 9 — Configure OpenCode
 
@@ -293,19 +340,133 @@ curl http://localhost:4000/v1/models
 
 ```json
 {
-  "api_base": "http://localhost:4000",
-  "api_key": "dummy-key",
-  "model": "zen-auto",
-  "custom_models": [
-    "zen-auto",
-    "zen",
-    "local-coder"
-  ]
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/big-pickle",
+  "small_model": "opencode/claude-haiku-4-5",
+  "skills": { 
+    "paths": ["~/.globalskills/skills"] 
+  },
+  "agent": {
+    "chat": {
+      "description": "Standard conversational chat without tools",
+      "mode": "primary",
+      "tools": {
+        "*": false
+      },
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "You are a helpful AI coding assistant. Respond directly in natural language and standard Markdown. Do not attempt to use any tools, and do NOT format your responses as JSON."
+    }
+  },
+  "provider": {
+    "opencode": {
+      "options": {
+        "apiKey": "{env:OPENCODE_API_KEY}"
+      }
+    },
+    "ollama": {
+      "id": "ollama",
+      "api": "openai",
+      "name": "Ollama Local",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "gemma4:12b": {
+          "id": "gemma4:12b",
+          "name": "Gemma 4 12B (Ollama)",
+          "family": "gemma",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 32768, "output": 32768 }
+        }
+      }
+    },
+    "litellm": {
+      "id": "litellm",
+      "api": "openai",
+      "name": "LiteLLM Proxy",
+      "options": {
+        "baseURL": "http://localhost:4000/v1",
+        "apiKey": "sk-12345678"
+      },
+      "models": {
+        "big-pickle": {
+          "id": "big-pickle",
+          "name": "Big Pickle (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "claude-sonnet-4-5": {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5 (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 3, "output": 15 },
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "claude-haiku-4-5": {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5 (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 1, "output": 5 },
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "gpt-5.2": {
+          "id": "gpt-5.2",
+          "name": "GPT 5.2 (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 1.75, "output": 14 },
+          "limit": { "context": 272000, "output": 16384 }
+        },
+        "gpt-5.1-codex": {
+          "id": "gpt-5.1-codex",
+          "name": "GPT 5.1 Codex (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 1.07, "output": 8.5 },
+          "limit": { "context": 272000, "output": 16384 }
+        },
+        "deepseek-v4-flash-free": {
+          "id": "deepseek-v4-flash-free",
+          "name": "DeepSeek V4 Flash Free (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gemma4": {
+          "id": "gemma4",
+          "name": "Gemma 4 12B Local (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 8192, "output": 4096 }
+        },
+        "local-coder": {
+          "id": "local-coder",
+          "name": "Local Coder (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 8192, "output": 4096 }
+        }
+      }
+    }
+  }
 }
-
 ```
 
-*Note: This ensures the TUI will display all three models fetched from LiteLLM.*
+*Note: This configuration provides three providers:*
+- *`opencode/` - Direct access to OpenCode Zen cloud models*
+- *`litellm/` - All models via LiteLLM proxy (cloud + local)*
+- *`ollama/` - Direct access to local Ollama models*
 
 **Healthcheck:**
 Execute a test prompt to verify connection.
@@ -345,10 +506,11 @@ source ~/.bashrc
 Verify:
 
 * Ollama responds.
-* LiteLLM responds and exposes all 3 models (`zen-auto`, `zen`, `local-coder`).
+* LiteLLM responds and exposes all models (big-pickle, claude-sonnet-4-5, claude-haiku-4-5, gpt-5.2, gpt-5.1-codex, deepseek-v4-flash-free, gemma4, local-coder).
+* OpenCode shows all three providers (opencode, litellm, ollama).
 * Primary routing works.
-* Fallback routing works on `zen-auto`.
+* Fallback routing works on big-pickle -> local-coder.
 
 Only then report:
 
-> Installation completed successfully. You can now choose between `zen-auto`, `zen`, or `local-coder` directly in the OpenCode UI.
+> Installation completed successfully. You can now choose between OpenCode Zen models (big-pickle, claude-sonnet-4-5, etc.), LiteLLM proxy models, or local Ollama models directly in the OpenCode UI.
