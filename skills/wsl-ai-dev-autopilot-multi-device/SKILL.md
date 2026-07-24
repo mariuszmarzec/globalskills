@@ -346,6 +346,13 @@ curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678"
   "skills": { 
     "paths": ["~/.globalskills/skills"] 
   },
+  "permission": {
+    "external_directory": {
+      "~/litellm/**": "allow",
+      "~/.config/opencode/**": "allow",
+      "~/.globalskills/**": "allow"
+    }
+  },
   "agent": {
     "chat": {
       "description": "Standard conversational chat without tools",
