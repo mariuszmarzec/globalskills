@@ -117,6 +117,21 @@ Exact bash commands or WAITING.
 * Agent selects the best local model based on the hardware profile.
 * Agent configures LiteLLM to expose multiple models: OpenCode Zen cloud models + local Ollama models.
 
+## Multi-Device Sync Policy (Desktop Push to Remote)
+
+When configuring the **Desktop**, the agent MUST push the working LiteLLM configuration to the Laptop (remote):
+
+```bash
+# Push config from Desktop to Laptop
+scp ~/litellm/config.yaml <laptop-user>@<laptop-ip>:~/litellm/config.yaml
+scp ~/litellm/.env <laptop-user>@<laptop-ip>:~/litellm/.env
+```
+
+* Desktop is the **source of truth** for LiteLLM config.
+* Laptop receives the config but adjusts local model names to match its hardware profile (7B instead of 14B).
+* After pushing, always verify the remote LiteLLM instance restarts and healthcheck passes.
+* Never push 14B model references to laptop — agent must substitute with 7B equivalents before push.
+
 ## Detection Policy
 
 Automatically detect:
@@ -249,59 +264,74 @@ litellm --help
 
 *Agent Note: Adjust the `local-coder` and `gemma4` model names in the YAML below based on the downloaded model from Step 6.*
 
+Create file: `~/litellm/.env`
+
+```bash
+LITELLM_MASTER_KEY=sk-12345678
+OPENCODE_API_KEY=<YOUR_ZEN_KEY>
+```
+
 Create file: `~/litellm/config.yaml`
 
 ```yaml
 model_list:
-  # === OpenCode Zen Models ===
+
+  # ============================================================
+  # OpenCode Zen Models
+  # ============================================================
+
   - model_name: big-pickle
     litellm_params:
       model: openai/big-pickle
-      api_base: https://opencode.ai/zen/v1/chat/completions
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
+      reasoning_effort: none
 
   - model_name: claude-sonnet-4-5
     litellm_params:
-      model: openai/claude-sonnet-4-5
-      api_base: https://opencode.ai/zen/v1/messages
+      model: anthropic/claude-sonnet-4-5
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
 
   - model_name: claude-haiku-4-5
     litellm_params:
-      model: openai/claude-haiku-4-5
-      api_base: https://opencode.ai/zen/v1/messages
+      model: anthropic/claude-haiku-4-5
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
 
   - model_name: gpt-5.2
     litellm_params:
       model: openai/gpt-5.2
-      api_base: https://opencode.ai/zen/v1/responses
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
 
   - model_name: gpt-5.1-codex
     litellm_params:
       model: openai/gpt-5.1-codex
-      api_base: https://opencode.ai/zen/v1/responses
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
 
   - model_name: deepseek-v4-flash-free
     litellm_params:
       model: openai/deepseek-v4-flash-free
-      api_base: https://opencode.ai/zen/v1/chat/completions
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
       max_tokens: 16384
 
-  # === Local Ollama Models ===
+  # ============================================================
+  # Local Ollama Models
+  # ============================================================
+
   - model_name: gemma4
     litellm_params:
       model: ollama/gemma4:12b
       api_base: http://localhost:11434
-      api_key: "ollama-local"
+      api_key: ollama-local
       max_tokens: 4096
       extra_body:
         num_ctx: 8192
@@ -310,18 +340,37 @@ model_list:
     litellm_params:
       model: ollama/gemma4:12b
       api_base: http://localhost:11434
-      api_key: "ollama-local"
+      api_key: ollama-local
       max_tokens: 4096
       extra_body:
         num_ctx: 8192
 
+# ============================================================
+# Router / Fallback
+# ============================================================
+
 router_settings:
   fallbacks:
-    - {"big-pickle": ["local-coder"]}
-  allowed_fails: 1
+    - big-pickle:
+        - local-coder
+  allowed_fails: 3
+
+# ============================================================
+# LiteLLM Server
+# ============================================================
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 2
+  set_verbose: true
+
+# ============================================================
+# Proxy
+# ============================================================
 
 general_settings:
-  master_key: "sk-12345678"
+  master_key: sk-12345678
   completion_model: big-pickle
 ```
 
@@ -333,6 +382,31 @@ curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678"
 ```
 
 *Verify that all models are returned: big-pickle, claude-sonnet-4-5, claude-haiku-4-5, gpt-5.2, gpt-5.1-codex, deepseek-v4-flash-free, gemma4, local-coder.*
+
+### Step 8b — Desktop: Push Config to Remote (Laptop)
+
+**IMPORTANT: Desktop is the source of truth.** When configuring the Desktop, push the LiteLLM config to the Laptop before proceeding:
+
+```bash
+# Ensure laptop ~/litellm directory exists
+ssh <laptop-user>@<laptop-ip> "mkdir -p ~/litellm"
+
+# Push config and env
+scp ~/litellm/config.yaml <laptop-user>@<laptop-ip>:~/litellm/config.yaml
+scp ~/litellm/.env <laptop-user>@<laptop-ip>:~/litellm/.env
+
+# IMPORTANT: Before pushing, substitute 14B model refs with 7B for laptop
+# The agent MUST edit the remote config to use qwen2.5-coder:7b instead of qwen3-coder:14b
+ssh <laptop-user>@<laptop-ip> "sed -i 's/qwen3-coder:14b/qwen2.5-coder:7b/g; s/qwen3:14b/qwen2.5:7b/g' ~/litellm/config.yaml"
+
+# Restart LiteLLM on laptop
+ssh <laptop-user>@<laptop-ip> "pkill -f litellm; nohup litellm --config ~/litellm/config.yaml --port 4000 >/tmp/litellm.log 2>&1 &"
+
+# Verify remote healthcheck
+ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Authorization: Bearer sk-12345678'"
+```
+
+*Skip this step when configuring the Laptop directly.*
 
 ## Step 9 — Configure OpenCode
 
