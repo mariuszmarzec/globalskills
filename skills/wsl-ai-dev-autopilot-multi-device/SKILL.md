@@ -364,6 +364,11 @@ litellm_settings:
   request_timeout: 600
   num_retries: 2
   set_verbose: true
+  cache: true
+  cache_params:
+    type: disk
+    disk_cache_dir: /tmp/litellm-cache
+    ttl: 3600
 
 # ============================================================
 # Proxy
