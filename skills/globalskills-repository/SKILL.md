@@ -19,6 +19,6 @@ Always create new skills in the global skills repository at ~/.globalskills/skil
 - Use the shared repository as the canonical home for reusable skills.
 
 ## README Maintenance
-- After creating, removing, or significantly updating a skill, update `README.md` in the repository root (`~/.globalskills/skills/README.md`).
+- After creating, removing, or significantly updating a skill, update `README.md` in the repository root (`~/.globalskills/README.md`).
 - The README must list every skill with a one-line description matching the skill's `description` field in its frontmatter.
 - Keep the table in sync with the actual skill folders.
