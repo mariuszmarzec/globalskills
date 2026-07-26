@@ -2,6 +2,20 @@
 
 Shared skills for OpenCode AI agents. Each skill lives in its own folder with a `SKILL.md` definition file.
 
+## Quick Install
+
+```bash
+wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszmarzec/globalskills/master/install.sh && bash /tmp/install-globalskills.sh
+```
+
+This clones the repo to `~/.globalskills` and symlinks `~/.agents/skills -> ~/.globalskills/skills`.
+
+## Updating
+
+```bash
+git -C ~/.globalskills pull
+```
+
 ## Skills
 
 | Skill | Description |
@@ -12,4 +26,4 @@ Shared skills for OpenCode AI agents. Each skill lives in its own folder with a 
 
 ## Usage
 
-OpenCode automatically loads skills from `~/.globalskills/skills/`. Skills are matched by name and invoked when a task matches their description.
+OpenCode automatically loads skills from `~/.agents/skills/` (symlinked to `~/.globalskills/skills/`). Skills are matched by name and invoked when a task matches their description.
