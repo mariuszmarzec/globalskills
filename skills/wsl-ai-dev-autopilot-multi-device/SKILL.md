@@ -135,7 +135,7 @@ Exact bash commands or WAITING.
 
 * Agent selects the best local model based on the hardware profile.
 * Agent configures LiteLLM to expose multiple models: free cloud models (Groq, Cerebras, Gemini, Mistral, OpenRouter) + OpenCode Zen cloud models + local Ollama models.
-* Default model is `litellm/groq-llama-70b` (free, fast, 70B). Small model is `litellm/groq-llama-8b`.
+* Default model is `litellm/big-pickle` (OpenCode Zen, paid). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-flash → local-coder.
 
 ## Multi-Device Sync Policy (Desktop Push to Remote)
 
@@ -511,7 +511,7 @@ litellm_settings:
 
 general_settings:
   master_key: sk-12345678
-  completion_model: groq-llama-70b
+  completion_model: big-pickle
 ```
 
 **Healthcheck:**
@@ -560,7 +560,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "litellm/groq-llama-70b",
+  "model": "litellm/big-pickle",
   "small_model": "litellm/groq-llama-8b",
   "skills": { 
     "paths": ["~/.globalskills/skills"] 
@@ -773,7 +773,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
 - *`opencode/` - Direct access to OpenCode Zen cloud models*
 - *`litellm/` - All models via LiteLLM proxy (20+ free cloud models + local)*
 - *`ollama/` - Direct access to local Ollama models*
-- *Default model: `litellm/groq-llama-70b` (free, fast 70B). Small model: `litellm/groq-llama-8b`.*
+- *Default model: `litellm/big-pickle` (OpenCode Zen, paid). Fallback: groq-llama-70b → cerebras → gemini → local-coder.*
 
 **Healthcheck:**
 Execute a test prompt to verify connection.
@@ -861,10 +861,10 @@ Verify:
 * Ollama responds.
 * LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-flash, gemini-flash-lite, gemini-3.5-flash, mistral-large, mistral-codestral, or-nemotron-120b, or-gpt-oss-20b, or-gemma-31b, gemma4, local-coder).
 * OpenCode shows all three providers (opencode, litellm, ollama).
-* Primary routing works (groq-llama-70b via LiteLLM).
+* Primary routing works (big-pickle via LiteLLM).
 * Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-flash → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
 
 Only then report:
 
-> Installation completed successfully. You have 20+ free models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. Default model is `litellm/groq-llama-70b` (free, fast). Switch models anytime in the OpenCode UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. Default model is `litellm/big-pickle` (paid). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI.
