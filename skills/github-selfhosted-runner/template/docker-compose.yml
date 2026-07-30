@@ -1,0 +1,13 @@
+services:
+  github-runner:
+    build: .
+    container_name: github-runner
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/<owner>/<repo>
+      RUNNER_TOKEN: <paste-token-here>
+    volumes:
+      - runner-cache:/home/runner/.gradle
+
+volumes:
+  runner-cache:
