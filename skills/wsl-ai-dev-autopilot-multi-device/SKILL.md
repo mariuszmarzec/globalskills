@@ -26,17 +26,18 @@ LiteLLM (Router & Proxy - Port 4000)
         │   │   ├── cerebras-gpt-oss-120b
         │   │   ├── cerebras-gemma-31b (Gemma 4 31B)
         │   │   └── cerebras-glm-4.7 (GLM 4.7)
-        │   ├── Google Gemini (1M context)
-        │   │   ├── gemini-flash (2.0 Flash)
-        │   │   ├── gemini-flash-lite (2.0 Flash Lite)
-        │   │   └── gemini-3.5-flash (3.5 Flash)
+        │   ├── Google Gemini (free tier)
+        │   │   ├── gemini-3.6-flash (3.6 Flash, 20 RPD)
+        │   │   ├── gemini-3.5-flash (3.5 Flash, 20 RPD)
+        │   │   ├── gemini-3.5-flash-lite (500 RPD)
+        │   │   ├── gemini-3.1-flash-lite (500 RPD)
+        │   │   ├── gemma-4-31b (Gemma 4 31B, 14.4K RPD)
+        │   │   └── gemma-4-26b (Gemma 4 26B, 14.4K RPD)
         │   ├── Mistral (1B tokens/month)
         │   │   ├── mistral-large (Mistral Large)
         │   │   └── mistral-codestral (Codestral, code-specialized)
-        │   ├── OpenRouter (22+ free :free models)
-        │   │   ├── or-nemotron-120b (Nemotron 3 Super 120B)
-        │   │   ├── or-gpt-oss-20b (GPT-OSS 20B)
-        │   │   └── or-gemma-31b (Gemma 4 31B)
+        │   ├── OpenRouter (Free Models Router)
+        │   │   └── or-free (auto-routes to live :free models)
         │   └── OpenCode Zen (Cloud)
         │       ├── big-pickle (Free)
         │       ├── deepseek-v4-flash-free (Free)
@@ -135,7 +136,7 @@ Exact bash commands or WAITING.
 
 * Agent selects the best local model based on the hardware profile.
 * Agent configures LiteLLM to expose multiple models: free cloud models (Groq, Cerebras, Gemini, Mistral, OpenRouter) + OpenCode Zen cloud models + local Ollama models.
-* Default model is `litellm/big-pickle` (OpenCode Zen, paid). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-flash → mistral-large → or-nemotron-120b → local-coder.
+* Default model is `litellm/big-pickle` (OpenCode Zen, paid). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 
 ## Multi-Device Sync Policy (Desktop Push to Remote)
 
@@ -299,6 +300,8 @@ OPENROUTER_API_KEY=<YOUR_OPENROUTER_KEY>
 
 *Free API keys (no credit card): Groq (console.groq.com), Cerebras (cloud.cerebras.ai), Gemini (aistudio.google.com), Mistral (console.mistral.ai), OpenRouter (openrouter.ai)*
 
+> **Privacy note:** Gemini free tier may use your prompts for training — fine for public/research work, wrong for anything with client or personal data. Groq and Cerebras do not train on your data, so route sensitive work there or to local Ollama models.
+
 Create file: `~/litellm/config.yaml`
 
 ```yaml
@@ -396,24 +399,44 @@ model_list:
       max_tokens: 8192
 
   # ============================================================
-  # Google Gemini (1M context on Flash)
+  # Google Gemini (free tier, per-project limits)
+  #   Flash: 5 RPM / 20 RPD | Flash Lite: 15 RPM / 500 RPD
+  #   Gemma 4: 30 RPM / 14.4K RPD
   # ============================================================
 
-  - model_name: gemini-flash
+  - model_name: gemini-3.6-flash
     litellm_params:
-      model: gemini/gemini-2.0-flash
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemini-flash-lite
-    litellm_params:
-      model: gemini/gemini-2.0-flash-lite
+      model: gemini/gemini-3.6-flash
       api_key: os.environ/GEMINI_API_KEY
       max_tokens: 8192
 
   - model_name: gemini-3.5-flash
     litellm_params:
       model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
+
+  - model_name: gemini-3.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
+
+  - model_name: gemini-3.1-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
+
+  - model_name: gemma-4-31b
+    litellm_params:
+      model: gemini/gemma-4-31b-it
+      api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
+
+  - model_name: gemma-4-26b
+    litellm_params:
+      model: gemini/gemma-4-26b-a4b-it
       api_key: os.environ/GEMINI_API_KEY
       max_tokens: 8192
 
@@ -434,26 +457,13 @@ model_list:
       max_tokens: 8192
 
   # ============================================================
-  # OpenRouter (22+ free :free models)
+  # OpenRouter (Free Models Router - auto-picks live :free models)
   # ============================================================
 
-  - model_name: or-nemotron-120b
+  - model_name: or-free
     litellm_params:
-      model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
+      model: openrouter/openrouter/free
       api_key: os.environ/OPENROUTER_API_KEY
-      max_tokens: 8192
-
-  - model_name: or-gpt-oss-20b
-    litellm_params:
-      model: openrouter/openai/gpt-oss-20b:free
-      api_key: os.environ/OPENROUTER_API_KEY
-      max_tokens: 8192
-
-  - model_name: or-gemma-31b
-    litellm_params:
-      model: openrouter/google/gemma-4-31b-it:free
-      api_key: os.environ/OPENROUTER_API_KEY
-      max_tokens: 8192
 
   # ============================================================
   # Local Ollama Models
@@ -466,7 +476,7 @@ model_list:
       api_key: ollama-local
       max_tokens: 4096
       extra_body:
-        num_ctx: 8192
+        num_ctx: 131072
 
   - model_name: local-coder
     litellm_params:
@@ -475,7 +485,7 @@ model_list:
       api_key: ollama-local
       max_tokens: 4096
       extra_body:
-        num_ctx: 8192
+        num_ctx: 131072
 
 # ============================================================
 # Router / Fallback
@@ -486,9 +496,9 @@ router_settings:
     - big-pickle:
         - groq-llama-70b
         - cerebras-gpt-oss-120b
-        - gemini-flash
+        - gemini-3.5-flash-lite
         - mistral-large
-        - or-nemotron-120b
+        - or-free
         - local-coder
   allowed_fails: 3
 
@@ -528,7 +538,7 @@ sleep 5
 curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
 ```
 
-*Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-flash, gemini-flash-lite, gemini-3.5-flash, mistral-large, mistral-codestral, or-nemotron-120b, or-gpt-oss-20b, or-gemma-31b, gemma4, local-coder.*
+*Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder.*
 
 ### Step 8b — Desktop: Push Config to Remote (Laptop)
 
@@ -685,17 +695,9 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "cost": { "input": 0, "output": 0 },
           "limit": { "context": 8192, "output": 8192 }
         },
-        "gemini-flash": {
-          "id": "gemini-flash",
-          "name": "Gemini 2.0 Flash (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 1048576, "output": 8192 }
-        },
-        "gemini-flash-lite": {
-          "id": "gemini-flash-lite",
-          "name": "Gemini 2.0 Flash Lite (Google, free)",
+        "gemini-3.6-flash": {
+          "id": "gemini-3.6-flash",
+          "name": "Gemini 3.6 Flash (Google, free)",
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
@@ -708,6 +710,38 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
           "limit": { "context": 1048576, "output": 8192 }
+        },
+        "gemini-3.5-flash-lite": {
+          "id": "gemini-3.5-flash-lite",
+          "name": "Gemini 3.5 Flash Lite (Google, free)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1048576, "output": 8192 }
+        },
+        "gemini-3.1-flash-lite": {
+          "id": "gemini-3.1-flash-lite",
+          "name": "Gemini 3.1 Flash Lite (Google, free)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 1048576, "output": 8192 }
+        },
+        "gemma-4-31b": {
+          "id": "gemma-4-31b",
+          "name": "Gemma 4 31B (Google, free)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 131072, "output": 8192 }
+        },
+        "gemma-4-26b": {
+          "id": "gemma-4-26b",
+          "name": "Gemma 4 26B (Google, free)",
+          "tool_call": true,
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 131072, "output": 8192 }
         },
         "mistral-large": {
           "id": "mistral-large",
@@ -725,29 +759,13 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "cost": { "input": 0, "output": 0 },
           "limit": { "context": 256000, "output": 8192 }
         },
-        "or-nemotron-120b": {
-          "id": "or-nemotron-120b",
-          "name": "Nemotron 3 Super 120B (OpenRouter, free)",
+        "or-free": {
+          "id": "or-free",
+          "name": "Free Models Router (OpenRouter, free)",
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
-        },
-        "or-gpt-oss-20b": {
-          "id": "or-gpt-oss-20b",
-          "name": "GPT-OSS 20B (OpenRouter, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
-        },
-        "or-gemma-31b": {
-          "id": "or-gemma-31b",
-          "name": "Gemma 4 31B (OpenRouter, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
+          "limit": { "context": 200000, "output": 65536 }
         },
         "gemma4": {
           "id": "gemma4",
@@ -755,7 +773,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 8192, "output": 4096 }
+          "limit": { "context": 131072, "output": 4096 }
         },
         "local-coder": {
           "id": "local-coder",
@@ -763,7 +781,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 8192, "output": 4096 }
+          "limit": { "context": 131072, "output": 4096 }
         }
       }
     }
@@ -861,10 +879,10 @@ source ~/.bashrc
 Verify:
 
 * Ollama responds.
-* LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-flash, gemini-flash-lite, gemini-3.5-flash, mistral-large, mistral-codestral, or-nemotron-120b, or-gpt-oss-20b, or-gemma-31b, gemma4, local-coder).
+* LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder).
 * OpenCode shows all three providers (opencode, litellm, ollama).
 * Primary routing works (big-pickle via LiteLLM).
-* Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-flash → mistral-large → or-nemotron-120b → local-coder.
+* Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
 
 Only then report:
