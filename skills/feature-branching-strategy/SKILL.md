@@ -71,8 +71,24 @@ bugfix/fix-ci-build
 
 4. If a feature branch for the work already exists, reuse it instead of creating a new one.
 
+## Creating a pull request
+
+Once the branch is pushed, open a PR with the GitHub CLI (`gh`):
+
+```bash
+gh pr create --base <default-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION> \
+  --title "<short, descriptive title>" --body "<meaningful description>"
+```
+
+- Always use the `gh` CLI to create pull requests.
+- The PR title and description must be a **meaningful but short** summary of the changes:
+  - Title: concise, imperative or descriptive, e.g. `Add mock mode to vitalia.py`.
+  - Body: a brief summary of what changed and why, plus verification steps if useful (e.g. test results). No walls of text.
+- Link the issue in the body when one exists: `Closes #<ISSUE_NUMBER>`.
+
 ## Never
 
 - Never push directly to the default branch (except in `~/.globalskills`).
 - Never push changes made without a branch.
 - Never create branches with ambiguous names like `feature` or `fix`.
+- Never create a PR without a meaningful short description of the changes.
