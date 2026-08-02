@@ -15,6 +15,11 @@ Every change pushed by an AI agent must live on a dedicated branch, never on the
 - Never commit or push from the default branch.
 - This requirement applies to all repositories **except** `~/.globalskills`, where direct pushes to `master` are allowed.
 
+## The `~/.globalskills` repository
+
+- In `~/.globalskills`, changes are committed and pushed directly to `master` by default — no branch is created unless the user **explicitly asks** for a new branch.
+- Do not assume branching is wanted for globalskills changes; only create a branch there when the user prompt explicitly requests it.
+
 ## Base branch
 
 - If the user prompt does not explicitly name a base branch, branch off **`develop`** when it exists locally or on the remote.
@@ -105,6 +110,7 @@ gh pr create --base <default-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION>
 ## Never
 
 - Never push directly to the default branch (except in `~/.globalskills`).
+- Never create a branch in `~/.globalskills` unless the user explicitly asked for one.
 - Never push changes made without a branch.
 - Never create branches with ambiguous names like `feature` or `fix`.
 - Never create a branch without first pulling the latest remote changes for the base branch.
