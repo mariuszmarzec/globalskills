@@ -15,6 +15,13 @@ Every change pushed by an AI agent must live on a dedicated branch, never on the
 - Never commit or push from the default branch.
 - This requirement applies to all repositories **except** `~/.globalskills`, where direct pushes to `master` are allowed.
 
+## Base branch
+
+- If the user prompt does not explicitly name a base branch, branch off **`develop`** when it exists locally or on the remote.
+- If `develop` is not present, branch off **`master`** (or the repository's default branch).
+- Always **pull the latest changes from the remote** before creating the new branch, then start the work.
+- When the user prompt does name a specific base branch, use that branch and still pull the latest remote changes from it first.
+
 ## Branch naming
 
 ### Feature changes
@@ -55,21 +62,30 @@ bugfix/fix-ci-build
 ## Workflow
 
 1. Check the current branch: `git branch --show-current`.
-2. If not already on the target branch, create it:
+2. Pick the base branch:
+   - Use `develop` if it exists (local or remote); otherwise use `master`.
+   - Use the branch named in the user prompt when one is given.
+3. Fetch and pull the latest changes from the remote for the base branch before branching:
 
    ```bash
-   git checkout master   # or the default branch
-   git pull
+   git fetch origin
+   git checkout develop     # or master / the branch from the user prompt
+   git pull origin develop  # or master
+   ```
+
+4. Create the new branch from the up-to-date base branch:
+
+   ```bash
    git checkout -b feature/<ISSUE_NUMBER>-<DESCRIPTION>
    ```
 
-3. Make changes, commit, and push:
+5. Make changes, commit, and push:
 
    ```bash
    git push -u origin feature/<ISSUE_NUMBER>-<DESCRIPTION>
    ```
 
-4. If a feature branch for the work already exists, reuse it instead of creating a new one.
+6. If a feature branch for the work already exists, reuse it instead of creating a new one.
 
 ## Creating a pull request
 
@@ -91,4 +107,5 @@ gh pr create --base <default-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION>
 - Never push directly to the default branch (except in `~/.globalskills`).
 - Never push changes made without a branch.
 - Never create branches with ambiguous names like `feature` or `fix`.
+- Never create a branch without first pulling the latest remote changes for the base branch.
 - Never create a PR without a meaningful short description of the changes.
