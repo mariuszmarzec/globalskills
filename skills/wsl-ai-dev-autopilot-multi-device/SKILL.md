@@ -1,20 +1,21 @@
 ---
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, and OpenCode.
+description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, and OpenClaw.
 ---
 
 # WSL AI Dev Autopilot Skill
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models from 7 sources to the OpenCode TUI, allowing the user to select cloud models (with fallback), strictly cloud, or strictly local models.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models from 7 sources to the OpenCode TUI and the OpenClaw Gateway, allowing the user to select cloud models (with fallback), strictly cloud, or strictly local models.
 
 ## Architecture
 
 ```text
-OpenCode Client
-        │
-        ▼
+OpenCode Client        OpenClaw Gateway (Port 18789)
+        │                       │
+        └───────────┬───────────┘
+                    ▼
 LiteLLM (Router & Proxy - Port 4000)
         │
         ├── Free Cloud Models (via API keys)
@@ -77,6 +78,7 @@ LiteLLM (Router & Proxy - Port 4000)
 * LiteLLM installed and responding with multiple models available
 * Local models installed
 * OpenCode configured to see all LiteLLM proxy models
+* OpenClaw Gateway installed, connected to LiteLLM, and responding to agent turns
 * Test prompt succeeds
 * Fallback routing verified
 
@@ -798,6 +800,90 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
 **Healthcheck:**
 Execute a test prompt to verify connection.
 
+## Step 10 — Install & Configure OpenClaw
+
+OpenClaw is the open-source personal AI assistant gateway (https://openclaw.ai). It runs one Gateway process that serves a Control UI dashboard, a TUI/CLI, and optional chat channels (Telegram, WhatsApp, Slack, Discord, etc.). It connects to LiteLLM as a custom OpenAI-compatible provider, so all LiteLLM models are available. Requires Node 22.22.3+, 24.15+, or 25.9+.
+
+```bash
+npm install -g openclaw@latest
+openclaw --version
+```
+
+**Healthcheck:**
+```bash
+openclaw --version
+```
+
+Create `~/.openclaw/openclaw.json` (JSON5). The provider id is `litellm`, pointing at the local proxy. Model metadata (contextWindow/maxTokens) should mirror the model's real limits; `reasoning: false` unless the model supports it.
+
+```json5
+{
+  models: {
+    providers: {
+      litellm: {
+        baseUrl: "http://localhost:4000/v1",
+        apiKey: "sk-12345678", // LITELLM_MASTER_KEY from ~/litellm/.env
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        models: [
+          { id: "big-pickle", name: "Big Pickle (Zen, paid)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
+          { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5 (Zen)", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 16384 },
+          { id: "claude-haiku-4-5", name: "Claude Haiku 4.5 (Zen)", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 16384 },
+          { id: "gpt-5.2", name: "GPT-5.2 (Zen)", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
+          { id: "gpt-5.1-codex", name: "GPT-5.1 Codex (Zen)", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
+          { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free (Zen)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
+          { id: "groq-llama-70b", name: "Llama 3.3 70B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
+          { id: "groq-qwen3", name: "Qwen3.6 27B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
+          { id: "groq-llama-8b", name: "Llama 3.1 8B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
+          { id: "cerebras-gpt-oss-120b", name: "GPT-OSS 120B (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
+          { id: "cerebras-gemma-31b", name: "Gemma 4 31B (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
+          { id: "cerebras-glm-4.7", name: "GLM 4.7 (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
+          { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
+          { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
+          { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
+          { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
+          { id: "gemma-4-31b", name: "Gemma 4 31B (Google, free)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 8192 },
+          { id: "gemma-4-26b", name: "Gemma 4 26B (Google, free)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 8192 },
+          { id: "mistral-large", name: "Mistral Large (free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
+          { id: "mistral-codestral", name: "Codestral (free)", reasoning: false, input: ["text"], contextWindow: 256000, maxTokens: 8192 },
+          { id: "or-free", name: "Free Models Router (OpenRouter)", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 65536 },
+          { id: "gemma4", name: "Gemma 4 12B Local (Ollama)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096 },
+          { id: "local-coder", name: "Local Coder (Ollama)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096 },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "litellm/groq-llama-70b" },
+    },
+  },
+}
+```
+
+Configure local Gateway mode + a persistent auth token (avoids the runtime-generated token that breaks WS probes):
+
+```bash
+openclaw config set gateway.mode local
+openclaw config set gateway.auth.mode token
+openclaw config set gateway.auth.token sk-openclaw-local
+openclaw config validate
+```
+
+**Healthcheck:**
+```bash
+nohup openclaw gateway --force --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+sleep 8
+openclaw gateway status | grep -i connectivity   # expect: ok
+openclaw models list                              # expect: 23 litellm/ models listed
+# IMPORTANT: use a dedicated --session-key. Routing to --agent main hangs while
+# the main session is busy (the turn just queues). A separate session answers instantly:
+openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: LiteLLM connection OK" --model litellm/groq-llama-70b
+# expect reply: LiteLLM connection OK
+```
+
+*Note: If the gateway blocks on `missing gateway.mode`, set `gateway.mode=local` as above. Use `openclaw dashboard` for the browser UI and `openclaw chat` for the terminal TUI.*
+
 # Daily Startup Script
 
 `~/.aicode/aicode`
@@ -854,6 +940,12 @@ if ! pgrep -f "litellm" > /dev/null; then
     sleep 3
 fi
 
+# Ensure OpenClaw Gateway is running (serves all LiteLLM models too)
+if ! pgrep -f "openclaw gateway" > /dev/null; then
+    nohup openclaw gateway --force --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+    sleep 3
+fi
+
 # Launch OpenCode
 if [ -n "${OPENCODE_API_KEY:-}" ]; then
     echo "OpenCode Zen API key detected; all Zen models available."
@@ -862,6 +954,7 @@ else
 fi
 echo "Free cloud models: Groq, Cerebras, Gemini, Mistral, OpenRouter"
 echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
+echo "OpenClaw Gateway: http://127.0.0.1:18789 (openclaw chat / openclaw dashboard)"
 
 exec opencode "$@"
 ```
@@ -881,10 +974,11 @@ Verify:
 * Ollama responds.
 * LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder).
 * OpenCode shows all three providers (opencode, litellm, ollama).
+* OpenClaw Gateway responds on ws://127.0.0.1:18789, lists 23 `litellm/` models, and answers an agent turn through LiteLLM.
 * Primary routing works (big-pickle via LiteLLM).
 * Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. Default model is `litellm/big-pickle` (paid). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (paid). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
