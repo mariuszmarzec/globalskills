@@ -26,7 +26,23 @@ git -C ~/.globalskills pull
 | `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
 | `kotlin-code-formatting` | Code formatting and style rules for Kotlin. Use when writing, editing, or reviewing Kotlin code in an Android/Gradle project that enforces these rules via detekt (config/detekt/detekt.yml) and Kotlin official style. Run ./gradlew detekt to verify. |
 | `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM with database support or fixing database connection issues. |
+| `manul-github-bot` | Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. |
+
+## Manul 🐈
+
+Manul (kot stepowy, Pallas's cat) — the GitHub command bot living in this repo's
+skills. Watches configured repositories, reacts to `/manul` in issues/PR
+comments, implements tasks on `manul/*` branches, opens PRs, and replies
+signed `— manul 🐈`.
+
+```text
+        /\_/\
+       ( o.o )   manul 🐈 — GitHub command bot
+        > ^ <
+```
+
+Full setup, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
 
 ## Usage
 
