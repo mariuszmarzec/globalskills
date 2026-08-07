@@ -946,6 +946,10 @@ if ! pgrep -f "openclaw gateway" > /dev/null; then
     sleep 3
 fi
 
+# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
+# Idempotent: start is a no-op when the daemon is already up.
+"$HOME/.openclaw/manul/manul-daemon.sh" start >/dev/null 2>&1
+
 # Launch OpenCode
 if [ -n "${OPENCODE_API_KEY:-}" ]; then
     echo "OpenCode Zen API key detected; all Zen models available."
