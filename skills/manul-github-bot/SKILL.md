@@ -87,6 +87,18 @@ overlap; `lock` is a backstop with 30 min TTL.
 * `allowedUsers` — GitHub logins allowed to invoke manul (others are ignored).
   Default when missing: the owner of the first repository.
 
+### Watched repositories
+
+Context for workers when implementing tasks:
+
+| Repository | What it is |
+|---|---|
+| `mariuszmarzec/fiteo` | Backend for the todo, cheatday and fiteoApp applications |
+| `mariuszmarzec/shoppingListGenerator` | Shopping list generator — adds tasks to the todo app via API call and adds items to the shopping list in Listonic |
+| `mariuszmarzec/QuickMVI` | MVI store library, used by fiteoApp and the todo app |
+| `mariuszmarzec/todo` | Todo list app (todoApp) — uses the fiteo backend |
+| `mariuszmarzec/fiteoApp` | Workout/training app — uses the fiteo backend |
+
 ### poll.sh
 
 ```bash
