@@ -2,13 +2,18 @@
 
 Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle.
 
+Runners live under `$GITHUB_RUNNERS_PATH` (exported in `~/.zshrc`, defaults to `/mnt/d/github-runner`). One directory per repository — a runner can be rebuilt and re-run from the same path anytime, so runners are reusable for the future.
+
 ## Usage
 
 ### Quick start
 
 ```bash
+# 0. Ensure base path is set (from ~/.zshrc)
+export GITHUB_RUNNERS_PATH=${GITHUB_RUNNERS_PATH:-/mnt/d/github-runner}
+
 # 1. Create project directory
-mkdir -p /mnt/d/github-runner/<repo-name> && cd "$_"
+mkdir -p "$GITHUB_RUNNERS_PATH/<repo-name>" && cd "$_"
 
 # 2. Copy template
 cp -r ~/.globalskills/skills/github-selfhosted-runner/template/* .
@@ -26,6 +31,17 @@ docker logs <container-name> --tail 5
 ```
 
 Expected log: `Listening for Jobs` means the runner is registered and idle.
+
+### Re-running an existing runner
+
+If a runner already exists at `$GITHUB_RUNNERS_PATH/<repo-name>`, you only need a fresh token and a restart:
+
+```bash
+cd "$GITHUB_RUNNERS_PATH/<repo-name>"
+NEW_TOKEN=$(gh api --method POST /repos/<owner>/<repo>/actions/runners/registration-token --jq '.token')
+sed -i "s/RUNNER_TOKEN:.*/RUNNER_TOKEN: $NEW_TOKEN/" docker-compose.yml
+docker compose down && docker compose up -d
+```
 
 ### Token refresh
 
