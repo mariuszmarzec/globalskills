@@ -413,9 +413,25 @@ For every task in queue.json:
    - Create branch `manul/<short-kebab-slug>` (slug from the prompt, max ~40 chars, alnum+dash).
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → `gh pr create --base <default> --title "manul: <short summary>" --body "Zadanie z komentarza: <commentUrl>
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Zadanie z komentarza"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+     The description MUST cover:
+       * Task: what was requested (one line + comment URL)
+       * Changes: concrete summary of what the diff does (not a copy of the commit message)
+       * Verification: what you ran (tests/build) and the result
+     Language: match the repository's language — detect it from the README/code
+     comments; code repos default to English. End with the signature `— manul 🐈`.
+     Example:
+       ## Task
+       Update the project to the latest ktor (3.5.2) — [issue #4](<commentUrl>)
 
-— manul 🐈"`; otherwise just push the branch.
+       ## Changes
+       - Bumped ktor to 3.5.2 (and kotlin, if required) in buildSrc/Dependency.kt
+       - Added gradle.properties with JVM heap settings
+
+       ## Verification
+       - `./gradlew build` passes
+
+       — manul 🐈
    - Do NOT post any GitHub comments yourself, do NOT force-push.
    - Skip if a branch `manul/<slug>` or open PR for it already exists (report as already-exists).
    - End your final reply with EXACTLY ONE line starting `MANUL_RESULT ` in the form:
@@ -443,7 +459,7 @@ Powód: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection).
-- Comments are written in Polish; code/technical identifiers stay as-is.
+- Bot comments (🤖 Running…, ✅ Gotowe) are written in Polish; PR descriptions are written in the repository's language (English for code repos); code/technical identifiers stay as-is.
 - Never force-push. Never touch branches other than `manul/*`.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
 ```
