@@ -43,15 +43,37 @@ sed -i "s/RUNNER_TOKEN:.*/RUNNER_TOKEN: $NEW_TOKEN/" docker-compose.yml
 docker compose down && docker compose up -d
 ```
 
-### Token refresh
+### Pre-flight token check (avoid 404 / "already configured")
 
-Runner registration tokens expire after 1 hour. When the container is rebuilt or the token expires, get a new one:
+Runner registration tokens expire after **1 hour**. The classic failure mode:
+
+1. Docker is stopped/reboots while the container runs with `restart: unless-stopped`.
+2. Docker Desktop comes back → the container auto-restarts with the **old, expired token**.
+3. `entrypoint.sh` hits a stale `.runner` → `Cannot configure the runner because it is already configured` + `404 Not Found` from `POST https://api.github.com/actions/runner-registration` (token no longer matches GitHub's records).
+
+Prevent it by refreshing the token when the compose file is stale and confirming the runner state before (re)starting:
 
 ```bash
-NEW_TOKEN=$(gh api --method POST /repos/<owner>/<repo>/actions/runners/registration-token --jq '.token')
-sed -i "s/RUNNER_TOKEN:.*/RUNNER_TOKEN: $NEW_TOKEN/" docker-compose.yml
+cd "$GITHUB_RUNNERS_PATH/<repo-name>"
+
+# 1. Is a runner already registered for this repo? (check name/status)
+gh api repos/<owner>/<repo>/actions/runners --jq '.runners[] | {name, status}'
+
+# 2. Refresh token if docker-compose.yml is older than 1 hour
+if test -n "$(find docker-compose.yml -mmin +60)"; then
+  NEW_TOKEN=$(gh api --method POST /repos/<owner>/<repo>/actions/runners/registration-token --jq '.token')
+  sed -i "s/RUNNER_TOKEN:.*/RUNNER_TOKEN: $NEW_TOKEN/" docker-compose.yml
+fi
+
+# 3. If a stale/offline runner is registered on GitHub, delete it first:
+#    RUNNER_ID=$(gh api repos/<owner>/<repo>/actions/runners --jq '.runners[] | select(.status=="offline") | .id')
+#    gh api --method DELETE repos/<owner>/<repo>/actions/runners/$RUNNER_ID
+
+# 4. Start fresh
 docker compose down && docker compose up -d
 ```
+
+The template `entrypoint.sh` also deletes stale `.runner`/`.credentials` files before configuring, so a restarted container always re-registers cleanly (`--replace`) instead of failing with the 404.
 
 ### Adding Android SDK (optional)
 
@@ -98,5 +120,6 @@ Includes:
 ### `template/entrypoint.sh`
 
 - Registers runner with `REPO_URL` + `RUNNER_TOKEN`
+- Deletes stale `.runner`/`.credentials` before configuring (prevents "already configured" + 404 on restart)
 - Sets labels `docker,android` (customize as needed)
 - Cleans up registration on container stop
