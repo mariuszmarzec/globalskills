@@ -53,7 +53,7 @@ overlap; `lock` is a backstop with 30 min TTL.
 
 | Path | Purpose |
 |---|---|
-| `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, autoCreatePr, repositories[] |
+| `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, autoCreatePr, allowedUsers[], repositories[] |
 | `~/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild |
 | `~/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
 | `~/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
@@ -73,6 +73,7 @@ overlap; `lock` is a backstop with 30 min TTL.
   "pollInterval": 60,
   "trigger": "/manul",
   "autoCreatePr": true,
+  "allowedUsers": ["mariuszmarzec"],
   "repositories": [
     "mariuszmarzec/fiteo",
     "mariuszmarzec/shoppingListGenerator",
@@ -82,6 +83,9 @@ overlap; `lock` is a backstop with 30 min TTL.
   ]
 }
 ```
+
+* `allowedUsers` — GitHub logins allowed to invoke manul (others are ignored).
+  Default when missing: the owner of the first repository.
 
 ### poll.sh
 
@@ -121,6 +125,12 @@ fail() { echo "MANUL_RESULT {\"fire\":false,\"error\":\"$1\"}"; exit 0; }
 [ -f "$CONFIG" ] || fail "no config at $CONFIG"
 TRIGGER="$(jq -r '.trigger // "/manul"' "$CONFIG")"
 [ -n "$TRIGGER" ] || TRIGGER="/manul"
+
+# Only these GitHub logins may invoke manul. Default: repo owner.
+ALLOWED_JSON="$(jq -c '.allowedUsers // [.repositories[0] | split("/")[0]]' "$CONFIG" 2>/dev/null)"
+if [ -z "$ALLOWED_JSON" ] || [ "$ALLOWED_JSON" = "null" ]; then
+  ALLOWED_JSON='[]'
+fi
 
 if [ $# -gt 0 ]; then
   REPOS=("$@")
@@ -173,8 +183,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue"
     fi
-  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) |
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
     {
       id: ("issue:" + (.id|tostring)),
       repo: $repo,
@@ -201,8 +211,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body)"
     fi
-  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" '
-    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) |
+  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
     {
       id: ("issuebody:" + (.id|tostring)),
       repo: $repo,
@@ -229,8 +239,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue"
     fi
-  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) |
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
     {
       id: ("review:" + (.id|tostring)),
       repo: $repo,
@@ -480,7 +490,8 @@ Powód: <reason>`
    ```bash
    chmod +x ~/.openclaw/manul/poll.sh ~/.openclaw/manul/feedback.sh ~/.openclaw/manul/manul-daemon.sh
    ```
-5. **Edit `config.json`**: set `repositories` to the repos manul should watch.
+5. **Edit `config.json`**: set `repositories` to the repos manul should watch and
+   `allowedUsers` to the GitHub logins allowed to invoke manul (default: repo owner).
 6. **Set the baseline (IMPORTANT — do this BEFORE first daemon start)**:
    ```bash
    sqlite3 ~/.openclaw/manul/manul.db "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
