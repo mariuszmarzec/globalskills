@@ -419,11 +419,11 @@ For every task in queue.json:
 
 1. Mark running:
    `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='running' WHERE commentId='<commentId>';"`
-2. Post the running comment (Polish), using the helper:
-   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Przyjąłem zadanie: <prompt, first 200 chars>"`
+2. Post the running comment (English), using the helper:
+   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
 
    If the prompt is vague or does not describe a concrete task (e.g. it just
-   says "zrób to", "do it", "fix this"), fetch the issue context first and
+   says "do it", "fix this"), fetch the issue context first and
    use it as the task description:
    `gh issue view <issueNumber> --repo <repository>` — pass the issue
    title + body to the worker as the actual task.
@@ -483,7 +483,7 @@ Powód: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection).
-- Bot comments (🤖 Running…, ✅ Gotowe) are written in Polish; PR descriptions are written in the repository's language (English for code repos); code/technical identifiers stay as-is.
+- All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `manul/*`.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
 ```
