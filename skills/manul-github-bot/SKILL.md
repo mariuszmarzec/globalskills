@@ -79,7 +79,8 @@ overlap; `lock` is a backstop with 30 min TTL.
     "mariuszmarzec/shoppingListGenerator",
     "mariuszmarzec/QuickMVI",
     "mariuszmarzec/todo",
-    "mariuszmarzec/fiteoApp"
+    "mariuszmarzec/fiteoApp",
+    "mariuszmarzec/cheatDay"
   ]
 }
 ```
@@ -98,6 +99,7 @@ Context for workers when implementing tasks:
 | `mariuszmarzec/QuickMVI` | MVI store library, used by fiteoApp and the todo app |
 | `mariuszmarzec/todo` | Todo list app (todoApp) — uses the fiteo backend |
 | `mariuszmarzec/fiteoApp` | Workout/training app — uses the fiteo backend |
+| `mariuszmarzec/cheatDay` | Cheat day app — uses the fiteo backend |
 
 ### poll.sh
 
