@@ -42,7 +42,7 @@ worker: clone repo → branch manul/<slug> → implement → tests → commit
         (Co-authored-by trailer) → push → gh pr create (if autoCreatePr)
                         │
                         ▼
-orchestrator: parse MANUL_RESULT → post ✅ Gotowe / ❌ Nie udało się
+orchestrator: parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
               → update DB (done/failed)
 ```
 
@@ -294,17 +294,32 @@ fi
 
 ```bash
 #!/usr/bin/env bash
-# feedback.sh <repo> <issueNumber> <message> — post a signed manul comment.
+# feedback.sh <repo> <issueNumber> <message> [--in-reply-to <reviewCommentId>]
+# Post a signed manul comment. With --in-reply-to the comment is posted as a
+# reply inside the PR review thread (pulls/comments/<id>/replies); otherwise it
+# goes to the issue/PR conversation (issues/<n>/comments).
 # Strips any literal "/manul" from the message (self-trigger protection) and
 # signs with "— manul 🐈". Prints the created comment URL.
 set -euo pipefail
 repo="$1"
 issue="$2"
 msg="$3"
+reply_to=""
+if [ "${4:-}" = "--in-reply-to" ]; then
+  reply_to="${5:-}"
+fi
 msg="${msg//\/manul/manul}"
 signed="${msg}"$'\n\n— manul 🐈'
-jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/issues/$issue/comments" --input - -q '.html_url'
+if [ -n "$reply_to" ]; then
+  jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/pulls/comments/$reply_to/replies" --input - -q '.html_url'
+else
+  jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/issues/$issue/comments" --input - -q '.html_url'
+fi
 ```
+
+> Review comments (from PR review threads, queued with commentId `review:<id>`) are
+> answered **inside the thread**: the orchestrator passes `--in-reply-to <id>` so the
+> bot replies to the exact comment instead of the PR conversation.
 
 ### manul-daemon.sh
 
@@ -422,6 +437,11 @@ For every task in queue.json:
 2. Post the running comment (English), using the helper:
    `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
 
+   **If the task came from a PR review comment** (commentId starts with `review:`,
+   e.g. `review:3740554181`): reply INSIDE the review thread instead of the PR
+   conversation — pass `--in-reply-to <numeric-id-after-review:>`:
+   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>" --in-reply-to 3740554181`
+
    If the prompt is vague or does not describe a concrete task (e.g. it just
    says "do it", "fix this"), fetch the issue context first and
    use it as the task description:
@@ -464,16 +484,16 @@ For every task in queue.json:
    ---
 
 4. When the subagent finishes: parse its `MANUL_RESULT` line.
-   - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post:
-     `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Gotowe
+   - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 2):
+     `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
 
-Podsumowanie: <summary>
+Summary: <summary>
 Branch: <branch>
 Commit: <commit>
 PR: <pr_url>"` (omit PR line if none)
-   - failed → `UPDATE ... SET status='failed' ...` then post: `❌ Nie udało się
+   - failed → `UPDATE ... SET status='failed' ...` then post: `❌ Failed
 
-Powód: <reason>`
+Reason: <reason>`
    - If you spawned subagents, use `sessions_yield` and wait for completion events before finishing.
 
 ## Step 2 — Finish
@@ -592,7 +612,7 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
 1. Create a throwaway issue in a watched repo with the trigger in the body,
    e.g. `/manul add hello.txt with content hi`.
 2. Expect within a few poll cycles: 🤖 Running comment → branch
-   `manul/<slug>` → commit → PR (if `autoCreatePr`) → ✅ Gotowe comment →
+   `manul/<slug>` → commit → PR (if `autoCreatePr`) → ✅ Done comment →
    DB status `done`.
 3. Helper: `~/.openclaw/manul/e2e-watch.sh` polls until a `manul/*` PR exists
    or DB reaches done/failed, then prints the result.
