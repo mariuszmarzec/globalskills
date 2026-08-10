@@ -330,16 +330,19 @@ model_list:
     litellm_params:
       model: groq/llama-3.3-70b-versatile
       api_key: os.environ/GROQ_API_KEY
+      max_tokens: 32768
 
   - model_name: groq-qwen3
     litellm_params:
       model: groq/qwen/qwen3.6-27b
       api_key: os.environ/GROQ_API_KEY
+      max_tokens: 32768
 
   - model_name: groq-llama-8b
     litellm_params:
       model: groq/llama-3.1-8b-instant
       api_key: os.environ/GROQ_API_KEY
+      max_tokens: 8192
 
   # ============================================================
   # Cerebras (fastest inference, ~2600 tok/s)
@@ -349,16 +352,19 @@ model_list:
     litellm_params:
       model: cerebras/gpt-oss-120b
       api_key: os.environ/CEREBRAS_API_KEY
+      max_tokens: 8192
 
   - model_name: cerebras-gemma-31b
     litellm_params:
       model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
+      max_tokens: 8192
 
   - model_name: cerebras-glm-4.7
     litellm_params:
       model: cerebras/zai-glm-4.7
       api_key: os.environ/CEREBRAS_API_KEY
+      max_tokens: 8192
 
   # ============================================================
   # Google Gemini (free tier, per-project limits)
@@ -370,31 +376,37 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.6-flash
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   - model_name: gemini-3.5-flash
     litellm_params:
       model: gemini/gemini-3.5-flash
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   - model_name: gemini-3.5-flash-lite
     litellm_params:
       model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   - model_name: gemini-3.1-flash-lite
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   - model_name: gemma-4-31b
     litellm_params:
       model: gemini/gemma-4-31b-it
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   - model_name: gemma-4-26b
     litellm_params:
       model: gemini/gemma-4-26b-a4b-it
       api_key: os.environ/GEMINI_API_KEY
+      max_tokens: 8192
 
   # ============================================================
   # Mistral (huge monthly quota, Codestral for code)
@@ -449,6 +461,40 @@ router_settings:
         - groq-llama-70b
         - cerebras-gpt-oss-120b
         - gemini-3.5-flash-lite
+        - mistral-large
+        - or-free
+        - local-coder
+    - deepseek-v4-flash-free:
+        - groq-llama-70b
+        - mistral-codestral
+        - or-free
+        - local-coder
+    - groq-llama-70b:
+        - groq-qwen3
+        - cerebras-gpt-oss-120b
+        - gemini-3.5-flash-lite
+        - mistral-large
+        - or-free
+        - local-coder
+    - groq-qwen3:
+        - groq-llama-70b
+        - cerebras-gpt-oss-120b
+        - gemini-3.5-flash-lite
+        - or-free
+        - local-coder
+    - groq-llama-8b:
+        - gemini-3.1-flash-lite
+        - gemma-4-26b
+        - local-coder
+    - gemini-3.1-flash-lite:
+        - groq-llama-8b
+        - gemma-4-26b
+        - or-free
+        - local-coder
+    - gemini-3.6-flash:
+        - gemini-3.5-flash
+        - groq-llama-70b
+        - cerebras-gpt-oss-120b
         - mistral-large
         - or-free
         - local-coder
