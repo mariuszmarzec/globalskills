@@ -432,6 +432,16 @@ Read `/home/marzec/.openclaw/manul/queue.json` (array of tasks):
 - DB: `/home/marzec/.openclaw/manul/manul.db` (sqlite3). Task statuses: `queued` → `running` → `done` | `failed`.
 - Lock: the daemon holds `/home/marzec/.openclaw/manul/lock` while you run — it guarantees only one dispatch at a time. Do **not** check or remove it; just proceed with the queue.
 
+## Step 0.5 — Leftover recovery (ALWAYS, before Step 1)
+
+Crashed turns (gateway restart, machine reboot, timeout kill) leave tasks stuck in `running`. The daemon only queues tasks with status `queued`, so stranded `running` tasks are never retried automatically. At the start of EVERY turn:
+
+1. `sqlite3 /home/marzec/.openclaw/manul/manul.db "SELECT commentId, createdAt FROM processed_comments WHERE status='running';"`
+2. If any rows come back, they are leftovers from a crashed turn. Reset each:
+   `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE commentId='<commentId>';"`
+3. The daemon's next poll (≤60s) will rebuild the queue with full task details and dispatch them. Mention recovered leftovers in your final summary.
+   If the queue.json you already read in Step 0 contained tasks, process those normally — do NOT double-process a task you just reset (it is not in the current queue.json yet).
+
 ## Step 1 — Process each task
 
 For every task in queue.json:
