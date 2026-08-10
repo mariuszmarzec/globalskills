@@ -8,8 +8,9 @@ description: Setup, operate, and reinstall the manul GitHub command bot (OpenCla
 Manul (kot stepowy, Pallas's cat) is a GitHub command bot driven by OpenClaw.
 It watches configured repositories, reacts to the trigger `/manul` in issue
 bodies, issue comments, and PR review comments, and implements the requested
-task: dedicated branch `manul/<slug>` → commit → push → optional PR → feedback
-comments on the issue. Every comment/PR manul writes is signed `— manul 🐈`
+task: dedicated branch `<type>/manul/<issue>-<slug>` → commit → push → optional
+PR → feedback comments on the issue. Every comment/PR manul writes is signed
+`— manul 🐈`
 (identity: **manul** on GitHub, **OpenClaw** in the console).
 
 ```
@@ -38,7 +39,7 @@ orchestrator: per task → mark running → post "🤖 Running..." →
               sessions_spawn subagent (worker) → wait (sessions_yield)
                         │
                         ▼
-worker: clone repo → branch manul/<slug> → implement → tests → commit
+worker: clone repo → branch <type>/manul/<issue>-<slug> → implement → tests → commit
         (Co-authored-by trailer) → push → gh pr create (if autoCreatePr)
                         │
                         ▼
@@ -454,7 +455,7 @@ For every task in queue.json:
    - Repository: `<repository>` (use `gh` CLI; auth is already set up)
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
-   - Create branch `manul/<short-kebab-slug>` (slug from the prompt, max ~40 chars, alnum+dash).
+   - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Zadanie z komentarza"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
@@ -477,7 +478,7 @@ For every task in queue.json:
 
        — manul 🐈
    - Do NOT post any GitHub comments yourself, do NOT force-push.
-   - Skip if a branch `manul/<slug>` or open PR for it already exists (report as already-exists).
+   - Skip if an open PR or a branch matching `feature/manul/<issueNumber>-*` or `bugfix/manul/<issueNumber>-*` already exists for this task (report as already-exists).
    - End your final reply with EXACTLY ONE line starting `MANUL_RESULT ` in the form:
      `MANUL_RESULT status=ok branch=<branch> commit=<sha> pr_url=<url-or-> summary=<one line>`
      or `MANUL_RESULT status=failed reason=<short reason>`
@@ -504,7 +505,7 @@ Reason: <reason>`
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection).
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
-- Never force-push. Never touch branches other than `manul/*`.
+- Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
 ```
 
@@ -612,8 +613,8 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
 1. Create a throwaway issue in a watched repo with the trigger in the body,
    e.g. `/manul add hello.txt with content hi`.
 2. Expect within a few poll cycles: 🤖 Running comment → branch
-   `manul/<slug>` → commit → PR (if `autoCreatePr`) → ✅ Done comment →
-   DB status `done`.
+   `feature/manul/<issue>-<slug>` (or `bugfix/...` for bug fixes) → commit → PR
+   (if `autoCreatePr`) → ✅ Done comment → DB status `done`.
 3. Helper: `~/.openclaw/manul/e2e-watch.sh` polls until a `manul/*` PR exists
    or DB reaches done/failed, then prints the result.
 
