@@ -1,3 +1,8 @@
+---
+name: github-selfhosted-runner
+description: Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle.
+---
+
 # Skill: github-selfhosted-runner
 
 Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle.

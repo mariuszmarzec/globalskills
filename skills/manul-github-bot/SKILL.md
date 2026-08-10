@@ -540,7 +540,12 @@ Reason: <reason>`
            name: "manul",
            workspace: "/home/marzec/.openclaw/workspace-manul",
            agentDir: "/home/marzec/.openclaw/agents/manul/agent",
-           skills: ["ai-commit-attribution", "manul-github-bot"],
+           // Skills: full shared set (~/.agents/skills → globalskills). The
+           // operator deliberately gives manul ALL skills — they encode his
+           // coding approach (kotlin-code-formatting, karpathy-guidelines,
+           // feature-branching-strategy, ...) and manul should follow them.
+           // Keep this list in sync when adding new skills to globalskills.
+           skills: ["ai-commit-attribution", "feature-branching-strategy", "github-selfhosted-runner", "globalskills-repository", "karpathy-guidelines", "kotlin-code-formatting", "litellm-db-setup", "manul-github-bot", "wsl-ai-dev-autopilot-multi-device"],
            tools: {
              allow: ["exec", "process", "read", "write", "edit", "apply_patch", "web_search", "web_fetch", "sessions_spawn", "sessions_yield", "subagents", "session_status", "memory_get", "memory_search"],
              deny: ["message", "browser", "canvas", "nodes", "cron", "gateway", "image", "image_generate", "music_generate", "tts", "video_generate", "pdf", "create_goal", "get_goal", "update_goal", "dir_fetch", "dir_list", "file_fetch", "file_write", "skill_workshop", "agents_list", "sessions_list", "sessions_history", "sessions_send", "node_inference"]
