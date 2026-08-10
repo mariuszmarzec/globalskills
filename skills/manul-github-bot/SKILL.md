@@ -31,12 +31,14 @@ poll.sh ── gh api: issue bodies + issue comments + PR review comments
 SQLite manul.db (processed_comments: queued→running→done|failed, meta.baseline)
    │ rebuild queue.json
    ▼
-fire:true? ──► openclaw agent --message-file orchestrator.prompt.md \
+fire:true? ──► openclaw agent --agent manul --message-file orchestrator.prompt.md \
                   --session-key manul-worker  (headless, timeout -k 60)
                         │
                         ▼
-orchestrator: per task → mark running → post "🤖 Running..." →
-              sessions_spawn subagent (worker) → wait (sessions_yield)
+manul agent (isolated persona: ~/.openclaw/workspace-manul, restricted tools,
+             own session store under ~/.openclaw/agents/manul/sessions)
+   orchestrator: per task → mark running → post "🤖 Running..." →
+                 sessions_spawn subagent (worker) → wait (sessions_yield)
                         │
                         ▼
 worker: clone repo → branch <type>/manul/<issue>-<slug> → implement → tests → commit
@@ -59,6 +61,7 @@ overlap; `lock` is a backstop with 30 min TTL.
 | `~/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
 | `~/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
 | `~/.openclaw/manul/orchestrator.prompt.md` | prompt for the headless orchestrator agent turn |
+| `~/.openclaw/workspace-manul/` | isolated agent workspace (AGENTS.md, SOUL.md) |
 | `~/.openclaw/manul/manul.db` | SQLite state (created on first poll) |
 | `~/.openclaw/manul/queue.json` | pending tasks (rebuilt each poll) |
 | `~/.openclaw/manul/poll.log`, `daemon.log` | logs |
@@ -336,8 +339,8 @@ fi
 #
 # Loop: every $MANUL_INTERVAL (default from config pollInterval, else 60s) run
 # poll.sh; when it reports fire:true, dispatch one headless agent turn via
-# `openclaw agent`. Dispatch is synchronous, so runs never overlap; the lock
-# file is a backstop.
+# `openclaw agent --agent manul`. Dispatch is synchronous, so runs never
+# overlap; the lock file is a backstop.
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
@@ -389,7 +392,7 @@ run_once() {
   if printf '%s' "$out" | grep -q '"fire":true'; then
     log "dispatch: $out"
     [ -f "$LOCK" ] || date +%s >"$LOCK"
-    timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent \
+    timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent manul \
       --message-file "$PROMPT_FILE" --session-key manul-worker >>"$LOG" 2>&1
     rc=$?
     echo "[$(date -Is)] agent turn finished rc=$rc" >>"$LOG"
@@ -518,6 +521,39 @@ Reason: <reason>`
    ```bash
    mkdir -p ~/.openclaw/manul/work
    ```
+2b. **Create the isolated `manul` agent** (one brain = one workspace; manul gets
+   its own minimal workspace so it never reads the main agent's personal files):
+   ```bash
+   openclaw agents add manul --workspace ~/.openclaw/workspace-manul --non-interactive
+   ```
+   Then apply the restricted tool/skill policy (operator-side; these config paths
+   are agent-protected, so apply with `openclaw config patch` from your shell,
+   not from inside an agent session):
+   ```json5
+   // openclaw config patch --file manul-agent-policy.json5
+   {
+     agents: {
+       list: [
+         { id: "main" },
+         {
+           id: "manul",
+           name: "manul",
+           workspace: "/home/marzec/.openclaw/workspace-manul",
+           agentDir: "/home/marzec/.openclaw/agents/manul/agent",
+           skills: ["ai-commit-attribution", "manul-github-bot"],
+           tools: {
+             allow: ["exec", "process", "read", "write", "edit", "apply_patch", "web_search", "web_fetch", "sessions_spawn", "sessions_yield", "subagents", "session_status", "memory_get", "memory_search"],
+             deny: ["message", "browser", "canvas", "nodes", "cron", "gateway", "image", "image_generate", "music_generate", "tts", "video_generate", "pdf", "create_goal", "get_goal", "update_goal", "dir_fetch", "dir_list", "file_fetch", "file_write", "skill_workshop", "agents_list", "sessions_list", "sessions_history", "sessions_send", "node_inference"]
+           }
+         }
+       ]
+     }
+   }
+   ```
+   Write a minimal `AGENTS.md`/`SOUL.md` into `~/.openclaw/workspace-manul/`
+   (bot rules only — no personal data; see the skill repo for a template).
+   The daemon dispatches turns with `--agent manul`, so workers and the
+   orchestrator always run inside this isolated agent.
 3. **Write the files**: copy the exact contents from this skill —
    `config.json`, `poll.sh`, `feedback.sh`, `manul-daemon.sh`,
    `orchestrator.prompt.md` — into `~/.openclaw/manul/`.
@@ -588,7 +624,7 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
 
 - **Nothing happens after a task is queued**: check `daemon.log` for the
   `agent turn finished rc=` line; check the orchestrator session transcript
-  under `~/.openclaw/agents/main/sessions/` (search `manul-worker`).
+  under `~/.openclaw/agents/manul/sessions/` (search `manul-worker`).
 - **Orchestrator used to self-block**: the daemon's `lock` belongs to the
   daemon. The orchestrator must NOT check/remove it — it was removed from the
   prompt after a bug where fresh lock → `NO_REPLY` → infinite no-op turns.
