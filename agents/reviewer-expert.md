@@ -1,7 +1,7 @@
 ---
 description: Reviewer escalation (EXPERT tier). Deep review of security-critical, architectural, or high-risk changes. Read-only.
 mode: subagent
-model: litellm/gpt-5.2
+model: litellm/big-pickle
 steps: 50
 temperature: 0
 permission:

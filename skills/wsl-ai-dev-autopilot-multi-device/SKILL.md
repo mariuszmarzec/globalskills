@@ -41,11 +41,7 @@ LiteLLM (Router & Proxy - Port 4000)
         │   │   └── or-free (auto-routes to live :free models)
         │   └── OpenCode Zen (Cloud)
         │       ├── big-pickle (Free)
-        │       ├── deepseek-v4-flash-free (Free)
-        │       ├── claude-sonnet-4-5 (Paid)
-        │       ├── claude-haiku-4-5 (Paid)
-        │       ├── gpt-5.2 (Paid)
-        │       └── gpt-5.1-codex (Paid)
+        │       └── deepseek-v4-flash-free (Free)
         │
         └── Local Ollama Models
             ├── gemma4 (gemma4:12b)
@@ -138,7 +134,7 @@ Exact bash commands or WAITING.
 
 * Agent selects the best local model based on the hardware profile.
 * Agent configures LiteLLM to expose multiple models: free cloud models (Groq, Cerebras, Gemini, Mistral, OpenRouter) + OpenCode Zen cloud models + local Ollama models.
-* Default model is `litellm/big-pickle` (OpenCode Zen, paid). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
+* Default model is `litellm/big-pickle` (OpenCode Zen, free). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 
 ## Multi-Device Sync Policy (Desktop Push to Remote)
 
@@ -318,43 +314,13 @@ model_list:
       model: openai/big-pickle
       api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
       reasoning_effort: none
-
-  - model_name: claude-sonnet-4-5
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
-
-  - model_name: claude-haiku-4-5
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
-
-  - model_name: gpt-5.2
-    litellm_params:
-      model: openai/gpt-5.2
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
-
-  - model_name: gpt-5.1-codex
-    litellm_params:
-      model: openai/gpt-5.1-codex
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
 
   - model_name: deepseek-v4-flash-free
     litellm_params:
       model: openai/deepseek-v4-flash-free
       api_base: https://opencode.ai/zen/v1
       api_key: os.environ/OPENCODE_API_KEY
-      max_tokens: 16384
 
   # ============================================================
   # Groq (fastest free tier, ~320 tok/s)
@@ -364,19 +330,16 @@ model_list:
     litellm_params:
       model: groq/llama-3.3-70b-versatile
       api_key: os.environ/GROQ_API_KEY
-      max_tokens: 8192
 
   - model_name: groq-qwen3
     litellm_params:
       model: groq/qwen/qwen3.6-27b
       api_key: os.environ/GROQ_API_KEY
-      max_tokens: 8192
 
   - model_name: groq-llama-8b
     litellm_params:
       model: groq/llama-3.1-8b-instant
       api_key: os.environ/GROQ_API_KEY
-      max_tokens: 8192
 
   # ============================================================
   # Cerebras (fastest inference, ~2600 tok/s)
@@ -386,19 +349,16 @@ model_list:
     litellm_params:
       model: cerebras/gpt-oss-120b
       api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
 
   - model_name: cerebras-gemma-31b
     litellm_params:
       model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
 
   - model_name: cerebras-glm-4.7
     litellm_params:
       model: cerebras/zai-glm-4.7
       api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
 
   # ============================================================
   # Google Gemini (free tier, per-project limits)
@@ -410,37 +370,31 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.6-flash
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   - model_name: gemini-3.5-flash
     litellm_params:
       model: gemini/gemini-3.5-flash
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   - model_name: gemini-3.5-flash-lite
     litellm_params:
       model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   - model_name: gemini-3.1-flash-lite
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   - model_name: gemma-4-31b
     litellm_params:
       model: gemini/gemma-4-31b-it
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   - model_name: gemma-4-26b
     litellm_params:
       model: gemini/gemma-4-26b-a4b-it
       api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
 
   # ============================================================
   # Mistral (huge monthly quota, Codestral for code)
@@ -450,13 +404,11 @@ model_list:
     litellm_params:
       model: mistral/mistral-large-latest
       api_key: os.environ/MISTRAL_API_KEY
-      max_tokens: 8192
 
   - model_name: mistral-codestral
     litellm_params:
       model: mistral/codestral-latest
       api_key: os.environ/MISTRAL_API_KEY
-      max_tokens: 8192
 
   # ============================================================
   # OpenRouter (Free Models Router - auto-picks live :free models)
@@ -476,7 +428,6 @@ model_list:
       model: ollama/gemma4:12b
       api_base: http://localhost:11434
       api_key: ollama-local
-      max_tokens: 4096
       extra_body:
         num_ctx: 131072
 
@@ -485,7 +436,6 @@ model_list:
       model: ollama/gemma4:12b
       api_base: http://localhost:11434
       api_key: ollama-local
-      max_tokens: 4096
       extra_body:
         num_ctx: 131072
 
@@ -639,7 +589,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 16384 }
+          "limit": { "context": 128000, "output": 65536 }
         },
         "deepseek-v4-flash-free": {
           "id": "deepseek-v4-flash-free",
@@ -647,7 +597,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 16384 }
+          "limit": { "context": 128000, "output": 65536 }
         },
         "groq-llama-70b": {
           "id": "groq-llama-70b",
@@ -655,7 +605,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
+          "limit": { "context": 128000, "output": 32000 }
         },
         "groq-qwen3": {
           "id": "groq-qwen3",
@@ -663,7 +613,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
+          "limit": { "context": 128000, "output": 32000 }
         },
         "groq-llama-8b": {
           "id": "groq-llama-8b",
@@ -751,7 +701,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
+          "limit": { "context": 128000, "output": 32000 }
         },
         "mistral-codestral": {
           "id": "mistral-codestral",
@@ -759,7 +709,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 256000, "output": 8192 }
+          "limit": { "context": 256000, "output": 32000 }
         },
         "or-free": {
           "id": "or-free",
@@ -767,7 +717,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 200000, "output": 65536 }
+          "limit": { "context": 200000, "output": 32000 }
         },
         "gemma4": {
           "id": "gemma4",
@@ -775,7 +725,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 4096 }
+          "limit": { "context": 131072, "output": 32000 }
         },
         "local-coder": {
           "id": "local-coder",
@@ -783,7 +733,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
           "tool_call": true,
           "reasoning": false,
           "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 4096 }
+          "limit": { "context": 131072, "output": 32000 }
         }
       }
     }
@@ -795,7 +745,7 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
 - *`opencode/` - Direct access to OpenCode Zen cloud models*
 - *`litellm/` - All models via LiteLLM proxy (20+ free cloud models + local)*
 - *`ollama/` - Direct access to local Ollama models*
-- *Default model: `litellm/big-pickle` (OpenCode Zen, paid). Fallback: groq → cerebras → gemini → mistral → openrouter → local-coder.*
+- *Default model: `litellm/big-pickle` (OpenCode Zen, free). Fallback: groq → cerebras → gemini → mistral → openrouter → local-coder.*
 
 **Healthcheck:**
 Execute a test prompt to verify connection.
@@ -826,12 +776,8 @@ Create `~/.openclaw/openclaw.json` (JSON5). The provider id is `litellm`, pointi
         api: "openai-completions",
         timeoutSeconds: 300,
         models: [
-          { id: "big-pickle", name: "Big Pickle (Zen, paid)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
-          { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5 (Zen)", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 16384 },
-          { id: "claude-haiku-4-5", name: "Claude Haiku 4.5 (Zen)", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 16384 },
-          { id: "gpt-5.2", name: "GPT-5.2 (Zen)", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
-          { id: "gpt-5.1-codex", name: "GPT-5.1 Codex (Zen)", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
-          { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free (Zen)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 16384 },
+          { id: "big-pickle", name: "Big Pickle (Zen, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
+          { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free (Zen)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
           { id: "groq-llama-70b", name: "Llama 3.3 70B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
           { id: "groq-qwen3", name: "Qwen3.6 27B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
           { id: "groq-llama-8b", name: "Llama 3.1 8B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
@@ -985,4 +931,4 @@ Verify:
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (paid). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (free). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.

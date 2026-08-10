@@ -46,19 +46,19 @@ the `agent-orchestration` skill.
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|--------------|-------|-----------|
-| `orchestrator` | primary | EXPERT | `litellm/gpt-5.2` | no |
-| `architect` | subagent | EXPERT | `litellm/claude-sonnet-4-5` | edit: ask |
+| `orchestrator` | primary | EXPERT | `litellm/big-pickle` | no |
+| `architect` | subagent | EXPERT | `litellm/big-pickle` | edit: ask |
 | `coder-cheap` | subagent | CHEAP | `litellm/groq-llama-8b` | no |
 | `coder` | subagent | NORMAL | `litellm/groq-llama-70b` | no |
-| `coder-strong` | subagent | STRONG | `litellm/gpt-5.1-codex` | no |
-| `coder-expert` | subagent | EXPERT | `litellm/claude-sonnet-4-5` | no |
-| `reviewer` | subagent | STRONG | `litellm/claude-haiku-4-5` | edit: deny |
-| `reviewer-expert` | subagent | EXPERT | `litellm/gpt-5.2` | edit: deny |
-| `debugger` | subagent | STRONG | `litellm/gpt-5.1-codex` | no |
-| `debugger-expert` | subagent | EXPERT | `litellm/gpt-5.2` | no |
+| `coder-strong` | subagent | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `coder-expert` | subagent | EXPERT | `litellm/big-pickle` | no |
+| `reviewer` | subagent | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
+| `reviewer-expert` | subagent | EXPERT | `litellm/big-pickle` | edit: deny |
+| `debugger` | subagent | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `debugger-expert` | subagent | EXPERT | `litellm/big-pickle` | no |
 | `researcher` | subagent | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
 | `tester` | subagent | NORMAL | `litellm/groq-llama-70b` | no |
-| `security` | subagent | EXPERT | `litellm/gpt-5.2` | edit: deny |
+| `security` | subagent | EXPERT | `litellm/big-pickle` | edit: deny |
 | `performance` | subagent | STRONG | `litellm/gemini-3.6-flash` | edit: ask |
 | `refactorer` | subagent | NORMAL | `litellm/groq-qwen3` | no |
 

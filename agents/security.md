@@ -1,7 +1,7 @@
 ---
 description: Security review of auth, authorization, validation, injection, secrets, dependency vulnerabilities, and API security. Read-only analysis.
 mode: subagent
-model: litellm/gpt-5.2
+model: litellm/big-pickle
 steps: 40
 temperature: 0
 permission:

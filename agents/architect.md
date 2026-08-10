@@ -1,7 +1,7 @@
 ---
 description: Analyzes larger tasks, designs the solution, breaks work into steps, makes architectural decisions, identifies risks and dependencies. Prefers analysis over editing code.
 mode: subagent
-model: litellm/claude-sonnet-4-5
+model: litellm/big-pickle
 steps: 40
 permission:
   edit: ask

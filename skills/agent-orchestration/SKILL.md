@@ -16,35 +16,36 @@ models here (or in the LiteLLM config) without rebuilding the agents.
 
 ## Model tiers (audit of LiteLLM @ localhost:4000, 2026-08-10)
 
-All 23 models in the LiteLLM model_list respond successfully. Tiers are based
-on measured latency, context window, cost, and known capability.
+All 19 models in the LiteLLM model_list respond successfully and are **free**
+(no paid model is configured — OpenCode Zen is used only for its free models:
+`big-pickle`, `deepseek-v4-flash-free`). Tiers are based on measured latency,
+context window, cost, and known capability.
 
 | Tier | Default model | Rationale | Alternatives |
 |------|---------------|-----------|--------------|
 | CHEAP | `litellm/groq-llama-8b` | free, 128k ctx, adequate for trivial single-file edits | `litellm/gemini-3.1-flash-lite` (1M ctx), `litellm/deepseek-v4-flash-free` |
 | NORMAL | `litellm/groq-llama-70b` | free, 70B, solid general coding | `litellm/groq-qwen3`, `litellm/cerebras-gpt-oss-120b`, `litellm/gemini-3.5-flash`, `litellm/mistral-large` |
-| STRONG | `litellm/gpt-5.1-codex` | code-specialized, 272k ctx | `litellm/claude-haiku-4-5`, `litellm/gemini-3.6-flash`, `litellm/mistral-codestral` |
-| EXPERT | `litellm/claude-sonnet-4-5` | strongest reasoning, 200k ctx | `litellm/gpt-5.2`, `litellm/big-pickle` |
+| STRONG | `litellm/deepseek-v4-flash-free` | free, fast, strong reasoning (Zen free tier) | `litellm/gemini-3.6-flash`, `litellm/mistral-codestral`, `litellm/cerebras-gpt-oss-120b` |
+| EXPERT | `litellm/big-pickle` | free, strongest reasoning (Zen stealth model) | `litellm/deepseek-v4-flash-free` |
 
-Free-first principle: when a free model is adequate for the tier, prefer it
-over a paid model. Escalate only when the current tier demonstrably fails.
+Every model is free. Escalate only when the current tier demonstrably fails.
 
 ## Role agents
 
 | Agent | Default tier | Model | Read-only |
 |-------|--------------|-------|-----------|
-| `architect` | EXPERT | `litellm/claude-sonnet-4-5` | edit: ask |
+| `architect` | EXPERT | `litellm/big-pickle` | edit: ask |
 | `coder-cheap` | CHEAP | `litellm/groq-llama-8b` | no |
 | `coder` | NORMAL | `litellm/groq-llama-70b` | no |
-| `coder-strong` | STRONG | `litellm/gpt-5.1-codex` | no |
-| `coder-expert` | EXPERT | `litellm/claude-sonnet-4-5` | no |
-| `reviewer` | STRONG | `litellm/claude-haiku-4-5` | edit: deny |
-| `reviewer-expert` | EXPERT | `litellm/gpt-5.2` | edit: deny |
-| `debugger` | STRONG | `litellm/gpt-5.1-codex` | no |
-| `debugger-expert` | EXPERT | `litellm/gpt-5.2` | no |
+| `coder-strong` | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `coder-expert` | EXPERT | `litellm/big-pickle` | no |
+| `reviewer` | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
+| `reviewer-expert` | EXPERT | `litellm/big-pickle` | edit: deny |
+| `debugger` | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `debugger-expert` | EXPERT | `litellm/big-pickle` | no |
 | `researcher` | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
 | `tester` | NORMAL | `litellm/groq-llama-70b` | no |
-| `security` | EXPERT | `litellm/gpt-5.2` | edit: deny |
+| `security` | EXPERT | `litellm/big-pickle` | edit: deny |
 | `performance` | STRONG | `litellm/gemini-3.6-flash` | edit: deny |
 | `refactorer` | NORMAL | `litellm/groq-qwen3` | no |
 
