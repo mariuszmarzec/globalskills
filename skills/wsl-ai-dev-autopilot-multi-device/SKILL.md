@@ -517,6 +517,32 @@ ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Autho
 
 *Skip this step when configuring the Laptop directly.*
 
+### Step 8c — Install globalskills (agents + skills)
+
+The environment ships with shared skills (`~/.globalskills/skills`) and OpenCode agents (`~/.globalskills/agents`). OpenCode only reads agents from `~/.config/opencode/agents/`, so they must be symlinked — `install.sh` does this automatically. This must run on **every** machine (Desktop and Laptop) before configuring OpenCode.
+
+```bash
+# Clone or update the globalskills repo
+if [ -d ~/.globalskills ]; then
+  git -C ~/.globalskills pull --ff-only
+else
+  git clone git@github.com:mariuszmarzec/globalskills.git ~/.globalskills \
+    || git clone https://github.com/mariuszmarzec/globalskills.git ~/.globalskills
+fi
+
+# Create skills + agents symlinks (~/.agents/skills, ~/.config/opencode/agents)
+bash ~/.globalskills/install.sh
+```
+
+**Healthcheck:**
+
+```bash
+test -e ~/.config/opencode/agents/orchestrator.md && echo "agents OK"
+test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "skills OK"
+```
+
+*If SSH fails on a fresh machine (no key deployed), fall back to the HTTPS clone URL shown above.*
+
 ## Step 9 — Configure OpenCode
 
 `~/.config/opencode/opencode.json`
@@ -928,7 +954,9 @@ Verify:
 * Primary routing works (big-pickle via LiteLLM).
 * Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
+* OpenCode agents symlinked and readable (`~/.config/opencode/agents/orchestrator.md`).
+* Shared skills symlinked (`~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (free). Fallback chain ensures free models are used if Zen is unavailable. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (free). Fallback chain ensures free models are used if Zen is unavailable. Multi-agent orchestration (orchestrator + 14 subagents) is installed and free-only. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
