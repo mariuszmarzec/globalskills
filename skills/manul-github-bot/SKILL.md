@@ -84,7 +84,8 @@ overlap; `lock` is a backstop with 30 min TTL.
     "mariuszmarzec/QuickMVI",
     "mariuszmarzec/todo",
     "mariuszmarzec/fiteoApp",
-    "mariuszmarzec/cheatDay"
+    "mariuszmarzec/cheatDay",
+    "mariuszmarzec/caracal-rag"
   ]
 }
 ```
@@ -104,6 +105,7 @@ Context for workers when implementing tasks:
 | `mariuszmarzec/todo` | Todo list app (todoApp) — uses the fiteo backend |
 | `mariuszmarzec/fiteoApp` | Workout/training app — uses the fiteo backend |
 | `mariuszmarzec/cheatDay` | Cheat day app — uses the fiteo backend |
+| `mariuszmarzec/caracal-rag` | RAG service for the fiteo backend — research + architecture doc (Kotlin exploration) on `feature/manul/6-caracal-rag-kotlin` / PR #1 |
 
 ### poll.sh
 
