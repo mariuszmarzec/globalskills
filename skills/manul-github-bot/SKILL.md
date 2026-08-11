@@ -56,7 +56,7 @@ overlap; `lock` is a backstop with 30 min TTL.
 
 | Path | Purpose |
 |---|---|
-| `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, autoCreatePr, allowedUsers[], repositories[] |
+| `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
 | `~/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild |
 | `~/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
 | `~/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
@@ -76,6 +76,22 @@ overlap; `lock` is a backstop with 30 min TTL.
   "enabled": true,
   "pollInterval": 60,
   "trigger": "/manul",
+  "agents": [
+    "architect",
+    "coder",
+    "coder-cheap",
+    "coder-strong",
+    "coder-expert",
+    "reviewer",
+    "reviewer-expert",
+    "debugger",
+    "debugger-expert",
+    "researcher",
+    "tester",
+    "security",
+    "performance",
+    "refactorer"
+  ],
   "autoCreatePr": true,
   "allowedUsers": ["mariuszmarzec"],
   "repositories": [
@@ -92,6 +108,20 @@ overlap; `lock` is a backstop with 30 min TTL.
 
 * `allowedUsers` — GitHub logins allowed to invoke manul (others are ignored).
   Default when missing: the owner of the first repository.
+* `agents` — known role agent names. The parser sets the task's `agent` field
+  only when the first token after the trigger on the trigger line matches one
+  of these exactly. Missing key → fallback to the default list above.
+
+### Role agents (OpenClaw-native, no opencode)
+
+The role agents (`coder`, `reviewer`, `debugger`, …) are defined as OpenClaw
+agents in the gateway config (`agents.list`) — id, model, skills, tool
+allowlist (reviewer/researcher/security/performance are read-only: no
+write/edit/apply_patch) and `subagents.allowAgents`. The manul agent entry has
+`subagents.allowAgents` listing all role ids so the orchestrator can spawn them
+via `sessions_spawn(agentId=<role>)`. Models follow the `agent-orchestration`
+skill tiers (CHEAP/NORMAL/STRONG/EXPERT). Do NOT shell out to `opencode` —
+the role logic lives in the OpenClaw agent config + this skill.
 
 ### Watched repositories
 
@@ -146,6 +176,30 @@ fail() { echo "MANUL_RESULT {\"fire\":false,\"error\":\"$1\"}"; exit 0; }
 TRIGGER="$(jq -r '.trigger // "/manul"' "$CONFIG")"
 [ -n "$TRIGGER" ] || TRIGGER="/manul"
 
+# Known role agents (from config.json `.agents`, fallback = skill's role set).
+# The parser sets `.agent` only when the first token after the trigger on the
+# trigger line matches one of these (case-sensitive exact). Anything else stays
+# in the prompt and the orchestrator decides (default coder).
+mapfile -t AGENTS < <(jq -r '.agents[]?' "$CONFIG" 2>/dev/null)
+if [ "${#AGENTS[@]}" -eq 0 ]; then
+  AGENTS=(architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert debugger debugger-expert researcher tester security performance refactorer)
+fi
+AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
+
+# Shared jq: extract (agent, prompt) from a comment/issue body.
+# - find the first line containing the trigger,
+# - everything after the trigger on that line = rest0 (leading spaces trimmed),
+# - if rest0 is empty, the following lines become the prompt,
+# - first token of the rest: known agent name => agent; the remainder = prompt.
+PARSE='(.body | split("\n")) as $lines
+| ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+| ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+| (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+| ($rest | split(" ")[0]) as $tok
+| (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+| (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+| {agent: $agent, prompt: $prompt}'
+
 # Only these GitHub logins may invoke manul. Default: repo owner.
 ALLOWED_JSON="$(jq -c '.allowedUsers // [.repositories[0] | split("/")[0]]' "$CONFIG" 2>/dev/null)"
 if [ -z "$ALLOWED_JSON" ] || [ "$ALLOWED_JSON" = "null" ]; then
@@ -169,11 +223,17 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
   issueNumber INTEGER NOT NULL,
   commentUrl TEXT NOT NULL,
   author TEXT,
+  agent TEXT,
   prompt TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued',
   createdAt TEXT,
   processedAt TEXT
 );" 2>>"$LOG"
+# migration for existing DBs (pre-agent column)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|agent|'; then
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN agent TEXT;" 2>>"$LOG"
+  log "migration: added agent column"
+fi
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
@@ -196,23 +256,33 @@ for repo in "${REPOS[@]}"; do
     author="$(jq -r '.author' <<<"$obj")"
     created="$(jq -r '.created' <<<"$obj")"
     prompt="$(jq -r '.prompt' <<<"$obj")"
+    agent="$(jq -r '.agent // ""' <<<"$obj")"
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc','queued','$created');" 2>>"$LOG"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
     if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
       NEW=$((NEW + 1))
-      log "queued $id on $repo#$issue"
+      log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
-    {
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+    | {
       id: ("issue:" + (.id|tostring)),
       repo: $repo,
       author: .user.login,
       created: .created_at,
       url: .html_url,
       issueNumber: (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber),
-      body: .body
+      agent: $agent,
+      prompt: $prompt
     }')
 
   # 1b) Issue bodies (new issues carrying the trigger in the description)
@@ -224,23 +294,33 @@ for repo in "${REPOS[@]}"; do
     author="$(jq -r '.author' <<<"$obj")"
     created="$(jq -r '.created' <<<"$obj")"
     prompt="$(jq -r '.prompt' <<<"$obj")"
+    agent="$(jq -r '.agent // ""' <<<"$obj")"
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc','queued','$created');" 2>>"$LOG"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
     if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
       NEW=$((NEW + 1))
-      log "queued $id on $repo#$issue (issue body)"
+      log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
-    {
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+    | {
       id: ("issuebody:" + (.id|tostring)),
       repo: $repo,
       author: .user.login,
       created: .created_at,
       url: .html_url,
       issueNumber: .number,
-      body: .body
+      agent: $agent,
+      prompt: $prompt
     }')
 
   # 2) PR review comments
@@ -252,29 +332,39 @@ for repo in "${REPOS[@]}"; do
     author="$(jq -r '.author' <<<"$obj")"
     created="$(jq -r '.created' <<<"$obj")"
     prompt="$(jq -r '.prompt' <<<"$obj")"
+    agent="$(jq -r '.agent // ""' <<<"$obj")"
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc','queued','$created');" 2>>"$LOG"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
     if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
       NEW=$((NEW + 1))
-      log "queued $id on $repo#$issue"
+      log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" '
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
-    {
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+    | {
       id: ("review:" + (.id|tostring)),
       repo: $repo,
       author: .user.login,
       created: .created_at,
       url: .html_url,
       issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
-      body: .body
+      agent: $agent,
+      prompt: $prompt
     }')
 done
 
 # Rebuild queue.json from queued rows
 QUEUE_TMP="${QUEUE_JSON}.tmp"
-sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'prompt',prompt)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,prompt FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
+sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
 if ! jq -e . "$QUEUE_TMP" >/dev/null 2>&1; then
   echo '[]' >"$QUEUE_TMP"
 fi
@@ -436,10 +526,15 @@ esac
 ```markdown
 You are the manul bot orchestrator. Manul = GitHub command bot: it reacts to comments containing `/manul` by implementing the requested task on a branch and reporting back with GitHub comments. You are triggered by the poller daemon when new tasks exist.
 
+You run as the isolated agent `manul` (workspace `~/.openclaw/workspace-manul`, session `manul-worker`). Your own workspace is minimal — ALL bot state lives under `/home/marzec/.openclaw/manul/`. Never read or write the main agent's workspace (`/home/marzec/.openclaw/workspace`, `~/.openclaw/workspace`).
+
 ## Step 0 — Read the queue
 
 Read `/home/marzec/.openclaw/manul/queue.json` (array of tasks):
-`[{"commentId": "...", "repository": "owner/repo", "issueNumber": 12, "commentUrl": "...", "author": "...", "prompt": "..."}]`
+`[{"commentId": "...", "repository": "owner/repo", "issueNumber": 12, "commentUrl": "...", "author": "...", "agent": "coder", "prompt": "..."}]`
+
+- `agent` is the role agent explicitly requested on the trigger line (e.g. `/manul reviewer check the diff` → `reviewer`). The parser only sets it for exact matches against the known list; empty string means "no agent requested" → use the default `coder`.
+- `prompt` is the text after the trigger (first token stripped if it was a known agent).
 
 - If the file is missing or the array is empty → reply `NO_REPLY` and stop.
 - DB: `/home/marzec/.openclaw/manul/manul.db` (sqlite3). Task statuses: `queued` → `running` → `done` | `failed`.
@@ -461,8 +556,21 @@ For every task in queue.json:
 
 1. Mark running:
    `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='running' WHERE commentId='<commentId>';"`
-2. Post the running comment (English), using the helper:
-   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
+
+2. Resolve the agent (read the known list from config if needed:
+   `jq -r '.agents[]' /home/marzec/.openclaw/manul/config.json`):
+   - `agent` non-empty → use it (the parser already validated it).
+   - `agent` empty → default agent is `coder`. BUT first check the prompt's
+     first word: if it is a plausible (case-insensitive, close) spelling of a
+     known agent name, the user probably meant an explicit agent — post ONE
+     comment that both informs and runs:
+     `🤖 Running... Unknown agent '<first-word>' — using the default coder. Known agents: <comma-separated>. Accepted the task: <prompt, first 200 chars>`
+     and proceed with `coder`.
+   - Otherwise (no agent requested) → default `coder`.
+
+3. Post the running comment (English), using the helper:
+   - explicit agent: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
+   - default: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
 
    **feedback.sh signs automatically — NEVER include `— manul 🐈` in the message you pass to it** (it would be added a second time).
 
@@ -476,17 +584,21 @@ For every task in queue.json:
    use it as the task description:
    `gh issue view <issueNumber> --repo <repository>` — pass the issue
    title + body to the worker as the actual task.
-3. Spawn ONE subagent with `sessions_spawn` (mode=run, taskName=`manul-<issueNumber>`). The subagent brief (write it explicitly):
+
+4. Spawn ONE subagent with `sessions_spawn` (mode=run, runtime=subagent, taskName=`manul-<issueNumber>-<agent>`). Use `agentId=<agent>` (the resolved role agent, e.g. `coder`, `reviewer`, `debugger`) — its system prompt/model come from the OpenClaw agent config. Pass `cwd` = the repo work dir. The subagent brief (write it explicitly):
 
    ---
-   You are a manul worker. Fix a task requested via GitHub comment.
+   You are a manul worker running as the `<agent>` role agent (your role's
+   system prompt and model come from the OpenClaw agent config). Fix a task
+   requested via GitHub comment. The manul contract below still governs
+   everything GitHub-related:
    - Repository: `<repository>` (use `gh` CLI; auth is already set up)
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Zadanie z komentarza"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
      The description MUST cover:
        * Task: what was requested (one line + comment URL)
        * Changes: concrete summary of what the diff does (not a copy of the commit message)
@@ -512,8 +624,8 @@ For every task in queue.json:
      or `MANUL_RESULT status=failed reason=<short reason>`
    ---
 
-4. When the subagent finishes: parse its `MANUL_RESULT` line.
-   - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 2):
+5. When the subagent finishes: parse its `MANUL_RESULT` line.
+   - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 3):
      `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
 
 Summary: <summary>
@@ -701,6 +813,13 @@ git push origin master
 ## Roadmap
 
 - [x] MVP: `/manul` trigger, dedupe, worker branch, feedback, optional PR
-- [ ] Per-agent commands (e.g. `/manul <agent-name>`) — parser currently treats
-      everything after the trigger line as the prompt
+- [x] Per-agent commands (`/manul <agent-name> <task>`): parser extracts the
+      agent from the first token after the trigger (exact match vs `config.json`
+      `agents` list), rest = prompt; unknown/misspelled agent → notice comment +
+      default `coder`; workers spawn as OpenClaw role agents (`agentId`)
+      — no opencode involved
+- [ ] Escalation: `status=failed` → re-spawn one tier higher
+      (CHEAP→NORMAL→STRONG→EXPERT, max 2 rounds) before reporting ❌ Failed
+- [ ] `/manul orchestrator <task>` → full multi-agent flow
+      (architect → coder → reviewer) for large tasks
 - [ ] Optional native cron-trigger variant (needs `cron.triggers.enabled`)
