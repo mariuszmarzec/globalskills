@@ -226,6 +226,7 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
   agent TEXT,
   prompt TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT,
   processedAt TEXT
 );" 2>>"$LOG"
@@ -233,6 +234,11 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|agent|'; then
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN agent TEXT;" 2>>"$LOG"
   log "migration: added agent column"
+fi
+# migration for existing DBs (pre-attempts column)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|attempts|'; then
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;" 2>>"$LOG"
+  log "migration: added attempts column"
 fi
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 
@@ -362,9 +368,15 @@ for repo in "${REPOS[@]}"; do
     }')
 done
 
-# Rebuild queue.json from queued rows
+# Rebuild queue.json from queued rows (failed rows with attempts below max re-queue)
+# Escalation: a failed task goes back to queued (attempts incremented by the
+# orchestrator before marking failed) — the daemon re-dispatches it and the
+# orchestrator picks a stronger agent next round. Max ESCALATION_ROUNDS; beyond
+# that the task stays failed and is not re-queued.
+ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-2}"
+sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='failed' AND attempts <= $ESCALATION_ROUNDS;" 2>>"$LOG"
 QUEUE_TMP="${QUEUE_JSON}.tmp"
-sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
+sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt,'attempts',attempts)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt,attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
 if ! jq -e . "$QUEUE_TMP" >/dev/null 2>&1; then
   echo '[]' >"$QUEUE_TMP"
 fi
@@ -526,6 +538,8 @@ esac
 ```markdown
 You are the manul bot orchestrator. Manul = GitHub command bot: it reacts to comments containing `/manul` by implementing the requested task on a branch and reporting back with GitHub comments. You are triggered by the poller daemon when new tasks exist.
 
+**THE QUEUE IS THE SOURCE OF TRUTH.** If a task is in queue.json, you MUST process it in this very turn: mark it running, post the 🤖 Running comment, spawn the worker, wait for it, post the result. Do NOT investigate history, do NOT check GitHub for previous attempts, do NOT wonder whether the task was already handled — previous attempts may have failed, that's exactly why the task is queued again. If the queue has tasks, your job is to execute, not to audit.
+
 You run as the isolated agent `manul` (workspace `~/.openclaw/workspace-manul`, session `manul-worker`). Your own workspace is minimal — ALL bot state lives under `/home/marzec/.openclaw/manul/`. Never read or write the main agent's workspace (`/home/marzec/.openclaw/workspace`, `~/.openclaw/workspace`).
 
 ## Step 0 — Read the queue
@@ -550,16 +564,37 @@ Crashed turns (gateway restart, machine reboot, timeout kill) leave tasks stuck 
 3. The daemon's next poll (≤60s) will rebuild the queue with full task details and dispatch them. Mention recovered leftovers in your final summary.
    If the queue.json you already read in Step 0 contained tasks, process those normally — do NOT double-process a task you just reset (it is not in the current queue.json yet).
 
+**Important:** if Step 0.5 finds NO `running` rows (the usual case), move straight to Step 1. Do not spend time "investigating" — the queue in Step 0 is what you process.
+
 ## Step 1 — Process each task
 
-For every task in queue.json:
+For every task in queue.json — **process it NOW, in this turn, without investigating anything else**:
+
+**Escalation context:** the task carries `attempts` (how many times a worker
+has already run on it and failed). `attempts=0` → first try. Each failed run
+increments `attempts`; the daemon re-queues failed tasks automatically as long
+as `attempts <= 2`. Your job: pick the right agent tier for the CURRENT
+attempt (see step 2) and, on failure, decide whether to escalate or give up.
 
 1. Mark running:
    `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='running' WHERE commentId='<commentId>';"`
 
 2. Resolve the agent (read the known list from config if needed:
    `jq -r '.agents[]' /home/marzec/.openclaw/manul/config.json`):
-   - `agent` non-empty → use it (the parser already validated it).
+   - If the task already has an explicit `agent` (from the trigger) AND
+     `attempts == 0`, use it.
+   - Otherwise pick by escalation tier based on `attempts`:
+       attempts 0 → default `coder` (NORMAL tier) — or the explicit agent if set
+       attempts 1 → escalate: `coder-strong` (STRONG) if the role is coding
+                    (reviewer/debugger/etc. → their -expert variant); keep the
+                    same role family, just one tier higher
+       attempts 2 → escalate again: `coder-expert` (EXPERT)
+   - Escalation map (role → attempts1 → attempts2):
+       coder        → coder-strong  → coder-expert
+       debugger     → debugger-expert
+       reviewer     → reviewer-expert
+       (other roles: same family, -expert at attempts≥1; if no expert variant
+        exists, keep the role but note the escalation in the Running comment)
    - `agent` empty → default agent is `coder`. BUT first check the prompt's
      first word: if it is a plausible (case-insensitive, close) spelling of a
      known agent name, the user probably meant an explicit agent — post ONE
@@ -571,6 +606,7 @@ For every task in queue.json:
 3. Post the running comment (English), using the helper:
    - explicit agent: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
    - default: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
+   - escalation round: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (attempt <n+1>, escalated to <agent>) Accepted the task: <prompt, first 200 chars>"`
 
    **feedback.sh signs automatically — NEVER include `— manul 🐈` in the message you pass to it** (it would be added a second time).
 
@@ -634,9 +670,19 @@ Commit: <commit>
 PR: <pr_url>"` (omit PR line if none)
 
      Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
-   - failed → `UPDATE ... SET status='failed' ...` then post: `❌ Failed
+   - failed → decide: escalate or give up.
+     * Read the task's current attempts: `sqlite3 ... "SELECT attempts FROM processed_comments WHERE commentId='<commentId>';"`
+     * If `attempts < 2` (more escalation rounds allowed):
+       `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt='<now>' WHERE commentId='<commentId>';`
+       then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
 
 Reason: <reason>`
+       The daemon's next poll re-queues it and the next turn escalates.
+       Do NOT post the full ❌ Failed summary yet — the task is not finished.
+     * If `attempts >= 2` (no rounds left): `UPDATE ... SET status='failed', attempts=attempts+1 ...` then post the honest final: `❌ Failed
+
+Reason: <reason>`
+       and do NOT re-queue (the daemon's re-queue guard stops at `attempts > 2`).
    - If you spawned subagents, use `sessions_yield` and wait for completion events before finishing.
 
 ## Step 2 — Finish
@@ -818,8 +864,9 @@ git push origin master
       `agents` list), rest = prompt; unknown/misspelled agent → notice comment +
       default `coder`; workers spawn as OpenClaw role agents (`agentId`)
       — no opencode involved
-- [ ] Escalation: `status=failed` → re-spawn one tier higher
-      (CHEAP→NORMAL→STRONG→EXPERT, max 2 rounds) before reporting ❌ Failed
+- [x] Escalation: `status=failed` → re-queue with `attempts+1`; orchestrator
+      picks one tier higher (coder→coder-strong→coder-expert), max 2 rounds,
+      then honest ❌ Failed
 - [ ] `/manul orchestrator <task>` → full multi-agent flow
       (architect → coder → reviewer) for large tasks
 - [ ] Optional native cron-trigger variant (needs `cron.triggers.enabled`)
