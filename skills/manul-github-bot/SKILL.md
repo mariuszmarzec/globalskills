@@ -631,6 +631,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
+   - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
@@ -693,6 +694,7 @@ Reason: <reason>`
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
+- Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
 ```
 
