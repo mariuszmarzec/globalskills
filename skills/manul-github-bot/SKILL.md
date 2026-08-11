@@ -176,6 +176,12 @@ fail() { echo "MANUL_RESULT {\"fire\":false,\"error\":\"$1\"}"; exit 0; }
 TRIGGER="$(jq -r '.trigger // "/manul"' "$CONFIG")"
 [ -n "$TRIGGER" ] || TRIGGER="/manul"
 
+# Bot signature: any comment ending with this is manul's OWN comment
+# (feedback.sh signs every comment). Skip them so manul never re-triggers
+# itself — e.g. a Done comment mentioning a path like docs/manul-… would
+# otherwise match the trigger substring.
+SIG="— manul 🐈"
+
 # Known role agents (from config.json `.agents`, fallback = skill's role set).
 # The parser sets `.agent` only when the first token after the trigger on the
 # trigger line matches one of these (case-sensitive exact). Anything else stays
@@ -271,8 +277,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
     | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
@@ -309,8 +315,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
+  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
     | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
@@ -347,8 +353,8 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select(.user.login as $u | $allowed | index($u)) |
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
     | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
@@ -404,12 +410,13 @@ fi
 #!/usr/bin/env bash
 # feedback.sh <repo> <issueNumber> <message> [--in-reply-to <reviewCommentId>]
 # Post a signed manul comment. With --in-reply-to the comment is posted as a
-# reply inside the PR review thread (pulls/comments/<id>/replies); otherwise it
-# goes to the issue/PR conversation (issues/<n>/comments).
+# reply inside the PR review thread (pulls/<n>/comments with in_reply_to);
+# otherwise it goes to the issue/PR conversation (issues/<n>/comments).
+# Note: the documented endpoint pulls/comments/<id>/replies returns 404 on
+# github.com (as of 2026-08) — in_reply_to on pulls/<n>/comments is the
+# reliable way to reply in-thread.
 # Strips any literal "/manul" from the message (self-trigger protection) and
-# signs with "— manul 🐈" — idempotently: any trailing signature the caller
-# already included is stripped first, so exactly one is always appended.
-# Prints the created comment URL.
+# signs with "— manul 🐈". Prints the created comment URL.
 set -euo pipefail
 repo="$1"
 issue="$2"
@@ -418,7 +425,7 @@ reply_to=""
 if [ "${4:-}" = "--in-reply-to" ]; then
   reply_to="${5:-}"
 fi
-msg="${msg//\/manul/manul}"
+msg="$(printf '%s' "$msg" | sed -E 's@(^|[[:space:]])/manul([[:space:]]|$)@\1manul\2@g')"
 # Idempotent signing: strip any trailing "— manul 🐈" the caller already
 # included (defense against a double signature), then sign exactly once.
 while [[ "$msg" =~ ([[:space:]]*—[[:space:]]*manul[[:space:]]*🐈[[:space:]]*)$ ]]; do
@@ -431,14 +438,6 @@ else
   jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/issues/$issue/comments" --input - -q '.html_url'
 fi
 ```
-
-> ⚠️ The documented endpoint `pulls/comments/<id>/replies` returns 404 on
-> github.com — the reliable way to reply in-thread is `in_reply_to` on
-> `pulls/<n>/comments` (as the production script does).
-
-> Review comments (from PR review threads, queued with commentId `review:<id>`) are
-> answered **inside the thread**: the orchestrator passes `--in-reply-to <id>` so the
-> bot replies to the exact comment instead of the PR conversation.
 
 ### manul-daemon.sh
 
@@ -691,7 +690,7 @@ Reason: <reason>`
 
 ## Hard rules
 
-- Never include the literal trigger `/manul` in any comment you post (self-trigger protection).
+- Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
