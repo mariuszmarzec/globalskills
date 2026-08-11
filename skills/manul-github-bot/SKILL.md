@@ -305,7 +305,9 @@ fi
 # reply inside the PR review thread (pulls/comments/<id>/replies); otherwise it
 # goes to the issue/PR conversation (issues/<n>/comments).
 # Strips any literal "/manul" from the message (self-trigger protection) and
-# signs with "— manul 🐈". Prints the created comment URL.
+# signs with "— manul 🐈" — idempotently: any trailing signature the caller
+# already included is stripped first, so exactly one is always appended.
+# Prints the created comment URL.
 set -euo pipefail
 repo="$1"
 issue="$2"
@@ -315,13 +317,22 @@ if [ "${4:-}" = "--in-reply-to" ]; then
   reply_to="${5:-}"
 fi
 msg="${msg//\/manul/manul}"
+# Idempotent signing: strip any trailing "— manul 🐈" the caller already
+# included (defense against a double signature), then sign exactly once.
+while [[ "$msg" =~ ([[:space:]]*—[[:space:]]*manul[[:space:]]*🐈[[:space:]]*)$ ]]; do
+  msg="${msg%"${BASH_REMATCH[1]}"}"
+done
 signed="${msg}"$'\n\n— manul 🐈'
 if [ -n "$reply_to" ]; then
-  jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/pulls/comments/$reply_to/replies" --input - -q '.html_url'
+  jq -nc --arg body "$signed" --argjson in_reply_to "$reply_to" '{body: $body, in_reply_to: $in_reply_to}' | gh api --method POST "repos/$repo/pulls/$issue/comments" --input - -q '.html_url'
 else
   jq -nc --arg body "$signed" '{body: $body}' | gh api "repos/$repo/issues/$issue/comments" --input - -q '.html_url'
 fi
 ```
+
+> ⚠️ The documented endpoint `pulls/comments/<id>/replies` returns 404 on
+> github.com — the reliable way to reply in-thread is `in_reply_to` on
+> `pulls/<n>/comments` (as the production script does).
 
 > Review comments (from PR review threads, queued with commentId `review:<id>`) are
 > answered **inside the thread**: the orchestrator passes `--in-reply-to <id>` so the
@@ -453,6 +464,8 @@ For every task in queue.json:
 2. Post the running comment (English), using the helper:
    `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
 
+   **feedback.sh signs automatically — NEVER include `— manul 🐈` in the message you pass to it** (it would be added a second time).
+
    **If the task came from a PR review comment** (commentId starts with `review:`,
    e.g. `review:3740554181`): reply INSIDE the review thread instead of the PR
    conversation — pass `--in-reply-to <numeric-id-after-review:>`:
@@ -507,6 +520,8 @@ Summary: <summary>
 Branch: <branch>
 Commit: <commit>
 PR: <pr_url>"` (omit PR line if none)
+
+     Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
    - failed → `UPDATE ... SET status='failed' ...` then post: `❌ Failed
 
 Reason: <reason>`
