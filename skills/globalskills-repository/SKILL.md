@@ -36,3 +36,7 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 - After creating, removing, or significantly updating a skill, update `README.md` in the repository root (`~/.globalskills/README.md`).
 - The README must list every skill with a one-line description matching the skill's `description` field in its frontmatter.
 - Keep the table in sync with the actual skill folders.
+
+## Skills Index (quick reference)
+- `freellmapi-environment` — Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
+- `wsl-ai-dev-autopilot-multi-device` — Automated WSL2 AI dev environment installer and validator (`~/.globalskills/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).

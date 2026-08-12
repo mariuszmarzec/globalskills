@@ -989,6 +989,20 @@ source ~/.bashrc
 
 ```
 
+# FreeLLMAPI integration
+
+This skill supports using FreeLLMAPI as a local unified cloud-provider router for LiteLLM. Use this when you want to aggregate multiple cloud providers behind a single local API to simplify routing and key management.
+
+- Deploy FreeLLMAPI locally (Docker / docker-compose) and bind it to loopback only (`127.0.0.1:3001`).
+- Add provider keys in the FreeLLMAPI dashboard and generate the unified `FREELLMAPI_API_KEY`.
+- Store the unified key in `~/litellm/.env` as `FREELLMAPI_API_KEY` and load it into the environment when starting `litellm` (use `set -a; source ~/litellm/.env; set +a`).
+- Add a `free-cloud` provider entry in `~/litellm/config.yaml` that points at `http://127.0.0.1:3001/v1` and uses `api_key: os.environ/FREELLMAPI_API_KEY`.
+- Verification quickchecks:
+  - `curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models` — confirm FreeLLMAPI catalog.
+  - Start or restart LiteLLM with the env loaded and confirm `curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://127.0.0.1:4000/v1/models` lists `free-cloud`.
+
+See the dedicated skill for operational guidance and security best practices: `~/.globalskills/skills/freellmapi-environment/SKILL.md`.
+
 # Final Validation
 
 Verify:
