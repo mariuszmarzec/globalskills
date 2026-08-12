@@ -57,7 +57,7 @@ overlap; `lock` is a backstop with 30 min TTL.
 | Path | Purpose |
 |---|---|
 | `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
-| `~/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild |
+| `~/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild; enriches tasks with full comment body + context (PR body, linked issues, file/line/diff for review comments; parent issue for issue comments) |
 | `~/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
 | `~/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
 | `~/.openclaw/manul/orchestrator.prompt.md` | prompt for the headless orchestrator agent turn |
@@ -231,6 +231,7 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
   author TEXT,
   agent TEXT,
   prompt TEXT NOT NULL,
+  context TEXT,
   status TEXT NOT NULL DEFAULT 'queued',
   attempts INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT,
@@ -246,6 +247,11 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;" 2>>"$LOG"
   log "migration: added attempts column"
 fi
+# migration for existing DBs (pre-context column)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|context|'; then
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
+  log "migration: added context column"
+fi
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
@@ -254,6 +260,73 @@ if [ -z "$BASELINE" ]; then
   sqlite3 "$DB" "INSERT OR IGNORE INTO meta(key,value) VALUES('baseline','$BASELINE');" 2>>"$LOG"
   log "baseline set: $BASELINE"
 fi
+
+# === context enrichment helpers ===
+# Enriches queued tasks with the surrounding GitHub context so workers get the
+# WHOLE picture, not just the trigger-line snippet:
+#   - review comments -> PR (title/body/state) + every issue linked in the PR
+#     body (e.g. the task issue) + comment path/line/diffHunk
+#   - issue comments  -> parent issue (title/body)
+# Context is stored in the `context` column (JSON) and shipped via queue.json;
+# the orchestrator passes it to the worker verbatim.
+declare -A CTX_PR_CACHE CTX_ISSUE_CACHE
+
+# extract_issue_refs <text> <default-repo> -> lines "<owner/repo> <number>"
+# Finds issue references of the forms:
+#   https://github.com/<owner>/<repo>/issues/<n>
+#   <owner>/<repo>#<n>
+#   #<n>                       (same repo)
+extract_issue_refs() {
+  local text="$1" repo="$2"
+  printf '%s' "$text" | grep -oE 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|#[0-9]+' | awk -v repo="$repo" '
+    /^http/ { split($0, a, "/"); print a[4] "/" a[5], a[7] }
+    /#/ && !/^http/ && index($0, "/") { split($0, a, "#"); print a[1], a[2] }
+    /^#/ { sub(/^#/, ""); print repo, $0 }
+  ' | sort -u
+}
+
+# fetch_issue_ctx <owner/repo> <number> -> {"number":n,"title":...,"body":...} (cached)
+fetch_issue_ctx() {
+  local repo="$1" n="$2" key="$repo#$n" j
+  if [ -n "${CTX_ISSUE_CACHE[$key]:-}" ]; then
+    printf '%s' "${CTX_ISSUE_CACHE[$key]}"
+    return
+  fi
+  j="$(gh issue view "$n" --repo "$repo" --json number,title,body 2>/dev/null | jq -c '{number,title,body}' 2>/dev/null || true)"
+  CTX_ISSUE_CACHE[$key]="$j"
+  printf '%s' "$j"
+}
+
+# build_review_context <repo> <pr> <path> <line> <diffHunk> -> JSON
+# {pr:{number,title,state,body}, linkedIssues:[{number,title,body}], comment:{path,line,diffHunk}}
+build_review_context() {
+  local repo="$1" pr="$2" path="$3" line="$4" hunk="$5"
+  local key="$repo#$pr" pr_json issues_json r n issue_json
+  if [ -n "${CTX_PR_CACHE[$key]:-}" ]; then
+    pr_json="${CTX_PR_CACHE[$key]}"
+  else
+    pr_json="$(gh pr view "$pr" --repo "$repo" --json number,title,state,body 2>/dev/null | jq -c . 2>/dev/null || true)"
+    [ -n "$pr_json" ] || pr_json='{"number":0,"title":"","state":"","body":""}'
+    CTX_PR_CACHE[$key]="$pr_json"
+  fi
+  issues_json='[]'
+  while read -r r n; do
+    [ -n "${r:-}" ] || continue
+    issue_json="$(fetch_issue_ctx "$r" "$n")"
+    [ -n "$issue_json" ] && issues_json="$(printf '%s' "$issues_json" | jq -c --argjson x "$issue_json" '. + [$x]')"
+  done <<< "$(extract_issue_refs "$(printf '%s' "$pr_json" | jq -r '.body // ""')" "$repo")"
+  jq -nc --argjson pr "$pr_json" --argjson issues "$issues_json" --arg path "$path" --arg line "$line" --arg hunk "$hunk" '{pr:$pr, linkedIssues:$issues, comment:{path:$path,line:$line,diffHunk:$hunk}}'
+}
+
+# build_issue_context <repo> <issueNumber> -> JSON {issue:{number,title,body}}
+build_issue_context() {
+  local repo="$1" n="$2" issue_json
+  issue_json="$(fetch_issue_ctx "$repo" "$n")"
+  if [ -n "$issue_json" ]; then
+    printf '%s' "$issue_json" | jq -c '{issue:.}'
+  fi
+}
+# === end context enrichment helpers ===
 
 NEW=0
 for repo in "${REPOS[@]}"; do
@@ -270,11 +343,22 @@ for repo in "${REPOS[@]}"; do
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     [ -n "$prompt" ] || continue
+    # fullBody = whole comment with the trigger marker removed (fixes the old
+    # truncation where only the trigger-line rest was kept as the prompt)
+    fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
+    [ -n "$fullBody" ] || fullBody="$prompt"
+    prompt="$fullBody"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
-    if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
+      ctx="$(build_issue_context "$repo" "$issue")"
+      if [ -n "$ctx" ]; then
+        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+        log "context enriched for $id on $repo#$issue (parent issue)"
+      fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
   done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
@@ -294,7 +378,8 @@ for repo in "${REPOS[@]}"; do
       url: .html_url,
       issueNumber: (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber),
       agent: $agent,
-      prompt: $prompt
+      prompt: $prompt,
+      fullBody: (.body | sub($trig; ""))
     }')
 
   # 1b) Issue bodies (new issues carrying the trigger in the description)
@@ -310,8 +395,8 @@ for repo in "${REPOS[@]}"; do
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
-    if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
@@ -346,11 +431,25 @@ for repo in "${REPOS[@]}"; do
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     [ -n "$prompt" ] || continue
+    # fullBody = whole review comment with the trigger marker removed; path,
+    # line and diffHunk travel along so the worker gets the exact code spot
+    fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
+    [ -n "$fullBody" ] || fullBody="$prompt"
+    prompt="$fullBody"
+    cpath="$(jq -r '.path // ""' <<<"$obj")"
+    cline="$(jq -r '.line // ""' <<<"$obj")"
+    chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created');" 2>>"$LOG"
-    if [ "$(sqlite3 "$DB" "SELECT changes();")" -gt 0 ]; then
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
+      ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
+      if [ -n "$ctx" ]; then
+        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+        log "context enriched for $id on $repo#$issue (PR + linked issues)"
+      fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
   done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
@@ -370,7 +469,11 @@ for repo in "${REPOS[@]}"; do
       url: .html_url,
       issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
       agent: $agent,
-      prompt: $prompt
+      prompt: $prompt,
+      fullBody: (.body | sub($trig; "")),
+      path: (.path // ""),
+      line: ((.line // .original_line // "") | tostring),
+      diffHunk: (.diff_hunk // "")
     }')
 done
 
@@ -382,7 +485,7 @@ done
 ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-2}"
 sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='failed' AND attempts <= $ESCALATION_ROUNDS;" 2>>"$LOG"
 QUEUE_TMP="${QUEUE_JSON}.tmp"
-sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt,'attempts',attempts)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt,attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
+sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt,'context',context,'attempts',attempts)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt,context,attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
 if ! jq -e . "$QUEUE_TMP" >/dev/null 2>&1; then
   echo '[]' >"$QUEUE_TMP"
 fi
@@ -402,6 +505,7 @@ elif [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
 else
   echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":0}"
 fi
+
 ```
 
 ### feedback.sh
@@ -544,10 +648,14 @@ You run as the isolated agent `manul` (workspace `~/.openclaw/workspace-manul`, 
 ## Step 0 — Read the queue
 
 Read `/home/marzec/.openclaw/manul/queue.json` (array of tasks):
-`[{"commentId": "...", "repository": "owner/repo", "issueNumber": 12, "commentUrl": "...", "author": "...", "agent": "coder", "prompt": "..."}]`
+`[{"commentId": "...", "repository": "owner/repo", "issueNumber": 12, "commentUrl": "...", "author": "...", "agent": "coder", "prompt": "...", "context": "...", "attempts": 0}]`
 
 - `agent` is the role agent explicitly requested on the trigger line (e.g. `/manul reviewer check the diff` → `reviewer`). The parser only sets it for exact matches against the known list; empty string means "no agent requested" → use the default `coder`.
-- `prompt` is the text after the trigger (first token stripped if it was a known agent).
+- `prompt` is the FULL comment/issue text with the trigger marker removed (never truncated).
+- `context` (optional JSON string, enriched by the poller at queue time):
+  - review comments: `{"pr":{"number":..,"title":..,"state":..,"body":..}, "linkedIssues":[{"number":..,"title":..,"body":..}], "comment":{"path":..,"line":..,"diffHunk":..}}` — the PR body describes the task, `linkedIssues` are the issues referenced in the PR body (e.g. the task issue).
+  - issue comments: `{"issue":{"number":..,"title":..,"body":..}}` — the parent issue.
+  Pass `context` to the worker VERBATIM whenever present.
 
 - If the file is missing or the array is empty → reply `NO_REPLY` and stop.
 - DB: `/home/marzec/.openclaw/manul/manul.db` (sqlite3). Task statuses: `queued` → `running` → `done` | `failed`.
@@ -618,7 +726,21 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    says "do it", "fix this"), fetch the issue context first and
    use it as the task description:
    `gh issue view <issueNumber> --repo <repository>` — pass the issue
-   title + body to the worker as the actual task.
+   title + body to the worker as the actual task. If the task carries
+   `context.issue` (JSON from the queue), use THAT instead of fetching.
+
+   **If the task came from a PR review comment** (commentId starts with `review:`,
+   e.g. `review:3740554181`): the worker needs the complete context — the
+   comment, the code spot, the PR, AND the issues the PR links to:
+   - **If the task has a `context` field** (enriched by the poller): pass it to
+     the worker VERBATIM — it already contains the full PR body, every issue
+     linked in the PR body (title+body, e.g. the task issue), and the comment
+     path/line/diffHunk. Do NOT re-fetch anything.
+   - **Legacy tasks without `context`**: fetch it yourself:
+     - `gh api repos/<repository>/pulls/comments/<review-comment-id>` (gets diff_hunk, path, body, line)
+     - `gh pr view <issueNumber> --repo <repository>` (gets PR title, body, state)
+     - **ALWAYS also fetch every issue linked in the PR body** (regex `issues/(\d+)` / `#(\d+)` / `owner/repo#\d+`): `gh issue view <n> --repo <owner/repo> --json number,title,body` and include each title+body.
+   Pass ALL of this (full comment body, file/diff, PR body, linked issues) as part of the subagent task description.
 
 4. Spawn ONE subagent with `sessions_spawn` (mode=run, runtime=subagent, taskName=`manul-<issueNumber>-<agent>`). Use `agentId=<agent>` (the resolved role agent, e.g. `coder`, `reviewer`, `debugger`) — its system prompt/model come from the OpenClaw agent config. Pass `cwd` = the repo work dir. The subagent brief (write it explicitly):
 
@@ -629,10 +751,13 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    everything GitHub-related:
    - Repository: `<repository>` (use `gh` CLI; auth is already set up)
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
+     If the task carries a `context` field, append it verbatim:
+     `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
+   - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
      The description MUST cover:
@@ -696,6 +821,7 @@ Reason: <reason>`
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
+
 ```
 
 ## Install on a new machine (fresh setup)
