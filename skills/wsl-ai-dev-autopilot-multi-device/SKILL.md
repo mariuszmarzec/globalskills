@@ -521,6 +521,7 @@ litellm_settings:
 
 general_settings:
   master_key: sk-12345678
+  database_url: "postgresql://litellm:litellm@127.0.0.1:5432/litellm"
   completion_model: big-pickle
 ```
 
