@@ -35,8 +35,8 @@ fire:true? ──► openclaw agent --agent manul --message-file orchestrator.pr
                   --session-key manul-worker  (headless, timeout -k 60)
                         │
                         ▼
-manul agent (isolated persona: ~/.openclaw/workspace-manul, restricted tools,
-             own session store under ~/.openclaw/agents/manul/sessions)
+manul agent (isolated persona: /mnt/f/ubuntu-workspace/.openclaw/workspace-manul, restricted tools,
+             own session store under /mnt/f/ubuntu-workspace/.openclaw/agents/manul/sessions)
    orchestrator: per task → mark running → post "🤖 Running..." →
                  sessions_spawn subagent (worker) → wait (sessions_yield)
                         │
@@ -56,18 +56,18 @@ overlap; `lock` is a backstop with 30 min TTL.
 
 | Path | Purpose |
 |---|---|
-| `~/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
-| `~/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild; enriches tasks with full comment body + context (PR body, linked issues, file/line/diff for review comments; parent issue for issue comments) |
-| `~/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
-| `~/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
-| `~/.openclaw/manul/orchestrator.prompt.md` | prompt for the headless orchestrator agent turn |
-| `~/.openclaw/workspace-manul/` | isolated agent workspace (AGENTS.md, SOUL.md) |
-| `~/.openclaw/manul/manul.db` | SQLite state (created on first poll) |
-| `~/.openclaw/manul/queue.json` | pending tasks (rebuilt each poll) |
-| `~/.openclaw/manul/poll.log`, `daemon.log` | logs |
-| `~/.openclaw/manul/lock` | run lock (TTL 1800s) |
-| `~/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
-| `~/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild; enriches tasks with full comment body + context (PR body, linked issues, file/line/diff for review comments; parent issue for issue comments) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/orchestrator.prompt.md` | prompt for the headless orchestrator agent turn |
+| `/mnt/f/ubuntu-workspace/.openclaw/workspace-manul/` | isolated agent workspace (AGENTS.md, SOUL.md) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/manul.db` | SQLite state (created on first poll) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/queue.json` | pending tasks (rebuilt each poll) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.log`, `daemon.log` | logs |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/lock` | run lock (TTL 1800s) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
 
 ### config.json
 
@@ -643,7 +643,7 @@ You are the manul bot orchestrator. Manul = GitHub command bot: it reacts to com
 
 **THE QUEUE IS THE SOURCE OF TRUTH.** If a task is in queue.json, you MUST process it in this very turn: mark it running, post the 🤖 Running comment, spawn the worker, wait for it, post the result. Do NOT investigate history, do NOT check GitHub for previous attempts, do NOT wonder whether the task was already handled — previous attempts may have failed, that's exactly why the task is queued again. If the queue has tasks, your job is to execute, not to audit.
 
-You run as the isolated agent `manul` (workspace `~/.openclaw/workspace-manul`, session `manul-worker`). Your own workspace is minimal — ALL bot state lives under `/home/marzec/.openclaw/manul/`. Never read or write the main agent's workspace (`/home/marzec/.openclaw/workspace`, `~/.openclaw/workspace`).
+You run as the isolated agent `manul` (workspace `/mnt/f/ubuntu-workspace/.openclaw/workspace-manul`, session `manul-worker`). Your own workspace is minimal — ALL bot state lives under `/home/marzec/.openclaw/manul/`. Never read or write the main agent's workspace (`/home/marzec/.openclaw/workspace`, `/mnt/f/ubuntu-workspace/.openclaw/workspace`).
 
 ## Step 0 — Read the queue
 
@@ -711,16 +711,16 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Otherwise (no agent requested) → default `coder`.
 
 3. Post the running comment (English), using the helper:
-   - explicit agent: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
-   - default: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
-   - escalation round: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (attempt <n+1>, escalated to <agent>) Accepted the task: <prompt, first 200 chars>"`
+   - explicit agent: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
+   - default: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
+   - escalation round: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (attempt <n+1>, escalated to <agent>) Accepted the task: <prompt, first 200 chars>"`
 
    **feedback.sh signs automatically — NEVER include `— manul 🐈` in the message you pass to it** (it would be added a second time).
 
    **If the task came from a PR review comment** (commentId starts with `review:`,
    e.g. `review:3740554181`): reply INSIDE the review thread instead of the PR
    conversation — pass `--in-reply-to <numeric-id-after-review:>`:
-   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>" --in-reply-to 3740554181`
+   `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>" --in-reply-to 3740554181`
 
    If the prompt is vague or does not describe a concrete task (e.g. it just
    says "do it", "fix this"), fetch the issue context first and
@@ -755,11 +755,12 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
-   - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
+   - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+   - Resolve the repository's default branch for the PR base: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`. Never target `develop`, `staging`, or any branch other than the repository's default branch as a PR target.
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
      The description MUST cover:
        * Task: what was requested (one line + comment URL)
        * Changes: concrete summary of what the diff does (not a copy of the commit message)
@@ -787,7 +788,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
 
 5. When the subagent finishes: parse its `MANUL_RESULT` line.
    - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 3):
-     `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
+     `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
 
 Summary: <summary>
 Branch: <branch>
@@ -817,6 +818,7 @@ Reason: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
+- NEVER create a PR targeting `develop` (or any non-default branch). The PR base is always the repository's default branch (e.g. `main`, `master`) — resolve it via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
@@ -890,16 +892,16 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Otherwise (no agent requested) → default `coder`.
 
 3. Post the running comment (English), using the helper:
-   - explicit agent: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
-   - default: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
-   - escalation round: `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (attempt <n+1>, escalated to <agent>) Accepted the task: <prompt, first 200 chars>"`
+   - explicit agent: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (agent: <agent>) Accepted the task: <prompt, first 200 chars>"`
+   - default: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>"`
+   - escalation round: `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... (attempt <n+1>, escalated to <agent>) Accepted the task: <prompt, first 200 chars>"`
 
    **feedback.sh signs automatically — NEVER include `— manul 🐈` in the message you pass to it** (it would be added a second time).
 
    **If the task came from a PR review comment** (commentId starts with `review:`,
    e.g. `review:3740554181`): reply INSIDE the review thread instead of the PR
    conversation — pass `--in-reply-to <numeric-id-after-review:>`:
-   `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>" --in-reply-to 3740554181`
+   `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "🤖 Running... Accepted the task: <prompt, first 200 chars>" --in-reply-to 3740554181`
 
    If the prompt is vague or does not describe a concrete task (e.g. it just
    says "do it", "fix this"), fetch the issue context first and
@@ -934,11 +936,12 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
    - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
-   - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
+   - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+   - Resolve the repository's default branch for the PR base: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`. Never target `develop`, `staging`, or any branch other than the repository's default branch as a PR target.
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
      The description MUST cover:
        * Task: what was requested (one line + comment URL)
        * Changes: concrete summary of what the diff does (not a copy of the commit message)
@@ -966,7 +969,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
 
 5. When the subagent finishes: parse its `MANUL_RESULT` line.
    - ok → `UPDATE processed_comments SET status='done', processedAt='<now>' WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 3):
-     `~/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
+     `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
 
 Summary: <summary>
 Branch: <branch>
@@ -996,6 +999,7 @@ Reason: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
+- NEVER create a PR targeting `develop` (or any non-default branch). The PR base is always the repository's default branch (e.g. `main`, `master`) — resolve it via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
@@ -1010,12 +1014,12 @@ Reason: <reason>`
    (`openclaw gateway status`). On Ubuntu/Debian: `sudo apt-get install -y sqlite3 jq`.
 2. **Create the directory**:
    ```bash
-   mkdir -p ~/.openclaw/manul/work
+   mkdir -p /mnt/f/ubuntu-workspace/.openclaw/manul/work
    ```
 2b. **Create the isolated `manul` agent** (one brain = one workspace; manul gets
    its own minimal workspace so it never reads the main agent's personal files):
    ```bash
-   openclaw agents add manul --workspace ~/.openclaw/workspace-manul --non-interactive
+   openclaw agents add manul --workspace /mnt/f/ubuntu-workspace/.openclaw/workspace-manul --non-interactive
    ```
    Then apply the restricted tool/skill policy (operator-side; these config paths
    are agent-protected, so apply with `openclaw config patch` from your shell,
@@ -1046,34 +1050,34 @@ Reason: <reason>`
      }
    }
    ```
-   Write a minimal `AGENTS.md`/`SOUL.md` into `~/.openclaw/workspace-manul/`
+   Write a minimal `AGENTS.md`/`SOUL.md` into `/mnt/f/ubuntu-workspace/.openclaw/workspace-manul/`
    (bot rules only — no personal data; see the skill repo for a template).
    The daemon dispatches turns with `--agent manul`, so workers and the
    orchestrator always run inside this isolated agent.
 3. **Write the files**: copy the exact contents from this skill —
    `config.json`, `poll.sh`, `feedback.sh`, `manul-daemon.sh`,
-   `orchestrator.prompt.md` — into `~/.openclaw/manul/`.
+   `orchestrator.prompt.md` — into `/mnt/f/ubuntu-workspace/.openclaw/manul/`.
 4. **Make scripts executable**:
    ```bash
-   chmod +x ~/.openclaw/manul/poll.sh ~/.openclaw/manul/feedback.sh ~/.openclaw/manul/manul-daemon.sh
+   chmod +x /mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh
    ```
 5. **Edit `config.json`**: set `repositories` to the repos manul should watch and
    `allowedUsers` to the GitHub logins allowed to invoke manul (default: repo owner).
 6. **Set the baseline (IMPORTANT — do this BEFORE first daemon start)**:
    ```bash
-   sqlite3 ~/.openclaw/manul/manul.db "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+   sqlite3 /mnt/f/ubuntu-workspace/.openclaw/manul/manul.db "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
    INSERT OR IGNORE INTO meta(key,value) VALUES('baseline','$(date -u +%Y-%m-%dT%H:%M:%SZ)');"
    ```
    (poll.sh also sets it automatically on first run if missing — the explicit
    write just makes the install moment unambiguous.)
 7. **Start the daemon**:
    ```bash
-   ~/.openclaw/manul/manul-daemon.sh start
+   /mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh start
    ```
-8. **Verify**: `~/.openclaw/manul/manul-daemon.sh status`, then check one poll:
+8. **Verify**: `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh status`, then check one poll:
    ```bash
-   ~/.openclaw/manul/manul-daemon.sh run-once
-   tail -5 ~/.openclaw/manul/daemon.log ~/.openclaw/manul/poll.log
+   /mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh run-once
+   tail -5 /mnt/f/ubuntu-workspace/.openclaw/manul/daemon.log /mnt/f/ubuntu-workspace/.openclaw/manul/poll.log
    ```
 
 ## Baseline semantics (anti-duplication rule)
@@ -1091,14 +1095,14 @@ Reason: <reason>`
   vague ("zrób to"), the orchestrator fetches the issue body as task context.
 - **View/reset baseline**:
   ```bash
-  sqlite3 ~/.openclaw/manul/manul.db "SELECT value FROM meta WHERE key='baseline';"
-  sqlite3 ~/.openclaw/manul/manul.db "UPDATE meta SET value='$(date -u +%Y-%m-%dT%H:%M:%SZ)' WHERE key='baseline';"
+  sqlite3 /mnt/f/ubuntu-workspace/.openclaw/manul/manul.db "SELECT value FROM meta WHERE key='baseline';"
+  sqlite3 /mnt/f/ubuntu-workspace/.openclaw/manul/manul.db "UPDATE meta SET value='$(date -u +%Y-%m-%dT%H:%M:%SZ)' WHERE key='baseline';"
   ```
 
 ## Operations
 
 ```bash
-~/.openclaw/manul/manul-daemon.sh start|stop|status|run-once
+/mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh start|stop|status|run-once
 ```
 
 - Daemon survives Gateway restarts (setsid), **not** WSL reboots — after a WSL
@@ -1120,7 +1124,7 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
 
 - **Nothing happens after a task is queued**: check `daemon.log` for the
   `agent turn finished rc=` line; check the orchestrator session transcript
-  under `~/.openclaw/agents/manul/sessions/` (search `manul-worker`).
+  under `/mnt/f/ubuntu-workspace/.openclaw/agents/manul/sessions/` (search `manul-worker`).
 - **Orchestrator used to self-block**: the daemon's `lock` belongs to the
   daemon. The orchestrator must NOT check/remove it — it was removed from the
   prompt after a bug where fresh lock → `NO_REPLY` → infinite no-op turns.
@@ -1147,7 +1151,7 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
 2. Expect within a few poll cycles: 🤖 Running comment → branch
    `feature/manul/<issue>-<slug>` (or `bugfix/...` for bug fixes) → commit → PR
    (if `autoCreatePr`) → ✅ Done comment → DB status `done`.
-3. Helper: `~/.openclaw/manul/e2e-watch.sh` polls until a `manul/*` PR exists
+3. Helper: `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` polls until a `manul/*` PR exists
    or DB reaches done/failed, then prints the result.
 
 ## Maintenance rule
