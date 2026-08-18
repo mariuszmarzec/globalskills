@@ -40,8 +40,6 @@ git -C ~/.globalskills pull
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. |
 | `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
 
-**Always update this skill list in README.md after adding or removing any skill** to keep documentation synchronized.
-
 ## Agents (multi-agent orchestration)
 
 OpenCode agents in `agents/`. Roles define WHAT to do; model tiers define how
