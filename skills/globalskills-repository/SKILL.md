@@ -40,4 +40,5 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 
 ## Skills Index (quick reference)
 - `freellmapi-environment` — Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
+- `pr-description-management` — Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update descriptions when pushing changes. Uses gh CLI for all PR operations. (`~/.globalskills/skills/pr-description-management/SKILL.md`).
 - `wsl-ai-dev-autopilot-multi-device` — Automated WSL2 AI dev environment installer and validator (`~/.globalskills/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).

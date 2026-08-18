@@ -10,6 +10,7 @@ description: Rules for the OpenCode multi-agent orchestration system. Use when r
 - **Role** = WHAT the agent does (architect, coder, reviewer, ...).
 - **Skill** = HOW / with what knowledge the work is done.
 - **Model tier** = HOW MUCH reasoning power / how expensive the work is.
+- **GitHub CLI** = Any role may use the GitHub CLI (`gh`) for repository operations such as checking out branches, creating commits, pushing changes, creating pull requests, or commenting on PRs.
 
 Model routing is independent of roles. Any role can run on any tier. Change
 models here (or in the LiteLLM config) without rebuilding the agents.

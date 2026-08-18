@@ -41,8 +41,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
 1. Mark running:
    `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='running' WHERE commentId='<commentId>';"`
 
-2. Resolve the agent (read the known list from config if needed:
-   `jq -r '.agents[]' /home/marzec/.openclaw/manul/config.json`):
+2. Resolve the agent (read the known list from config if needed):
    - If the task already has an explicit `agent` (from the trigger) AND
      `attempts == 0`, use it.
    - Otherwise pick by escalation tier based on `attempts`:
@@ -125,6 +124,9 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
        — manul 🐈
    - Do NOT post any GitHub comments yourself, do NOT force-push.
    - Skip if an open PR or a branch matching `feature/manul/<issueNumber>-*` or `bugfix/manul/<issueNumber>-*` already exists for this task (report as already-exists).
+   - **Existing branch with open PR:** If a branch matching `feature/manul/<issueNumber>-*` or `bugfix/manul/<issueNumber>-*` already exists AND has an open PR, do NOT skip. Instead: checkout the existing branch, push your changes to it, and then **update the PR description** to reflect the CURRENT state of the work (not the original request). Write the updated description to `/tmp/manul-pr-body.md` and run `gh pr edit <PR-number> --body-file /tmp/manul-pr-body.md`. The updated description must cover: Task (original request + comment URL), Changes (what the current diff does — describe the ACTUAL diff after your push, not just the original commit message), Verification (what tests/build you ran and result). End with `— manul 🐈`. This ensures the PR description always matches the actual code on the branch.
+   - If the branch exists but has NO open PR, skip and report as already-exists (orphan branch).
+   - **Update PR description rule:** manul musi zawsze updateowac PR description do stanu aktualnego jeżeli pushuje do brancha który ma otwarty PR
    - End your final reply with EXACTLY ONE line starting `MANUL_RESULT ` in the form:
      `MANUL_RESULT status=ok branch=<branch> commit=<sha> pr_url=<url-or-> summary=<one line>`
      or `MANUL_RESULT status=failed reason=<short reason>`
@@ -164,5 +166,6 @@ Reason: <reason>`
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
+- **Manul cannot merge branches into master unless explicitly commanded to do so.**
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
