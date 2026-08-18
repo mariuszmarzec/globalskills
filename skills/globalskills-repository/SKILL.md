@@ -32,10 +32,11 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 - Store each skill in its own folder with a clear README or skill definition file.
 - Use the shared repository as the canonical home for reusable skills.
 
-## README Maintenance
+# README Maintenance
 - After creating, removing, or significantly updating a skill, update `README.md` in the repository root (`~/.globalskills/README.md`).
 - The README must list every skill with a one-line description matching the skill's `description` field in its frontmatter.
 - Keep the table in sync with the actual skill folders.
+- **Always update this skill list in README.md after adding or removing any skill** to keep documentation synchronized.
 
 ## Skills Index (quick reference)
 - `freellmapi-environment` — Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
