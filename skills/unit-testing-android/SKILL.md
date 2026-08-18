@@ -33,23 +33,23 @@ Android-specific unit testing practices that supplement the language-agnostic gu
 ```kotlin
 dependencies {
     // Core testing
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.mockito:mockito-core:5.11.0")
-    testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
+    testImplementation("junit:junit:<version>")
+    testImplementation("org.mockito:mockito-core:<version>")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:<version>")
     
     // Robolectric for Android framework
-    testImplementation("org.robolectric:robolectric:4.11")
+    testImplementation("org.robolectric:robolectric:<version>")
     
     // Coroutines testing
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:<version>")
     
     // Truth assertions
-    testImplementation("com.google.truth:truth:1.1.5")
+    testImplementation("com.google.truth:truth:<version>")
     
     // Instrumented
-    androidTestImplementation("androidx.test:core:1.5.0")
-    androidTestImplementation("androidx.test:rules:1.5.0")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation("androidx.test:core:<version>")
+    androidTestImplementation("androidx.test:rules:<version>")
+    androidTestImplementation("androidx.test.espresso:espresso-core:<version>")
 }
 ```
 
