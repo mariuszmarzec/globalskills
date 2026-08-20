@@ -98,11 +98,13 @@ overlap; `lock` is a backstop with 30 min TTL.
     "mariuszmarzec/fiteo",
     "mariuszmarzec/shoppingListGenerator",
     "mariuszmarzec/QuickMVI",
-    "mariuszmarzec/todo",
-    "mariuszmarzec/fiteoApp",
-    "mariuszmarzec/cheatDay",
-    "mariuszmarzec/caracal-rag"
-  ]
+    "mariuszmarzec/todo"
+  ],
+  "ciFix": {
+    "enabled": true,
+    "maxAttemptsPerRun": 2,
+    "cooldownMinutes": 60
+  }
 }
 ```
 
