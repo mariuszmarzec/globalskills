@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh` and `orchestrator.prompt.md`; copy them to `~/.openclaw/manul/` after skill updates.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh`, `manul-comments-remove.sh`, and `orchestrator.prompt.md`; copy them to `~/.openclaw/manul/` after skill updates.
 ---
 
 # Manul GitHub Bot 🐈
@@ -71,22 +71,25 @@ overlap; `lock` is a backstop with 30 min TTL.
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/lock` | run lock (TTL 1800s) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks/<repo-slug>.lock` | per-repo workdir lock (TTL 1800s) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-comments-remove.sh` | installed comment cleanup script |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
 
 ### Installation
 
 Run the installer or use the skill directly. After installation, add a
-convenience alias for `manul-status` in your shell rc:
+convenience alias for `manul-status` and `manul-comments-remove` in your shell rc:
 
 ```bash
 alias manul-status='$HOME/.openclaw/manul/manul-status.sh'
+alias manul-comments-remove='$HOME/.openclaw/manul/manul-comments-remove.sh'
 ```
 
-**Keep `poll.sh` in sync:** the canonical poller lives in this skill directory.
-After updating the skill, copy it to your manul installation:
+**Keep `poll.sh` and `manul-comments-remove.sh` in sync:** the canonical poller and comment cleanup script live in this skill directory.
+After updating the skill, copy them to your manul installation:
 
 ```bash
 cp ~/.globalskills/skills/manul-github-bot/poll.sh ~/.openclaw/manul/poll.sh
+cp ~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh ~/.openclaw/manul/manul-comments-remove.sh
 ```
 
 The same applies to `orchestrator.prompt.md` if it changes.
@@ -783,7 +786,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
      If the task carries a `context` field, append it verbatim:
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
-   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
+   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch first, then create the new branch from it (resolve default via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - **Repo lock:** before doing any work, create a lock file at `/home/marzec/.openclaw/manul/repo-locks/<repo-slug>.lock` (slug = repo name with `/` replaced by `-`). If the file exists and is younger than 30 minutes, another worker is already processing this repo — fail immediately with `MANUL_RESULT status=failed reason=repo-locked`. On success or failure, remove the lock file. This prevents two workers from working on the same repo concurrently. Always update the DB task status to `done` or `failed` before exiting, so the poller does not see a stale `running` task and mistakenly release the repo lock.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
@@ -791,7 +794,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - **CI Build / Check Inspection (skipCiFix=false only):** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the correct PR base branch: use the branch that the new feature branch was created from, NOT the repository default branch. If the branch was explicitly created from a named base branch, use that branch. If `develop` exists and the branch was based on it, use `develop`. Otherwise use the repository default branch. You can inspect this with `git branch --show-current` before branching, or from branch history.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <parent-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <pr-target-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
    - **Resolved review threads:** When processing review comments, ignore comments whose root review thread is already resolved. Only act on unresolved threads; resolved threads are not actionable and should not trigger new work.
    - **One task per repo at a time:** The poller acquires a per-repo lock in `~/.openclaw/manul/repo-locks/<repo-slug>.lock` before dispatching a task for a repo. If the lock already exists and is fresh (TTL 30 min), the repo is skipped in this polling cycle and queued tasks remain pending for the next cycle. The worker also creates a repo lock in its workdir while running, so two workers cannot work on the same repo concurrently. The lock is released on completion; a stale lock (older than TTL) is treated as expired and removed. Before removing a stale lock, the poller also checks the DB: if a task is still marked `running` for that repo, the stale lock is preserved (the old worker may still be alive). If a task remains `running` for longer than 2x TTL, it is automatically reset to `queued` for retry — this handles crashes where the worker died without clearing its state.     The description MUST cover:
        * Task: what was requested (one line + comment URL)
@@ -850,7 +853,7 @@ Reason: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
-- NEVER create a PR targeting `develop` (or any non-default branch). The PR base is always the repository's default branch (e.g. `main`, `master`) — resolve it via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
+- NEVER create a PR targeting `develop` or the repository's default branch when a related manul feature branch or existing manul PR exists for this task. The PR base must be the source branch of the existing manul PR, or the related feature branch, falling back to the default branch only when no task-specific branch exists — resolve candidates via `gh api repos/<repository>/branches`, `gh api repos/<repository>/pulls`, and `gh repo view <repository> --json defaultBranchRef`.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
@@ -966,7 +969,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
      If the task carries a `context` field, append it verbatim:
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
-   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch (resolve via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
+   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch first, then create the new branch from it (resolve default via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
    - **Repo lock:** before doing any work, create a lock file at `/home/marzec/.openclaw/manul/repo-locks/<repo-slug>.lock` (slug = repo name with `/` replaced by `-`). If the file exists and is younger than 30 minutes, another worker is already processing this repo — fail immediately with `MANUL_RESULT status=failed reason=repo-locked`. On success or failure, remove the lock file. This prevents two workers from working on the same repo concurrently. Always update the DB task status to `done` or `failed` before exiting, so the poller does not see a stale `running` task and mistakenly release the repo lock.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
@@ -974,7 +977,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - **CI Build / Check Inspection (skipCiFix=false only):** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the correct PR base branch: use the branch that the new feature branch was created from, NOT the repository default branch. If the branch was explicitly created from a named base branch, use that branch. If `develop` exists and the branch was based on it, use `develop`. Otherwise use the repository default branch. You can inspect this with `git branch --show-current` before branching, or from branch history.
-   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <parent-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
+   - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <pr-target-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
    - **Resolved review threads:** When processing review comments, ignore comments whose root review thread is already resolved. Only act on unresolved threads; resolved threads are not actionable and should not trigger new work.
    - **One task per repo at a time:** The poller acquires a per-repo lock in `~/.openclaw/manul/repo-locks/<repo-slug>.lock` before dispatching a task for a repo. If the lock already exists and is fresh (TTL 30 min), the repo is skipped in this polling cycle and queued tasks remain pending for the next cycle. The worker also creates a repo lock in its workdir while running, so two workers cannot work on the same repo concurrently. The lock is released on completion; a stale lock (older than TTL) is treated as expired and removed. Before removing a stale lock, the poller also checks the DB: if a task is still marked `running` for that repo, the stale lock is preserved (the old worker may still be alive). If a task remains `running` for longer than 2x TTL, it is automatically reset to `queued` for retry — this handles crashes where the worker died without clearing its state.     The description MUST cover:
        * Task: what was requested (one line + comment URL)
@@ -1033,7 +1036,7 @@ Reason: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
-- NEVER create a PR targeting `develop` (or any non-default branch). The PR base is always the repository's default branch (e.g. `main`, `master`) — resolve it via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
+- NEVER create a PR targeting `develop` or the repository's default branch when a related manul feature branch or existing manul PR exists for this task. The PR base must be the source branch of the existing manul PR, or the related feature branch, falling back to the default branch only when no task-specific branch exists — resolve candidates via `gh api repos/<repository>/branches`, `gh api repos/<repository>/pulls`, and `gh repo view <repository> --json defaultBranchRef`.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
