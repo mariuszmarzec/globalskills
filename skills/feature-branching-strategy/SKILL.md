@@ -94,10 +94,18 @@ bugfix/fix-ci-build
 
 ## Creating a pull request
 
+**The PR base branch must be the branch that the feature branch was created from, not the repository default.**
+
+Determine the correct base branch before creating the PR:
+
+1. If the feature branch was explicitly created from a named base branch, use that branch.
+2. If there is a `develop` branch and the feature branch was based on it, use `develop`.
+3. Otherwise, use the repository default branch.
+
 Once the branch is pushed, open a PR with the GitHub CLI (`gh`):
 
 ```bash
-gh pr create --base <default-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION> \
+gh pr create --base <parent-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION> \
   --title "<short, descriptive title>" --body "<meaningful description>"
 ```
 

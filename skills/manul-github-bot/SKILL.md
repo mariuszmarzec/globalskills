@@ -69,6 +69,15 @@ overlap; `lock` is a backstop with 30 min TTL.
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
 
+### Installation
+
+Run the installer or use the skill directly. After installation, add a
+convenience alias for `manul-status` in your shell rc:
+
+```bash
+alias manul-status='$HOME/.openclaw/manul/manul-status.sh'
+```
+
 ### config.json
 
 ```json
@@ -744,6 +753,12 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
      - **ALWAYS also fetch every issue linked in the PR body** (regex `issues/(\d+)` / `#(\d+)` / `owner/repo#\d+`): `gh issue view <n> --repo <owner/repo> --json number,title,body` and include each title+body.
    Pass ALL of this (full comment body, file/diff, PR body, linked issues) as part of the subagent task description.
 
+3.5. CI priority check (before spawning):
+   - If this task relates to a PR (review comment, or issueNumber is a PR number), inspect the queue.json from Step 0 for OTHER tasks with the same `repository` + `issueNumber` but different `commentId`.
+   - If there ARE other tasks for the same PR → set `skipCiFix=true` for this dispatch.
+   - If there are NO other tasks → set `skipCiFix=false`.
+   - When writing the subagent brief: include the CI Build / Check Inspection instruction ONLY if `skipCiFix=false`. If `skipCiFix=true`, omit that bullet entirely.
+
 4. Spawn ONE subagent with `sessions_spawn` (mode=run, runtime=subagent, taskName=`manul-<issueNumber>-<agent>`). Use `agentId=<agent>` (the resolved role agent, e.g. `coder`, `reviewer`, `debugger`) — its system prompt/model come from the OpenClaw agent config. Pass absolute `cwd` = `/home/marzec/.openclaw/manul/work/...` (NEVER use `~`). The subagent brief (write it explicitly):
 
    ---
@@ -759,7 +774,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
-   - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
+   - **CI Build / Check Inspection (skipCiFix=false only):** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the repository's default branch for the PR base: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`. Never target `develop`, `staging`, or any branch other than the repository's default branch as a PR target.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
@@ -940,7 +955,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
-   - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
+   - **CI Build / Check Inspection (skipCiFix=false only):** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the repository's default branch for the PR base: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`. Never target `develop`, `staging`, or any branch other than the repository's default branch as a PR target.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.

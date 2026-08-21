@@ -9,9 +9,12 @@ description: Manage GitHub Pull Request descriptions - create PRs with proper de
 Ensure every PR created or updated has a meaningful description. This skill covers creating PRs with descriptions and updating existing PR descriptions when pushing new commits.
 
 ## When to Use
-- Creating a new PR (after pushing a feature branch)
-- Updating an existing PR with new commits (push to existing branch)
+**Mandatory** — use this skill every time work is completed and a branch is pushed to GitHub:
+- After pushing a new feature branch for the first time: **create a PR with a description**
+- After pushing additional commits to an existing PR branch: **update the PR description**
 - Any time you push changes that should be reflected in the PR description
+
+Do not stop at "branch pushed" — always ensure a PR exists and its description is accurate.
 
 ## Prerequisites
 - `gh` CLI installed and authenticated (`gh auth status` shows logged in)
@@ -19,9 +22,20 @@ Ensure every PR created or updated has a meaningful description. This skill cove
 - Feature branch follows `feature/<ISSUE_NUMBER>-<DESCRIPTION>` or `bugfix/<DESCRIPTION>` naming (per feature-branching-strategy)
 
 ## Workflow
+This is the final step after any push. Do not consider the task complete until the PR is created or updated.
+
+## Base branch for PR
+
+**The PR base branch must be the branch that the feature branch was created from, not the repository default.**
+
+Determine the correct base branch before creating or editing the PR:
+
+1. If the feature branch was explicitly created from a named base branch, use that branch.
+2. If there is a `develop` branch and the feature branch was based on it, use `develop`.
+3. Otherwise, use the repository default branch.
 
 ### 1. Create PR with Description (First Push)
-After pushing a new feature branch for the first time:
+After pushing a new feature branch for the first time, immediately create a PR:
 
 ```bash
 # Push the branch first
@@ -31,7 +45,7 @@ git push -u origin <branch-name>
 gh pr create \
   --title "<PR Title>" \
   --body "<PR Description>" \
-  --base main \
+  --base <parent-branch> \
   --head <branch-name>
 ```
 
@@ -53,7 +67,7 @@ Closes #<ISSUE_NUMBER> (if applicable)
 ```
 
 ### 2. Update PR Description (Subsequent Pushes)
-When pushing additional commits to an existing PR branch:
+After pushing additional commits to an existing PR branch, immediately update the PR description:
 
 ```bash
 # Push changes
