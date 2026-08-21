@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh` and `orchestrator.prompt.md`; copy them to `~/.openclaw/manul/` after skill updates.
 ---
 
 # Manul GitHub Bot 🐈
@@ -56,6 +56,9 @@ overlap; `lock` is a backstop with 30 min TTL.
 
 | Path | Purpose |
 |---|---|
+| `~/.globalskills/skills/manul-github-bot/SKILL.md` | skill/rules source of truth |
+| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (copy to `~/.openclaw/manul/poll.sh`) |
+| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (copy to `~/.openclaw/manul/orchestrator.prompt.md`) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild; enriches tasks with full comment body + context (PR body, linked issues, file/line/diff for review comments; parent issue for issue comments) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
@@ -66,6 +69,7 @@ overlap; `lock` is a backstop with 30 min TTL.
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/queue.json` | pending tasks (rebuilt each poll) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.log`, `daemon.log` | logs |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/lock` | run lock (TTL 1800s) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks/<repo-slug>.lock` | per-repo workdir lock (TTL 1800s) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
 
@@ -77,6 +81,15 @@ convenience alias for `manul-status` in your shell rc:
 ```bash
 alias manul-status='$HOME/.openclaw/manul/manul-status.sh'
 ```
+
+**Keep `poll.sh` in sync:** the canonical poller lives in this skill directory.
+After updating the skill, copy it to your manul installation:
+
+```bash
+cp ~/.globalskills/skills/manul-github-bot/poll.sh ~/.openclaw/manul/poll.sh
+```
+
+The same applies to `orchestrator.prompt.md` if it changes.
 
 ### config.json
 
