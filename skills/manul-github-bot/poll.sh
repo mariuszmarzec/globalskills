@@ -258,6 +258,12 @@ mark_ci_fix_attempted() {
   sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_seen (prNumber, runId, attemptedAt) VALUES ($pr, '$run', '$now');" 2>>"$LOG"
 }
 
+has_unresolved_manul_tasks() {
+  local repo="$1"
+  local issue="$2"
+  sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE repository='$repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','failed') AND (status!='failed' OR attempts <= 2) LIMIT 1;" 2>>"$LOG"
+}
+
 # scan_failing_ci <repo> -> queues synthetic tasks for failing manul PRs
 scan_failing_ci() {
   local repo="$1"
@@ -278,6 +284,12 @@ scan_failing_ci() {
     pr_num="$(printf '%s' "$pr" | jq -r '.number')"
     pr_branch="$(printf '%s' "$pr" | jq -r '.head')"
     pr_title="$(printf '%s' "$pr" | jq -r '.title')"
+    # Skip build-fix if this PR already has unresolved manul tasks
+    if has_unresolved_manul_tasks "$repo" "$pr_num"; then
+      log "skipping CI fix for $repo#$pr_num — unresolved manul tasks present"
+      i=$((i+1))
+      continue
+    fi
     # Get failing checks for this PR
     local checks_json
     checks_json="$(gh pr checks "$pr_num" --repo "$repo" --json name,state,completedAt,link 2>>"$LOG" | jq -c '[.[] | select(.state=="FAILURE" or .state=="ERROR")]' 2>>"$LOG")"
