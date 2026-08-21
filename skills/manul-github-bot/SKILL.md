@@ -778,7 +778,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the correct PR base branch: use the branch that the new feature branch was created from, NOT the repository default branch. If the branch was explicitly created from a named base branch, use that branch. If `develop` exists and the branch was based on it, use `develop`. Otherwise use the repository default branch. You can inspect this with `git branch --show-current` before branching, or from branch history.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <parent-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
-     The description MUST cover:
+   - **Resolved review threads:** When processing review comments, ignore comments whose root review thread is already resolved. Only act on unresolved threads; resolved threads are not actionable and should not trigger new work.     The description MUST cover:
        * Task: what was requested (one line + comment URL)
        * Changes: concrete summary of what the diff does (not a copy of the commit message)
        * Verification: what you ran (tests/build) and the result
@@ -959,7 +959,7 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
    - Resolve the correct PR base branch: use the branch that the new feature branch was created from, NOT the repository default branch. If the branch was explicitly created from a named base branch, use that branch. If `develop` exists and the branch was based on it, use `develop`. Otherwise use the repository default branch. You can inspect this with `git branch --show-current` before branching, or from branch history.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <parent-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
-     The description MUST cover:
+   - **Resolved review threads:** When processing review comments, ignore comments whose root review thread is already resolved. Only act on unresolved threads; resolved threads are not actionable and should not trigger new work.     The description MUST cover:
        * Task: what was requested (one line + comment URL)
        * Changes: concrete summary of what the diff does (not a copy of the commit message)
        * Verification: what you ran (tests/build) and the result
