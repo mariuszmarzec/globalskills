@@ -587,6 +587,13 @@ if [ "${STUCK_RESET:-0}" -gt 0 ]; then
   log "recovered $STUCK_RESET stuck running task(s) older than ${STUCK_THRESHOLD}s"
 fi
 
+# Reaper: remove queued tasks for closed issues / merged-closed PRs
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE status='queued' AND ( (issueState='closed') OR (prState IN ('merged','closed')) );" 2>>"$LOG"
+REAPER="$(sqlite3 "$DB" "SELECT changes();" 2>/dev/null || echo 0)"
+if [ "${REAPER:-0}" -gt 0 ]; then
+  log "reaped $REAPER stale queued task(s) for closed issues/PRs"
+fi
+
 # Rebuild queue.json from queued rows (failed rows with attempts below max re-queue)
 ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-2}"
 sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='failed' AND attempts <= $ESCALATION_ROUNDS;" 2>>"$LOG"
