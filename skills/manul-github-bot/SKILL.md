@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh`, `manul-comments-remove.sh`, and `orchestrator.prompt.md`; copy them to `~/.openclaw/manul/` after skill updates.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh`, `manul-comments-remove.sh`, and `orchestrator.prompt.md`. They are symlinked into `~/.openclaw/manul/` during installation, so skill updates apply automatically — no copy step needed.
 ---
 
 # Manul GitHub Bot 🐈
@@ -52,14 +52,16 @@ orchestrator: parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
 Dispatch is synchronous (daemon waits for the agent turn), so runs never
 overlap; `lock` is a backstop with 30 min TTL.
 
-## Files (canonical source lives here — copy from this skill)
+## Files (canonical source lives here — symlinked into `~/.openclaw/manul/`)
 
 | Path | Purpose |
 |---|---|
 | `~/.globalskills/skills/manul-github-bot/SKILL.md` | skill/rules source of truth |
-| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (copy to `~/.openclaw/manul/poll.sh`) |
-| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (copy to `~/.openclaw/manul/orchestrator.prompt.md`) |
-| `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` | enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repositories[] |
+| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `~/.openclaw/manul/poll.sh`) |
+| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `~/.openclaw/manul/orchestrator.prompt.md`) |
+| `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `~/.openclaw/manul/config.json` and customize) |
+| `~/.globalskills/skills/manul-github-bot/watchdog.sh` | canonical watchdog script (symlinked into `~/.openclaw/manul/watchdog.sh`) |
+| `~/.openclaw/manul/config.json` | **local runtime config** — enabled, pollInterval, trigger, agents[], autoCreatePr, allowedUsers[], repository[] (not in skill repo)
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh` | poller: scan + dedupe + queue rebuild; enriches tasks with full comment body + context (PR body, linked issues, file/line/diff for review comments; parent issue for issue comments) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh` | post a signed comment (strips literal `/manul`) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh` | start/stop/status/run-once wrapper around the loop |
@@ -71,28 +73,48 @@ overlap; `lock` is a backstop with 30 min TTL.
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/lock` | run lock (TTL 1800s) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks/<repo-slug>.lock` | per-repo workdir lock (TTL 1800s) |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/work/<owner-repo>/` | git clones used by workers |
+
+### Build-fix commit gate (new — 2026-08-24)
+
+When the bot attempts to fix a failing CI build (`ci_fix:` task) but fails, it records `(repo, PR#, commit SHA)` in a new `ci_fix_failed` table. While the PR's head stays on that exact commit, `poll.sh` skips queuing any new build-fix tasks (`is_ci_fix_failed_for_commit` check in `scan_failing_ci`). Once a new commit is pushed (new `head_sha`), the gate lifts automatically and the bot will try again. The orchestrator (`MANUL_RESULT status=failed`) writes the record; the poller reads it. This prevents the bot from burning retries trying to fix a broken build on a commit the user hasn't changed.
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-comments-remove.sh` | installed comment cleanup script |
 | `/mnt/f/ubuntu-workspace/.openclaw/manul/e2e-watch.sh` | E2E test helper (polls until PR/done) |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh` | daemon watchdog (symlinked to skill canonical copy); starts daemon if dead, clears stale `lock` files (TTL 1800s) and resets stuck `running` tasks in `manul.db`. Logs to `watchdog.log`. |
+| `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.log` | watchdog log output |
 
 ### Installation
 
-Run the installer or use the skill directly. After installation, add a
-convenience alias for `manul-status` and `manul-comments-remove` in your shell rc:
+Run the installer or use the skill directly. After installation:
+
+1. Copy the config template and customize it:
+   ```bash
+   cp ~/.globalskills/skills/manul-github-bot/config.json.example ~/.openclaw/manul/config.json
+   # then edit ~/.openclaw/manul/config.json with your repos, allowedUsers, etc.
+   ```
+
+2. Add a convenience alias for `manul-status` and `manul-comments-remove` in your shell rc:
 
 ```bash
 alias manul-status='$HOME/.openclaw/manul/manul-status.sh'
 alias manul-comments-remove='$HOME/.openclaw/manul/manul-comments-remove.sh'
 ```
 
-**Keep `poll.sh` and `manul-comments-remove.sh` in sync:** the canonical poller and comment cleanup script live in this skill directory.
-After updating the skill, copy them to your manul installation:
+**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, and `watchdog.sh` in `~/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
+
+To verify the symlinks are intact:
 
 ```bash
-cp ~/.globalskills/skills/manul-github-bot/poll.sh ~/.openclaw/manul/poll.sh
-cp ~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh ~/.openclaw/manul/manul-comments-remove.sh
+ls -la ~/.openclaw/manul/poll.sh ~/.openclaw/manul/manul-comments-remove.sh ~/.openclaw/manul/orchestrator.prompt.md
 ```
 
-The same applies to `orchestrator.prompt.md` if it changes.
+If a symlink is ever broken (e.g. after manually editing the installed copy), recreate it:
+
+```bash
+ln -sf ~/.globalskills/skills/manul-github-bot/poll.sh ~/.openclaw/manul/poll.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh ~/.openclaw/manul/manul-comments-remove.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md ~/.openclaw/manul/orchestrator.prompt.md
+ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
+```
 
 ### config.json
 
@@ -125,6 +147,17 @@ The same applies to `orchestrator.prompt.md` if it changes.
     "mariuszmarzec/QuickMVI",
     "mariuszmarzec/todo"
   ],
+  "retryConfig": {
+    "maxAttempts": 3,
+    "contextStrategy": "progressive",
+    "contextLimits": [240000, 120000, 60000],
+    "useLightContextOnFinalRetry": true,
+    "sessionTimeoutSeconds": 300
+  },
+  "compaction": {
+    "retryOnTimeout": true,
+    "fallbackCutoffTokens": 240000
+  },
   "ciFix": {
     "enabled": true,
     "maxAttemptsPerRun": 2,
@@ -133,6 +166,15 @@ The same applies to `orchestrator.prompt.md` if it changes.
 }
 ```
 
+* `retryConfig` — progressive retry/fallback for failed tasks:
+  - `maxAttempts`: how many times a failed task is re-queued before giving up (default 3).
+  - `contextStrategy`: `"progressive"` reduces the token context on each retry attempt to avoid compaction timeouts.
+  - `contextLimits`: array of max input tokens per attempt (e.g. `[240000, 120000, 60000]`) — first attempt uses full context, subsequent attempts get progressively smaller windows.
+  - `useLightContextOnFinalRetry`: on the last attempt, switch to `lightContext` mode for minimal context overhead.
+  - `sessionTimeoutSeconds`: hard timeout per agent turn (default 300s/5min); if exceeded the agent is killed and marked failed.
+* `compaction` — controls how the OpenClaw session transcript is compacted before serialization:
+  - `retryOnTimeout`: if the initial compaction exceeds the time budget, retry once with aggressive truncation to `fallbackCutoffTokens`.
+  - `fallbackCutoffTokens`: token ceiling used when compaction falls back (default 240000).
 * `allowedUsers` — GitHub logins allowed to invoke manul (others are ignored).
   Default when missing: the owner of the first repository.
 * `agents` — known role agent names. The parser sets the task's `agent` field
@@ -409,7 +451,7 @@ for repo in "${REPOS[@]}"; do
       fullBody: (.body | sub($trig; ""))
     }')
 
-  # 1b) Issue bodies (new issues carrying the trigger in the description)
+  # 1b) Issue bodies (new OPEN issues carrying the trigger in the description) — state=open skips closed issues
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
     id="$(jq -r '.id' <<<"$obj")"
@@ -427,7 +469,7 @@ for repo in "${REPOS[@]}"; do
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues?state=all&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -786,13 +828,17 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
      If the task carries a `context` field, append it verbatim:
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
-   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch first, then create the new branch from it (resolve default via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
+   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin`.
+     - **NEW critical step (review-comment HEAD sync):** if this is a `review:` comment and `T.context.pr.head` ("comment_pr_head") is non-empty, run:
+       `git fetch origin "$comment_pr_head" && git checkout "$comment_pr_head" && git pull origin "$comment_pr_head"`
+       (this syncs the work dir to the **HEAD of the PR the comment lives on** — the code state the review comment refers to, e.g. `feature/14-navigation-module-extraction` for PR #25. We do NOT use `pr.base` here; for a feature-branch PR that would be the deep merge base like `master`, which has none of the feature work.) Then checkout the branch (continuation: the existing manul branch on top of the freshly-pulled comment-PR HEAD; fresh: create new branch from the pulled HEAD).
    - **Repo lock:** before doing any work, create a lock file at `/home/marzec/.openclaw/manul/repo-locks/<repo-slug>.lock` (slug = repo name with `/` replaced by `-`). If the file exists and is younger than 30 minutes, another worker is already processing this repo — fail immediately with `MANUL_RESULT status=failed reason=repo-locked`. On success or failure, remove the lock file. This prevents two workers from working on the same repo concurrently. Always update the DB task status to `done` or `failed` before exiting, so the poller does not see a stale `running` task and mistakenly release the repo lock.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
    - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
    - **CI Build / Check Inspection (skipCiFix=false only):** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
    - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
+   - **NEW PR-base guardrail (review comments):** for `review:` comments, `pr_target_branch` is ONLY ever `existing_pr.head` (the manul branch) — NEVER the comment-PR's base or the repo default. Assert `pr_target_branch` starts with `feature/manul/` or `bugfix/manul/` — if not, refuse `gh pr create` and log a hard error. This is because the work dir was synced to `comment_pr_head` (HEAD of the comment-PR) and new commits must land on manul's branch whose PR targets `comment_pr_head` as its base.
    - Resolve the correct PR base branch: use the branch that the new feature branch was created from, NOT the repository default branch. If the branch was explicitly created from a named base branch, use that branch. If `develop` exists and the branch was based on it, use `develop`. Otherwise use the repository default branch. You can inspect this with `git branch --show-current` before branching, or from branch history.
    - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <pr-target-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
    - **Resolved review threads:** When processing review comments, ignore comments whose root review thread is already resolved. Only act on unresolved threads; resolved threads are not actionable and should not trigger new work.
@@ -833,6 +879,13 @@ PR: <pr_url>"` (omit PR line if none)
      Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
    - failed → decide: escalate or give up.
      * Read the task's current attempts: `sqlite3 ... "SELECT attempts FROM processed_comments WHERE commentId='<commentId>';"`
+     * **CI fix tasks (`ci_fix:%`):** if the build-fix attempt failed, record the failed commit so the poller stops queueing more attempts for the SAME commit. Resolve the PR's current head SHA and write to the `ci_fix_failed` table:
+       ```
+       head_sha="$(gh pr view <issueNumber> --repo <repository> --json headRefOid --jq '.headRefOid // ""')"
+       branch="$(gh pr view <issueNumber> --repo <repository> --json headRef --jq '.headRef // ""' | sed 's|refs/heads/||')"
+       sqlite3 /home/marzec/.openclaw/manul/manul.db "INSERT OR REPLACE INTO ci_fix_failed(repository, prNumber, head_sha, branch, reason, failed_at) VALUES('<repository>', <issueNumber>, '$head_sha', '$branch', '<reason>', datetime('now'));"
+       ```
+       Skip this if the failure reason is `repo-locked` (transient). The poller reads `ci_fix_failed` and will NOT queue another build-fix task until the PR's head SHA changes — see "Build-fix commit gate" below.
      * If `attempts < 2` (more escalation rounds allowed):
        `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt='<now>' WHERE commentId='<commentId>';`
        then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
@@ -969,7 +1022,10 @@ attempt (see step 2) and, on failure, decide whether to escalate or give up.
    - Task (from comment `<commentUrl>` by `<author>`): `<prompt>`
      If the task carries a `context` field, append it verbatim:
      `- Context (enriched by the poller): <context JSON — PR body, linked issues, comment path/line/diff>`
-   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the default branch first, then create the new branch from it (resolve default via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`).
+   - Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin`.
+     - **NEW critical step (review-comment HEAD sync):** if this is a `review:` comment and `T.context.pr.head` ("comment_pr_head") is non-empty, run:
+       `git fetch origin "$comment_pr_head" && git checkout "$comment_pr_head" && git pull origin "$comment_pr_head"`
+       (this syncs the work dir to the **HEAD of the PR the comment lives on** — the code state the review comment refers to. We do NOT use `pr.base` here; for a feature-branch PR that would be the deep merge base like `master`, which has none of the feature work.) Then checkout the branch (continuation: the existing manul branch on top of the freshly-pulled comment-PR HEAD; fresh: create new branch from the pulled HEAD).
    - **Repo lock:** before doing any work, create a lock file at `/home/marzec/.openclaw/manul/repo-locks/<repo-slug>.lock` (slug = repo name with `/` replaced by `-`). If the file exists and is younger than 30 minutes, another worker is already processing this repo — fail immediately with `MANUL_RESULT status=failed reason=repo-locked`. On success or failure, remove the lock file. This prevents two workers from working on the same repo concurrently. Always update the DB task status to `done` or `failed` before exiting, so the poller does not see a stale `running` task and mistakenly release the repo lock.
    - Create branch `<type>/manul/<issueNumber>-<short-kebab-slug>` where `<type>` is `feature` for new functionality/changes/improvements and `bugfix` for bug fixes (judge from the task; when in doubt use `feature`). `<issueNumber>` is the issue/PR number the task came from. Slug from the prompt, max ~40 chars, alnum+dash. Examples: `feature/manul/12-update-ktor`, `bugfix/manul/3-fix-crash-on-empty-input`.
    - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or „don't code yet“ request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. „add docs/plan.md“) — then do the PR as usual.
@@ -1016,6 +1072,13 @@ PR: <pr_url>"` (omit PR line if none)
      Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
    - failed → decide: escalate or give up.
      * Read the task's current attempts: `sqlite3 ... "SELECT attempts FROM processed_comments WHERE commentId='<commentId>';"`
+     * **CI fix tasks (`ci_fix:%`):** if the build-fix attempt failed, record the failed commit so the poller stops queueing more attempts for the SAME commit. Resolve the PR's current head SHA and write to the `ci_fix_failed` table:
+       ```
+       head_sha="$(gh pr view <issueNumber> --repo <repository> --json headRefOid --jq '.headRefOid // ""')"
+       branch="$(gh pr view <issueNumber> --repo <repository> --json headRef --jq '.headRef // ""' | sed 's|refs/heads/||')"
+       sqlite3 /home/marzec/.openclaw/manul/manul.db "INSERT OR REPLACE INTO ci_fix_failed(repository, prNumber, head_sha, branch, reason, failed_at) VALUES('<repository>', <issueNumber>, '$head_sha', '$branch', '<reason>', datetime('now'));"
+       ```
+       Skip this if the failure reason is `repo-locked` (transient). The poller reads `ci_fix_failed` and will NOT queue another build-fix task until the PR's head SHA changes — see "Build-fix commit gate" below.
      * If `attempts < 2` (more escalation rounds allowed):
        `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt='<now>' WHERE commentId='<commentId>';`
        then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
@@ -1139,16 +1202,31 @@ Reason: <reason>`
 ## Operations
 
 ```bash
+# daemon lifecycle
 /mnt/f/ubuntu-workspace/.openclaw/manul/manul-daemon.sh start|stop|status|run-once
 ```
 
-- Daemon survives Gateway restarts (setsid), **not** WSL reboots — after a WSL
-  restart run `start` again.
-- Editing `config.json` needs no daemon restart (poll.sh reads it every cycle);
-  a new `pollInterval` applies on the daemon's next loop only after a restart
-  of the daemon process.
-- Logs: `daemon.log` (loop + dispatch + agent rc), `poll.log` (scan details).
-- DB statuses: `queued` → `running` → `done` | `failed`.
+### Watchdog (cron-based liveness & recovery)
+
+`watchdog.sh` keeps manul self-healing when cron is available (e.g. WSL2 has no
+systemd). It runs `*/5 * * * *` and:
+
+1. **Starts the daemon** if `daemon.pid` is missing or its PID is not alive.
+2. **Clears a stale lock** (`lock` file older than `LOCK_TTL=1800`s / 30 min) — the lock is a backstop since dispatch is synchronous; a stale lock (e.g. after a crash) would make `poll.sh` return `fire:false` forever.
+3. **Resets stuck `running` tasks** — any `processed_comments` row still `status='running'` is moved back to `queued` with `processedAt=NULL`, so the next poll retries it.
+
+Logs go to `~/.openclaw/manul/watchdog.log`. Install it once:
+
+```bash
+chmod +x /home/marzec/.openclaw/manul/watchdog.sh
+(crontab -l 2>/dev/null; echo '*/5 * * * * /home/marzec/.openclaw/manul/watchdog.sh') | sort -u | crontab -
+```
+
+Run manually once to recover the current session:
+
+```bash
+/home/marzec/.openclaw/manul/watchdog.sh && tail -5 /home/marzec/.openclaw/manul/watchdog.log
+```
 
 ## Rate limits
 
@@ -1173,6 +1251,14 @@ Example: 5 repos → 60s interval ≈ 900 req/h (safe). 22 repos → 20s would b
   bounds the turn.
 - **`openclaw daemon` is NOT a polling daemon**: it only manages the Gateway
   service (systemd/launchd). Do not use it for manul.
+- **Watchdog cron not firing**: check `crontab -l` includes `watchdog.sh`. On
+  WSL2 cron runs when the WSL distro is active — if the distro is suspended,
+  jobs are delayed until it wakes; no other scheduler is needed while WSL is
+  running.
+- **Watchdog removed lock but task is still stuck**: if a worker died inside a
+  git command that left the repo workdir dirty, the next poll may fail again
+  before the reset takes effect. Check `daemon.log` for the next `fire:true`
+  cycle, or force a recovery with `manul-daemon.sh run-once`.
 - **No systemd in this WSL2**: no systemd timers/user timers — use the setsid
   daemon. PID 1 is `init`.
 - **`cron.triggers.enabled` is protected**: agent cannot enable it (unattended
