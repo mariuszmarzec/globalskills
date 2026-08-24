@@ -401,6 +401,20 @@ NEW=0
 for repo in "${REPOS[@]}"; do
   [ -n "$repo" ] || continue
 
+  if ! acquire_repo_lock "$repo"; then
+    continue
+  fi
+  repo_cleanup_lock=1
+
+  # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
+  # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
+  declare -A OPEN_ISSUES CLOSED_ISSUES OPEN_PRS MERGED_PRS CLOSED_PRS
+  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=closed&per_page=100" --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
+
   # 1) Issue comments (PR conversation comments are issue comments too)
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
@@ -419,7 +433,12 @@ for repo in "${REPOS[@]}"; do
     prompt="$fullBody"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    # Skip comments on closed issues and PR-conversation comments on
+    # merged/closed PRs (PR review comments are handled in §2).
+    [ -n "${CLOSED_ISSUES[$issue]:-}" ] && continue
+    [ -n "${MERGED_PRS[$issue]:-}" ] && continue
+    [ -n "${CLOSED_PRS[$issue]:-}" ] && continue
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState,prState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${CLOSED_ISSUES[$issue]:-open}','${OPEN_PRS[$issue]:-}'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_issue_context "$repo" "$issue")"
@@ -464,7 +483,7 @@ for repo in "${REPOS[@]}"; do
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','open'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
@@ -510,7 +529,9 @@ for repo in "${REPOS[@]}"; do
     chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
+    pr_state="$(jq -r '.state // ""' <<<"$obj")"
+    is_res="$(jq -r '.isResolved // false' <<<"$obj")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,prState,isResolved) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${pr_state:-open}',$is_res); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
@@ -542,9 +563,17 @@ for repo in "${REPOS[@]}"; do
       fullBody: (.body | sub($trig; "")),
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
-      diffHunk: (.diff_hunk // "")
+      diffHunk: (.diff_hunk // ""),
+      isResolved: (.in_reply_to_id != null)
     }')
 done
+
+# Reaper: remove queued tasks for closed issues / merged-closed PRs
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE status='queued' AND ( (issueState='closed') OR (prState IN ('merged','closed')) );" 2>>"$LOG"
+REAPER="$(sqlite3 "$DB" "SELECT changes();" 2>/dev/null || echo 0)"
+if [ "${REAPER:-0}" -gt 0 ]; then
+  log "reaped $REAPER stale queued task(s) for closed issues/PRs"
+fi
 
 # Rebuild queue.json from queued rows (failed rows with attempts below max re-queue)
 # Escalation: a failed task goes back to queued (attempts incremented by the
