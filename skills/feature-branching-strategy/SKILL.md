@@ -92,6 +92,22 @@ bugfix/fix-ci-build
 
 6. If a feature branch for the work already exists, reuse it instead of creating a new one.
 
+## Resolving PR conflicts
+
+Conflict resolution for a PR must be done on that PR's **source branch**, then pushed back, so GitHub updates the same PR.
+
+Preferred flow:
+1. Fetch and check out the PR's source branch, e.g. `git fetch origin && git checkout -b pr/22 origin/pr/22` or the existing feature branch behind the PR.
+2. Pull/rebase onto the latest target branch: `git pull --rebase origin master` (or the actual base).
+3. Resolve conflicts, commit, and push the same branch: `git push --force-with-lease origin pr/22`.
+4. Do **not** merge the target branch into the PR branch locally and stop there without pushing/updating the PR.
+5. If a separate resolution branch is absolutely needed, open a **new PR** from it; do not leave the resolution only on a local/resolution branch with no PR.
+
+Never:
+- Merge the target branch into the PR branch locally and leave the result without pushing/updating the PR.
+- Leave conflict resolution only on a throwaway branch without a PR.
+- Rewrite public branch history carelessly; use `--force-with-lease` when required.
+
 ## Creating a pull request
 
 **The PR base branch must be the branch that the feature branch was created from, not the repository default.**

@@ -66,6 +66,18 @@ Message:
 
 **Check if this is a follow-up on an existing manul branch/PR:**
 
+**Stage 0 — Base-comment-PR checkout (NEW, critical fix):**
+This prevents the regression where manul checks out its own (possibly stale/merged) branch instead of the base branch of the PR the comment actually lives on.
+
+- If `commentId` starts with `review:` AND `T.context` is set with `.pr` non-empty:
+  - `comment_pr_number = T.context.pr.number` (e.g. 25 — the PR the comment lives on)
+  - `comment_pr_head = T.context.pr.head` (e.g. `feature/14-navigation-module-extraction` — HEAD of the PR the comment lives on)
+  - `comment_pr_base = T.context.pr.base` (e.g. `master` — the deep merge base of that PR; typically NOT what we work on)
+  - **ALWAYS** `git fetch origin "$comment_pr_head"` → `git checkout "$comment_pr_head"` → `git pull origin "$comment_pr_head"` — the work dir must start from the **current HEAD of the PR the comment lives on** (this is the code state the review comment refers to). `pr.base` is the PR's merge base (e.g. master) and must NOT be used as the working baseline for a review comment — doing so was the original bug.
+  - Log: `echo "comment-PR HEAD checkout: on $comment_pr_head (PR #$comment_pr_number HEAD) — NOT base ($comment_pr_base)"`
+- Then proceed to Stage 1 — `existing_branch` (the manul branch from the matched manul PR) is checked out **on top of** the freshly-pulled `comment_pr_head`, so divergence is visible via merge/rebase.
+- If this stage fails: log a warning and refuse to proceed — do NOT guess the branch.
+
 1. **For PR review comments (commentId starts with `review:`) — direct context-PR check:**
    - If `T.context` is set, parse it: `pr_number=$(printf '%s' "$context" | jq -r '.pr.number // empty')`, `pr_state=$(printf '%s' "$context" | jq -r '.pr.state // empty')`
    - If `pr_number` is non-empty and `pr_state == "open"` → this review comment was made on an open PR. Set `existing_pr` = `{number: pr_number, head: <pr.head.ref from context>, base: <pr.base.ref from context>, title: <pr.title>, html_url: <pr.html_url>}`. Set `existing_branch` = `existing_pr.head`.
@@ -76,8 +88,9 @@ Message:
    - If exactly one branch matches → `existing_branch` = that branch
 
 3. **Search for existing open manul PRs** for this repository + issue (only if not found in step 1):
-   - `gh api repos/$repo/pulls --paginate --jq '.[] | select(.head.ref | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.head.ref | contains("/'$issue'-")) | select(.state=="open") | {number: .number, head: .head.ref, base: .base.ref, title: .title, html_url: .html_url}'`
+   - `gh api repos/$repo/pulls --paginate --jq '.[] | select(.head.ref | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.head.ref | contains("/'$issue'-")) | select(.state=="open") | {number: .number, head: .head.ref, base: .base.ref, title: .title, html_url: .html_url}'` **wrapped with fallback**: if the above returns empty OR errors (defensive `|| true`), retry via `gh pr list --repo <repository> --state open --json number,headRefName,baseRefName,title,url -q '.[] | select(.headRefName | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.headRefName | contains("/'$issue'-")) | {number, head: .headRefName, base: .baseRefName, title, html_url: .url}'`. This prevents a jq slice/parse error from silently collapsing to "no existing PR".
    - If exactly one PR matches → `existing_pr` = that PR object; if `existing_branch` is not yet set, set it to `existing_pr.head`
+   - **Defensive invariant**: if `existing_pr` was provided (continuation case) and `pr_target_branch` resolves to the repo default branch anyway, explicitly override `pr_target_branch` to `existing_pr.head` and log a warning so `gh pr create` never accidentally targets the default branch on a continuation.
 
 **Continuation rules:**
 - If `existing_branch` exists AND `existing_pr` exists (and is open):
@@ -111,15 +124,27 @@ You are a manul worker running as the `<agent>` role agent (your role's system p
   -   - PR to update: #<existing_pr.number> (base: `<existing_pr.head.ref>`)
   -   - DO NOT create a new branch. Checkout the existing branch, pull latest, continue working on it.
   -   - If you push new commits, they will automatically update the existing PR.
-- Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin` + checkout the branch (continuation: the existing branch; fresh: the default branch first, then create new branch).
+- Work dir: `/home/marzec/.openclaw/manul/work/<repository-slashed-to-dash>` — `gh repo clone <repository> <dir>` if missing, else `cd` + `git fetch origin`.
+    - **NEW critical step (review-comment HEAD sync):** if this is a `review:` comment and `T.context.pr.head` ("comment_pr_head") is non-empty, run:
+      `git fetch origin "$comment_pr_head" && git checkout "$comment_pr_head" && git pull origin "$comment_pr_head"`
+      (this syncs the work dir to the **HEAD of the PR the comment lives on**, i.e. the code state the review comment refers to — e.g. `feature/14-navigation-module-extraction` for PR #25. We do NOT use `pr.base` here; for a feature-branch PR that would be the deep merge base like `master`, which has none of the feature work.) Then checkout the branch (continuation: the existing manul branch on top of the freshly-pulled comment-PR HEAD; fresh: create new branch from the pulled HEAD).
 - **Plans/proposals/analyses go in a COMMENT, never in a PR with a markdown file.** If the task is a plan, proposal, analysis, or "don't code yet" request: DO NOT create a branch/PR/md file. Instead write the plan as a reply comment on the issue (use `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "<plan>"`) and include a short summary in the ✅ Done comment. The ONLY exception: the task EXPLICITLY asks for a markdown file / document in the repo (e.g. "add docs/plan.md") — then do the PR as usual.
 - Implement the minimal fix for the task. Run the relevant tests/build (check for README/Makefile/package.json/gradle etc.). If tests fail after a genuine best effort, report that honestly.
 - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
 - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
-- Resolve the repository's default branch for the PR base: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
-  - **Exception for continuation on existing PR:** if Continuation flag is true and an existing PR was provided, use that PR's head branch (`<existing_pr.head.ref>`) as the PR base for any new PR creation (but normally you just push to the existing branch).
-- If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true` → create the PR with a MEANINGFUL description (never a stub like "Task from comment"): write the body to `/tmp/manul-pr-body.md` and run `gh pr create --base <default-branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`; otherwise just push the branch.
-  - For continuation: if the existing PR is open, just push — the PR updates automatically. If the existing PR was closed/merged, create a NEW PR targeting the repo's default branch.
+- Resolve the PR **target** (base) branch in this order:
+  1. If there is an existing open manul PR for this task → use its head branch (`<existing_pr.head.ref>`).
+  2. Else if there is an existing manul branch for this task → use that branch.
+  3. Else if the task context references a related open feature branch for this work → use that branch.
+  4. Else fall back to the repository's default branch: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
+  - **Continuation on existing PR:** when the Continuation flag is true and an existing PR was provided, set `pr_target_branch` to that PR's head branch (`<existing_pr.head.ref>`). Never auto‑create a new PR against the default branch in this case — push commits to the existing branch so the open PR updates automatically. If `pr_target_branch` is empty or equals the default branch while `existing_pr` is set, explicitly fall back to `existing_pr.head` and log a warning before proceeding.
+- **NEW PR-base guardrail (review comments):** for `review:` comments, `pr_target_branch` is ONLY ever `existing_pr.head` — NEVER the comment-PR's base or the repo default. This is because the work dir was synced to `pr_base_branch` (L115 Stage 0) and the new commits must land on manul's branch whose PR already targets `pr_base_branch` as its base. Assert `pr_target_branch.startswith("feature/manul/") or startswith("bugfix/manul/")` — if not, refuse `gh pr create` and log a hard error.
+- **PR base invariant check:** if `existing_pr` is set and `pr_target_branch == defaultBranchRef`, refuse to run `gh pr create` with `--base master` — instead set `--base <existing_pr.head.ref>` (or skip create and just push if the branch already has a PR). This invariant prevents the regression where a fresh-branch fallback clobbers a continuation target.
+- If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true`:
+  * Write the body to `/tmp/manul-pr-body.md`.
+  * Run `gh pr create --base <pr_target_branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`.
+  * For continuation on an existing open PR: do NOT call `gh pr create` — just push; the PR updates automatically.
+  * For continuation on a closed/merged branch (no open PR): create a NEW PR using the resolved `pr_target_branch` as the base.
   - The description MUST cover:
     * Task: what was requested (one line + comment URL)
     * Changes: concrete summary of what the diff does (not a copy of the commit message)
@@ -145,6 +170,13 @@ PR: <pr_url>"` (omit PR line if none)
   Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
 - failed → decide: escalate or give up.
   * Read the task's current attempts: `sqlite3 ... "SELECT attempts FROM processed_comments WHERE commentId='<commentId>';"`
+  * **CI fix tasks (`ci_fix:%`):** if the build-fix attempt failed, record the failed commit so the poller stops queueing more attempts for the SAME commit. Resolve the PR's current head SHA and write to the `ci_fix_failed` table:
+    ```
+    head_sha="$(gh pr view <issueNumber> --repo <repository> --json headRefOid --jq '.headRefOid // ""')"
+    branch="$(gh pr view <issueNumber> --repo <repository> --json headRef --jq '.headRef // ""' | sed 's|refs/heads/||')"
+    sqlite3 /home/marzec/.openclaw/manul/manul.db "INSERT OR REPLACE INTO ci_fix_failed(repository, prNumber, head_sha, branch, reason, failed_at) VALUES('<repository>', <issueNumber>, '$head_sha', '$branch', '<reason>', datetime('now'));"
+    ```
+    Skip this if the failure reason is `repo-locked` (transient). The poller reads `ci_fix_failed` and will NOT queue another build-fix task until the PR's head SHA changes — see "Build-fix commit gate" below.
   * If `attempts < 2` (more escalation rounds allowed):
     `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt=datetime('now') WHERE commentId='<commentId>';`
     then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
@@ -165,7 +197,7 @@ Reason: <reason>`
 ## Hard rules
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
-- NEVER create a PR targeting `develop` (or any non-default branch). The PR base is always the repository's default branch (e.g. `main`, `master`) — resolve it via `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
+- NEVER create a PR targeting `develop` or the repository's default branch when a related manul feature branch or existing manul PR exists for this task. The PR base must be the source branch of the existing manul PR, or the related feature branch, falling back to the default branch only when no task-specific branch exists — resolve candidates via `gh api repos/<repository>/branches`, `gh api repos/<repository>/pulls`, and `gh repo view <repository> --json defaultBranchRef`.
 - All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.

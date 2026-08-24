@@ -398,25 +398,11 @@ for repo in "${REPOS[@]}"; do
   fi
   repo_cleanup_lock=1
 
-  # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
-  # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
-  declare -A OPEN_ISSUES CLOSED_ISSUES OPEN_PRS MERGED_PRS CLOSED_PRS
-  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=closed&per_page=100" --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
-
   # 1) Issue comments (PR conversation comments are issue comments too)
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
     id="$(jq -r '.id' <<<"$obj")"
     issue="$(jq -r '.issueNumber' <<<"$obj")"
-    # Skip comments on closed issues and PR-conversation comments on
-    # merged/closed PRs (PR review comments are handled in §2).
-    [ -n "${CLOSED_ISSUES[$issue]:-}" ] && continue
-    [ -n "${MERGED_PRS[$issue]:-}" ] && continue
-    [ -n "${CLOSED_PRS[$issue]:-}" ] && continue
     url="$(jq -r '.url' <<<"$obj")"
     author="$(jq -r '.author' <<<"$obj")"
     created="$(jq -r '.created' <<<"$obj")"
@@ -428,7 +414,7 @@ for repo in "${REPOS[@]}"; do
     prompt="$fullBody"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState,prState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${CLOSED_ISSUES[$issue]:-open}','${OPEN_PRS[$issue]:-}'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_issue_context "$repo" "$issue")"
@@ -474,7 +460,7 @@ for repo in "${REPOS[@]}"; do
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','open'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
@@ -505,16 +491,19 @@ for repo in "${REPOS[@]}"; do
   # PR state here. This also catches reply comments (in_reply_to_id != null)
   # inside review threads — the old logic only tracked top-level comments and
   # silently dropped /manul replies.
-  # OPEN_PRS already populated above (batch fetch for the whole repo) — reuse it.
+  declare -A OPEN_PRS
+  while read -r pr_number; do
+    [ -n "$pr_number" ] || continue
+    OPEN_PRS["$pr_number"]=1
+  done < <(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
+
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
     id="$(jq -r '.id' <<<"$obj")"
     issue="$(jq -r '.issueNumber' <<<"$obj")"
-    # Skip review comments on closed/merged PRs and resolved threads.
+    # Skip review comments from closed/merged PRs
     [ -n "${OPEN_PRS[$issue]:-}" ] || continue
-    [ -n "${MERGED_PRS[$issue]:-}" ] && continue
-    [ -n "${CLOSED_PRS[$issue]:-}" ] && continue
-    [ "$(jq -r '.isResolved // false' <<<"$obj")" = "true" ] && continue
+    issue="$(jq -r '.issueNumber' <<<"$obj")"
     url="$(jq -r '.url' <<<"$obj")"
     author="$(jq -r '.author' <<<"$obj")"
     created="$(jq -r '.created' <<<"$obj")"
@@ -529,9 +518,7 @@ for repo in "${REPOS[@]}"; do
     chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    pr_state="$(jq -r '.state // ""' <<<"$obj")"
-    is_res="$(jq -r '.isResolved // false' <<<"$obj")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,prState,isResolved) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${pr_state:-open}',$is_res); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
@@ -563,8 +550,7 @@ for repo in "${REPOS[@]}"; do
       fullBody: (.body | sub($trig; "")),
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
-      diffHunk: (.diff_hunk // ""),
-      isResolved: (.in_reply_to_id // null | . != null)
+      diffHunk: (.diff_hunk // "")
     }')
 
   # Scan for failing CI on manul PRs
