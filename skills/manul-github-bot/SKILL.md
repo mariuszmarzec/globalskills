@@ -9,9 +9,11 @@ Manul (kot stepowy, Pallas's cat) is a GitHub command bot driven by OpenClaw.
 It watches configured repositories, reacts to the trigger `/manul` in issue
 bodies, issue comments, and PR review comments, and implements the requested
 task: dedicated branch `<type>/manul/<issue>-<slug>` → commit → push → optional
-PR → feedback comments on the issue. Every comment/PR manul writes is signed
+PR → feedback comments on the **same location** that triggered the task. Every comment/PR manul writes is signed
 `— manul 🐈`
 (identity: **manul** on GitHub, **OpenClaw** in the console).
+
+**Comment routing:** a task triggered by a PR review comment gets its feedback (🤖 Running, ✅ Done, ❌ Failed) posted as an in-thread reply on that review comment; a task triggered by an issue/PR conversation comment or issue body gets its feedback as a top-level issue/PR comment. Cross-posting (e.g. a review-thread task becoming a top-level PR comment) is a bug.
 
 ```
         /\_/\
