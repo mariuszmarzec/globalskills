@@ -41,5 +41,17 @@
     "enabled": true,
     "maxAttemptsPerRun": 2,
     "cooldownMinutes": 60
+  },
+
+  "automation": {
+    "enabled": true,
+    "maxTaskRunningTime": 1800,
+    "maxAttemptsBeforeFail": 3,
+    "lockTtl": 1800,
+    "taskHealthCheckInterval": 120,
+    "alerts": {
+      "failureWebhook": null,
+      "stuckTaskWebhook": null
+    }
   }
 }

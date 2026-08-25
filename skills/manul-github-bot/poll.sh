@@ -407,7 +407,25 @@ for repo in "${REPOS[@]}"; do
   while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
   while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
 
-  # 1) Issue comments (PR conversation comments are issue comments too)
+  # Drain pending skip comments from a previous failed run (GitHub as primary frontend: comments are queued to skip-comments.log when feedback.sh fails after all retries, and retried here).
+skip_log="$MANUL_DIR/skip-comments.log"
+if [ -f "$skip_log" ]; then
+  tmp_skip="${skip_log}.tmp"
+  > "$tmp_skip"
+  while IFS='|' read -r srepo sissue smsg stime; do
+    [ -n "$srepo" ] || continue
+    if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+      log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
+    else
+      # Still failing — keep in queue for next poll
+      printf '%s|%s|%s|%s\n' "$srepo" "$sissue" "$smsg" "$stime" >> "$tmp_skip"
+      log "WARN: pending skip comment for $srepo#$sissue still failing, will retry next poll"
+    fi
+  done < "$skip_log"
+  mv "$tmp_skip" "$skip_log"
+fi
+
+# 1) Issue comments (PR conversation comments are issue comments too)
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
     id="$(jq -r '.id' <<<"$obj")"
@@ -567,6 +585,26 @@ for repo in "${REPOS[@]}"; do
       isResolved: (.in_reply_to_id // null | . != null)
     }')
 
+  # 3) Drain pending skip comments from a previous failed run (GitHub as
+  # primary frontend: comments are queued to skip-comments.log when feedback.sh
+  # fails after all retries, and retried here).
+  skip_log="$MANUL_DIR/skip-comments.log"
+  if [ -f "$skip_log" ]; then
+    tmp_skip="${skip_log}.tmp"
+    > "$tmp_skip"
+    while IFS='|' read -r srepo sissue smsg stime; do
+      [ -n "$srepo" ] || continue
+      if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+        log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
+      else
+        # Still failing — keep in queue for next poll
+        printf '%s|%s|%s|%s\n' "$srepo" "$sissue" "$smsg" "$stime" >> "$tmp_skip"
+        log "WARN: pending skip comment for $srepo#$sissue still failing, will retry next poll"
+      fi
+    done < "$skip_log"
+    mv "$tmp_skip" "$skip_log"
+  fi
+
   # Scan for failing CI on manul PRs
   scan_failing_ci "$repo"
 done
@@ -594,8 +632,59 @@ if [ "${REAPER:-0}" -gt 0 ]; then
   log "reaped $REAPER stale queued task(s) for closed issues/PRs"
 fi
 
+# Double-check: re-verify open state of issues/PRs for ALL queued tasks.
+# Between scan and now, some may have been closed/merged. If so, mark them
+# as skipped (status=failed) and post a "skipped — already closed" comment.
+verify_queued_open() {
+  local repo="$1" issue="$2" commentId="$3" commentUrl="$4" isPr="$5"
+  local state_json state
+  if [ "$isPr" = "true" ]; then
+    state_json="$(gh pr view "$issue" --repo "$repo" --json state 2>>"$LOG" | jq -r '.state // ""')"
+  else
+    state_json="$(gh issue view "$issue" --repo "$repo" --json state 2>>"$LOG" | jq -r '.state // ""')"
+  fi
+  state="$state_json"
+  if [ "$state" = "closed" ] || [ "$state" = "merged" ]; then
+    # Mark as failed so it won't be re-queued
+    sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$commentId';" 2>>"$LOG"
+    # Post skip comment using feedback.sh with retries
+    # If all retries fail, persist to a pending-comments file for retry on next poll
+    post_skip_comment() {
+      local repo="$1" issue="$2" msg="$3" attempt=1 max=3 delay=2 skip_log="$MANUL_DIR/skip-comments.log"
+      while [ $attempt -le $max ]; do
+        if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$repo" "$issue" "$msg" 2>>"$LOG"; then
+          return 0
+        fi
+        log "WARN: feedback.sh failed for $repo#$issue (attempt $attempt/$max), retrying in ${delay}s..."
+        sleep $delay
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+      done
+      log "WARN: feedback.sh FAILED after $max attempts for $repo#$issue — queuing comment for next poll"
+      printf '%s|%s|%s|%s\n' "$repo" "$issue" "$msg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$skip_log"
+      return 0
+    }
+    post_skip_comment "$repo" "$issue" "⏭️ Skipping — the ${isPr:+PR }issue was already $state before the task could be processed."
+    log "skipped task $commentId on $repo#$issue — ${isPr:+PR }issue is $state"
+    return 1
+  fi
+  return 0
+}
+
+# Run verification on all currently queued tasks
+sqlite3 "$DB" -separator '|' "SELECT commentId, repository, issueNumber, commentUrl, prState FROM processed_comments WHERE status='queued';" 2>>"$LOG" | while IFS='|' read -r cid repo issue url prstate; do
+  [ -n "$cid" ] || continue
+  if [ -n "$prstate" ] && [ "$prstate" != "" ]; then
+    # It was a PR (review comment or PR conversation)
+    verify_queued_open "$repo" "$issue" "$cid" "$url" "true"
+  else
+    # It was an issue (issue comment or issue body)
+    verify_queued_open "$repo" "$issue" "$cid" "$url" "false"
+  fi
+done
+
 # Rebuild queue.json from queued rows (failed rows with attempts below max re-queue)
-ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-2}"
+ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-3}"
 sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='failed' AND attempts <= $ESCALATION_ROUNDS;" 2>>"$LOG"
 QUEUE_TMP="${QUEUE_JSON}.tmp"
 sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt,'context',context,'attempts',attempts,'ciFix',CASE WHEN commentId LIKE 'ci_fix:%' THEN 1 ELSE 0 END)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt,context,attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"

@@ -63,6 +63,30 @@ echo "Signature filter: $SIG"
 echo
 
 token="$(gh auth token 2>/dev/null)"
+
+# --- fetch linked issue numbers from PR body ---
+linked_issues=()
+pr_body="$(gh api "repos/$repo/pulls/$issue" 2>/dev/null | jq -r '.body // ""')"
+if [ -n "$pr_body" ]; then
+  # Extract #N references from PR body
+  while IFS= read -r num; do
+    [ -n "$num" ] && linked_issues+=("$num")
+  done < <(printf '%s' "$pr_body" | grep -oE '#[0-9]+' | sed 's/^#//' | sort -u)
+fi
+
+# Also add cross-referenced issues from PR body (owner/repo#N format)
+if [ -n "$pr_body" ]; then
+  while IFS= read -r ref; do
+    [ -n "$ref" ] && linked_issues+=("$ref")
+  done < <(printf '%s' "$pr_body" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+' | sed 's/.*#//' | sort -u)
+fi
+
+# Deduplicate
+linked_issues=($(printf '%s\n' "${linked_issues[@]}" | sort -u))
+if [ ${#linked_issues[@]} -gt 0 ]; then
+  echo "Linked issues from PR body: ${linked_issues[*]}"
+fi
+echo
 if [ -z "$token" ]; then
   echo "Error: gh is not authenticated (run 'gh auth login')"
   exit 1
@@ -81,10 +105,22 @@ api() {
 echo "Scanning comments..."
 
 # PR review comments
-mapfile -t review_ids < <(gh api "repos/$repo/pulls/$issue/comments" --jq --arg sig "$SIG" '.[] | select(.body | contains($sig)) | .id' 2>/dev/null || true)
+mapfile -t review_ids < <(gh api "repos/$repo/pulls/$issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
 
-# Issue / PR conversation comments
-mapfile -t issue_ids < <(gh api "repos/$repo/issues/$issue/comments" --jq --arg sig "$SIG" '.[] | select(.body | contains($sig)) | .id' 2>/dev/null || true)
+# Issue / PR conversation comments on the PR itself
+mapfile -t issue_ids < <(gh api "repos/$repo/issues/$issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+
+# Issue / PR conversation comments on linked issues
+for linked_issue in "${linked_issues[@]}"; do
+  mapfile -t more_ids < <(gh api "repos/$repo/issues/$linked_issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+  issue_ids+=("${more_ids[@]}")
+  if [ ${#more_ids[@]} -gt 0 ]; then
+    echo "  Found ${#more_ids[@]} matching comment(s) on linked issue #$linked_issue"
+  fi
+done
+
+# Deduplicate issue_ids
+issue_ids=($(printf '%s\n' "${issue_ids[@]}" | sort -u))
 
 total=$(( ${#review_ids[@]} + ${#issue_ids[@]} ))
 if [ "$total" -eq 0 ]; then

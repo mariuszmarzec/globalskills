@@ -42,6 +42,7 @@ Every model is free. Escalate only when the current tier demonstrably fails.
 | `coder-expert` | EXPERT | `litellm/big-pickle` | no |
 | `reviewer` | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
 | `reviewer-expert` | EXPERT | `litellm/big-pickle` | edit: deny |
+| `reviewer-adversarial` | STRONG (or EXPERT for high‑risk) | `litellm/deepseek-v4-flash-free` (or `litellm/big-pickle`) | edit: deny |
 | `debugger` | STRONG | `litellm/deepseek-v4-flash-free` | no |
 | `debugger-expert` | EXPERT | `litellm/big-pickle` | no |
 | `researcher` | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
@@ -108,14 +109,30 @@ Use the smallest number of agents that can complete the task well:
 - hard feature: `architect` → `coder` → `tester` → `reviewer` → `coder` → DONE
 - hard bug: `debugger` → `coder` → `tester` → `reviewer` → DONE
 - research needed: `researcher` → `architect` → `coder` → `reviewer` → DONE
+- LOW RISK trivial: `coder-cheap` → `reviewer` → DONE
+- LOW RISK normal feature: `architect` → `coder` → `reviewer` → DONE
+- NORMAL FEATURE: `architect` → `coder` → `tester` → `reviewer` → DONE
+- HIGH RISK (security, auth, concurrency, data integrity, significant architecture):
+  `architect` → `coder` → `tester` → `reviewer` + `reviewer-expert` [+ `reviewer-adversarial` if correctness/concurrency/state behavior is critical]
+- SECURITY‑focused change: `coder` → `tester` → `reviewer-expert` → DONE
+- CONCURRENCY / RACE CONDITIONS: `coder` → `tester` → `reviewer-expert` + `reviewer-adversarial` → DONE
+- DB / DATA INTEGRITY: `coder` → `tester` → `reviewer-expert` → DONE
+- Large refactor: `architect` → `coder` → `tester` → `reviewer-expert` (+ architecture scrutiny by architect/reviewer-expert) → DONE
 
-Never dispatch all agents for every task.
+Never dispatch all agents for every task. Choose the MINIMUM set that gives adequate quality. Do not automatically run all reviewers.
 
 ## Reviewer independence
 
 Reviewer is a separate role from Coder, preferably a different model. It is
 read-only and returns `PASS` or a list of `ISSUES`. On issues: `coder` →
-`reviewer` again, up to a fixed limit (default 2 review rounds).
+`tester` → `reviewer` again (including any `reviewer-expert` /
+`reviewer-adversarial` that were part of the original review set). Maximum 2
+review rounds per implementation attempt.
+
+When multiple independent reviewers are used simultaneously, the orchestrator
+aggregates findings: deduplicates, distinguishes blockers from minors, rejects
+obvious false positives, and passes only actionable issues to the coder. Do
+not forward every reported item without evaluation.
 
 ## Report format
 

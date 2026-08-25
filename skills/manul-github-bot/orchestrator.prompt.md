@@ -44,6 +44,20 @@ Crashed turns (gateway restart, machine reboot, timeout kill) leave tasks stuck 
    - Do NOT escalate or retry this task this turn. The next poll will re-evaluate after the pending tasks are handled.
 4. Otherwise continue with normal Step 1 execution.
 
+## Step 0.7 — PR/issue closed/resolved guard
+
+**Before marking ANY task running**, check whether the target PR/issue is still actionable:
+
+1. Extract `repository` and `issueNumber` from the first task in `queue.json`.
+2. Run:
+   `gh issue view <issueNumber> --repo <repository> --json state,closedAt,title`
+3. If `state == "closed"`:
+   - Remove the task from the queue (do NOT mark it running):
+     - Read queue.json, remove the first task, write it back.
+     - Optionally: `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='<commentId>';"`
+   - End this orchestrator turn with `NO_REPLY`.
+4. Otherwise continue with normal Step 1 execution.
+
 ## Step 1 — Process the FIRST task only
 
 **Only the first element of the queue is processed per turn.** This is by design: the daemon re-polls every 60s, each turn handles exactly one task, serialized by the lock. Do NOT loop over the whole queue.
@@ -133,13 +147,15 @@ You are a manul worker running as the `<agent>` role agent (your role's system p
 - **CI Build / Check Inspection:** If this task relates to an existing PR (or after pushing a new branch/PR), check GitHub Actions or CI check status using `gh pr checks` or `gh run list --branch <branch>`. If any CI checks or builds are failing (`failure`), investigate the failure logs using `gh run view <run-id> --log-failed` (or `gh pr checks`), fix the root cause in the code, commit, and push so CI passes.
 - Commit with a conventional message (e.g. `fix: <summary>`). NEVER use `--author`, never change git author config. Append the trailer line `Co-authored-by: AI Agent <agent@ai.local>` to every AI-created commit (ai-commit-attribution skill). Push to origin.
 - Resolve the PR **target** (base) branch in this order:
-  1. If there is an existing open manul PR for this task → use its head branch (`<existing_pr.head.ref>`).
-  2. Else if there is an existing manul branch for this task → use that branch.
-  3. Else if the task context references a related open feature branch for this work → use that branch.
-  4. Else fall back to the repository's default branch: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
+  1. **Continuation (highest priority, overrides everything below):** if the Continuation flag is true AND `existing_pr` is set and open → `pr_target_branch` = `existing_pr.head.ref`. This is absolute — it wins even if the resolved value would otherwise be the repo default branch. Do NOT fall through to steps 2–4 in this case.
+  2. Else if there is an existing open manul PR for this task → use its head branch (`<existing_pr.head.ref>`).
+  3. Else if there is an existing manul branch for this task → use that branch.
+  4. Else if the task context references a related open feature branch for this work → use that branch.
+  5. Else fall back to the repository's default branch: `gh repo view <repository> --json defaultBranchRef -q .defaultBranchRef.name`.
   - **Continuation on existing PR:** when the Continuation flag is true and an existing PR was provided, set `pr_target_branch` to that PR's head branch (`<existing_pr.head.ref>`). Never auto‑create a new PR against the default branch in this case — push commits to the existing branch so the open PR updates automatically. If `pr_target_branch` is empty or equals the default branch while `existing_pr` is set, explicitly fall back to `existing_pr.head` and log a warning before proceeding.
 - **NEW PR-base guardrail (review comments):** for `review:` comments, `pr_target_branch` is ONLY ever `existing_pr.head` — NEVER the comment-PR's base or the repo default. This is because the work dir was synced to `pr_base_branch` (L115 Stage 0) and the new commits must land on manul's branch whose PR already targets `pr_base_branch` as its base. Assert `pr_target_branch.startswith("feature/manul/") or startswith("bugfix/manul/")` — if not, refuse `gh pr create` and log a hard error.
 - **PR base invariant check:** if `existing_pr` is set and `pr_target_branch == defaultBranchRef`, refuse to run `gh pr create` with `--base master` — instead set `--base <existing_pr.head.ref>` (or skip create and just push if the branch already has a PR). This invariant prevents the regression where a fresh-branch fallback clobbers a continuation target.
+- **Hard invariant (all task types):** before running `gh pr create`, assert `pr_target_branch` starts with `feature/manul/` or `bugfix/manul/`. If it does not, do NOT create the PR — push to the existing branch instead (if one exists) and log `ERROR: pr_target_branch=<pr_target_branch> is not a manul branch; refusing gh pr create`. This is the direct fix for the regression where continuation PRs were opened against the repo default branch.
 - If `/home/marzec/.openclaw/manul/config.json` has `autoCreatePr: true`:
   * Write the body to `/tmp/manul-pr-body.md`.
   * Run `gh pr create --base <pr_target_branch> --title "manul: <short summary>" --body-file /tmp/manul-pr-body.md`.
@@ -177,17 +193,17 @@ PR: <pr_url>"` (omit PR line if none)
     sqlite3 /home/marzec/.openclaw/manul/manul.db "INSERT OR REPLACE INTO ci_fix_failed(repository, prNumber, head_sha, branch, reason, failed_at) VALUES('<repository>', <issueNumber>, '$head_sha', '$branch', '<reason>', datetime('now'));"
     ```
     Skip this if the failure reason is `repo-locked` (transient). The poller reads `ci_fix_failed` and will NOT queue another build-fix task until the PR's head SHA changes — see "Build-fix commit gate" below.
-  * If `attempts < 2` (more escalation rounds allowed):
+  * If `attempts < 3` (more escalation rounds allowed):
     `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt=datetime('now') WHERE commentId='<commentId>';`
     then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
 
 Reason: <reason>`
     The daemon's next poll re-queues it and the next turn escalates.
     Do NOT post the full ❌ Failed summary yet — the task is not finished.
-  * If `attempts >= 2` (no rounds left): `UPDATE ... SET status='failed', attempts=attempts+1 ...` then post the honest final: `❌ Failed
+  * If `attempts >= 3` (no rounds left): `UPDATE ... SET status='failed', attempts=attempts+1 ...` then post the honest final: `❌ Failed
 
 Reason: <reason>`
-    and do NOT re-queue (the daemon's re-queue guard stops at `attempts > 2`).
+    and do NOT re-queue (the daemon's re-queue guard stops at `attempts > 3`).
 - If you spawned subagents, use `sessions_yield` and wait for completion events before finishing.
 
 ## Step 2 — Finish
