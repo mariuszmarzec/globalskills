@@ -33,6 +33,20 @@ mkdir -p "$REPO_LOCK_DIR" 2>/dev/null || true
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 fail() { echo "MANUL_RESULT {\"fire\":false,\"error\":\"$1\"}"; exit 0; }
 
+# SQL escaping helpers
+sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+sql_num() {
+  local val="$1"
+  if [[ "$val" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$val"
+  else
+    printf ''
+  fi
+}
+
 # Per-repo lock: prevents two different tasks from working on the same local
 # repo workdir at the same time. Repo is identified by its workdir slug.
 acquire_repo_lock() {
@@ -51,7 +65,9 @@ acquire_repo_lock() {
     # this repo in DB. If a task is still marked `running`, the old worker
     # may still be alive; do NOT steal the lock.
     local running_count
-    running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$repo' AND status='running';" 2>/dev/null || echo 0)"
+    local safe_repo
+    safe_repo="$(sql_escape "$repo")"
+    running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
     if [ "${running_count:-0}" -gt 0 ]; then
       log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
       return 1
@@ -247,14 +263,21 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_failed (
 check_ci_fix_eligible() {
   local repo="$1" pr="$2" run="$3"
   local key="$repo#$pr#$run"
+  local pr_num
+  pr_num="$(sql_num "$pr")"
+  [ -n "$pr_num" ] || return 1
+  local safe_run
+  safe_run="$(sql_escape "$run")"
+  local safe_repo
+  safe_repo="$(sql_escape "$repo")"
   local seen
-  seen="$(sqlite3 "$DB" "SELECT 1 FROM ci_fix_seen WHERE prNumber=$pr AND runId='$run';" 2>>"$LOG")"
+  seen="$(sqlite3 "$DB" "SELECT 1 FROM ci_fix_seen WHERE prNumber=$pr_num AND runId='$safe_run';" 2>>"$LOG")"
   if [ -n "$seen" ]; then
     return 1
   fi
   # Check cooldown
   local last_attempt
-  last_attempt="$(sqlite3 "$DB" "SELECT MAX(attemptedAt) FROM ci_fix_seen WHERE prNumber=$pr;" 2>>"$LOG")"
+  last_attempt="$(sqlite3 "$DB" "SELECT MAX(attemptedAt) FROM ci_fix_seen WHERE prNumber=$pr_num;" 2>>"$LOG")"
   if [ -n "$last_attempt" ] && [ "$last_attempt" != "null" ]; then
     local last_ts now_ts
     last_ts=$(date -d "$last_attempt" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_attempt" +%s 2>/dev/null || echo 0)
@@ -270,8 +293,13 @@ check_ci_fix_eligible() {
 # mark_ci_fix_attempted <repo> <prNumber> <runId>
 mark_ci_fix_attempted() {
   local repo="$1" pr="$2" run="$3"
+  local pr_num
+  pr_num="$(sql_num "$pr")"
+  [ -n "$pr_num" ] || return 0
+  local safe_run
+  safe_run="$(sql_escape "$run")"
   local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_seen (prNumber, runId, attemptedAt) VALUES ($pr, '$run', '$now');" 2>>"$LOG"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_seen (prNumber, runId, attemptedAt) VALUES ($pr_num, '$safe_run', '$now');" 2>>"$LOG"
 }
 
 # mark_ci_fix_failed_for_commit <repo> <prNumber> <head_sha> <branch> <reason>
@@ -283,11 +311,15 @@ mark_ci_fix_attempted() {
 mark_ci_fix_failed_for_commit() {
   local repo="$1" pr="$2" sha="$3" branch="$4" reason="$5"
   [ -n "$sha" ] || return 0
+  local pr_num
+  pr_num="$(sql_num "$pr")"
+  [ -n "$pr_num" ] || return 0
+  local safe_repo safe_branch safe_reason
+  safe_repo="$(sql_escape "$repo")"
+  safe_branch="$(sql_escape "$branch")"
+  safe_reason="$(sql_escape "$reason")"
   local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local esc_branch esc_reason
-  esc_branch="$(printf '%s' "$branch" | sed "s/'/''/g")"
-  esc_reason="$(printf '%s' "$reason" | sed "s/'/''/g")"
-  sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_failed (repository, prNumber, head_sha, branch, reason, failed_at) VALUES ('$repo', $pr, '$sha', '$esc_branch', '$esc_reason', '$now');" 2>>"$LOG"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_failed (repository, prNumber, head_sha, branch, reason, failed_at) VALUES ('$safe_repo', $pr_num, '$sha', '$safe_branch', '$safe_reason', '$now');" 2>>"$LOG"
   log "ci fix FAILED for $repo#$pr at commit $sha (branch=$branch): $reason — will not retry until head changes"
 }
 
@@ -457,7 +489,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh issue comment list --repo "$repo" --limit 100 --json id,author,body,created_at,html_url,issueNumber 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -497,7 +529,7 @@ fi
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <(gh issue list --repo "$repo" --limit 100 --json id,number,author,login,created_at,body,html_url --jq '.[].number' 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -560,7 +592,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh pr review list --repo "$repo" --limit 100 --json id,author,body 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
