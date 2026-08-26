@@ -68,13 +68,18 @@ Let `T` = first task in queue.json. Let `repo` = `T.repository`, `issue` = `T.is
 `sqlite3 /home/marzec/.openclaw/manul/manul.db "UPDATE processed_comments SET status='running', processedAt=datetime('now') WHERE commentId='<commentId>';"`
 
 ### 1b — Post 🤖 Running comment (ALWAYS)
-- If `T` came from a **PR review comment** (commentId starts with `review:`): reply **inside the review thread** using `feedback.sh` with `--in-reply-to <numeric-id-after-review:>`.
-- Otherwise (issue comment or issue body): post to the issue/PR conversation (issues endpoint).
 
-Message:
-```
-🤖 Running... Accepted the task: <prompt first 80 chars>
-```
+# Extract review comment ID from commentId format: "review:<numeric-id>"
+if commentId starts with "review:";
+    # Extract numeric ID after "review:" prefix (e.g., "review:3850548254" → "3850548254")
+    numeric_id = commentId.substring(7)
+    
+    # Reply inside the review thread using --in-reply-to for PR review comments
+    /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh $repo $issue "🤖 Running... Accepted the task: <prompt first 80 chars>" --in-reply-to "$numeric_id"
+else;
+    # Reply to issue/PR conversation comment (top-level)
+    /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh $repo $issue "🤖 Running... Accepted the task: <prompt first 80 chars>"
+fi
 
 ### 1c — Continuation detection (BEFORE spawning worker)
 
