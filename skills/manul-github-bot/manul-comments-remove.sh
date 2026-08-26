@@ -66,7 +66,7 @@ token="$(gh auth token 2>/dev/null)"
 
 # --- fetch linked issue numbers from PR body ---
 linked_issues=()
-pr_body="$(gh api "repos/$repo/pulls/$issue" 2>/dev/null | jq -r '.body // ""')"
+pr_body="$(gh pr view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
 if [ -n "$pr_body" ]; then
   # Extract #N references from PR body
   while IFS= read -r num; do
@@ -105,14 +105,14 @@ api() {
 echo "Scanning comments..."
 
 # PR review comments
-mapfile -t review_ids < <(gh api "repos/$repo/pulls/$issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+mapfile -t review_ids < <(gh pr review list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
 
 # Issue / PR conversation comments on the PR itself
-mapfile -t issue_ids < <(gh api "repos/$repo/issues/$issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+mapfile -t issue_ids < <(gh issue comment list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
 
 # Issue / PR conversation comments on linked issues
 for linked_issue in "${linked_issues[@]}"; do
-  mapfile -t more_ids < <(gh api "repos/$repo/issues/$linked_issue/comments" 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+  mapfile -t more_ids < <(gh issue comment list --repo "$repo" --number "$linked_issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
   issue_ids+=("${more_ids[@]}")
   if [ ${#more_ids[@]} -gt 0 ]; then
     echo "  Found ${#more_ids[@]} matching comment(s) on linked issue #$linked_issue"

@@ -404,8 +404,8 @@ for repo in "${REPOS[@]}"; do
   while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
   while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG")
   while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
 
   # Drain pending skip comments from a previous failed run (GitHub as primary frontend: comments are queued to skip-comments.log when feedback.sh fails after all retries, and retried here).
 skip_log="$MANUL_DIR/skip-comments.log"
@@ -457,7 +457,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh issue comment list --repo "$repo" --limit 100 --json id,author,body,created_at,html_url,issueNumber 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -497,7 +497,7 @@ fi
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh issue list --repo "$repo" --limit 100 --json id,number,author,login,created_at,body,html_url --jq '.[].number' 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -560,7 +560,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh pr review list --repo "$repo" --limit 100 --json id,author,body 2>/dev/null | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
