@@ -177,15 +177,24 @@ You are a manul worker running as the `<agent>` role agent (your role's system p
 ---
 
 ### 1e — When the subagent finishes: parse its `MANUL_RESULT` line.
-- ok → `UPDATE processed_comments SET status='done', processedAt=datetime('now') WHERE commentId='<commentId>';` then post (in-thread if review comment, same rule as step 1b):
-  `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
+- ok → `UPDATE processed_comments SET status='done', processedAt=datetime('now') WHERE commentId='<commentId>';` then post:
+  - **If the original comment was a PR review comment** (`commentId` starts with `review:`): reply **inside the review thread** by extracting the numeric review comment id (e.g. `3850625268` from `review:3850625268`) into `reply_id`, then running
+    `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> --in-reply-to "<reply_id>" "✅ Done
+
+Summary: <summary>
+Branch: <branch>
+Commit: <commit>
+PR: <pr_url>"` (omit PR line if none)
+  - **Otherwise** (issue comment or issue body): post to the issue/PR conversation:
+    `/mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh <repository> <issueNumber> "✅ Done
 
 Summary: <summary>
 Branch: <branch>
 Commit: <commit>
 PR: <pr_url>"` (omit PR line if none)
 
-  Same rule: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
+  In **both** cases: the message must NOT contain the signature — feedback.sh appends `— manul 🐈` itself.
+  **Routing rule (critical):** the same source/location rule that decides where the 🤖 Running comment goes MUST decide where the ✅ Done comment goes. A task that originated in a PR review thread (`review:` commentId) must reply in the review thread; a task that originated in an issue/PR conversation comment or an issue body must post to the issue/PR conversation. Never cross-post (e.g. a review-thread task must not post a top-level PR comment, and a top-level task must never reply into a review thread).
 - failed → decide: escalate or give up.
   * Read the task's current attempts: `sqlite3 ... "SELECT attempts FROM processed_comments WHERE commentId='<commentId>';"`
   * **CI fix tasks (`ci_fix:%`):** if the build-fix attempt failed, record the failed commit so the poller stops queueing more attempts for the SAME commit. Resolve the PR's current head SHA and write to the `ci_fix_failed` table:
@@ -197,12 +206,14 @@ PR: <pr_url>"` (omit PR line if none)
     Skip this if the failure reason is `repo-locked` (transient). The poller reads `ci_fix_failed` and will NOT queue another build-fix task until the PR's head SHA changes — see "Build-fix commit gate" below.
   * If `attempts < 3` (more escalation rounds allowed):
     `UPDATE processed_comments SET status='failed', attempts=attempts+1, processedAt=datetime('now') WHERE commentId='<commentId>';`
-    then post a short comment: `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
+    then post a short comment (use the **same routing rule as the ok case**: if `commentId` starts with `review:`, reply inside the review thread via `feedback.sh --in-reply-to <numeric-id>`; otherwise post to the issue/PR conversation):
+    `❌ Failed (attempt <n+1>) — retrying with a stronger agent.
 
 Reason: <reason>`
     The daemon's next poll re-queues it and the next turn escalates.
     Do NOT post the full ❌ Failed summary yet — the task is not finished.
-  * If `attempts >= 3` (no rounds left): `UPDATE ... SET status='failed', attempts=attempts+1 ...` then post the honest final: `❌ Failed
+  * If `attempts >= 3` (no rounds left): `UPDATE ... SET status='failed', attempts=attempts+1 ...` then post the honest final (same routing rule as ok case):
+    `❌ Failed
 
 Reason: <reason>`
     and do NOT re-queue (the daemon's re-queue guard stops at `attempts > 3`).
@@ -216,7 +227,7 @@ Reason: <reason>`
 
 - Never include the literal trigger `/manul` in any comment you post (self-trigger protection). Note: the poller ALSO ignores any comment signed with `— manul 🐈` (feedback.sh signs all bot comments), so a path like `docs/manul-…` inside a bot comment no longer re-triggers — but keep the no-trigger rule anyway.
 - NEVER create a PR targeting `develop` or the repository's default branch when a related manul feature branch or existing manul PR exists for this task. The PR base must be the source branch of the existing manul PR, or the related feature branch, falling back to the default branch only when no task-specific branch exists — resolve candidates via `gh api repos/<repository>/branches`, `gh api repos/<repository>/pulls`, and `gh repo view <repository> --json defaultBranchRef`.
-- All GitHub comments (🤖 Running…, ✅ Done) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub.
+- All GitHub comments (🤖 Running…, ✅ Done, ❌ Failed) are written in English; PR descriptions are written in English (code repos); code/technical identifiers stay as-is. Manul never writes Polish on GitHub. **Comment routing:** every comment manul posts (Running, Done, Failed) must go to the same target as the task that triggered it — PR review comments stay in the review thread (`feedback.sh --in-reply-to`); issue/PR-conversation comments and issue bodies go to the issue/PR conversation. A `review:` commentId never becomes a top-level PR comment, and a top-level task never becomes an in-thread review reply.
 - Never force-push. Never touch branches other than `feature/manul/*` and `bugfix/manul/*`.
 - Plans/proposals/analyses are always posted as comments on the issue — never as PRs with markdown files — unless the task explicitly requests a markdown file in the repo.
 - If anything is ambiguous in a task, do your best with a minimal, safe change and note assumptions in the summary.
