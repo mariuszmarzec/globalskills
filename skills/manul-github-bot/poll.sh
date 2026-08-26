@@ -311,7 +311,7 @@ scan_failing_ci() {
   [ "$CI_FIX_ENABLED" = "true" ] || return 0
   local prs_json
   # Scan all open PRs for failing CI (not just manul PRs)
-  prs_json="$(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .head.ref, base: .base.ref, title: .title, html_url: .html_url}]' 2>>"$LOG")"
+  prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}' 2>>"$LOG")"
   [ -n "$prs_json" ] || return 0
   local pr_count
   pr_count="$(printf '%s' "$prs_json" | jq 'length')"
@@ -401,9 +401,9 @@ for repo in "${REPOS[@]}"; do
   # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
   # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
   declare -A OPEN_ISSUES CLOSED_ISSUES OPEN_PRS MERGED_PRS CLOSED_PRS
-  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh api --paginate "repos/$repo/issues?state=closed&per_page=100" --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
   while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
   while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
 
