@@ -103,25 +103,11 @@ This prevents the regression where manul checks out its own (possibly stale/merg
    - Skip the general PR/branch searches below (the context PR is authoritative).
 
 2. **Search for existing manul branches** for this repository + issue:
-   if [ -x "$MANUL_DIR/github-api-wrapper.sh" ]; then
-  # Use the resilient wrapper to get branches
-  "$MANUL_DIR/github-api-wrapper.sh" branches "$repo" 2>>"$LOG" | jq -r '.[] | select(.name | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.name | contains("/'$issue'-")) | .name'
-else
-  # Fallback to direct gh api if wrapper not available
-  gh api repos/$repo/branches --paginate 2>>"$LOG" | jq -r '.[] | select(.name | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.name | contains("/'$issue'-")) | .name'
-fi
+   - `gh api repos/$repo/branches --paginate | jq -r '.[] | select(.name | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.name | contains("/'$issue'-")) | .name'`
    - If exactly one branch matches → `existing_branch` = that branch
 
 3. **Search for existing open manul PRs** for this repository + issue (only if not found in step 1):
-   - If the above returns empty OR errors (defensive `|| true`), retry via `gh pr list --repo <repository> --state open --json number,headRefName,baseRefName,title,url -q '.[] | select(.headRefName | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.headRefName | contains("/'$issue'-")) | {number, head: .headRefName, base: .baseRefName, title, html_url: .url}'`. This prevents a jq slice/parse error from silently collapsing to "no existing PR".
-  - **RESILIENCE:** Use `"$MANUL_DIR/github-api-wrapper.sh" pulls "$repo"` for the resilient version. If wrapper missing, fall back to direct API:
-    ```
-    if [ -x "$MANUL_DIR/github-api-wrapper.sh" ]; then
-      "$MANUL_DIR/github-api-wrapper.sh" pulls "$repo"
-    else
-      gh api repos/$repo/pulls --paginate --jq '...'
-    fi
-    ```
+   - `gh api repos/$repo/pulls --paginate --jq '.[] | select(.head.ref | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.head.ref | contains("/'$issue'-")) | select(.state=="open") | {number: .number, head: .head.ref, base: .base.ref, title: .title, html_url: .html_url}'` **wrapped with fallback**: if the above returns empty OR errors (defensive `|| true`), retry via `gh pr list --repo <repository> --state open --json number,headRefName,baseRefName,title,url -q '.[] | select(.headRefName | startswith("feature/manul/") or startswith("bugfix/manul/")) | select(.headRefName | contains("/'$issue'-")) | {number, head: .headRefName, base: .baseRefName, title, html_url: .url}'`. This prevents a jq slice/parse error from silently collapsing to "no existing PR".
    - If exactly one PR matches → `existing_pr` = that PR object; if `existing_branch` is not yet set, set it to `existing_pr.head`
    - **Defensive invariant**: if `existing_pr` was provided (continuation case) and `pr_target_branch` resolves to the repo default branch anyway, explicitly override `pr_target_branch` to `existing_pr.head` and log a warning so `gh pr create` never accidentally targets the default branch on a continuation.
 

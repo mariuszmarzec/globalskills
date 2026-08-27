@@ -489,7 +489,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" issue-comments-repo "$repo" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -529,7 +529,7 @@ fi
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" issues "$repo" "$BASELINE" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -592,7 +592,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" pr-comments-repo "$repo" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
