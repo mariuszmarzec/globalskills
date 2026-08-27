@@ -224,6 +224,45 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 * `maxAttemptsBeforeFail` — auto-mark as failed after N attempts (default 3)
 * `taskHealthCheckInterval` — seconds between health checks (default 120 seconds/2 minutes)
 
+### Troubleshooting
+
+**Common Issue: "Unknown agent id 'manul'"**
+
+This error occurs when the gateway cannot find the `manul` agent definition, typically because the agent is missing from the gateway configuration or the skill definition.
+
+**Causes:**
+1. **Missing agent in `.agents.list`** – The gateway looks for agent definitions in `~/.agents/agents/` (symlinked to `~/.globalskills/skills/`). If the manul entry is absent, the gateway reports "Unknown agent id 'manul'".
+2. **Skill definition not present** – The canonical skill source (`~/.globalskills/skills/manul-github-bot/`) is missing or corrupted.
+3. **Symlink broken** – The symlinks in `~/.openclaw/manul/` (e.g., `watchdog.sh`, `task-recovery.sh`, `orchestrator.prompt.md`) are broken, preventing the gateway from loading the skill.
+
+**Diagnosis:**
+- Check that `~/.agents/agents/manul` exists and contains the correct agent definition (see `agent.yaml`).
+- Verify the skill files are present in `~/.globalskills/skills/manul-github-bot/`.
+- Ensure the symlinks in `~/.openclaw/manul/` are valid:
+  ```bash
+  ls -la ~/.openclaw/manul/watchdog.sh ~/.openclaw/manul/task-recovery.sh ~/.openclaw/manul/orchestrator.prompt.md
+  ```
+
+**Resolution:**
+1. **Ensure the agent is registered** – Run `gateway config list` or `gateway get agents` to see if the manul agent appears. If not, add it to `~/.agents/agents/manul` (or regenerate via `start-manul-automation.sh install`).
+2. **Restore the skill** – If the skill is missing, copy the entire skill directory back:
+   ```bash
+   cp -r ~/.globalskills/skills/manul-github-bot ~/.openclaw/agents/  # restore symlinks
+   # Then run: ~/.openclaw/manul/start-manul-automation.sh install
+   ```
+3. **Verify symlinks** – Recreate any broken symlinks:
+   ```bash
+   ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
+   ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
+   ln -sf ~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md ~/.openclaw/manul/orchestrator.prompt.md
+   ```
+4. **Reload the gateway** – After making changes, reload the gateway configuration:
+   ```bash
+   gateway restart
+   ```
+
+Once fixed, the "Unknown agent id 'manul'" error will disappear and the manul bot will function normally.
+
 ### Installation
 
 Run the installer or use the skill directly. After installation:
