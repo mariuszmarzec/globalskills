@@ -1,0 +1,26 @@
+# OpenClaw Dependencies and Requirements
+# This file lists all dependencies needed for setup-environment
+
+# System requirements
+node: ">= 18.0"
+python: ">= 3.8"
+git: "any version"
+
+# OpenClaw specific
+openclaw: "2026.8.1 (ea80657)"
+opecode-cli: "latest"
+
+# Model providers (uncomment as needed)
+# anthropic: "API key required"
+# openai: "API key required"
+# groq: "API key required"
+
+# Additional tools
+jq: ">= 1.6" (for config management)
+sqlite3: "for database operations"
+ss: "for network checking"
+
+curl: "for connectivity tests"
+
+# Security
+# Tailscale: "for secure networking (optional)"
