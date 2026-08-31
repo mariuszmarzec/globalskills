@@ -1,0 +1,109 @@
+#!/bin/bash
+# aicode - Start AI dev environment and launch OpenCode
+
+export PATH="$HOME/.opencode/bin:$PATH"
+
+if [ -f "$HOME/.config/opencode/opencode.env" ]; then
+    set -a
+    . "$HOME/.config/opencode/opencode.env"
+    set +a
+fi
+
+if [ -z "${OPENCODE_API_KEY:-}" ]; then
+    echo "OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable until you add it to ~/.config/opencode/opencode.env."
+fi
+
+# Ensure Ollama is running
+if ! pgrep -x "ollama" > /dev/null; then
+    nohup ollama serve > /tmp/ollama.log 2>&1 &
+    sleep 3
+fi
+
+# Ensure PostgreSQL is available for LiteLLM UI/auth
+if command -v pg_isready >/dev/null 2>&1; then
+    if ! pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+        if command -v service >/dev/null 2>&1; then
+            sudo service postgresql start >/dev/null 2>&1 || true
+        fi
+        if command -v pg_ctlcluster >/dev/null 2>&1; then
+            pg_ctlcluster 12 main start >/dev/null 2>&1 || true
+        fi
+        sleep 3
+    fi
+    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+        if ! sudo -n -u postgres psql -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw 'litellm' 2>/dev/null; then
+            sudo -u postgres psql -c "CREATE USER litellm WITH PASSWORD 'litellm';" >/dev/null 2>&1 || true
+            sudo -u postgres psql -c "CREATE DATABASE litellm OWNER litellm;" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
+# Ensure LiteLLM is running
+if ! pgrep -f "litellm" > /dev/null; then
+    if [ -f "$HOME/litellm/.env" ]; then
+        set -a
+        . "$HOME/litellm/.env"
+        set +a
+    fi
+    nohup litellm --config "$HOME/litellm/config.yaml" --port 4000 > /tmp/litellm.log 2>&1 &
+    sleep 3
+fi
+
+# Ensure OpenClaw Gateway is running (serves all LiteLLM models too)
+GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+gateway_responding() {
+    curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}" >/dev/null 2>&1
+}
+if ! gateway_responding; then
+    if pgrep -f "openclaw gateway" > /dev/null; then
+        # Gateway process exists but is not responding; kill and restart
+        pkill -f "openclaw gateway" > /dev/null 2>&1 || true
+        sleep 1
+    fi
+    nohup openclaw gateway --force --allow-unconfigured --port "$GATEWAY_PORT" > /tmp/openclaw-gateway.log 2>&1 &
+    echo "Waiting for OpenClaw Gateway to become ready on 127.0.0.1:${GATEWAY_PORT}..."
+    ready=0
+    for _ in $(seq 1 20); do
+        if gateway_responding; then
+            ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$ready" -eq 1 ]; then
+        echo "OpenClaw Gateway is up on http://127.0.0.1:${GATEWAY_PORT}"
+    else
+        echo "WARNING: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log"
+    fi
+fi
+
+# Ensure OpenClaw Gateway is running and reloads agent config (fixes agent ids like "manul")
+if ! pgrep -f "openclaw gateway" > /dev/null; then
+    nohup openclaw gateway --force --allow-unconfigured --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+    sleep 3
+fi
+# Force gateway to reload agent configuration so new agents (like "manul") are visible
+timeout 10 openclaw gateway restart >/dev/null 2>&1 || true
+
+# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
+# Ensure OpenClaw Gateway is running and reloads agent config (fixes agent ids like "manul")
+if ! pgrep -f "openclaw gateway" > /dev/null; then
+    nohup openclaw gateway --force --allow-unconfigured --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+    sleep 3
+fi
+# Force gateway to reload agent configuration so new agents (like "manul") are visible
+timeout 10 openclaw gateway restart >/dev/null 2>&1 || true
+
+# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
+"$HOME/.openclaw/manul/manul-daemon.sh" start >/dev/null 2>&1
+
+# Launch OpenCode
+if [ -n "${OPENCODE_API_KEY:-}" ]; then
+    echo "OpenCode Zen API key detected; all Zen models available."
+else
+    echo "No OPENCODE_API_KEY detected; Zen models unavailable."
+fi
+echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
+echo "OpenClaw Gateway: http://127.0.0.1:18789 (openclaw dashboard)"
+
+exec opencode "$@"
