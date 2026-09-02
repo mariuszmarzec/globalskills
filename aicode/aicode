@@ -55,11 +55,6 @@ gateway_responding() {
     curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}" >/dev/null 2>&1
 }
 if ! gateway_responding; then
-    if pgrep -f "openclaw gateway" > /dev/null; then
-        # Gateway process exists but is not responding; kill and restart
-        pkill -f "openclaw gateway" > /dev/null 2>&1 || true
-        sleep 1
-    fi
     nohup openclaw gateway --force --allow-unconfigured --port "$GATEWAY_PORT" > /tmp/openclaw-gateway.log 2>&1 &
     echo "Waiting for OpenClaw Gateway to become ready on 127.0.0.1:${GATEWAY_PORT}..."
     ready=0
@@ -75,24 +70,9 @@ if ! gateway_responding; then
     else
         echo "WARNING: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log"
     fi
+else
+    echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
 fi
-
-# Ensure OpenClaw Gateway is running and reloads agent config (fixes agent ids like "manul")
-if ! pgrep -f "openclaw gateway" > /dev/null; then
-    nohup openclaw gateway --force --allow-unconfigured --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
-    sleep 3
-fi
-# Force gateway to reload agent configuration so new agents (like "manul") are visible
-timeout 10 openclaw gateway restart >/dev/null 2>&1 || true
-
-# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
-# Ensure OpenClaw Gateway is running and reloads agent config (fixes agent ids like "manul")
-if ! pgrep -f "openclaw gateway" > /dev/null; then
-    nohup openclaw gateway --force --allow-unconfigured --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
-    sleep 3
-fi
-# Force gateway to reload agent configuration so new agents (like "manul") are visible
-timeout 10 openclaw gateway restart >/dev/null 2>&1 || true
 
 # Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
 "$HOME/.openclaw/manul/manul-daemon.sh" start >/dev/null 2>&1
