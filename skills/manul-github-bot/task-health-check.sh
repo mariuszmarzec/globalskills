@@ -5,10 +5,10 @@
 # detecting stuck tasks and taking corrective action.
 #
 # Recommended cron schedule: every 2 minutes
-#   */2 * * * * /home/marzec/.openclaw/manul/task-health-check.sh
+#   */2 * * * * $MANUL_DIR/task-health-check.sh
 #
 # Supported env vars (set in environment or override in config):
-#   MANUL_DIR       — manul directory (default: ~/.openclaw/manul)
+#   MANUL_DIR       — manul directory (default: $OPENCLAW_MANUL_DIR)
 #   MANUL_DB        — SQLite database path (default: $MANUL_DIR/manul.db)
 #
 # History:

@@ -2,7 +2,7 @@
 # watchdog.sh — keep the manul daemon alive and recover from stale locks.
 #
 # Run from cron every 5 minutes:
-#   */5 * * * * /home/marzec/.openclaw/manul/watchdog.sh
+#   */5 * * * * $MANUL_DIR/watchdog.sh
 #
 # Responsibilities:
 #   1. Start the daemon if it is not running.
@@ -15,7 +15,7 @@
 #   - Marks failed tasks as 'failed' when they exceed max attempts
 #   - Logs all stuck task detections for debugging
 #
-# Logs are written to ~/.openclaw/manul/watchdog.log
+# Logs are written to $MANUL_DIR/watchdog.log
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"

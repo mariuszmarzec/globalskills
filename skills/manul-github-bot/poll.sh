@@ -446,7 +446,7 @@ if [ -f "$skip_log" ]; then
   > "$tmp_skip"
   while IFS='|' read -r srepo sissue smsg stime; do
     [ -n "$srepo" ] || continue
-    if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+    if $MANUL_DIR/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
       log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
     else
       # Still failing — keep in queue for next poll
@@ -626,7 +626,7 @@ fi
     > "$tmp_skip"
     while IFS='|' read -r srepo sissue smsg stime; do
       [ -n "$srepo" ] || continue
-      if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+      if $MANUL_DIR/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
         log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
       else
         # Still failing — keep in queue for next poll
@@ -684,7 +684,7 @@ verify_queued_open() {
     post_skip_comment() {
       local repo="$1" issue="$2" msg="$3" attempt=1 max=3 delay=2 skip_log="$MANUL_DIR/skip-comments.log"
       while [ $attempt -le $max ]; do
-        if /mnt/f/ubuntu-workspace/.openclaw/manul/feedback.sh "$repo" "$issue" "$msg" 2>>"$LOG"; then
+        if $MANUL_DIR/feedback.sh "$repo" "$issue" "$msg" 2>>"$LOG"; then
           return 0
         fi
         log "WARN: feedback.sh failed for $repo#$issue (attempt $attempt/$max), retrying in ${delay}s..."

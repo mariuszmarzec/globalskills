@@ -24,49 +24,73 @@ PR → feedback comments on the **same location** that triggered the task. Every
 ## Architecture
 
 ```
-manul-daemon.sh (setsid background loop, no systemd needed)
-   │ every pollInterval (default 60s)
-   ▼
+aicode
+→ starts/ensures LiteLLM and OpenClaw Gateway
+
+OpenClaw Gateway
+→ provides OpenClaw runtime
+
+OpenClaw main
+→ normal primary agent
+
+OpenClaw manul
+→ isolated GitHub automation agent
+
+manul-daemon.sh
+→ polls/dispatches Manul tasks
+
 poll.sh ── gh api: issue bodies + issue comments + PR review comments
    │         (created_at >= baseline) + contains trigger
    ▼
-SQLite manul.db (processed_comments: queued→running→done|failed, meta.baseline)
+  SQLite manul.db (processed_comments: queued→running→done|failed, meta.baseline)
    │ rebuild queue.json
    ▼
-fire:true? ──► openclaw agent --agent manul --message-file orchestrator.prompt.md \
-                  --session-key manul-worker  (headless, timeout -k 60)
-                        │
-                        ▼
-manul agent (isolated persona: /mnt/f/ubuntu-workspace/.openclaw/workspace-manul, restricted tools,
-             own session store under /mnt/f/ubuntu-workspace/.openclaw/agents/manul/sessions)
-   orchestrator: per task → mark running → post "🤖 Running..." →
-                 sessions_spawn subagent (worker) → wait (sessions_yield)
-                        │
-                        ▼
-worker: clone repo → branch <type>/manul/<issue>-<slug> → implement → tests → commit
-        (Co-authored-by trailer) → push → gh pr create (if autoCreatePr)
-                        │
-                        ▼
-orchestrator: parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
-              → update DB (done/failed)
-```
+  fire:true? ──► openclaw agent --agent manul --message-file orchestrator.prompt.md
+                     │
+                     ▼
+  native OpenClaw agent `manul`
+     orchestrator: per task → mark running → post "🤖 Running..." →
+                   execute task via native OpenClaw agent → parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
+                     │
+                     ▼
+  worker: clone repo → branch <type>/manul/<issue>-<slug> → implement → tests → commit
+          (Co-authored-by trailer) → push → gh pr create (if autoCreatePr)
+                     │
+                     ▼
+  orchestrator: parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
+                → update DB (done/failed)
+  ```
 
-Dispatch is synchronous (daemon waits for the agent turn), so runs never
-overlap; `lock` is a backstop with 30 min TTL.
+**Explicit separation of responsibilities:**
 
-## Files (canonical source lives here — symlinked into `~/.openclaw/manul/`)
+| Component | Responsibility |
+|-----------|----------------|
+| `aicode` | starts/ensures LiteLLM and OpenClaw Gateway |
+| `OpenClaw Gateway` | provides OpenClaw runtime |
+| `OpenClaw main` | normal primary agent |
+| `OpenClaw manul` | isolated GitHub automation agent |
+| `manul-daemon.sh` | polls/dispatches Manul tasks |
+| `manul-status.sh` | reports Manul runtime/daemon/task health |
+
+**Dispatch is synchronous (daemon waits for the agent turn), so runs never
+overlap; `lock` is a backstop with 30 min TTL.**
+
+**Manul must remain independently operable from OpenClaw `main`.**
+
+## Files (canonical source lives here — symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/`)
 
 | Path | Purpose |
 |---|---|
 | `~/.globalskills/skills/manul-github-bot/SKILL.md` | skill/rules source of truth |
-| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `~/.openclaw/manul/poll.sh`) |
-| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `~/.openclaw/manul/orchestrator.prompt.md`) |
+| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh`) |
+| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/orchestrator.prompt.md`) |
 | `~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh` | comment cleanup script (symlinked) |
-| **`~/.globalskills/skills/manul-github-bot/watchdog.sh`** | **enhanced watchdog script (symlinked into `~/.openclaw/manul/watchdog.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/task-recovery.sh`** | **task recovery CLI for manual intervention (symlinked into `~/.openclaw/manul/task-recovery.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **proactive task health monitor (symlinked into `~/.openclaw/manul/task-health-check.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/start-manul-automation.sh`** | **automation startup helper (symlinked into `~/.openclaw/manul/start-manul-automation.sh`) — NEW 2026-08-25** |
-| `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `~/.openclaw/manul/config.json` and customize) |
+| **`~/.globalskills/skills/manul-github-bot/watchdog.sh`** | **enhanced watchdog script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh`) — NEW 2026-08-25** |
+| **`~/.globalskills/skills/manul-github-bot/task-recovery.sh`** | **task recovery CLI for manual intervention (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh`) — NEW 2026-08-25** |
+| **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **proactive task health monitor (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh`) — NEW 2026-08-25** |
+| **`~/.globalskills/skills/manul-github-bot/start-manul-automation.sh`** | **automation startup helper (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh`) — NEW 2026-08-25** |
+| **`~/.globalskills/skills/manul-github-bot/manul-status.sh`** | **status reporting script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh`) — NEW 2026-08-25** |
+| `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` and customize) |
 
 ### Enhanced watchdog.sh (NEW 2026-08-25)
 
@@ -111,13 +135,13 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 **Example usage:**
 ```bash
 # List stuck tasks
-~/.openclaw/manul/task-recovery.sh --list-stuck
+$MANUL_DIR/task-recovery.sh --list-stuck
 
 # Reset a specific stuck task
-~/.openclaw/manul/task-recovery.sh --reset issue:5319953481
+$MANUL_DIR/task-recovery.sh --reset issue:5319953481
 
 # Run health check
-~/.openclaw/manul/task-recovery.sh --health-check
+$MANUL_DIR/task-recovery.sh --health-check
 ```
 
 ### Task Health Monitor (NEW 2026-08-25)
@@ -132,7 +156,7 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 
 **Schedule:** Runs every 2 minutes via cron
 
-**Logs:** All activity written to `~/.openclaw/manul/task-health.log`
+**Logs:** All activity written to `$MANUL_DIR/task-health.log`
 
 ### Automation Startup Helper (NEW 2026-08-25)
 
@@ -154,7 +178,7 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 
 **Quick setup:**
 ```bash
-~/.openclaw/manul/start-manul-automation.sh install
+$MANUL_DIR/start-manul-automation.sh install
 ```
 
 ### config.json
@@ -231,12 +255,13 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 This error occurs when the gateway cannot find the `manul` agent definition, typically because the agent is missing from the gateway configuration or the skill definition.
 
 **Causes:**
-1. **Missing agent in `.agents.list`** – The gateway looks for agent definitions in `~/.agents/agents/` (symlinked to `~/.globalskills/skills/`). If the manul entry is absent, the gateway reports "Unknown agent id 'manul'".
+1. **Missing agent** – The native OpenClaw agent `manul` is not registered with the gateway.
 2. **Skill definition not present** – The canonical skill source (`~/.globalskills/skills/manul-github-bot/`) is missing or corrupted.
-3. **Symlink broken** – The symlinks in `~/.openclaw/manul/` (e.g., `watchdog.sh`, `task-recovery.sh`, `orchestrator.prompt.md`) are broken, preventing the gateway from loading the skill.
+3. **Symlink broken** – The symlinks in `~/.openclaw/manul/` (e.g., `watchdog.sh`, `task-recovery.sh`, `orchestrator.prompt.md`) are broken.
 
 **Diagnosis:**
-- Check that `~/.agents/agents/manul` exists and contains the correct agent definition (see `agent.yaml`).
+- Verify the agent exists: `openclaw agents list`
+- Check the agent workspace exists: `ls -la ~/.openclaw/manul-workspace`
 - Verify the skill files are present in `~/.globalskills/skills/manul-github-bot/`.
 - Ensure the symlinks in `~/.openclaw/manul/` are valid:
   ```bash
@@ -244,57 +269,70 @@ This error occurs when the gateway cannot find the `manul` agent definition, typ
   ```
 
 **Resolution:**
-1. **Ensure the agent is registered** – Run `gateway config list` or `gateway get agents` to see if the manul agent appears. If not, add it to `~/.agents/agents/manul` (or regenerate via `start-manul-automation.sh install`).
-2. **Restore the skill** – If the skill is missing, copy the entire skill directory back:
-   ```bash
-   cp -r ~/.globalskills/skills/manul-github-bot ~/.openclaw/agents/  # restore symlinks
-   # Then run: ~/.openclaw/manul/start-manul-automation.sh install
-   ```
-3. **Verify symlinks** – Recreate any broken symlinks:
-   ```bash
-   ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
-   ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
-   ln -sf ~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md ~/.openclaw/manul/orchestrator.prompt.md
-   ```
-4. **Reload the gateway** – After making changes, reload the gateway configuration:
-   ```bash
-   gateway restart
-   ```
-
-Once fixed, the "Unknown agent id 'manul'" error will disappear and the manul bot will function normally.
+1. **Ensure the agent is registered** – Re-add the agent: `openclaw agents add manul --workspace ~/.openclaw/manul-workspace --model litellm/groq-llama-70b --non-interactive`
+2. **Verify symlinks** – Recreate any broken symlinks:
+    ```bash
+    ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
+    ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
+    ln -sf ~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md ~/.openclaw/manul/orchestrator.prompt.md
+    ```
+3. **Verify agent works** – Test the native agent: `openclaw agent --agent manul -m "Reply with exactly: MANUL_AGENT_OK" --json`
 
 ### Installation
 
 Run the installer or use the skill directly. After installation:
 
-1. Copy the config template and customize it:
-   ```bash
-   cp ~/.globalskills/skills/manul-github-bot/config.json.example ~/.openclaw/manul/config.json
-   # then edit ~/.openclaw/manul/config.json with your repos, allowedUsers, etc.
-   ```
+1. Create the manul runtime directory and symlink skill files:
+    ```bash
+    mkdir -p /mnt/f/ubuntu-workspace/.openclaw/manul
+    ln -sf ~/.globalskills/skills/manul-github-bot/poll.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/github-api-wrapper.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
+    ```
 
-2. Add a convenience alias for `manul-status` and `manul-comments-remove` in your shell rc:
+2. Copy and customize the config:
+    ```bash
+    cp ~/.globalskills/skills/manul-github-bot/config.json.example /mnt/f/ubuntu-workspace/.openclaw/manul/config.json
+    # then edit /mnt/f/ubuntu-workspace/.openclaw/manul/config.json with your repos, allowedUsers, etc.
+    ```
+
+3. Make scripts executable:
+    ```bash
+    chmod +x /mnt/f/ubuntu-workspace/.openclaw/manul/*.sh
+    ```
+
+4. Start the automation:
+    ```bash
+    /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh install
+    ```
 
 ```bash
-alias manul-status='$HOME/.openclaw/manul/manul-status.sh'
-alias manul-comments-remove='$HOME/.openclaw/manul/manul-comments-remove.sh'
+alias manul-status='$OPENCLAW_MANUL_DIR/manul-status.sh'
+alias manul-comments-remove='$OPENCLAW_MANUL_DIR/manul-comments-remove.sh'
 ```
 
-**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `task-health-check.sh`, and `start-manul-automation.sh` in `~/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
+**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `task-health-check.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `/mnt/f/ubuntu-workspace/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
 
 To verify the symlinks are intact:
 
 ```bash
-ls -la ~/.openclaw/manul/watchdog.sh ~/.openclaw/manul/task-recovery.sh ~/.openclaw/manul/task-health-check.sh ~/.openclaw/manul/start-manul-automation.sh
+ls -la /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
 ```
 
 If a symlink is ever broken (e.g. after manually editing the installed copy), recreate it:
 
 ```bash
-ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/task-health-check.sh ~/.openclaw/manul/task-health-check.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh ~/.openclaw/manul/start-manul-automation.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
 ```
 
 ### Enhanced Automation Features (NEW 2026-08-25)

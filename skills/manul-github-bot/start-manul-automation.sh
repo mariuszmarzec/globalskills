@@ -115,6 +115,7 @@ install_components() {
     chmod +x "$MANUL_DIR/watchdog.sh" 2>/dev/null || true
     chmod +x "$MANUL_DIR/task-recovery.sh" 2>/dev/null || true
     chmod +x "$MANUL_DIR/task-health-check.sh" 2>/dev/null || true
+    chmod +x "$MANUL_DIR/manul-status.sh" 2>/dev/null || true
     echo "   Scripts made executable"
     
     # 2. Install config if not exists
@@ -155,10 +156,19 @@ install_components() {
         echo "   Task health check already scheduled"
     fi
     
-    # 5. Start services
-    echo "5. Starting services..."
+# 5. Create missing symlinks
+    echo "5. Creating missing symlinks..."
+    [ ! -e "$MANUL_DIR/manul-status.sh" ] && ln -sf "$HOME/.globalskills/skills/manul-github-bot/manul-status.sh" "$MANUL_DIR/manul-status.sh" || true
+    [ ! -e "$MANUL_DIR/orchestrator.prompt.md" ] && ln -sf "$HOME/.globalskills/skills/manul-github-bot/orchestrator.prompt.md" "$MANUL_DIR/orchestrator.prompt.md" || true
+    [ ! -e "$MANUL_DIR/github-api-wrapper.sh" ] && ln -sf "$HOME/.globalskills/skills/manul-github-bot/github-api-wrapper.sh" "$MANUL_DIR/github-api-wrapper.sh" || true
+    [ ! -e "$MANUL_DIR/manul-comments-remove.sh" ] && ln -sf "$HOME/.globalskills/skills/manul-github-bot/manul-comments-remove.sh" "$MANUL_DIR/manul-comments-remove.sh" || true
+    [ ! -e "$MANUL_DIR/poll.sh" ] && ln -sf "$HOME/.globalskills/skills/manul-github-bot/poll.sh" "$MANUL_DIR/poll.sh" || true
+    echo "   Symlinks verified/ restored"
+
+    # 6. Start services
+    echo "6. Starting services..."
     start_daemon
-    
+
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         echo "   Manul daemon started"
         
