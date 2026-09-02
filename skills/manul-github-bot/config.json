@@ -1,0 +1,38 @@
+{
+  "trigger": "/manul",
+  "allowedUsers": ["<GITHUB_LOGIN>"],
+  "autoCreatePr": true,
+  "autoRebaseOnPrBase": true,
+  "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
+  "repositories": ["<owner>/<repo>"],
+  "retryConfig": {
+    "maxAttempts": 3,
+    "sessionTimeoutSeconds": 300,
+    "contextStrategy": "progressive",
+    "contextLimits": [240000, 120000, 60000],
+    "useLightContextOnFinalRetry": true
+  },
+  "automation": {
+    "enabled": true,
+    "pollInterval": 60,
+    "maxTaskRunningTime": 1800,
+    "maxAttemptsBeforeFail": 3,
+    "lockTtl": 1800,
+    "heartbeatInterval": 60,
+    "heartbeatTimeout": 900,
+    "leaseTimeout": 900,
+    "alerts": {
+      "failureWebhook": null,
+      "stuckTaskWebhook": null
+    }
+  },
+  "ciFix": {
+    "enabled": true,
+    "maxAttemptsPerRun": 2,
+    "cooldownMinutes": 60
+  },
+  "compaction": {
+    "fallbackCutoffTokens": 240000,
+    "retryOnTimeout": true
+  }
+}

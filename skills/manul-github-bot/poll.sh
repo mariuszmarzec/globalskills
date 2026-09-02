@@ -28,6 +28,8 @@ LOG="${MANUL_DIR}/poll.log"
 LOCK_TTL_SECONDS="${MANUL_LOCK_TTL_SECONDS:-1800}"
 REPO_LOCK_DIR="${MANUL_DIR}/repo-locks"
 REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-1800}"
+LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
+LEASE_TIMEOUT="${LEASE_TIMEOUT:-900}"
 mkdir -p "$REPO_LOCK_DIR" 2>/dev/null || true
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
@@ -343,7 +345,7 @@ scan_failing_ci() {
   [ "$CI_FIX_ENABLED" = "true" ] || return 0
   local prs_json
   # Scan all open PRs for failing CI (not just manul PRs)
-  prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}' 2>>"$LOG")"
+  prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}' 2>>"$LOG" || true)"
   [ -n "$prs_json" ] || return 0
   local pr_count
   pr_count="$(printf '%s' "$prs_json" | jq 'length')"
@@ -368,7 +370,7 @@ scan_failing_ci() {
     # another one (the bot has proven it could not fix this build). The gate
     # lifts automatically the moment the PR head moves to a new commit.
     local pr_head_sha
-    pr_head_sha="$(gh pr view "$pr_num" --repo "$repo" --json headRefOid --jq '.headRefOid // ""' 2>>"$LOG")"
+    pr_head_sha="$(gh pr view "$pr_num" --repo "$repo" --json headRefOid --jq '.headRefOid // ""' 2>>"$LOG" || true)"
     if [ -n "$pr_head_sha" ] && is_ci_fix_failed_for_commit "$repo" "$pr_num" "$pr_head_sha"; then
       local prev_reason prev_at
       prev_reason="$(sqlite3 "$DB" "SELECT reason FROM ci_fix_failed WHERE repository='$repo' AND prNumber=$pr_num AND head_sha='$pr_head_sha' LIMIT 1;" 2>>"$LOG")"
@@ -379,7 +381,7 @@ scan_failing_ci() {
     fi
     # Get failing checks for this PR
     local checks_json
-    checks_json="$(gh pr checks "$pr_num" --repo "$repo" --json name,state,completedAt,link 2>>"$LOG" | jq -c '[.[] | select(.state=="FAILURE" or .state=="ERROR")]' 2>>"$LOG")"
+    checks_json="$(gh pr checks "$pr_num" --repo "$repo" --json name,state,completedAt,link 2>>"$LOG" | jq -c '[.[] | select(.state=="FAILURE" or .state=="ERROR")]' 2>>"$LOG" || true)"
     [ -n "$checks_json" ] || { i=$((i+1)); continue; }
     local failing_count
     failing_count="$(printf '%s' "$checks_json" | jq 'length')"
@@ -407,7 +409,9 @@ scan_failing_ci() {
         local created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         local esc_prompt
         esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-        sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at');" 2>>"$LOG"
+        local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        local lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+        sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at','$now','$lease_expires');" 2>>"$LOG"
         if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
           NEW=$((NEW + 1))
           log "queued CI fix task for $repo#$pr_num run $run_id (check: $check_name)"
@@ -433,11 +437,11 @@ for repo in "${REPOS[@]}"; do
   # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
   # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
   declare -A OPEN_ISSUES CLOSED_ISSUES OPEN_PRS MERGED_PRS CLOSED_PRS
-  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG")
-  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG")
+  while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
+  while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG" || true)
+  while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
+  while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG" || true)
+  while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG" || true)
 
   # Drain pending skip comments from a previous failed run (GitHub as primary frontend: comments are queued to skip-comments.log when feedback.sh fails after all retries, and retried here).
 skip_log="$MANUL_DIR/skip-comments.log"
@@ -446,7 +450,7 @@ if [ -f "$skip_log" ]; then
   > "$tmp_skip"
   while IFS='|' read -r srepo sissue smsg stime; do
     [ -n "$srepo" ] || continue
-    if $MANUL_DIR/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+    if "$MANUL_DIR/feedback.sh" "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
       log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
     else
       # Still failing — keep in queue for next poll
@@ -478,7 +482,9 @@ fi
     prompt="$fullBody"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState,prState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${CLOSED_ISSUES[$issue]:-open}','${OPEN_PRS[$issue]:-}'); SELECT changes();" 2>>"$LOG")"
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_issue_context "$repo" "$issue")"
@@ -489,7 +495,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" issue-comments-repo "$repo" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -508,7 +514,7 @@ fi
       agent: $agent,
       prompt: $prompt,
       fullBody: (.body | sub($trig; ""))
-    }')
+    }' 2>>"$LOG" || true)
 
   # 1b) Issue bodies (new OPEN issues carrying the trigger in the description) — state=open skips closed issues
   # state=open ensures manul does NOT process closed issues.
@@ -524,12 +530,14 @@ fi
     [ -n "$prompt" ] || continue
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,issueState) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','open'); SELECT changes();" 2>>"$LOG")"
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" issues "$repo" "$BASELINE" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -547,7 +555,7 @@ fi
       issueNumber: .number,
       agent: $agent,
       prompt: $prompt
-    }')
+    }' 2>>"$LOG" || true)
 
   # 2) PR review comments
   # Only process review comments on OPEN PRs. The GitHub pulls/comments API
@@ -581,7 +589,9 @@ fi
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     pr_state="$(jq -r '.state // ""' <<<"$obj")"
     is_res="$(jq -r '.isResolved // false' <<<"$obj")"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,prState,isResolved) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','${pr_state:-open}',$is_res); SELECT changes();" 2>>"$LOG")"
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
@@ -592,7 +602,7 @@ fi
       fi
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
-  done < <("$MANUL_DIR/github-api-wrapper.sh" pr-comments-repo "$repo" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -615,7 +625,7 @@ fi
       line: ((.line // .original_line // "") | tostring),
       diffHunk: (.diff_hunk // ""),
       isResolved: (.in_reply_to_id // null | . != null)
-    }')
+    }' 2>>"$LOG" || true)
 
   # 3) Drain pending skip comments from a previous failed run (GitHub as
   # primary frontend: comments are queued to skip-comments.log when feedback.sh
@@ -626,7 +636,7 @@ fi
     > "$tmp_skip"
     while IFS='|' read -r srepo sissue smsg stime; do
       [ -n "$srepo" ] || continue
-      if $MANUL_DIR/feedback.sh "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+      if "$MANUL_DIR/feedback.sh" "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
         log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
       else
         # Still failing — keep in queue for next poll
@@ -647,84 +657,7 @@ if [ "${repo_cleanup_lock:-0}" -eq 1 ]; then
   done
 fi
 
-# Recover stuck tasks: if a task has been `running` for longer than 2x TTL,
-# reset it to `queued` so it can be retried. This handles crashes where the
-# worker died without clearing the lock / updating DB.
-STUCK_THRESHOLD=$(( REPO_LOCK_TTL * 2 ))
-sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='running' AND (strftime('%s','now') - strftime('%s', COALESCE(processedAt, createdAt))) > $STUCK_THRESHOLD;" 2>>"$LOG"
-STUCK_RESET="$(sqlite3 "$DB" "SELECT changes();" 2>/dev/null || echo 0)"
-if [ "${STUCK_RESET:-0}" -gt 0 ]; then
-  log "recovered $STUCK_RESET stuck running task(s) older than ${STUCK_THRESHOLD}s"
-fi
-
-# Reaper: remove queued tasks for closed issues / merged-closed PRs
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE status='queued' AND ( (issueState='closed') OR (prState IN ('merged','closed')) );" 2>>"$LOG"
-REAPER="$(sqlite3 "$DB" "SELECT changes();" 2>/dev/null || echo 0)"
-if [ "${REAPER:-0}" -gt 0 ]; then
-  log "reaped $REAPER stale queued task(s) for closed issues/PRs"
-fi
-
-# Double-check: re-verify open state of issues/PRs for ALL queued tasks.
-# Between scan and now, some may have been closed/merged. If so, mark them
-# as skipped (status=failed) and post a "skipped — already closed" comment.
-verify_queued_open() {
-  local repo="$1" issue="$2" commentId="$3" commentUrl="$4" isPr="$5"
-  local state_json state
-  if [ "$isPr" = "true" ]; then
-    state_json="$(gh pr view "$issue" --repo "$repo" --json state 2>>"$LOG" | jq -r '.state // ""')"
-  else
-    state_json="$(gh issue view "$issue" --repo "$repo" --json state 2>>"$LOG" | jq -r '.state // ""')"
-  fi
-  state="$state_json"
-  if [ "$state" = "closed" ] || [ "$state" = "merged" ]; then
-    # Mark as failed so it won't be re-queued
-    sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$commentId';" 2>>"$LOG"
-    # Post skip comment using feedback.sh with retries
-    # If all retries fail, persist to a pending-comments file for retry on next poll
-    post_skip_comment() {
-      local repo="$1" issue="$2" msg="$3" attempt=1 max=3 delay=2 skip_log="$MANUL_DIR/skip-comments.log"
-      while [ $attempt -le $max ]; do
-        if $MANUL_DIR/feedback.sh "$repo" "$issue" "$msg" 2>>"$LOG"; then
-          return 0
-        fi
-        log "WARN: feedback.sh failed for $repo#$issue (attempt $attempt/$max), retrying in ${delay}s..."
-        sleep $delay
-        attempt=$((attempt + 1))
-        delay=$((delay * 2))
-      done
-      log "WARN: feedback.sh FAILED after $max attempts for $repo#$issue — queuing comment for next poll"
-      printf '%s|%s|%s|%s\n' "$repo" "$issue" "$msg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$skip_log"
-      return 0
-    }
-    post_skip_comment "$repo" "$issue" "⏭️ Skipping — the ${isPr:+PR }issue was already $state before the task could be processed."
-    log "skipped task $commentId on $repo#$issue — ${isPr:+PR }issue is $state"
-    return 1
-  fi
-  return 0
-}
-
-# Run verification on all currently queued tasks
-sqlite3 "$DB" -separator '|' "SELECT commentId, repository, issueNumber, commentUrl, prState FROM processed_comments WHERE status='queued';" 2>>"$LOG" | while IFS='|' read -r cid repo issue url prstate; do
-  [ -n "$cid" ] || continue
-  if [ -n "$prstate" ] && [ "$prstate" != "" ]; then
-    # It was a PR (review comment or PR conversation)
-    verify_queued_open "$repo" "$issue" "$cid" "$url" "true"
-  else
-    # It was an issue (issue comment or issue body)
-    verify_queued_open "$repo" "$issue" "$cid" "$url" "false"
-  fi
-done
-
-# Rebuild queue.json from queued rows (failed rows with attempts below max re-queue)
-ESCALATION_ROUNDS="${MANUL_ESCALATION_ROUNDS:-3}"
-sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL WHERE status='failed' AND attempts <= $ESCALATION_ROUNDS;" 2>>"$LOG"
-QUEUE_TMP="${QUEUE_JSON}.tmp"
-sqlite3 "$DB" "SELECT json_group_array(json_object('commentId',commentId,'repository',repository,'issueNumber',issueNumber,'commentUrl',commentUrl,'author',author,'agent',agent,'prompt',prompt,'context',context,'attempts',attempts,'ciFix',CASE WHEN commentId LIKE 'ci_fix:%' THEN 1 ELSE 0 END)) FROM (SELECT commentId,repository,issueNumber,commentUrl,author,agent,prompt,context,attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt);" 2>>"$LOG" >"$QUEUE_TMP"
-if ! jq -e . "$QUEUE_TMP" >/dev/null 2>&1; then
-  echo '[]' >"$QUEUE_TMP"
-fi
-mv "$QUEUE_TMP" "$QUEUE_JSON"
-PENDING="$(jq 'length' "$QUEUE_JSON" 2>/dev/null || echo 0)"
+PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
 
 LOCKED=0
 if [ -f "$LOCK" ]; then
