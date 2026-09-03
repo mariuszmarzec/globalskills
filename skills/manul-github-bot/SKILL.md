@@ -113,7 +113,7 @@ Do NOT use legacy names `maxTaskRunningTime` or `taskHealthCheckInterval`; they 
 | `~/.globalskills/skills/manul-github-bot/SKILL.md` | skill/rules source of truth |
 | `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh`) |
 | `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/orchestrator.prompt.md`) |
-| `~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh` | comment cleanup script (symlinked) |
+| `~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh` | comment cleanup script (symlinked, supports both PR and issue URLs) |
 | `~/.globalskills/skills/manul-github-bot/watchdog.sh` | automatic recovery/liveness script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh`) |
 | `~/.globalskills/skills/manul-github-bot/task-recovery.sh` | manual recovery CLI (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh`) |
 | **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **LEGACY/DEPRECATED — do not install or use in automatic operation** |

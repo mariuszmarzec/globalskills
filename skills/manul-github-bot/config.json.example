@@ -22,9 +22,16 @@
   "autoRebaseOnPrBase": true,
   "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
   "allowedUsers": ["<GITHUB_LOGIN>"],
-  "repositories": [
-    "<owner>/<repo>",
-    "<owner>/<repo>"
+   "repositories": [
+    "mariuszmarzec/globalskills",
+    "mariuszmarzec/interview-subjects",
+    "mariuszmarzec/fiteo",
+    "mariuszmarzec/caracal-rag",
+    "mariuszmarzec/todo",
+    "mariuszmarzec/shoppingListGenerator",
+    "mariuszmarzec/cheatDay",
+    "mariuszmarzec/fiteoApp",
+    "mariuszmarzec/QuickMVI"
   ],
   "retryConfig": {
     "maxAttempts": 3,

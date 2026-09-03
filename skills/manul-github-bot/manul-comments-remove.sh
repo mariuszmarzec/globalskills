@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# manul-comments-remove.sh — Remove all manul-signed comments from a PR.
+# manul-comments-remove.sh — Remove all manul-signed comments from a PR or issue.
 #
 # Usage:
-#   manul-comments-remove.sh <pr-url-or-ref>
+#   manul-comments-remove.sh <pr-url-or-ref-or-issue>
 #
 # Examples:
 #   manul-comments-remove.sh https://github.com/mariuszmarzec/todo/pull/14
+#   manul-comments-remove.sh https://github.com/mariuszmarzec/caracal-rag/issues/10
 #   manul-comments-remove.sh mariuszmarzec/todo#14
 #   manul-comments-remove.sh 14                # uses repo from config.json
 #
 # Removes comments containing the signature "— manul 🐈" from:
 #   - PR review comments
 #   - PR/issue conversation comments
+#   - Issue conversation comments
 #
 set -uo pipefail
 
@@ -23,11 +25,12 @@ SIG="— manul 🐈"
 # --- resolve repo + issue number ---
 arg="${1:-}"
 if [ -z "$arg" ]; then
-  echo "Usage: $0 <pr-url-or-ref>"
+  echo "Usage: $0 <pr-url-or-ref-or-issue>"
   echo "Examples:"
   echo "  $0 https://github.com/mariuszmarzec/todo/pull/14"
+  echo "  $0 https://github.com/mariuszmarzec/caracal-rag/issues/10"
   echo "  $0 mariuszmarzec/todo#14"
-  echo "  $0 14"
+  echo "  $0 14                # uses repo from config.json"
   exit 1
 fi
 
@@ -47,9 +50,12 @@ elif [[ "$arg" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$ ]]; then
 elif [[ "$arg" =~ pull/[0-9]+$ ]]; then
   repo="$(echo "$arg" | sed -E 's|https?://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+.*|\1|')"
   issue="$(echo "$arg" | sed -E 's|.*/pull/([0-9]+).*|\1|')"
+elif [[ "$arg" =~ issues/[0-9]+$ ]]; then
+  repo="$(echo "$arg" | sed -E 's|https?://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/[0-9]+.*|\1|')"
+  issue="$(echo "$arg" | sed -E 's|.*/issues/([0-9]+).*|\1|')"
 else
   echo "Error: unsupported argument format '$arg'"
-  echo "Expected: PR URL, owner/repo#N, or bare number"
+  echo "Expected: PR URL, issue URL, owner/repo#N, or bare number"
   exit 1
 fi
 
@@ -64,18 +70,25 @@ echo
 
 token="$(gh auth token 2>/dev/null)"
 
-# --- fetch linked issue numbers from PR body ---
+# --- fetch linked issue numbers from PR/issue body ---
 linked_issues=()
-pr_body="$(gh pr view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
+
+# Determine if this is a PR or issue by checking if it's a PR
+is_pr=$(gh pr view --repo "$repo" --number "$issue" --json number 2>/dev/null | jq -r '.number // empty' 2>/dev/null)
+if [ -n "$is_pr" ]; then
+  # This is a PR - use PR body
+  pr_body="$(gh pr view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
+else
+  # This is an issue - use issue body
+  pr_body="$(gh issue view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
+fi
+
 if [ -n "$pr_body" ]; then
-  # Extract #N references from PR body
+  # Extract #N references from body
   while IFS= read -r num; do
     [ -n "$num" ] && linked_issues+=("$num")
   done < <(printf '%s' "$pr_body" | grep -oE '#[0-9]+' | sed 's/^#//' | sort -u)
-fi
-
-# Also add cross-referenced issues from PR body (owner/repo#N format)
-if [ -n "$pr_body" ]; then
+  # Also add cross-referenced issues from body (owner/repo#N format)
   while IFS= read -r ref; do
     [ -n "$ref" ] && linked_issues+=("$ref")
   done < <(printf '%s' "$pr_body" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+' | sed 's/.*#//' | sort -u)
@@ -84,7 +97,7 @@ fi
 # Deduplicate
 linked_issues=($(printf '%s\n' "${linked_issues[@]}" | sort -u))
 if [ ${#linked_issues[@]} -gt 0 ]; then
-  echo "Linked issues from PR body: ${linked_issues[*]}"
+  echo "Linked issues from body: ${linked_issues[*]}"
 fi
 echo
 if [ -z "$token" ]; then
@@ -104,10 +117,10 @@ api() {
 # --- collect IDs to delete ---
 echo "Scanning comments..."
 
-# PR review comments
+# PR review comments (only for PRs)
 mapfile -t review_ids < <(gh pr review list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
 
-# Issue / PR conversation comments on the PR itself
+# Issue / PR conversation comments on the issue/PR itself
 mapfile -t issue_ids < <(gh issue comment list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
 
 # Issue / PR conversation comments on linked issues
