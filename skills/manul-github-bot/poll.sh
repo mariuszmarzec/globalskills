@@ -2,8 +2,8 @@
 # manul-poll.sh — GitHub /manul trigger poller for OpenClaw cron.
 #
 # Scans configured repos for issue comments + PR review comments containing the
-# trigger command, queues unprocessed ones in SQLite, rebuilds queue.json and
-# prints a single MANUL_RESULT line for the cron trigger wrapper.
+# trigger command, queues unprocessed ones in SQLite
+# and prints a single MANUL_RESULT line for the cron trigger wrapper.
 #
 # Usage: manul-poll.sh [repo...]   (repos override config for testing)
 #
@@ -15,14 +15,12 @@
 #     Only issues/comments created AFTER baseline are considered, so manul
 #     never picks up old posts after a (re)install on a new machine.
 #     Set explicitly during install; falls back to first-run time if empty.
-#   queue.json       — pending work for the orchestrator agent turn
-#   lock             — orchestrator run lock (fresh lock => don't fire)
+#   meta(baseline)   — BASELINE = manul install/config moment (UTC ISO).
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 CONFIG="${MANUL_DIR}/config.json"
 DB="${MANUL_DIR}/manul.db"
-QUEUE_JSON="${MANUL_DIR}/queue.json"
 LOCK="${MANUL_DIR}/lock"
 LOG="${MANUL_DIR}/poll.log"
 LOCK_TTL_SECONDS="${MANUL_LOCK_TTL_SECONDS:-1800}"

@@ -42,13 +42,12 @@
     "maxAttemptsPerRun": 2,
     "cooldownMinutes": 60
   },
-
   "automation": {
     "enabled": true,
-    "maxTaskRunningTime": 1800,
+    "heartbeatTimeout": 900,
+    "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,
     "lockTtl": 1800,
-    "taskHealthCheckInterval": 120,
     "alerts": {
       "failureWebhook": null,
       "stuckTaskWebhook": null

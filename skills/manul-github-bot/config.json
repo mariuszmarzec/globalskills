@@ -14,11 +14,8 @@
   },
   "automation": {
     "enabled": true,
-    "pollInterval": 60,
-    "maxTaskRunningTime": 1800,
     "maxAttemptsBeforeFail": 3,
     "lockTtl": 1800,
-    "heartbeatInterval": 60,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,
     "alerts": {

@@ -150,8 +150,7 @@ Recovery operations are idempotent:
     "heartbeatTimeout": 900,            // seconds before task is considered stale
     "leaseTimeout": 900,               // total lease duration
     "maxAttemptsBeforeFail": 3,
-    "lockTtl": 1800,
-    "taskHealthCheckInterval": 300     // watchdog interval (recommended: 300s)
+    "lockTtl": 1800
   }
 }
 ```
@@ -184,8 +183,8 @@ Time 65: Watchdog runs recovery:
   - attempts=1 < maxAttempts=3
   - running → queued (attempts stays at 1, recovery flag set)
   - Clear workerPid, heartbeatAt, leaseExpiresAt
-Time 120: Daemon starts, poll.sh processes new queue.json
-  - Task sees status='queued', requeues it
+Time 120: Daemon starts, poll.sh detects status='queued'
+  - Task is claimed by orchestrator
   - Worker W2 claims it (status='running', attempts=2, workerPid=W2)
 ```
 

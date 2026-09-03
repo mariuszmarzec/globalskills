@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, and the **enhanced automation scripts** for task recovery, health monitoring, and proactive task management.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, and `start-manul-automation.sh`.
 ---
 
 # Manul GitHub Bot 🐈
@@ -24,58 +24,87 @@ PR → feedback comments on the **same location** that triggered the task. Every
 ## Architecture
 
 ```
-aicode
-→ starts/ensures LiteLLM and OpenClaw Gateway
-
-OpenClaw Gateway
-→ provides OpenClaw runtime
-
-OpenClaw main
-→ normal primary agent
-
-OpenClaw manul
-→ isolated GitHub automation agent
-
+GitHub
+  ↓
+poll.sh
+  ↓
+SQLite (single source of truth)
+  ↓
+queued
+  ↓
 manul-daemon.sh
-→ polls/dispatches Manul tasks
+  ↓
+running
+  ↓
+heartbeat + lease
+  ↓
+done / failed
 
-poll.sh ── gh api: issue bodies + issue comments + PR review comments
-   │         (created_at >= baseline) + contains trigger
-   ▼
-  SQLite manul.db (processed_comments: queued→running→done|failed, meta.baseline)
-   │ rebuild queue.json
-   ▼
-  fire:true? ──► openclaw agent --agent manul --message-file orchestrator.prompt.md
-                     │
-                     ▼
-  native OpenClaw agent `manul`
-     orchestrator: per task → mark running → post "🤖 Running..." →
-                   execute task via native OpenClaw agent → parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
-                     │
-                     ▼
-  worker: clone repo → branch <type>/manul/<issue>-<slug> → implement → tests → commit
-          (Co-authored-by trailer) → push → gh pr create (if autoCreatePr)
-                     │
-                     ▼
-  orchestrator: parse MANUL_RESULT → post ✅ Done / ❌ Failed (English only)
-                → update DB (done/failed)
-  ```
+watchdog.sh
+  ↓
+automatic stale-task recovery
+```
 
 **Explicit separation of responsibilities:**
 
 | Component | Responsibility |
 |-----------|----------------|
-| `aicode` | starts/ensures LiteLLM and OpenClaw Gateway |
-| `OpenClaw Gateway` | provides OpenClaw runtime |
-| `OpenClaw main` | normal primary agent |
-| `OpenClaw manul` | isolated GitHub automation agent |
-| `manul-daemon.sh` | polls/dispatches Manul tasks |
-| `manul-status.sh` | reports Manul runtime/daemon/task health |
+| `poll.sh` | GitHub polling, deduplication and enqueueing only (no recovery) |
+| `SQLite manul.db` | single source of truth for all task state |
+| `manul-daemon.sh` | consumes queued tasks and executes the orchestrator |
+| `watchdog.sh` | ONLY automatic recovery/liveness mechanism (daemon liveness, stale lock removal, heartbeat/lease-based task recovery) |
+| `task-recovery.sh` | manual/admin recovery tool only (NOT automatic) |
+| `task-health-check.sh` | LEGACY/DEPRECATED; MUST NOT be part of automatic operation |
 
 **Dispatch is synchronous (daemon waits for the agent turn), so runs never
 overlap; `lock` is a backstop with 30 min TTL.**
 
 **Manul must remain independently operable from OpenClaw `main`.**
+
+## Task Lifecycle
+
+```text
+queued → running → done
+                 ↘ failed
+
+running → queued  (watchdog recovery)
+```
+
+**State transitions:**
+
+- **queued → running**: atomic claim by `manul-daemon.sh`; `attempts` increments by 1; `heartbeatAt`, `startedAt`, `workerPid`, and `leaseExpiresAt` are set.
+- **running → done**: task completed successfully.
+- **running → failed**: task failed permanently (after `attempts >= maxAttemptsBeforeFail`).
+- **running → queued**: watchdog recovery for stale tasks. **Does NOT increment `attempts`.**
+
+`attempts` counts actual execution attempts and is incremented only when a queued task is claimed for execution (queued → running transition). Recovery from `running → queued` does NOT increment `attempts`.
+
+## Heartbeat / Lease Fields
+
+The `processed_comments` table in SQLite carries the following liveness/lease fields:
+
+| Field | Meaning |
+|-------|---------|
+| `heartbeatAt` | last heartbeat timestamp updated by the worker |
+| `startedAt` | when the task started executing |
+| `workerPid` | PID of the worker process |
+| `leaseExpiresAt` | when the task lease expires |
+| `attempts` | number of actual execution attempts (incremented on claim) |
+| `recoveryCount` | number of times the task has been recovered by watchdog |
+
+## Configuration
+
+The current `automation` configuration names are:
+
+```text
+heartbeatTimeout
+leaseTimeout
+maxAttemptsBeforeFail
+lockTtl
+alerts
+```
+
+Do NOT use legacy names `maxTaskRunningTime` or `taskHealthCheckInterval`; they are not read by the current runtime.
 
 ## Files (canonical source lives here — symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/`)
 
@@ -85,37 +114,25 @@ overlap; `lock` is a backstop with 30 min TTL.**
 | `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh`) |
 | `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/orchestrator.prompt.md`) |
 | `~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh` | comment cleanup script (symlinked) |
-| **`~/.globalskills/skills/manul-github-bot/watchdog.sh`** | **enhanced watchdog script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/task-recovery.sh`** | **task recovery CLI for manual intervention (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **proactive task health monitor (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/start-manul-automation.sh`** | **automation startup helper (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh`) — NEW 2026-08-25** |
-| **`~/.globalskills/skills/manul-github-bot/manul-status.sh`** | **status reporting script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh`) — NEW 2026-08-25** |
+| `~/.globalskills/skills/manul-github-bot/watchdog.sh` | automatic recovery/liveness script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh`) |
+| `~/.globalskills/skills/manul-github-bot/task-recovery.sh` | manual recovery CLI (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh`) |
+| **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **LEGACY/DEPRECATED — do not install or use in automatic operation** |
+| `~/.globalskills/skills/manul-github-bot/start-manul-automation.sh` | startup wrapper for daemon + watchdog cron (symlinked) |
+| `~/.globalskills/skills/manul-github-bot/manul-status.sh` | status reporting script (symlinked) |
 | `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` and customize) |
 
-### Enhanced watchdog.sh (NEW 2026-08-25)
+### watchdog.sh
 
-The enhanced watchdog provides **proactive task recovery** beyond the basic lock cleanup:
+`watchdog.sh` is the **only** automatic recovery mechanism.
 
-**New features:**
-- Detects tasks stuck in 'running' for >15 minutes (configurable via `automation.maxTaskRunningTime`)
-- Automatically resets tasks to 'queued' or marks them as 'failed' based on attempt count
-- Logs all stuck task detections for debugging
-- Optional webhook alerts for systemic failures
-- Configurable timeouts and failure thresholds via config.json
+**Responsibilities:**
+1. Start the daemon if it is not running.
+2. Detect a stale lock file (age >= `lockTtl`) and remove it (WITHOUT resetting tasks).
+3. Recover tasks based on stale heartbeat/lease ONLY.
 
-**Key improvements over original:**
-- **Task health monitoring** — catches stuck tasks before they block the queue
-- **Configurable thresholds** — adjust max running time and max attempts via config
-- **Failure detection** — alerts when multiple failures occur in short time
-- **Better logging** — detailed logs for troubleshooting
+**Schedule:** Runs every 5 minutes via cron.
 
-**Installation:**
-- Automatically installed when using `start-manul-automation.sh`
-- Can be installed manually: `cp ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh`
-
-**Schedule:** Runs every 5 minutes via cron
-
-### Task Recovery CLI (NEW 2026-08-25)
+### Task Recovery CLI
 
 `task-recovery.sh` provides **manual intervention** capabilities for stuck manul tasks:
 
@@ -126,60 +143,17 @@ The enhanced watchdog provides **proactive task recovery** beyond the basic lock
 - `--reset-all` — Reset ALL running tasks (requires confirmation)
 - `--health-check` — Run comprehensive health check with recommendations
 
-**Use cases:**
-- Manually recover tasks stuck after orchestrator crashes
-- Inspect task health and get recommendations
-- Force-mark problematic tasks as failed
-- Emergency queue cleanup
+### Task Health Monitor (LEGACY/DEPRECATED)
 
-**Example usage:**
-```bash
-# List stuck tasks
-$MANUL_DIR/task-recovery.sh --list-stuck
+`task-health-check.sh` is **legacy/deprecated** and uses obsolete concepts such as `maxTaskRunningTime` and `queue.json` consistency checks. It MUST NOT be installed or run as part of automatic operation.
 
-# Reset a specific stuck task
-$MANUL_DIR/task-recovery.sh --reset issue:5319953481
+### Automation Startup Helper
 
-# Run health check
-$MANUL_DIR/task-recovery.sh --health-check
-```
-
-### Task Health Monitor (NEW 2026-08-25)
-
-`task-health-check.sh` runs as a **background service** and continuously monitors manul task state:
-
-**Features:**
-- Detects tasks stuck in 'running' for >15 minutes
-- Automatically recovers stuck tasks based on attempt count
-- Logs system status every run
-- Can be run manually for diagnostics
-
-**Schedule:** Runs every 2 minutes via cron
-
-**Logs:** All activity written to `$MANUL_DIR/task-health.log`
-
-### Automation Startup Helper (NEW 2026-08-25)
-
-`start-manul-automation.sh` provides **easy installation and management** of all enhanced manul components:
-
-**Commands:**
-- `install` — Install and configure everything (recommended)
-- `start` — Start manul daemon
-- `stop` — Stop manul daemon
-- `status` — Show status of all components
-- `restart` — Restart all components
-
-**Installation benefits:**
-- Sets up executable permissions for all scripts
-- Installs config.json from template
-- Configures cron jobs (watchdog every 5min, health check every 2min)
-- Starts daemon and task health monitor
-- Provides helpful status output
-
-**Quick setup:**
-```bash
-$MANUL_DIR/start-manul-automation.sh install
-```
+`start-manul-automation.sh` is a startup/management wrapper that:
+- Starts/stops the manul daemon
+- Installs/removes the `watchdog.sh` cron job
+- Does NOT start `task-health-check.sh`
+- Does NOT create duplicate recovery mechanisms
 
 ### config.json
 
@@ -228,13 +202,12 @@ $MANUL_DIR/start-manul-automation.sh install
     "maxAttemptsPerRun": 2,
     "cooldownMinutes": 60
   },
-
   "automation": {
     "enabled": true,
-    "maxTaskRunningTime": 900,
+    "heartbeatTimeout": 900,
+    "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,
     "lockTtl": 1800,
-    "taskHealthCheckInterval": 120,
     "alerts": {
       "failureWebhook": null,
       "stuckTaskWebhook": null
@@ -243,10 +216,12 @@ $MANUL_DIR/start-manul-automation.sh install
 }
 ```
 
-* `automation` — new section with settings for proactive task recovery and health monitoring
-* `maxTaskRunningTime` — max seconds a task can stay 'running' before auto-recovery (default 15 minutes)
-* `maxAttemptsBeforeFail` — auto-mark as failed after N attempts (default 3)
-* `taskHealthCheckInterval` — seconds between health checks (default 120 seconds/2 minutes)
+* `automation` — heartbeat/lease settings and recovery thresholds
+* `heartbeatTimeout` — seconds before a task is considered stale (default 900)
+* `leaseTimeout` — total lease duration in seconds (default 900)
+* `maxAttemptsBeforeFail` — mark as failed after N attempts (default 3)
+* `lockTtl` — lock file TTL in seconds (default 1800)
+* `alerts` — optional webhook configuration
 
 ### Troubleshooting
 
@@ -278,7 +253,7 @@ This error occurs when the gateway cannot find the `manul` agent definition, typ
     ```
 3. **Verify agent works** – Test the native agent: `openclaw agent --agent manul -m "Reply with exactly: MANUL_AGENT_OK" --json`
 
-### Installation
+## Installation
 
 Run the installer or use the skill directly. After installation:
 
@@ -291,7 +266,6 @@ Run the installer or use the skill directly. After installation:
     ln -sf ~/.globalskills/skills/manul-github-bot/github-api-wrapper.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
     ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
     ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
-    ln -sf ~/.globalskills/skills/manul-github-bot/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
     ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
     ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-workspace/.openclaw/manul/
     ```
@@ -317,12 +291,12 @@ alias manul-status='$OPENCLAW_MANUL_DIR/manul-status.sh'
 alias manul-comments-remove='$OPENCLAW_MANUL_DIR/manul-comments-remove.sh'
 ```
 
-**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `task-health-check.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `/mnt/f/ubuntu-workspace/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
+**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `/mnt/f/ubuntu-workspace/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
 
 To verify the symlinks are intact:
 
 ```bash
-ls -la /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
+ls -la /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
 ```
 
 If a symlink is ever broken (e.g. after manually editing the installed copy), recreate it:
@@ -330,37 +304,23 @@ If a symlink is ever broken (e.g. after manually editing the installed copy), re
 ```bash
 ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh
 ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/task-health-check.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-health-check.sh
 ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh
 ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
 ```
 
-### Enhanced Automation Features (NEW 2026-08-25)
+### Manual Recovery
 
-**Before:** Manul had a basic watchdog that only cleared stale locks every 5 minutes. Tasks stuck in 'running' state would remain stuck indefinitely, blocking the queue.
+`task-recovery.sh` provides manual intervention tools:
 
-**After:** The enhanced automation provides **proactive task recovery**:
-
-1. **Task Health Monitoring** (`task-health-check.sh`) — Runs every 2 minutes and detects tasks stuck in 'running' state for >15 minutes, automatically recovering them.
-
-2. **Enhanced Watchdog** (`watchdog.sh`) — Builds on original watchdog with:
-   - Proactive task recovery (same as task-health-check.sh)
-   - System-wide health checks
-   - Webhook alerts for systemic issues
-   - Better error handling
-
-3. **Task Recovery CLI** (`task-recovery.sh`) — Manual intervention tools for debugging and emergency recovery.
-
-4. **Automation Startup Helper** (`start-manul-automation.sh`) — One-command installation and management.
-
-**Example emergency recovery:**
 ```bash
-# If tasks are getting stuck
-~/.openclaw/manul/task-recovery.sh --list-stuck
-~/.openclaw/manul/task-recovery.sh --reset-all  # Requires confirmation
+# List stuck tasks
+$MANUL_DIR/task-recovery.sh --list-stuck
 
-# Or run health check
-~/.openclaw/manul/task-recovery.sh --health-check
+# Reset a specific stuck task
+$MANUL_DIR/task-recovery.sh --reset issue:5319953481
+
+# Run health check
+$MANUL_DIR/task-recovery.sh --health-check
 ```
 
 ### Related
@@ -368,3 +328,7 @@ ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-wor
 - [Default AGENTS.md](/reference/AGENTS.default)
 - [Scheduled tasks vs heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat)
 - [Heartbeat](/gateway/heartbeat)
+
+Base directory for this skill: /home/marzec/.globalskills/skills/manul-github-bot
+Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.
+Note: file list is sampled.

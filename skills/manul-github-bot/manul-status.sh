@@ -2,7 +2,7 @@
 # manul-status.sh - Display Manul automation status
 #
 # Shows the status of all Manul components including the daemon,
-# task health service, recent logs, and stuck tasks.
+# recent logs, and stuck tasks.
 #
 # Usage: manul-status.sh
 #
@@ -13,7 +13,7 @@
 # Configuration
 MANUL_DIR="${MANUL_DIR:-$OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}"
 DAEMON_LOG="$MANUL_DIR/daemon.log"
-TASK_HEALTH_LOG="$MANUL_DIR/task-health.log"
+WATCHDOG_LOG="$MANUL_DIR/watchdog.log"
 
 # Colors for output (if available)
 if [ -t 1 ]; then
@@ -81,16 +81,16 @@ function show_stuck_tasks() {
     fi
 }
 
-function health_check() {
-    local health_pid
-    health_pid=$(pgrep -f "task-health-check.sh" | head -1)
-
-    if [ -n "$health_pid" ]; then
-        echo -e "${GREEN}Task Health Service:${NC} RUNNING (pid: $health_pid)"
-        return 0
+function show_watchdog_status() {
+    echo -e "\n${YELLOW}Watchdog (automatic recovery):${NC}"
+    if crontab -l 2>/dev/null | grep -qF "$MANUL_DIR/watchdog.sh"; then
+        echo -e "   ${GREEN}installed${NC} (every 5 minutes)"
     else
-        echo -e "${YELLOW}Task Health Service:${NC} STOPPED"
-        return 1
+        echo -e "   ${RED}NOT installed${NC}"
+    fi
+    if [ -f "$WATCHDOG_LOG" ] && [ -s "$WATCHDOG_LOG" ]; then
+        echo -e "\n${YELLOW}Recent Watchdog Log (last 5 lines):${NC}"
+        tail -5 "$WATCHDOG_LOG" | sed 's/^/   /' || true
     fi
 }
 
@@ -100,12 +100,11 @@ echo "=== Manul Automation Status ==="
 # Daemon status
 status_daemon
 
-# Task health service status
-health_check
+# Watchdog status
+show_watchdog_status
 
 # Recent logs
 show_recent_logs "$DAEMON_LOG" "Daemon Log"
-show_recent_logs "$TASK_HEALTH_LOG" "Task Health Log"
 
 # Stuck tasks
 show_stuck_tasks
