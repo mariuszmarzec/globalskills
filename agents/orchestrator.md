@@ -2,7 +2,7 @@
 description: Main agent. Understands a task, classifies its complexity, routes it to the cheapest adequate role agent via the Task tool, evaluates the result, and escalates to stronger tiers only when needed. Never implements code itself.
 mode: primary
 model: litellm/big-pickle
-steps: 40
+steps: 200
 temperature: 0.2
 ---
 
