@@ -7,7 +7,7 @@
 # Responsibilities:
 #   1. Start the daemon if it is not running.
 #   2. Detect a stale lock file (age >= LOCK_TTL) and remove it (WITHOUT resetting tasks).
-#   3. Recover tasks based on stale heartbeat/lease ONLY.
+#   3. Recover tasks based on stale heartbeat/lease ONLY, respecting worker ownership.
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -30,6 +30,8 @@ if [ -f "$CONFIG" ]; then
     CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // empty' "$CONFIG" 2>/dev/null)"
 fi
 
+HEARTBEAT_TIMEOUT="${CFG_HEARTBEAT_TIMEOUT:-900}"
+
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
 # --- 1) daemon liveness ----------------------------------------------------
@@ -51,24 +53,34 @@ fi
 
 # --- 3) heartbeat-based task recovery -------------------------------------
 if [ -f "$DB" ]; then
-    # Find tasks with stale heartbeat
+    # Find tasks with stale heartbeat or expired lease
+    # CRITICAL: Only recover tasks where the worker is dead (not alive)
+    # This prevents stealing from live workers
     STUCK_TASKS="$(sqlite3 "$DB" "
-        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt
+        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid
         FROM processed_comments
         WHERE status='running'
         AND (
-            heartbeatAt < datetime('now', '-${CFG_HEARTBEAT_TIMEOUT:-900} seconds') OR
+            heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds') OR
             leaseExpiresAt < datetime('now')
         )
     " 2>/dev/null)"
 
     if [ -n "$STUCK_TASKS" ] && [ "$STUCK_TASKS" != "" ]; then
-        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at; do
+        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at worker_pid; do
             [ -z "$comment_id" ] && continue
-            log "RECOVERY: $comment_id ($repo#$issue_num) stuck (heartbeat: $heartbeat_at, lease: $lease_at), attempts=$attempts"
-            
+
+            # SAFETY: Check if worker PID is still alive
+            # If worker is alive, do NOT recover — it may still be processing
+            if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+                log "RECOVERY: $comment_id ($repo#$issue_num) skipped — worker $worker_pid is still alive"
+                continue
+            fi
+
+            log "RECOVERY: $comment_id ($repo#$issue_num) stuck (heartbeat: $heartbeat_at, lease: $lease_at), attempts=$attempts, worker=$worker_pid"
+
             # Check if we've exceeded max attempts
-            if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+            if [ "${attempts:-0}" -ge "$MAX_ATTEMPTS" ]; then
                 log "  → marking as FAILED (exceeded max attempts: $MAX_ATTEMPTS)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
@@ -76,7 +88,7 @@ if [ -f "$DB" ]; then
                     WHERE commentId='$comment_id';
                 " 2>/dev/null
             else
-                log "  → resetting to QUEUED for retry (no attempt increment)"
+                log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
                     SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
