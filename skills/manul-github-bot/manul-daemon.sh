@@ -441,7 +441,15 @@ post_github_comment() {
   local body="$3"
 
   # Append Manul signature to automated comments (deterministic)
-  local signed_body="$body — manul 🐈"
+  # Format: body\n\n— manul 🐈
+  # Prevent duplicate signature if body already ends with it
+  local signature="— manul 🐈"
+  local signed_body
+  if [[ "$body" == *"$signature" ]]; then
+    signed_body="$body"
+  else
+    signed_body="${body}"$'\n\n'"$signature"
+  fi
 
   gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
 }
