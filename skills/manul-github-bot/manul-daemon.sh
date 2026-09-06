@@ -650,10 +650,42 @@ PROMPT_APPEND
     local FAIL_REASON=""
 
     if [ $rc -eq 0 ]; then
-      if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
+      if grep -qE '^(\*\*)?TASK_DONE(\*\*)?$' "$STDOUT_FILE"; then
         SUCCESS="true"
-      elif grep -q "^TASK_FAILED:" "$STDOUT_FILE"; then
-        FAIL_REASON="$(grep "^TASK_FAILED:" "$STDOUT_FILE" | head -1 | sed 's/^TASK_FAILED: //')"
+      elif grep -qE '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE"; then
+        FAIL_REASON="$(grep -E '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE" | head -1 | sed -E 's/^(\*\*)?TASK_FAILED: //')"
+      fi
+    fi
+
+    # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+    if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
+      local repo_state_clean="true"
+      local repo_state_issues=""
+
+      # Check for staged changes
+      if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
+        repo_state_clean="false"
+        repo_state_issues+="staged_changes "
+      fi
+
+      # Check for unstaged changes
+      if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
+        repo_state_clean="false"
+        repo_state_issues+="unstaged_changes "
+      fi
+
+      # Check for untracked files
+      local untracked
+      untracked="$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)"
+      if [ -n "$untracked" ]; then
+        repo_state_clean="false"
+        repo_state_issues+="untracked_files "
+      fi
+
+      if [ "$repo_state_clean" = "false" ]; then
+        SUCCESS="false"
+        FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
+        log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
       fi
     fi
 
