@@ -15,6 +15,31 @@ PR → feedback comments on the **same location** that triggered the task. Every
 
 **Comment routing:** a task triggered by a PR review comment gets its feedback (🤖 Running, ✅ Done, ❌ Failed) posted as an in-thread reply on that review comment; a task triggered by an issue/PR conversation comment or issue body gets its feedback as a top-level issue/PR comment. Cross-posting (e.g. a review-thread task becoming a top-level PR comment) is a bug.
 
+## GitHub Task Workflow
+
+When executing a GitHub issue task, manul **must never modify the repository default branch directly**. The mandatory workflow is:
+
+1. **Create a dedicated task branch** from the default branch before making any repository changes.
+2. **Make all task commits on that task branch** — never on `master`, `main`, or any other default branch.
+3. **Push the task branch** to GitHub.
+4. **Deliver completed repository changes through a GitHub PR** targeting the default branch.
+5. **Do not report a task as successfully completed** if the required PR could not be created.
+6. The **default branch must remain untouched** by issue-task execution.
+
+## Automated GitHub Comment Signature
+
+Every comment or PR review comment that manul posts must include the signature:
+
+```
+— manul 🐈
+```
+
+Rules for the signature:
+
+* The signature **must be separated from the comment body by two newlines**.
+* **Do not append a duplicate signature** if the comment already ends with `— manul 🐈`.
+* A signature occurring in the **middle** of the body does **not** prevent appending the final signature.
+
 ```
         /\_/\
        ( o.o )   manul 🐈 — GitHub command bot
