@@ -27,6 +27,9 @@ POLL="$MANUL_DIR/poll.sh"
 PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
 PID_FILE="$MANUL_DIR/daemon.pid"
 LOG="$MANUL_DIR/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+LAST_POLL_FILE="$MANUL_DIR/last-poll"
+CURRENT_ACTIVITY_FILE="$MANUL_DIR/active-task"
 LOCK="$MANUL_DIR/lock"
 DB="$MANUL_DIR/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
@@ -43,6 +46,30 @@ CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/nu
 LEASE_TIMEOUT="${MANUL_LEASE_TIMEOUT:-${CFG_LEASE_TIMEOUT:-900}}"
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+
+# Lifecycle event logger — structured, machine-parsable, human-readable
+lc_log() {
+  local event="$1"
+  shift
+  echo "[$(date -Is)] $event ${*:-}" >>"$LIFECYCLE_LOG"
+}
+
+# Update current activity state file
+set_activity() {
+  local task_id="${1:-none}"
+  local activity="${2:-idle}"
+  echo "${task_id}|${activity}|$(date -Is)" >"$CURRENT_ACTIVITY_FILE" 2>/dev/null || true
+}
+
+# Record last poll timestamp and result
+record_poll() {
+  local fire="$1"
+  local new="$2"
+  local pending="$3"
+  printf '{"fire":%s,"new":%s,"pending":%s,"timestamp":"%s"}\n' \
+    "$fire" "$new" "$pending" "$(date -Is)" >"$LAST_POLL_FILE" 2>/dev/null || true
+  echo "${fire}|${new}|${pending}|$(date -Is)" >>"$LIFECYCLE_LOG"
+}
 
 # Get daemon PID as a function (handles empty file safely)
 get_daemon_pid() {
@@ -385,12 +412,14 @@ start_heartbeat() {
   local pid=$$
   HEARTBEAT_PIDS["$comment_id"]=$pid
   log "started heartbeat for task $comment_id (pid $pid)"
+  lc_log "HEARTBEAT_START" "task=$comment_id pid=$pid interval=${HEARTBEAT_INTERVAL}s"
 }
 
 stop_heartbeat() {
   local comment_id="$1"
   unset HEARTBEAT_PIDS["$comment_id"]
   log "stopped heartbeat for task $comment_id (pid ${HEARTBEAT_PIDS[$comment_id]:-unknown})"
+  lc_log "HEARTBEAT_STOP" "task=$comment_id"
 }
 
 start() {
@@ -408,6 +437,7 @@ start() {
 
   setsid nohup "$0" loop >>"$LOG" 2>&1 &
   echo $! >"$PID_FILE"
+  lc_log "DAEMON_START" "pid=$! interval=${INTERVAL}s"
   echo "manul daemon started (pid $(cat "$PID_FILE"), interval ${INTERVAL}s)"
 }
 
@@ -420,6 +450,7 @@ stop() {
   pid="$(cat "$PID_FILE")"
   kill "$pid" 2>/dev/null
   rm -f "$PID_FILE"
+  lc_log "DAEMON_STOP" "pid=$pid"
   echo "manul daemon stopped (pid $pid)"
 }
 
@@ -458,12 +489,28 @@ run_once() {
   local out
   out="$("$POLL")"
   echo "$out"
-  if printf '%s' "$out" | grep -q '"fire":true'; then
+  # Record poll result for observability
+  local poll_fire poll_new poll_pending
+  poll_fire="$(printf '%s' "$out" | jq -r '.fire // false' 2>/dev/null)"
+  poll_new="$(printf '%s' "$out" | jq -r '.new // 0' 2>/dev/null)"
+  poll_pending="$(printf '%s' "$out" | jq -r '.pending // 0' 2>/dev/null)"
+  record_poll "$poll_fire" "$poll_new" "$poll_pending"
+
+  if [ "$poll_fire" = "true" ]; then
     log "dispatch: $out"
+    lc_log "POLL" "fire=true new=$poll_new pending=$poll_pending"
+  else
+    lc_log "POLL" "fire=false new=$poll_new pending=$poll_pending"
+  fi
+
+  if [ "$poll_fire" != "true" ]; then
+    return 0
+  fi
 
     # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races
     if ! acquire_task_lock; then
       log "dispatch: could not acquire lock, skipping"
+      lc_log "LOCK_FAIL" "could_not_acquire"
       return 0
     fi
 
@@ -474,6 +521,7 @@ run_once() {
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no queued task found"
+      lc_log "NO_TASK" "fire=true but_queue_empty"
       release_task_lock
       return 0
     fi
@@ -498,10 +546,12 @@ run_once() {
     MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
+      lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to complete the task after $ACTUAL_ATTEMPTS attempts (max reached)."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
       release_task_lock
+      set_activity "none" "idle"
       return 0
     fi
 
@@ -517,6 +567,7 @@ run_once() {
 
     if [ "${CHANGED:-0}" -ne 1 ]; then
       log "dispatch: task $COMMENT_ID not claimed (changed=$CHANGED)"
+      lc_log "CLAIM_FAIL" "task=$COMMENT_ID changed=$CHANGED"
       release_task_lock
       return 0
     fi
@@ -531,6 +582,8 @@ run_once() {
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
     log "dispatch: claimed task $COMMENT_ID ($REPO#$ISSUE_NUM), attempts now $((ACTUAL_ATTEMPTS + 1))"
+    lc_log "CLAIMED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$((ACTUAL_ATTEMPTS + 1))"
+    set_activity "$COMMENT_ID" "claimed"
 
     # Start heartbeat for long-running task
     start_heartbeat "$COMMENT_ID"
@@ -540,9 +593,11 @@ run_once() {
 
     if ! post_github_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY"; then
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
       release_task_lock
+      set_activity "none" "idle"
       return 0
     fi
 
@@ -597,23 +652,27 @@ PROMPT_EOF
     REPO_DIR="$(ensure_repo "$REPO")"
     if [ $? -ne 0 ]; then
       log "dispatch: FAILED to ensure repository $REPO, failing task"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_task_lock
+      set_activity "none" "idle"
       return 0
     fi
 
     # Verify repository integrity
     if ! verify_repo "$REPO" "$REPO_DIR"; then
       log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
+      set_activity "none" "idle"
       return 0
     fi
 
@@ -653,6 +712,8 @@ PROMPT_APPEND
     local STDERR_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stderr"
 
     log "dispatch: invoking agent manul for task $COMMENT_ID"
+    lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
+    set_activity "$COMMENT_ID" "working"
 
     # Change to repository directory and invoke agent
     local prev_dir
@@ -663,6 +724,7 @@ PROMPT_APPEND
     cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
     log "dispatch: agent finished rc=$rc for task $COMMENT_ID"
+    lc_log "WORKER_FINISH" "task=$COMMENT_ID rc=$rc"
 
     # 7. Determine success using BOTH exit status AND explicit completion marker
     local SUCCESS="false"
@@ -742,9 +804,13 @@ PROMPT_APPEND
       if [ "$COMPLETION_SUCCESS" = "true" ]; then
         FINAL_COMMENT="✅ Manul completed the task successfully."
         log "dispatch: task $COMMENT_ID completed successfully"
+        lc_log "TASK_SUCCESS" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+        set_activity "$COMMENT_ID" "completed"
       else
         FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
         log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
+        set_activity "$COMMENT_ID" "error"
       fi
     else
       # Re-read attempts from DB to ensure accuracy
@@ -757,15 +823,20 @@ PROMPT_APPEND
         sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
         FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID failed (max attempts reached)"
+        lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+        set_activity "none" "idle"
       else
         sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
         FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
+        lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+        set_activity "none" "idle"
       fi
     fi
 
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
+    lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
 
     # 9. Post final result comment to the SAME GitHub thread
     if [ -n "$FINAL_COMMENT" ]; then
@@ -779,11 +850,12 @@ PROMPT_APPEND
     rm -rf "$TASK_WORKDIR"
 
     release_task_lock
-  fi
+    set_activity "none" "idle"
 }
 
 loop() {
   log "daemon loop started (interval ${INTERVAL}s)"
+  lc_log "LOOP_START" "interval=${INTERVAL}s"
   while true; do
     run_once
     sleep "$INTERVAL"
