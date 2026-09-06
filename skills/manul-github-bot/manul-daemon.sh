@@ -634,7 +634,18 @@ The target repository for this task is located at: $REPO_DIR
 You will execute in the following task workspace (inside the repository):
 $TASK_WORKDIR
 
-Please navigate to this directory and implement the requested changes. The repository at $REPO_DIR is the authoritative source for this task.
+## Branch Creation
+A dedicated task branch must be created from the current default branch BEFORE making any repository changes.
+- Current branch: $(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")
+- Default branch: $(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")
+- Create a unique branch name (e.g., 'manul-task-$COMMENT_ID-$timestamp')
+- Do NOT make any repository changes while on the default branch
+
+## Rules for Repository Changes
+1. Create a dedicated task branch from default branch
+2. Make all repository changes on that task branch
+3. Commit and push changes to the task branch
+4. Do NOT commit directly to the default branch
 PROMPT_APPEND
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
