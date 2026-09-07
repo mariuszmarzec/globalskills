@@ -32,6 +32,7 @@ LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
 LAST_POLL_FILE="$MANUL_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
 LOCK="$MANUL_DIR/lock"
+FLOCK_FILE="$MANUL_DIR/daemon.flock"
 DB="$MANUL_DIR/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
@@ -450,10 +451,15 @@ start() {
     fi
   fi
 
+  # Atomically write PID file under flock to prevent concurrent start races
+  exec 200>"$FLOCK_FILE"
+  flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
   setsid nohup "$0" loop >>"$LOG" 2>&1 &
-  echo $! >"$PID_FILE"
-  lc_log "DAEMON_START" "pid=$! interval=${INTERVAL}s"
-  echo "manul daemon started (pid $(cat "$PID_FILE"), interval ${INTERVAL}s)"
+  local new_pid=$!
+  echo "$new_pid" >"$PID_FILE"
+  flock -u 200
+  lc_log "DAEMON_START" "pid=$new_pid interval=${INTERVAL}s"
+  echo "manul daemon started (pid $new_pid, interval ${INTERVAL}s)"
 }
 
 stop() {
@@ -499,8 +505,11 @@ post_github_comment() {
   fi
 
   if [ -n "$reply_to" ]; then
-    # Review-thread task: reply inside the review thread
-    gh pr comment "$issue" --repo "$repo" --in-reply-to "$reply_to" --body "$signed_body" 2>>"$LOG"
+    # Review-thread task: reply inside the review thread via gh api
+    # (gh pr comment --in-reply-to is not supported by gh CLI)
+    gh api "repos/$repo/pulls/$issue/comments" \
+      -F "body=$signed_body" \
+      --field "in_reply_to=$reply_to" 2>>"$LOG"
   else
     # Top-level issue/PR-conversation task: post as a regular comment
     gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
@@ -615,7 +624,16 @@ run_once() {
     start_heartbeat "$COMMENT_ID"
 
     # 4. Post "in progress" comment BEFORE invoking the LLM
-    local IN_PROGRESS_BODY="🔄 Manul is working on this task..."
+    # Gather task metadata for an informative status comment
+    local TRIGGERER="$AUTHOR"
+    local SOURCE_LINK="$COMMENT_URL"
+    local TASK_SUMMARY
+    TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
+    local IN_PROGRESS_BODY="🔄 Manul is working on this task...
+
+**Summary:** $TASK_SUMMARY
+**Triggered by:** $TRIGGERER
+**Source:** $SOURCE_LINK"
 
     if ! post_github_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
@@ -636,6 +654,7 @@ run_once() {
 
     # Determine task type from commentUrl metadata (do NOT call gh pr view)
     local TASK_TYPE="issue"
+    local PR_HEAD_BRANCH=""
     if [[ "$COMMENT_URL" == *"/pull/"* ]]; then
       if [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
         TASK_TYPE="pr_review_comment"
@@ -643,6 +662,15 @@ run_once() {
         REPLY_TO="${COMMENT_ID#review:}"
       else
         TASK_TYPE="pr_conversation_comment"
+      fi
+      # Extract PR number from URL for branch resolution
+      PR_NUM_FROM_URL="$(printf '%s' "$COMMENT_URL" | grep -oE 'pull/[0-9]+' | grep -oE '[0-9]+' || echo "")"
+      if [ -n "$PR_NUM_FROM_URL" ] && [ "$PR_NUM_FROM_URL" != "$ISSUE_NUM" ]; then
+        ISSUE_NUM="$PR_NUM_FROM_URL"
+      fi
+      # Fetch PR head branch for PR-tied tasks
+      if [ -n "$PR_NUM_FROM_URL" ]; then
+        PR_HEAD_BRANCH="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefName --jq '.headRefName // ""' 2>>"$LOG" || echo "")"
       fi
     fi
 
@@ -663,6 +691,13 @@ $TASK_PROMPT
 
 ## Context
 $TASK_CONTEXT
+
+## Command Intent Guidance
+Before taking any action, determine whether this task is:
+- **Informational**: The user is asking a question, requesting an explanation, or seeking advice. Reply with a thoughtful answer via GitHub comment. Do NOT modify any repository files.
+- **Repository Change**: The user wants code changes, fixes, features, or other modifications. Proceed with implementation on the appropriate branch.
+
+If the task is informational, respond directly in your output with the answer and emit \`TASK_DONE\`. No repository changes are needed.
 
 ## Rules
 1. Inspect the local repository and implement the requested change.
@@ -704,42 +739,55 @@ PROMPT_EOF
       return 0
     fi
 
-    # 6. Set task-specific working directory inside repository
-    local TASK_WORKDIR
-    TASK_WORKDIR="$REPO_DIR/task-$COMMENT_ID"
-    mkdir -p "$TASK_WORKDIR"
+    # 6. Set working directory to the repository root
+    local WORKDIR="$REPO_DIR"
 
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, working dir: $TASK_WORKDIR"
+    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR"
 
     # Generate timestamp for unique branch name
     local timestamp
     timestamp="$(date +%s)"
 
-    # Update prompt to include authoritative repository path
+    # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
 
 ## Authoritative Repository
 The target repository for this task is located at: $REPO_DIR
 
 ## Working Directory
-You will execute in the following task workspace (inside the repository):
-$TASK_WORKDIR
+You will execute in the repository directory:
+$WORKDIR
 
-## Branch Creation
-A dedicated task branch must be created from the current default branch BEFORE making any repository changes.
+## Branch Policy
+PROMPT_APPEND
+
+    if [ -n "$PR_HEAD_BRANCH" ]; then
+      # PR-tied task: operate on the PR's head branch
+      cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
+- This task is tied to PR #$ISSUE_NUM
+- PR head branch: \`$PR_HEAD_BRANCH\`
+- Switch to the PR head branch (\`git checkout $PR_HEAD_BRANCH\`) before making any changes
+- Commit and push changes to the same PR head branch
+- Do NOT create a new branch for this task
+PROMPT_APPEND
+    else
+      # Issue or non-PR task: create a dedicated task branch
+      cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
+- This is a standalone task (not tied to an existing PR)
 - Current branch: $(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")
 - Default branch: $(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")
-- Create a unique branch name (e.g., 'manul-task-$COMMENT_ID-$timestamp')
+- Create a dedicated task branch from the default branch BEFORE making any changes
+- Branch name format: \`manul-task-$COMMENT_ID-$timestamp\`
 - Do NOT make any repository changes while on the default branch
+- After completing changes, commit and push to your task branch
+PROMPT_APPEND
+    fi
 
-## Rules for Repository Changes
-1. Create a dedicated task branch from default branch
-2. Make all repository changes on that task branch
-3. Commit and push changes to the task branch
-4. Do NOT commit directly to the default branch
+    cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
 
-## Task Branch
-Create a unique branch name (e.g., 'manul-task-$COMMENT_ID-$timestamp')
+## Skills
+Your skills are available at: ~/.globalskills/skills
+Use relevant skills when appropriate to guide your implementation.
 PROMPT_APPEND
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
@@ -753,7 +801,9 @@ PROMPT_APPEND
     # Change to repository directory and invoke agent
     local prev_dir
     prev_dir="$(pwd)"
-    cd "$TASK_WORKDIR" || { log "ERROR: cannot enter task workspace $TASK_WORKDIR, failing task"; return 0; }
+    cd "$WORKDIR" || { log "ERROR: cannot enter working directory $WORKDIR, failing task"; return 0; }
+    # Ensure skill visibility for the OpenCode process
+    export OPENCODE_SKILLS_PATH="$HOME/.globalskills/skills"
     timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
     local rc=$?
     cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
@@ -766,7 +816,7 @@ PROMPT_APPEND
     local FAIL_REASON=""
 
     if [ $rc -eq 0 ]; then
-      if grep -qE '^(\*\*)?TASK_DONE(\*\*)?$' "$STDOUT_FILE"; then
+      if grep -qE '^(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?$' "$STDOUT_FILE"; then
         SUCCESS="true"
       elif grep -qE '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE"; then
         FAIL_REASON="$(grep -E '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE" | head -1 | sed -E 's/^(\*\*)?TASK_FAILED: //')"
@@ -881,14 +931,22 @@ PROMPT_APPEND
     # Release repository lock
     release_repo_lock "$REPO"
 
-    # Cleanup task workspace
-    rm -rf "$TASK_WORKDIR"
+    # Cleanup task artifacts (no separate workdir to remove)
+    rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
 
     release_task_lock
     set_activity "none" "idle"
 }
 
 loop() {
+  # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
+  exec 200>"$FLOCK_FILE"
+  if ! flock -n 200; then
+    log "daemon already running (flock held); exiting"
+    exit 1
+  fi
+  # Lock held for lifetime of daemon process
+
   log "daemon loop started (interval ${INTERVAL}s)"
   lc_log "LOOP_START" "interval=${INTERVAL}s"
   while true; do

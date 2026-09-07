@@ -80,19 +80,19 @@ test_poller_discovers_review_comments() {
   result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
   local new_count
   new_count="$(extract_new_count "$result")"
-  assert_eq "$TEST_NAME" "2" "$new_count"  # Both review and issue comments discovered
+  assert_eq "$TEST_NAME" "4" "$new_count"  # 1 review + 3 issue comments on PR #11
 
   local count
-  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
+  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$count"
 
   # Verify context was enriched (PR info + linked issues)
   local has_context
-  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
+  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$has_context"
 
   # Cleanup
-  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:3945316399';" 2>/dev/null
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:3952521856';" 2>/dev/null
 }
 
 # ============================================================================
@@ -108,19 +108,19 @@ test_poller_discovers_pr_conversation_comments() {
   result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
   local new_count
   new_count="$(extract_new_count "$result")"
-  assert_eq "$TEST_NAME" "2" "$new_count"  # Both review and issue comments discovered
+  assert_eq "$TEST_NAME" "4" "$new_count"  # 1 review + 3 issue comments on PR #11
 
   local count
-  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
+  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5575478422' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$count"
 
   # Verify context was enriched (parent issue info)
   local has_context
-  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
+  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5575478422' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$has_context"
 
   # Cleanup
-  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='issue:5562293230';" 2>/dev/null
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='issue:5575478422';" 2>/dev/null
 }
 
 # ============================================================================
@@ -164,15 +164,15 @@ test_new_comments_after_completion() {
   result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
   local new_count
   new_count="$(extract_new_count "$result")"
-  assert_eq "$TEST_NAME" "2" "$new_count"
+  assert_eq "$TEST_NAME" "4" "$new_count"
 
   # Verify the new tasks are queued (not blocked by the completed one)
   local review_queued
-  review_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND status='queued';" 2>/dev/null)"
+  review_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$review_queued"
 
   local issue_queued
-  issue_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND status='queued';" 2>/dev/null)"
+  issue_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5575478422' AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$issue_queued"
 
   # Cleanup
@@ -189,9 +189,14 @@ test_reply_routing() {
   # Check that post_github_comment accepts reply_to parameter
   # We can't easily test the full daemon, but we can verify the function signature
   local func_sig
-  func_sig="$(grep -A 20 '^post_github_comment()' "$DAEMON")"
+  func_sig="$(sed -n '/^post_github_comment()/,/^}/p' "$DAEMON")"
   assert_contains "$TEST_NAME" "$func_sig" 'local reply_to="${4:-}"'
-  assert_contains "$TEST_NAME" "$func_sig" '--in-reply-to'
+  # Verify gh api is used for review-thread replies (not --in-reply-to which is unsupported)
+  assert_contains "$TEST_NAME" "$func_sig" 'gh api'
+  # Ensure old --in-reply-to is NOT present as a command flag (only in comments)
+  local has_old_reply
+  has_old_reply="$(echo "$func_sig" | grep 'in-reply-to' | grep -v '^[[:space:]]*#' | wc -l)"
+  assert_eq "$TEST_NAME (no --in-reply-to)" "0" "$has_old_reply"
 
   # Check that REPLY_TO is extracted for review comments
   local reply_to_extraction
@@ -297,12 +302,53 @@ test_allowed_users_filter() {
   # Reset caracal-rag tasks for this test
   sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
 
-  # The poller should discover both comments from allowed user mariuszmarzec
+  # The poller should discover all comments from allowed user mariuszmarzec (1 review + 3 issue = 4)
   local result
   result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
   local new_count
   new_count="$(extract_new_count "$result")"
-  assert_eq "$TEST_NAME" "2" "$new_count"
+  assert_eq "$TEST_NAME" "4" "$new_count"
+}
+
+# ============================================================================
+# Test 10: Daemon accepts both TASK_DONE and TASK_COMPLETED markers
+# ============================================================================
+test_completion_markers() {
+  TEST_NAME="completion_markers"
+  echo "=== Test 10: Completion markers ==="
+
+  # Verify daemon regex accepts both TASK_DONE and TASK_COMPLETED
+  local marker_check
+  marker_check="$(grep 'TASK_DONE.*TASK_COMPLETED\|TASK_COMPLETED.*TASK_DONE' "$DAEMON")"
+  assert_contains "$TEST_NAME" "$marker_check" 'TASK_COMPLETED'
+
+  # Verify TASK_DONE is still accepted
+  local task_done_check
+  task_done_check="$(grep 'TASK_DONE' "$DAEMON" | grep -v '^#' | head -1)"
+  assert_contains "$TEST_NAME" "$task_done_check" 'TASK_DONE'
+}
+
+# ============================================================================
+# Test 11: Daemon uses flock for singleton locking
+# ============================================================================
+test_flock_singleton() {
+  TEST_NAME="flock_singleton"
+  echo "=== Test 11: Flock singleton locking ==="
+
+  # Verify FLOCK_FILE is defined
+  local flock_var
+  flock_var="$(grep 'FLOCK_FILE=' "$DAEMON" | head -1)"
+  assert_contains "$TEST_NAME" "$flock_var" 'FLOCK_FILE'
+
+  # Verify flock is used in start()
+  local start_flock
+  start_flock="$(grep -A 30 '^start()' "$DAEMON" | grep 'flock')"
+  assert_contains "$TEST_NAME" "$start_flock" 'flock'
+
+  # Verify flock is used in loop()
+  local loop_flock
+  loop_flock="$(grep -A 15 '^loop()' "$DAEMON" | grep 'flock')"
+  assert_contains "$TEST_NAME" "$loop_flock" 'flock'
 }
 
 # ============================================================================
@@ -326,6 +372,8 @@ test_feedback_script
 test_config_repos
 test_install_script
 test_allowed_users_filter
+test_completion_markers
+test_flock_singleton
 
 echo ""
 echo "========================================"
