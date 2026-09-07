@@ -27,6 +27,60 @@ CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
 DB="$MANUL_DIR/manul.db"
 CONFIG="$MANUL_DIR/config.json"
 
+# If the configured MANUL_DIR has a stale PID (process not alive),
+# fall back to the default location used by the daemon itself.
+if [ -f "$PID_FILE" ]; then
+    _stale_pid="$(cat "$PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$_stale_pid" ] && ! kill -0 "$_stale_pid" 2>/dev/null; then
+        _default_dir="${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}"
+        _actual_home="$HOME/.openclaw/manul"
+        _found_dir=""
+        
+        # First try the explicit default
+        if [ -f "$_default_dir/daemon.pid" ]; then
+            _default_pid="$(cat "$_default_dir/daemon.pid" 2>/dev/null | tr -d '[:space:]')"
+            if [ -n "$_default_pid" ] && kill -0 "$_default_pid" 2>/dev/null; then
+                _found_dir="$_default_dir"
+            fi
+        fi
+        
+        # Then try the home location (in case OPENCLAW_MANUL_DIR differs)
+        if [ -z "$_found_dir" ] && [ "$_actual_home" != "$_default_dir" ]; then
+            if [ -f "$_actual_home/daemon.pid" ]; then
+                _home_pid="$(cat "$_actual_home/daemon.pid" 2>/dev/null | tr -d '[:space:]')"
+                if [ -n "$_home_pid" ] && kill -0 "$_home_pid" 2>/dev/null; then
+                    _found_dir="$_actual_home"
+                fi
+            fi
+        fi
+        
+        if [ -n "$_found_dir" ]; then
+            MANUL_DIR="$_found_dir"
+            DAEMON_LOG="$MANUL_DIR/daemon.log"
+            POLL_LOG="$MANUL_DIR/poll.log"
+            WATCHDOG_LOG="$MANUL_DIR/watchdog.log"
+            LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+            PID_FILE="$MANUL_DIR/daemon.pid"
+            LAST_POLL_FILE="$MANUL_DIR/last-poll"
+            CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
+            DB="$MANUL_DIR/manul.db"
+            CONFIG="$MANUL_DIR/config.json"
+        fi
+    fi
+fi
+unset _stale_pid _default_dir _actual_home _found_dir _default_pid _home_pid 2>/dev/null
+
+# Also check alternative locations for watchdog log
+_alt_watchdog_log=""
+if [ -f "$MANUL_DIR/watchdog.log" ]; then
+    _alt_watchdog_log="$MANUL_DIR/watchdog.log"
+fi
+_other_dir="${MANUL_DIR/#$HOME/.\/mnt\/f\/ubuntu-workspace}"
+if [ "$_other_dir" != "$MANUL_DIR" ] && [ -f "$_other_dir/watchdog.log" ]; then
+    _alt_watchdog_log="$_other_dir/watchdog.log"
+fi
+unset _other_dir 2>/dev/null
+
 # Colors for output (if available)
 if [ -t 1 ]; then
     RED='\033[0;31m'
@@ -94,12 +148,36 @@ get_current_activity() {
     fi
 }
 
-# Last poll result
+# Last poll result - handle malformed JSON gracefully
 get_last_poll() {
+    local default_poll='{"fire":false,"new":0,"pending":0,"timestamp":""}'
+    
     if [ -f "$LAST_POLL_FILE" ] && [ -s "$LAST_POLL_FILE" ]; then
-        cat "$LAST_POLL_FILE"
+        local poll_content
+        poll_content="$(cat "$LAST_POLL_FILE")"
+        # Try to parse as JSON; if it fails, use defaults
+        local parsed
+        parsed="$(echo "$poll_content" | jq -c '.' 2>/dev/null)"
+        if [ $? -eq 0 ] && [ -n "$parsed" ]; then
+            echo "$parsed"
+        else
+            # Extract what we can from malformed JSON
+            local ts fire new pending
+            ts="$(echo "$poll_content" | grep -oP '"timestamp"\s*:\s*"[^"]*"' | sed 's/"timestamp"\s*:\s*"//;s/"//' || echo "")"
+            fire="$(echo "$poll_content" | grep -oP '"fire"\s*:\s*\K[^,}]*' || echo "false")"
+            new="$(echo "$poll_content" | grep -oP '"new"\s*:\s*\K[^,}]*' || echo "0")"
+            pending="$(echo "$poll_content" | grep -oP '"pending"\s*:\s*\K[^,}]*' || echo "0")"
+            
+            # Validate extracted values
+            [ -z "$fire" ] && fire="false"
+            [ -z "$new" ] && new="0"
+            [ -z "$pending" ] && pending="0"
+            
+            printf '{"fire":%s,"new":%s,"pending":%s,"timestamp":"%s"}' \
+                "$fire" "$new" "$pending" "$ts"
+        fi
     else
-        echo '{"fire":false,"new":0,"pending":0,"timestamp":""}'
+        echo "$default_poll"
     fi
 }
 
@@ -121,13 +199,42 @@ get_task_counts() {
         "$queued" "$running" "$stuck" "$failed" "$completed"
 }
 
-# Recent lifecycle events
+# Recent lifecycle events - handle malformed entries
 get_recent_events() {
     if [ ! -f "$LIFECYCLE_LOG" ] || [ ! -s "$LIFECYCLE_LOG" ]; then
         echo '[]'
         return
     fi
-    jq -c 'sort_by(.timestamp) | reverse | .[0:5]' "$LIFECYCLE_LOG" 2>/dev/null || echo '[]'
+    tail -10 "$LIFECYCLE_LOG" | while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        # Skip pipe-only lines
+        case "$line" in
+            '|||'*|'') continue ;;
+        esac
+        
+        # Parse bracketed format: [timestamp] EVENT details
+        if [[ "$line" == \[* ]]; then
+            local ts evt rest details
+            ts="$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
+            rest="$(printf '%s' "$line" | sed 's/^\[[^]]*\] *//')"
+            evt="$(printf '%s' "$rest" | awk '{print $1}')"
+            details="$(printf '%s' "$rest" | sed "s/^${evt} *//")"
+            
+            # Extract key=value pairs from details
+            local fire new pending
+            fire="$(printf '%s' "$details" | grep -oP 'fire=\K[^ ]+' || echo "")"
+            new="$(printf '%s' "$details" | grep -oP 'new=\K[^ ]+' || echo "")"
+            pending="$(printf '%s' "$details" | grep -oP 'pending=\K[^ ]+' || echo "")"
+            
+            [ -z "$fire" ] && fire="?"
+            [ -z "$new" ] && new="?"
+            [ -z "$pending" ] && pending="?"
+            
+            printf '{"event":"%s","timestamp":"%s","details":"fire=%s new=%s pending=%s"}\n' \
+                "$evt" "$ts" "$fire" "$new" "$pending"
+        fi
+    done | jq -sc 'sort_by(.timestamp) | reverse | .[0:5]' 2>/dev/null || echo '[]'
 }
 
 # Recent daemon log
@@ -143,16 +250,26 @@ get_recent_log() {
 get_watchdog_status() {
     local installed="false"
     local status_text="NOT installed"
-
-    if crontab -l 2>/dev/null | grep -qF "$MANUL_DIR/watchdog.sh"; then
+    
+    # Check cron in both possible MANUL_DIR locations
+    if crontab -l 2>/dev/null | grep -qF "watchdog.sh"; then
         installed="true"
         status_text="Installed (every 5 minutes)"
     fi
 
-    # Get recent watchdog log entries
+    # Get recent watchdog log entries - try multiple locations
     local recent_log='[]'
-    if [ -f "$WATCHDOG_LOG" ] && [ -s "$WATCHDOG_LOG" ]; then
-        recent_log="$(tail -3 "$WATCHDOG_LOG" | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
+    local watchdog_log_to_use="$WATCHDOG_LOG"
+    
+    # If the primary location doesn't exist or is empty, try alternative
+    if [ ! -f "$watchdog_log_to_use" ] || [ ! -s "$watchdog_log_to_use" ]; then
+        if [ -n "$_alt_watchdog_log" ] && [ -f "$_alt_watchdog_log" ] && [ -s "$_alt_watchdog_log" ]; then
+            watchdog_log_to_use="$_alt_watchdog_log"
+        fi
+    fi
+    
+    if [ -f "$watchdog_log_to_use" ] && [ -s "$watchdog_log_to_use" ]; then
+        recent_log="$(tail -3 "$watchdog_log_to_use" | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
     fi
 
     printf '{"installed":%s,"status":"%s","recent_log":%s}' \
@@ -198,83 +315,65 @@ print_daemon_status() {
             status_color="$GREEN"
             ;;
         *)
-            status_text="STOPPED (no pid file${pid:+: stale pid=$pid})"
-            status_color="$YELLOW"
+            status_text="STOPPED"
+            status_color="$RED"
             ;;
     esac
 
-    printf '%b%s:%b %s%s\n' "$BOLD" "Daemon" "$NC" "${status_color}${status_text}${NC}"
+    printf '%b  %sDaemon:%b %s\n' "$status_color" "" "$NC" "$status_text"
 }
 
 print_current_activity() {
-    local activity_json
-    activity_json="$(get_current_activity)"
-    local task_id activity_type display timestamp
-    task_id="$(echo "$activity_json" | jq -r '.task_id // "none"' 2>/dev/null)"
-    activity_type="$(echo "$activity_json" | jq -r '.activity_type // "unknown"' 2>/dev/null)"
-    display="$(echo "$activity_json" | jq -r '.display // "unknown"' 2>/dev/null)"
-    timestamp="$(echo "$activity_json" | jq -r '.timestamp // ""' 2>/dev/null)"
+    local activity_info
+    activity_info="$(get_current_activity)"
+    local task_id activity_type timestamp display
+    task_id="$(echo "$activity_info" | jq -r '.task_id' 2>/dev/null || echo 'none')"
+    activity_type="$(echo "$activity_info" | jq -r '.activity_type' 2>/dev/null || echo 'idle')"
+    timestamp="$(echo "$activity_info" | jq -r '.timestamp' 2>/dev/null || echo '')"
+    display="$(echo "$activity_info" | jq -r '.display' 2>/dev/null || echo '— No activity recorded')"
 
-    local activity_color="$NC"
-    case "$activity_type" in
-        claimed) activity_color="$GREEN" ;;
-        working) activity_color="$YELLOW" ;;
-        completed) activity_color="$BLUE" ;;
-        error)   activity_color="$RED" ;;
-        idle)    activity_color="$CYAN" ;;
-        none)    activity_color="$NC" ;;
-        *)       activity_color="$YELLOW" ;;
-    esac
-
-    printf '%b  %sCurrent:%b %b%s%b\n' "$CYAN" "" "$NC" "$activity_color" "$display" "$NC"
-    [ -n "$timestamp" ] && printf '     Timestamp: %s\n' "$timestamp"
+    printf '%b  %sCurrent Activity:%b\n' "$CYAN" "" "$NC"
+    if [ "$task_id" != "none" ]; then
+        printf '     Task: %s\n' "$task_id"
+        printf '     Type: %s\n' "$activity_type"
+        printf '     Time: %s\n' "$timestamp"
+    else
+        printf '     %s\n' "$display"
+    fi
 }
 
 print_last_poll() {
-    local poll_json
-    poll_json="$(get_last_poll)"
-    local fire new_count pending timestamp
-    fire="$(echo "$poll_json" | jq -r '.fire // false' 2>/dev/null)"
-    new_count="$(echo "$poll_json" | jq -r '.new // 0' 2>/dev/null)"
-    pending="$(echo "$poll_json" | jq -r '.pending // 0' 2>/dev/null)"
-    timestamp="$(echo "$poll_json" | jq -r '.timestamp // ""' 2>/dev/null)"
+    local poll_info
+    poll_info="$(get_last_poll)"
+    local fire new pending timestamp
+    fire="$(echo "$poll_info" | jq -r 'if .fire == null or .fire == "" then "unknown" else (.fire | tostring) end' 2>/dev/null || echo "unknown")"
+    new="$(echo "$poll_info" | jq -r '.new // 0' 2>/dev/null || echo 0)"
+    pending="$(echo "$poll_info" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
+    timestamp="$(echo "$poll_info" | jq -r '.timestamp // "unknown"' 2>/dev/null || echo "unknown")"
 
-    local fire_display fire_color
-    if [ "$fire" = "true" ]; then
-        fire_display="🔥 FIRED"
-        fire_color="$RED"
-    else
-        fire_display="💤 No fire"
-        fire_color="$CYAN"
-    fi
-
-    printf '%b  %sLast poll:%b %b%s%b | New: %b%s%b | Pending: %b%s%b' \
-        "$CYAN" "" "$NC" "$fire_color" "$fire_display" "$NC" \
-        "$GREEN" "$new_count" "$NC" "$YELLOW" "$pending" "$NC"
-    [ -n "$timestamp" ] && printf ' | Time: %s' "$timestamp"
-    printf '\n'
+    printf '%b  %sLast Poll:%b\n' "$YELLOW" "" "$NC"
+    printf '     Fire: %s\n' "$fire"
+    printf '     New: %s\n' "$new"
+    printf '     Pending: %s\n' "$pending"
+    printf '     Time: %s\n' "$timestamp"
 }
 
 print_task_counts() {
-    local counts_json
-    counts_json="$(get_task_counts)"
+    local counts_info
+    counts_info="$(get_task_counts)"
     local queued running stuck failed completed
-    queued="$(echo "$counts_json" | jq -r '.queued // 0')"
-    running="$(echo "$counts_json" | jq -r '.running // 0')"
-    stuck="$(echo "$counts_json" | jq -r '.stuck // 0')"
-    failed="$(echo "$counts_json" | jq -r '.failed // 0')"
-    completed="$(echo "$counts_json" | jq -r '.completed // 0')"
+    queued="$(echo "$counts_info" | jq -r '.queued // 0' 2>/dev/null || echo 0)"
+    running="$(echo "$counts_info" | jq -r '.running // 0' 2>/dev/null || echo 0)"
+    stuck="$(echo "$counts_info" | jq -r '.stuck // 0' 2>/dev/null || echo 0)"
+    failed="$(echo "$counts_info" | jq -r '.failed // 0' 2>/dev/null || echo 0)"
+    completed="$(echo "$counts_info" | jq -r '.completed // 0' 2>/dev/null || echo 0)"
 
-    printf '\n%b  %sTask Counts:%b\n' "$BOLD" "" "$NC"
-    printf '     Queued:   %b%s%s\n' "$BLUE" "$queued" "$NC"
-    printf '     Running:  %b%s%s\n' "$GREEN" "$running" "$NC"
-    if [ "$stuck" -gt 0 ]; then
-        printf '     Stuck:    %b%s%s ⚠️\n' "$RED" "$stuck" "$NC"
-    else
-        printf '     Stuck:    %s0%s\n' "$NC" "$NC"
-    fi
-    printf '     Failed:   %b%s%s\n' "$YELLOW" "$failed" "$NC"
-    printf '     Completed:%b %s%s\n' "$NC" "$completed" "$NC"
+    printf '%b  %sTask Counts:%b\n' "$BLUE" "" "$NC"
+    printf '     QUEUED: %s\n' "$queued"
+    printf '     RUNNING: %s\n' "$running"
+    printf '     STUCK: %s\n' "$stuck"
+    printf '     FAILED: %s\n' "$failed"
+    printf '     COMPLETED: %s\n' "$completed"
 }
 
 print_recent_events() {
@@ -310,45 +409,6 @@ print_recent_events() {
     done
 }
 
-print_watchdog_status() {
-    local watchdog_json
-    watchdog_json="$(get_watchdog_status)"
-    local installed status_text
-    installed="$(echo "$watchdog_json" | jq -r '.installed // false')"
-    status_text="$(echo "$watchdog_json" | jq -r '.status // "unknown"')"
-
-    local watchdog_color="$RED"
-    [ "$installed" = "true" ] && watchdog_color="$GREEN"
-
-    printf '\n%b  %sWatchdog:%b %b%s%b\n' \
-        "$CYAN" "" "$NC" "$watchdog_color" "$status_text" "$NC"
-
-    # Show recent watchdog log
-    local recent_log
-    recent_log="$(echo "$watchdog_json" | jq -r '.recent_log // [] | .[]')"
-    if [ -n "$recent_log" ]; then
-        printf '     %bRecent watchdog log:%b\n' "$YELLOW" "$NC"
-        echo "$recent_log" | sed 's/^/       /'
-    fi
-}
-
-print_stuck_tasks() {
-    local stuck_json
-    stuck_json="$(get_stuck_tasks)"
-
-    local count
-    count="$(echo "$stuck_json" | jq 'length')"
-
-    if [ "$count" -eq 0 ]; then
-        printf '%b  %sStuck Tasks:%b None detected\n' "$CYAN" "" "$NC"
-        return
-    fi
-
-    printf '%b  %sStuck Tasks:%b\n' "$CYAN" "" "$NC"
-    printf '     Found %b%s%s stuck task(s):\n' "$RED" "$count" "$NC"
-    echo "$stuck_json" | jq -r '.[] | "       • \( .repository)@\(.commentId) (issue #\(.issueNumber), attempt \(.attempts)/?, last heartbeat: \(.last_heartbeat))"'
-}
-
 print_recent_log() {
     local log_json
     log_json="$(get_recent_log)"
@@ -362,9 +422,36 @@ print_recent_log() {
     echo "$log_json" | jq -r '.[]' | sed 's/^/     /'
 }
 
+print_watchdog_status() {
+    local watchdog_json
+    watchdog_json="$(get_watchdog_status)"
+    local installed status_text
+    installed="$(echo "$watchdog_json" | jq -r '.installed // false')"
+    status_text="$(echo "$watchdog_json" | jq -r '.status // "unknown"')"
+
+    printf '%b  %sWatchdog:%b %s\n' "$GREEN" "" "$NC" "$status_text"
+}
+
+print_stuck_tasks() {
+    local stuck_json
+    stuck_json="$(get_stuck_tasks)"
+    local count
+    count="$(echo "$stuck_json" | jq -r '. | length' 2>/dev/null || echo 0)"
+
+    if [ "$count" -eq 0 ]; then
+        printf '%b  %sStuck Tasks:%b None detected\n' "$CYAN" "" "$NC"
+        return
+    fi
+
+    printf '%b  %sStuck Tasks:%b\n' "$CYAN" "" "$NC"
+    printf '     Found %b%s%s stuck task(s):\n' "$RED" "$count" "$NC"
+    echo "$stuck_json" | jq -r '.[] | "       • \( .repository)@\(.commentId) (issue #\(.issueNumber), attempt \(.attempts)/?, last heartbeat: \(.last_heartbeat))"'
+}
+
 # ============================================================================
 # MAIN
 # ============================================================================
+
 if [ "$JSON_OUTPUT" = true ]; then
     # JSON mode: collect all data and output single JSON object
     local_daemon="$(get_daemon_status)"

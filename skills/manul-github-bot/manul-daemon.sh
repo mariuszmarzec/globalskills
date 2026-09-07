@@ -29,7 +29,7 @@ PID_FILE="$MANUL_DIR/daemon.pid"
 LOG="$MANUL_DIR/daemon.log"
 LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
 LAST_POLL_FILE="$MANUL_DIR/last-poll"
-CURRENT_ACTIVITY_FILE="$MANUL_DIR/active-task"
+CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
 LOCK="$MANUL_DIR/lock"
 DB="$MANUL_DIR/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
@@ -63,9 +63,9 @@ set_activity() {
 
 # Record last poll timestamp and result
 record_poll() {
-  local fire="$1"
-  local new="$2"
-  local pending="$3"
+  local fire="${1:-false}"
+  local new="${2:-0}"
+  local pending="${3:-0}"
   printf '{"fire":%s,"new":%s,"pending":%s,"timestamp":"%s"}\n' \
     "$fire" "$new" "$pending" "$(date -Is)" >"$LAST_POLL_FILE" 2>/dev/null || true
   echo "${fire}|${new}|${pending}|$(date -Is)" >>"$LIFECYCLE_LOG"
@@ -491,9 +491,9 @@ run_once() {
   echo "$out"
   # Record poll result for observability
   local poll_fire poll_new poll_pending
-  poll_fire="$(printf '%s' "$out" | jq -r '.fire // false' 2>/dev/null)"
-  poll_new="$(printf '%s' "$out" | jq -r '.new // 0' 2>/dev/null)"
-  poll_pending="$(printf '%s' "$out" | jq -r '.pending // 0' 2>/dev/null)"
+  poll_fire="$(printf '%s' "$out" | jq -r '.fire // false' 2>/dev/null || echo false)"
+  poll_new="$(printf '%s' "$out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
+  poll_pending="$(printf '%s' "$out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
   record_poll "$poll_fire" "$poll_new" "$poll_pending"
 
   if [ "$poll_fire" = "true" ]; then
