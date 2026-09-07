@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches pipeline errors
 # manul-daemon.sh — background poll loop for the manul GitHub bot.
 #
 # Usage:
@@ -470,6 +471,7 @@ post_github_comment() {
   local repo="$1"
   local issue="$2"
   local body="$3"
+  local reply_to="${4:-}"
 
   # Append Manul signature to automated comments (deterministic)
   # Format: body\n\n— manul 🐈
@@ -482,7 +484,13 @@ post_github_comment() {
     signed_body="${body}"$'\n\n'"$signature"
   fi
 
-  gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
+  if [ -n "$reply_to" ]; then
+    # Review-thread task: reply inside the review thread
+    gh pr comment "$issue" --repo "$repo" --in-reply-to "$reply_to" --body "$signed_body" 2>>"$LOG"
+  else
+    # Top-level issue/PR-conversation task: post as a regular comment
+    gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
+  fi
 }
 
 run_once() {
@@ -491,9 +499,11 @@ run_once() {
   echo "$out"
   # Record poll result for observability
   local poll_fire poll_new poll_pending
-  poll_fire="$(printf '%s' "$out" | jq -r '.fire // false' 2>/dev/null || echo false)"
-  poll_new="$(printf '%s' "$out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
-  poll_pending="$(printf '%s' "$out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
+  # Strip MANUL_RESULT prefix if present (poll.sh outputs "MANUL_RESULT {json}")
+  local json_out="${out#MANUL_RESULT }"
+  poll_fire="$(printf '%s' "$json_out" | jq -r '.fire // false' 2>/dev/null || echo false)"
+  poll_new="$(printf '%s' "$json_out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
+  poll_pending="$(printf '%s' "$json_out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
   record_poll "$poll_fire" "$poll_new" "$poll_pending"
 
   if [ "$poll_fire" = "true" ]; then
@@ -549,7 +559,7 @@ run_once() {
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to complete the task after $ACTUAL_ATTEMPTS attempts (max reached)."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -591,7 +601,7 @@ run_once() {
     # 4. Post "in progress" comment BEFORE invoking the LLM
     local IN_PROGRESS_BODY="🔄 Manul is working on this task..."
 
-    if ! post_github_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY"; then
+    if ! post_github_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
@@ -610,9 +620,12 @@ run_once() {
 
     # Determine task type from commentUrl metadata (do NOT call gh pr view)
     local TASK_TYPE="issue"
+    local REPLY_TO=""
     if [[ "$COMMENT_URL" == *"/pull/"* ]]; then
       if [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
         TASK_TYPE="pr_review_comment"
+        # Extract numeric review comment ID from commentId prefix (review:<id>)
+        REPLY_TO="${COMMENT_ID#review:}"
       else
         TASK_TYPE="pr_conversation_comment"
       fi
@@ -655,7 +668,7 @@ PROMPT_EOF
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_task_lock
       set_activity "none" "idle"
@@ -668,7 +681,7 @@ PROMPT_EOF
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
@@ -682,6 +695,10 @@ PROMPT_EOF
     mkdir -p "$TASK_WORKDIR"
 
     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, working dir: $TASK_WORKDIR"
+
+    # Generate timestamp for unique branch name
+    local timestamp
+    timestamp="$(date +%s)"
 
     # Update prompt to include authoritative repository path
     cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
@@ -705,6 +722,9 @@ A dedicated task branch must be created from the current default branch BEFORE m
 2. Make all repository changes on that task branch
 3. Commit and push changes to the task branch
 4. Do NOT commit directly to the default branch
+
+## Task Branch
+Create a unique branch name (e.g., 'manul-task-$COMMENT_ID-$timestamp')
 PROMPT_APPEND
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
@@ -840,7 +860,7 @@ PROMPT_APPEND
 
     # 9. Post final result comment to the SAME GitHub thread
     if [ -n "$FINAL_COMMENT" ]; then
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
     fi
 
     # Release repository lock

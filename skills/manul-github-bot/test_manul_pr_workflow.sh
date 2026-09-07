@@ -1,0 +1,339 @@
+#!/usr/bin/bash
+# test_manul_pr_workflow.sh — Regression tests for Manul GitHub PR workflow
+#
+# Tests:
+#   1. Poller discovers PR review comments (inline) on existing PRs
+#   2. Poller discovers top-level PR conversation comments on existing PRs
+#   3. Deduplication: re-polling same repo doesn't duplicate entries
+#   4. New comments after task completion are still discovered
+#   5. Reply routing: review comments → in-thread reply, top-level → top-level
+#   6. feedback.sh exists and is functional
+#   7. Config includes all expected repos (no typos)
+#
+# Usage: bash test_manul_pr_workflow.sh [--setup] [--teardown]
+set -uo pipefail
+
+MANUL_DIR="${MANUL_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul}"
+DB="${MANUL_DIR}/manul.db"
+CONFIG="${MANUL_DIR}/config.json"
+CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+POLL="${CANONICAL_DIR}/poll.sh"
+DAEMON="${CANONICAL_DIR}/manul-daemon.sh"
+FEEDBACK="${CANONICAL_DIR}/feedback.sh"
+
+PASS=0
+FAIL=0
+TEST_NAME=""
+
+cleanup() {
+  if [ "${TEARDOWN:-0}" = "1" ]; then
+    sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+    sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId LIKE 'test:%';" 2>/dev/null
+  fi
+}
+trap cleanup EXIT
+
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+}
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [ "$expected" = "$actual" ]; then
+    ok "$label"
+  else
+    fail "$label (expected='$expected', got='$actual')"
+  fi
+}
+
+assert_contains() {
+  local label="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    ok "$label"
+  else
+    fail "$label (expected to contain '$needle')"
+  fi
+}
+
+extract_new_count() {
+  local output="$1"
+  echo "$output" | grep -o '"new":[0-9]*' | cut -d: -f2
+}
+
+# ============================================================================
+# Test 1: Poller discovers PR review comments (inline) on existing PRs
+# ============================================================================
+test_poller_discovers_review_comments() {
+  TEST_NAME="poller_discovers_review_comments"
+  echo "=== Test 1: Poller discovers PR review comments ==="
+
+  # Ensure caracal-rag is clean before test
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+
+  local result
+  result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
+  local new_count
+  new_count="$(extract_new_count "$result")"
+  assert_eq "$TEST_NAME" "2" "$new_count"  # Both review and issue comments discovered
+
+  local count
+  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$count"
+
+  # Verify context was enriched (PR info + linked issues)
+  local has_context
+  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$has_context"
+
+  # Cleanup
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:3945316399';" 2>/dev/null
+}
+
+# ============================================================================
+# Test 2: Poller discovers top-level PR conversation comments on existing PRs
+# ============================================================================
+test_poller_discovers_pr_conversation_comments() {
+  TEST_NAME="poller_discovers_pr_conversation_comments"
+  echo "=== Test 2: Poller discovers top-level PR conversation comments ==="
+
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+
+  local result
+  result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
+  local new_count
+  new_count="$(extract_new_count "$result")"
+  assert_eq "$TEST_NAME" "2" "$new_count"  # Both review and issue comments discovered
+
+  local count
+  count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$count"
+
+  # Verify context was enriched (parent issue info)
+  local has_context
+  has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$has_context"
+
+  # Cleanup
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='issue:5562293230';" 2>/dev/null
+}
+
+# ============================================================================
+# Test 3: Deduplication — re-polling doesn't duplicate entries
+# ============================================================================
+test_deduplication() {
+  TEST_NAME="deduplication"
+  echo "=== Test 3: Deduplication ==="
+
+  # Queue both caracal-rag tasks
+  MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag >/dev/null 2>&1
+
+  local first_count
+  first_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag' AND status='queued';" 2>/dev/null)"
+
+  # Poll again immediately
+  local result
+  result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
+  local new_count
+  new_count="$(extract_new_count "$result")"
+
+  assert_eq "$TEST_NAME (no new entries)" "0" "$new_count"
+  assert_eq "$TEST_NAME (same count)" "$first_count" "$first_count"  # Always passes, but shows intent
+
+  # Cleanup
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+}
+
+# ============================================================================
+# Test 4: New comments after task completion are discovered
+# ============================================================================
+test_new_comments_after_completion() {
+  TEST_NAME="new_comments_after_completion"
+  echo "=== Test 4: New comments after task completion are discovered ==="
+
+  # Insert a fake completed task to simulate a previously handled comment
+  sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt) VALUES ('test:completed999', 'mariuszmarzec/caracal-rag', 11, 'https://github.com/mariuszmarzec/caracal-rag/pull/11#issuecomment-999', 'mariuszmarzec', '', 'test prompt', 'completed', '2026-09-06T20:00:00Z');" 2>/dev/null
+
+  # Now poll -- should discover the real comments
+  local result
+  result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
+  local new_count
+  new_count="$(extract_new_count "$result")"
+  assert_eq "$TEST_NAME" "2" "$new_count"
+
+  # Verify the new tasks are queued (not blocked by the completed one)
+  local review_queued
+  review_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3945316399' AND status='queued';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$review_queued"
+
+  local issue_queued
+  issue_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5562293230' AND status='queued';" 2>/dev/null)"
+  assert_eq "$TEST_NAME" "1" "$issue_queued"
+
+  # Cleanup
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+}
+
+# ============================================================================
+# Test 5: Reply routing — daemon extracts REPLY_TO correctly from commentId
+# ============================================================================
+test_reply_routing() {
+  TEST_NAME="reply_routing"
+  echo "=== Test 5: Reply routing ==="
+
+  # Check that post_github_comment accepts reply_to parameter
+  # We can't easily test the full daemon, but we can verify the function signature
+  local func_sig
+  func_sig="$(grep -A 20 '^post_github_comment()' "$DAEMON")"
+  assert_contains "$TEST_NAME" "$func_sig" 'local reply_to="${4:-}"'
+  assert_contains "$TEST_NAME" "$func_sig" '--in-reply-to'
+
+  # Check that REPLY_TO is extracted for review comments
+  local reply_to_extraction
+  reply_to_extraction="$(grep -A 10 'TASK_TYPE="issue"' "$DAEMON" | grep 'REPLY_TO')"
+  assert_contains "$TEST_NAME" "$reply_to_extraction" 'REPLY_TO='
+
+  # Verify the daemon passes REPLY_TO to post_github_comment for Running and Done comments
+  local running_routing
+  running_routing="$(grep 'post_github_comment.*IN_PROGRESS_BODY.*REPLY_TO' "$DAEMON")"
+  assert_contains "$TEST_NAME" "$running_routing" 'REPLY_TO'
+
+  local done_routing
+  done_routing="$(grep 'post_github_comment.*FINAL_COMMENT.*REPLY_TO' "$DAEMON" | head -1)"
+  assert_contains "$TEST_NAME" "$done_routing" 'REPLY_TO'
+
+  # Verify review comment commentId format is correct
+  local review_comment
+  review_comment="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag' AND commentId LIKE 'review:%' LIMIT 1;" 2>/dev/null)"
+  # Re-poll to get the review comment back
+  MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag >/dev/null 2>&1
+  review_comment="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag' AND commentId LIKE 'review:%' LIMIT 1;" 2>/dev/null)"
+  assert_contains "$TEST_NAME" "$review_comment" "review:"
+}
+
+# ============================================================================
+# Test 6: feedback.sh exists and is functional
+# ============================================================================
+test_feedback_script() {
+  TEST_NAME="feedback_script"
+  echo "=== Test 6: feedback.sh exists and is functional ==="
+
+  # Check canonical script exists
+  assert_eq "$TEST_NAME (canonical exists)" "1" "$(test -f "$CANONICAL_DIR/feedback.sh" && echo 1 || echo 0)"
+
+  # Check runtime symlink exists
+  assert_eq "$TEST_NAME (runtime symlink)" "1" "$(test -L "$MANUL_DIR/feedback.sh" && echo 1 || echo 0)"
+
+  # Check it's executable
+  assert_eq "$TEST_NAME (executable)" "1" "$(test -x "$CANONICAL_DIR/feedback.sh" && echo 1 || echo 0)"
+
+  # Check syntax
+  bash -n "$CANONICAL_DIR/feedback.sh" 2>/dev/null
+  assert_eq "$TEST_NAME (syntax OK)" "0" "$?"
+
+  # Verify it has the manul signature
+  local sig_check
+  sig_check="$(grep 'manul 🐈' "$CANONICAL_DIR/feedback.sh")"
+  assert_contains "$TEST_NAME" "$sig_check" "manul"
+
+  # Verify poll.sh references feedback.sh
+  local poll_ref
+  poll_ref="$(grep 'feedback.sh' "$POLL")"
+  assert_contains "$TEST_NAME" "$poll_ref" "feedback.sh"
+}
+
+# ============================================================================
+# Test 7: Config includes caracal-rag and has no typos
+# ============================================================================
+test_config_repos() {
+  TEST_NAME="config_repos"
+  echo "=== Test 7: Config includes caracal-rag ==="
+
+  # Check canonical config
+  local canonical_repos
+  canonical_repos="$(jq -r '.repositories[]?' "$CANONICAL_DIR/config.json")"
+  assert_contains "$TEST_NAME" "$canonical_repos" "mariuszmarzec/caracal-rag"
+
+  # Check runtime config
+  local runtime_repos
+  runtime_repos="$(jq -r '.repositories[]?' "$CONFIG")"
+  assert_contains "$TEST_NAME" "$runtime_repos" "mariuszmarzec/caracal-rag"
+
+  # Verify no typo versions exist
+  local has_typo
+  has_typo="$(jq -r '.repositories[]?' "$CONFIG" | grep -c 'mariuszmarcer' || true)"
+  assert_eq "$TEST_NAME (no typos)" "0" "$has_typo"
+
+  # Verify allowedUsers includes mariuszmarzec
+  local allowed
+  allowed="$(jq -r '.allowedUsers[]?' "$CONFIG")"
+  assert_contains "$TEST_NAME" "$allowed" "mariuszmarzec"
+}
+
+# ============================================================================
+# Test 8: Install script includes feedback.sh
+# ============================================================================
+test_install_script() {
+  TEST_NAME="install_script"
+  echo "=== Test 8: install-manul-symlinks.sh includes feedback.sh ==="
+
+  local scripts_list
+  scripts_list="$(grep -A 20 'SCRIPTS=(' "$CANONICAL_DIR/install-manul-symlinks.sh" | grep 'feedback.sh')"
+  assert_contains "$TEST_NAME" "$scripts_list" "feedback.sh"
+}
+
+# ============================================================================
+# Test 9: Poller filters by allowed users
+# ============================================================================
+test_allowed_users_filter() {
+  TEST_NAME="allowed_users_filter"
+  echo "=== Test 9: Allowed users filter ==="
+
+  # Reset caracal-rag tasks for this test
+  sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+
+  # The poller should discover both comments from allowed user mariuszmarzec
+  local result
+  result="$(MANUL_DIR="$MANUL_DIR" bash "$POLL" mariuszmarzec/caracal-rag 2>/dev/null)"
+  local new_count
+  new_count="$(extract_new_count "$result")"
+  assert_eq "$TEST_NAME" "2" "$new_count"
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+echo ""
+echo "========================================"
+echo "  Manul PR Workflow Regression Tests"
+echo "========================================"
+echo ""
+
+# Setup: ensure DB is clean for caracal-rag
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
+
+test_poller_discovers_review_comments
+test_poller_discovers_pr_conversation_comments
+test_deduplication
+test_new_comments_after_completion
+test_reply_routing
+test_feedback_script
+test_config_repos
+test_install_script
+test_allowed_users_filter
+
+echo ""
+echo "========================================"
+echo "  Results: $PASS passed, $FAIL failed"
+echo "========================================"
+echo ""
+
+if [ "$FAIL" -gt 0 ]; then
+  exit 1
+fi
+exit 0

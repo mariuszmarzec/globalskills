@@ -55,6 +55,7 @@ fi
 
 # List of scripts to symlink (in executable order)
 SCRIPTS=(
+    "feedback.sh"
     "github-api-wrapper.sh"
     "manul-comments-remove.sh"
     "manul-daemon.sh"

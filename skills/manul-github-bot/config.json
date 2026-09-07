@@ -1,10 +1,10 @@
 {
   "trigger": "/manul",
-  "allowedUsers": ["<GITHUB_LOGIN>"],
+  "allowedUsers": ["mariuszmarzec"],
   "autoCreatePr": true,
   "autoRebaseOnPrBase": true,
   "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
-  "repositories": ["<owner>/<repo>"],
+  "repositories": ["mariuszmarzec/caracal-rag", "mariuszmarzec/todo", "mariuszmarzec/test-manul-e2e", "mariuszmarzec/shoppingListGenerator"],
   "retryConfig": {
     "maxAttempts": 3,
     "sessionTimeoutSeconds": 300,
