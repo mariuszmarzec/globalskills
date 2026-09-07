@@ -45,6 +45,8 @@ CFG_HEARTBEAT_TIMEOUT="$(jq -r '.automation.heartbeatTimeout // 900' "$CONFIG" 2
 HEARTBEAT_TIMEOUT="${MANUL_HEARTBEAT_TIMEOUT:-${CFG_HEARTBEAT_TIMEOUT:-900}}"
 CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
 LEASE_TIMEOUT="${MANUL_LEASE_TIMEOUT:-${CFG_LEASE_TIMEOUT:-900}}"
+CFG_LOCK_TTL="$(jq -r '.automation.lockTtl // empty' "$CONFIG" 2>/dev/null)"
+LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-${CFG_LOCK_TTL:-1800}}"
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 
@@ -434,6 +436,18 @@ start() {
     fi
     # Stale PID file — remove it
     rm -f "$PID_FILE"
+  fi
+
+  # Clean up stale .daemon-lock if present from previous crashed/reboot session
+  if [ -d "$MANUL_DIR/.daemon-lock" ]; then
+    local lock_age
+    lock_age=$(( $(date +%s) - $(stat -c %Y "$MANUL_DIR/.daemon-lock" 2>/dev/null || echo 0) ))
+    if [ "$lock_age" -ge "$LOCK_TTL" ]; then
+      log "stale .daemon-lock detected (age=${lock_age}s, ttl=${LOCK_TTL}s) → removing"
+      rm -rf "$MANUL_DIR/.daemon-lock" 2>/dev/null
+    else
+      log ".daemon-lock is fresh (age=${lock_age}s); skipping cleanup"
+    fi
   fi
 
   setsid nohup "$0" loop >>"$LOG" 2>&1 &
