@@ -560,6 +560,8 @@ run_once() {
     safe_comment_id="$(sql_escape "$COMMENT_ID")"
     local safe_repo
     safe_repo="$(sql_escape "$REPO")"
+    # Initialize REPLY_TO early to prevent unbound variable errors
+    local REPLY_TO=""
 
     # Read actual attempts from database (authoritative source)
     local ACTUAL_ATTEMPTS
@@ -634,7 +636,6 @@ run_once() {
 
     # Determine task type from commentUrl metadata (do NOT call gh pr view)
     local TASK_TYPE="issue"
-    local REPLY_TO=""
     if [[ "$COMMENT_URL" == *"/pull/"* ]]; then
       if [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
         TASK_TYPE="pr_review_comment"
