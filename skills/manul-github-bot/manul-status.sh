@@ -142,7 +142,16 @@ get_daemon_status() {
 # Current activity
 get_current_activity() {
     if [ -f "$CURRENT_ACTIVITY_FILE" ] && [ -s "$CURRENT_ACTIVITY_FILE" ]; then
-        cat "$CURRENT_ACTIVITY_FILE"
+        local line task_id activity_type timestamp
+        line="$(cat "$CURRENT_ACTIVITY_FILE")"
+        task_id="$(printf '%s' "$line" | cut -d'|' -f1)"
+        activity_type="$(printf '%s' "$line" | cut -d'|' -f2)"
+        timestamp="$(printf '%s' "$line" | cut -d'|' -f3)"
+        jq -c -n \
+            --arg task_id "${task_id:-none}" \
+            --arg activity_type "${activity_type:-idle}" \
+            --arg timestamp "${timestamp:-}" \
+            '{task_id: $task_id, activity_type: $activity_type, display: (if $task_id == "none" then "— No activity recorded" else "\($task_id) [\($activity_type)] \($timestamp)" end), timestamp: $timestamp}'
     else
         echo '{"task_id":"none","activity_type":"idle","display":"— No activity recorded","timestamp":""}'
     fi
