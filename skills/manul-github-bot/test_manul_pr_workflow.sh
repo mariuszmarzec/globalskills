@@ -31,20 +31,17 @@ cleanup() {
     sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId LIKE 'test:%';" 2>/dev/null
   fi
 }
-test_issue_comment_detection
 trap cleanup EXIT
 
 ok() {
   PASS=$((PASS + 1))
   echo "  PASS: $1"
 }
-test_issue_comment_detection
 
 fail() {
   FAIL=$((FAIL + 1))
   echo "  FAIL: $1"
 }
-test_issue_comment_detection
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -54,7 +51,6 @@ assert_eq() {
     fail "$label (expected='$expected', got='$actual')"
   fi
 }
-test_issue_comment_detection
 
 assert_contains() {
   local label="$1" haystack="$2" needle="$3"
@@ -64,13 +60,11 @@ assert_contains() {
     fail "$label (expected to contain '$needle')"
   fi
 }
-test_issue_comment_detection
 
 extract_new_count() {
   local output="$1"
   echo "$output" | grep -o '"new":[0-9]*' | cut -d: -f2
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 1: Poller discovers PR review comments (inline) on existing PRs
@@ -100,7 +94,6 @@ test_poller_discovers_review_comments() {
   # Cleanup
   sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:3952521856';" 2>/dev/null
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 2: Poller discovers top-level PR conversation comments on existing PRs
@@ -129,7 +122,6 @@ test_poller_discovers_pr_conversation_comments() {
   # Cleanup
   sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='issue:5575478422';" 2>/dev/null
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 3: Deduplication — re-polling doesn't duplicate entries
@@ -156,7 +148,6 @@ test_deduplication() {
   # Cleanup
   sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 4: New comments after task completion are discovered
@@ -187,7 +178,6 @@ test_new_comments_after_completion() {
   # Cleanup
   sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag';" 2>/dev/null
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 5: Reply routing — daemon extracts REPLY_TO correctly from commentId
@@ -230,7 +220,6 @@ test_reply_routing() {
   review_comment="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='mariuszmarzec/caracal-rag' AND commentId LIKE 'review:%' LIMIT 1;" 2>/dev/null)"
   assert_contains "$TEST_NAME" "$review_comment" "review:"
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 6: feedback.sh exists and is functional
@@ -262,7 +251,6 @@ test_feedback_script() {
   poll_ref="$(grep 'feedback.sh' "$POLL")"
   assert_contains "$TEST_NAME" "$poll_ref" "feedback.sh"
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 7: Config includes caracal-rag and has no typos
@@ -291,7 +279,6 @@ test_config_repos() {
   allowed="$(jq -r '.allowedUsers[]?' "$CONFIG")"
   assert_contains "$TEST_NAME" "$allowed" "mariuszmarzec"
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 8: Install script includes feedback.sh
@@ -304,7 +291,6 @@ test_install_script() {
   scripts_list="$(grep -A 20 'SCRIPTS=(' "$CANONICAL_DIR/install-manul-symlinks.sh" | grep 'feedback.sh')"
   assert_contains "$TEST_NAME" "$scripts_list" "feedback.sh"
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 9: Poller filters by allowed users
@@ -323,7 +309,6 @@ test_allowed_users_filter() {
   new_count="$(extract_new_count "$result")"
   assert_eq "$TEST_NAME" "4" "$new_count"
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 10: Daemon accepts both TASK_DONE and TASK_COMPLETED markers
@@ -342,7 +327,6 @@ test_completion_markers() {
   task_done_check="$(grep 'TASK_DONE' "$DAEMON" | grep -v '^#' | head -1)"
   assert_contains "$TEST_NAME" "$task_done_check" 'TASK_DONE'
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Test 11: Daemon uses flock for singleton locking
@@ -366,7 +350,6 @@ test_flock_singleton() {
   loop_flock="$(grep -A 15 '^loop()' "$DAEMON" | grep 'flock')"
   assert_contains "$TEST_NAME" "$loop_flock" 'flock'
 }
-test_issue_comment_detection
 
 # ============================================================================
 # Main
@@ -402,69 +385,3 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 exit 0
-
-# Test 25: Issue comment detection with Unicode signature (em dash + space + manul + space + cat emoji)
-test_issue_comment_detection() {
-  local test_name="Issue comment detection with Unicode signature"
-  echo -n "Test 25: $test_name ... "
-  
-  # Create a test issue with comments containing the signature
-  local test_issue
-  test_issue=$(gh create issue --repo mariuszmarzec/test-automation --title "Test Signature Detection" --body "Testing signature matching" 2>/dev/null)
-  
-  if [ -z "$test_issue" ]; then
-    echo "SKIP (could not create test issue)"
-    return 0
-  fi
-  
-  # Extract issue number
-  local issue_num
-  issue_num=$(echo "$test_issue" | grep -oE '#[0-9]+' | tr -d '#')
-  
-  # Post comments with various signature patterns
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Normal comment without signature" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Manul completed task successfully.
-  
-— manul 🐈" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "This has partial signature — manul but should not match" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Another correct signature:
-  
-   — manul 🐈" 2>/dev/null
-  
-  # Test the signature matching logic
-  local test_sig='— manul 🐈'
-  local expected_count=2  # Only exact matches, not partial ones
-  local actual_count=0
-  
-  # Simulate the extract_ids function logic
-  local comments_json
-  comments_json=$(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" 2>/dev/null)
-  
-  if [ -n "$comments_json" ]; then
-    actual_count=$(echo "$comments_json" | python3 -c "
-import sys, json
-sig = '$test_sig'
-comments = json.load(sys.stdin)
-count = sum(1 for c in comments if sig in c.get('body', ''))
-print(count)
-" 2>/dev/null)
-  fi
-  
-  # Cleanup
-  # Delete all comments on the issue
-  for id in $(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" --jq '.[] | .id' 2>/dev/null); do
-    gh api -X DELETE "repos/mariuszmarzec/test-automation/issues/comments/$id" 2>/dev/null
-  done
-  # Delete the issue
-  gh issue delete --repo mariuszmarzec/test-automation --number "$issue_num" 2>/dev/null
-  
-  if [ "$actual_count" -eq "$expected_count" ]; then
-    echo "PASS ($actual_count comments detected)"
-    return 0
-  else
-    echo "FAIL (expected $expected_count, got $actual_count)"
-    return 1
-  fi
-}
-test_issue_comment_detection
-
