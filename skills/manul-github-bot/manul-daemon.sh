@@ -889,13 +889,10 @@ PROMPT_APPEND
       if [ "$COMPLETION_SUCCESS" = "true" ]; then
         FINAL_COMMENT="✅ Manul completed the task successfully."
         log "dispatch: task $COMMENT_ID completed successfully"
-        lc_log "TASK_SUCCESS" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
-        set_activity "$COMMENT_ID" "completed"
       else
         FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
         log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
         lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
-        set_activity "$COMMENT_ID" "error"
       fi
     else
       # Re-read attempts from DB to ensure accuracy
@@ -905,28 +902,51 @@ PROMPT_APPEND
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
 
       if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
         FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID failed (max attempts reached)"
         lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-        set_activity "none" "idle"
       else
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
         FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
         lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-        set_activity "none" "idle"
       fi
+    fi
+
+    # 9. Post final result comment to the SAME GitHub thread
+    # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
+    # The GitHub comment is the sole source of truth for completion.
+    # If comment posting fails, we must NOT mark the task as completed.
+    local COMMENT_POST_SUCCESS="false"
+    if [ -n "$FINAL_COMMENT" ]; then
+      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
+        COMMENT_POST_SUCCESS="true"
+      else
+        log "ERROR: failed to post final comment for $COMMENT_ID - task cannot be marked complete"
+      fi
+    fi
+
+    # Verify comment was posted before finalizing task state
+    if [ "$COMPLETION_SUCCESS" = "true" ] && [ "$COMMENT_POST_SUCCESS" != "true" ]; then
+      # Agent succeeded but comment posting failed - mark as failed instead
+      log "ERROR: Task $COMMENT_ID agent succeeded but GitHub comment post failed"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      FINAL_COMMENT="❌ Manul completed the work but failed to post the required GitHub comment."
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
+    elif [ "$COMPLETION_SUCCESS" = "true" ]; then
+      # Both agent succeeded AND comment posted - finalize as completed
+      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null; then
+        log "ERROR: Failed to update task state to completed for $COMMENT_ID"
+      fi
+      set_activity "$COMMENT_ID" "completed"
+    elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+    else
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
     fi
 
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
-
-    # 9. Post final result comment to the SAME GitHub thread
-    if [ -n "$FINAL_COMMENT" ]; then
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
-    fi
 
     # Release repository lock
     release_repo_lock "$REPO"
