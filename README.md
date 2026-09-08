@@ -87,3 +87,5 @@ Full setup, baseline semantics, and troubleshooting: `skills/manul-github-bot/SK
 
 OpenCode automatically loads skills from `~/.agents/skills/` (symlinked to `~/.globalskills/skills/`). Skills are matched by name and invoked when a task matches their description.
 Agents are loaded from `~/.config/opencode/agents/` (symlinked to `~/.globalskills/agents/`).
+
+TEST LINE - GitHub connector write test
