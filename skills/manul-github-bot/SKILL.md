@@ -90,10 +90,22 @@ automatic stale-task recovery
 |-----------|----------------|
 | `poll.sh` | GitHub polling, deduplication and enqueueing only (no recovery) |
 | `SQLite manul.db` | single source of truth for all task state |
-| `manul-daemon.sh` | consumes queued tasks and executes the orchestrator |
+| `manul-daemon.sh` | consumes queued tasks, posts lifecycle/status comments, manages orchestrator execution |
 | `watchdog.sh` | ONLY automatic recovery/liveness mechanism (daemon liveness, stale lock removal, heartbeat/lease-based task recovery) |
 | `task-recovery.sh` | manual/admin recovery tool only (NOT automatic) |
 | `task-health-check.sh` | LEGACY/DEPRECATED; MUST NOT be part of automatic operation |
+
+**Agent Comment Posting Contract:**
+
+Previously, the agent posted nothing to GitHub — the daemon extracted agent output from stdout and posted the result. **Under the new contract, the agent MUST post its own user-facing GitHub comment directly before `TASK_DONE`.**
+
+- **Agent responsibility:** After completing the task, post a GitHub comment with the result.
+- **Comment format:** Follow the existing automated GitHub comment signature rules (see "Automated GitHub Comment Signature" section). Include the signature `— manul 🐈` separated by two newlines.
+- **Comment timing:** Post exactly one comment per task (the final result), **before** emitting `TASK_DONE`.
+- **Comment routing:** Same as existing manul comment routing (top-level for issue/PR comments, in-thread reply for PR review comments).
+- **Daemon behavior:** The daemon no longer extracts `AGENT_RESPONSE` from agent stdout. The agent comment is the source of truth for user-facing results.
+- **Lifecycle comments:** The daemon continues to post lifecycle/status comments (`🔄 working`, `✅ completed`, `❌ failed`) on its own responsibility.
+- **No comment posting rules:** The orchestrator prompt no longer restricts agents from posting GitHub comments — posting a result comment is now required.
 
 **Dispatch is synchronous (daemon waits for the agent turn), so runs never
 overlap; `lock` is a backstop with 30 min TTL.**

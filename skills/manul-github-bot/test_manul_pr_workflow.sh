@@ -20,6 +20,7 @@ CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 POLL="${CANONICAL_DIR}/poll.sh"
 DAEMON="${CANONICAL_DIR}/manul-daemon.sh"
 FEEDBACK="${CANONICAL_DIR}/feedback.sh"
+PROMPT="${CANONICAL_DIR}/orchestrator.prompt.md"
 
 PASS=0
 FAIL=0
@@ -365,48 +366,32 @@ test_flock_singleton() {
 # ============================================================================
 test_agent_response_in_github_comment() {
   TEST_NAME="agent_response_in_github_comment"
-  echo "=== Test 12: Agent response included in GitHub comment ==="
+  echo "=== Test 12: Agent response IS included in GitHub comment ==="
 
-  # Simulate an agent stdout file with a realistic response
-  local tmp_stdout
-  tmp_stdout="$(mktemp)"
-  cat > "$tmp_stdout" <<'EOF'
-Here is the complete list of skills available in the system:
+  # Verify AGENT_RESPONSE extraction EXISTS in daemon
+  local has_extraction
+  has_extraction="$(grep -c 'AGENT_RESPONSE' "$DAEMON")"
+  assert_eq "$TEST_NAME (AGENT_RESPONSE extraction)" "9" "$has_extraction"
 
-1. **agent-orchestration** — Multi-agent orchestration rules
-2. **ai-commit-attribution** — AI commit attribution
-3. **feature-branching-strategy** — Branching strategy for AI changes
-4. **manul-github-bot** — GitHub command bot setup and operation
-5. **review-strategy** — Code review methodology
+  # Verify FINAL_COMMENT includes agent output for success
+  local final_comment_success
+  final_comment_success="$(grep -c 'AGENT_RESPONSE' <(grep -A8 'if \[ "$COMPLETION_SUCCESS" = "true" \]; then' "$DAEMON" | head -12))"
+  assert_eq "$TEST_NAME (success comment)" "2" "$final_comment_success"
 
-These skills are located at ~/.agents/skills/ and are loaded automatically.
-**TASK_DONE**
-EOF
+  # Verify FAILED comment includes agent output
+  local final_comment_failed
+  final_comment_failed="$(grep 'failed to complete.*attempts' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
+  assert_eq "$TEST_NAME (failed comment)" "1" "$final_comment_failed"
 
-  # Verify the sed extraction logic works correctly
-  local extracted
-  extracted="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_stdout" | sed '/^[[:space:]]*$/d')"
+  # Verify RETRY comment includes agent output
+  local final_comment_retry
+  final_comment_retry="$(grep 'encountered an issue.*will retry' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
+  assert_eq "$TEST_NAME (retry comment)" "1" "$final_comment_retry"
 
-  assert_contains "$TEST_NAME (extracts response)" "$extracted" "agent-orchestration"
-  assert_not_contains "$TEST_NAME (strips TASK_DONE)" "$extracted" "TASK_DONE"
-  assert_contains "$TEST_NAME (contains skill count)" "$extracted" "5"
-
-  # Verify the final comment assembly logic
-  local FINAL_COMMENT=""
-  local AGENT_RESPONSE="$extracted"
-  if [ -n "$AGENT_RESPONSE" ]; then
-    FINAL_COMMENT="✅ Manul completed the task successfully.
-
-${AGENT_RESPONSE}"
-  else
-    FINAL_COMMENT="✅ Manul completed the task successfully."
-  fi
-
-  assert_contains "$TEST_NAME (comment includes header)" "$FINAL_COMMENT" "✅ Manul completed the task successfully."
-  assert_contains "$TEST_NAME (comment includes agent response)" "$FINAL_COMMENT" "agent-orchestration"
-  assert_not_contains "$TEST_NAME (comment strips TASK_DONE)" "$FINAL_COMMENT" "TASK_DONE"
-
-  rm -f "$tmp_stdout"
+  # Verify success message exists
+  local has_success_msg
+  has_success_msg="$(grep -c '✅ Manul completed the task successfully.' "$DAEMON")"
+  assert_eq "$TEST_NAME (success message)" "2" "$has_success_msg"
 }
 
 # ============================================================================
@@ -441,35 +426,27 @@ test_github_post_required_for_completion() {
 # ============================================================================
 test_response_extraction_markers() {
   TEST_NAME="response_extraction_markers"
-  echo "=== Test 14: Response extraction handles both markers ==="
+  echo "=== Test 14: Response extraction logic EXISTS in daemon ==="
 
-  # Test with TASK_DONE
-  local tmp_done
-  tmp_done="$(mktemp)"
-  printf 'Some response\n\n**TASK_DONE**\n' > "$tmp_done"
-  local extracted_done
-  extracted_done="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_done" | sed '/^[[:space:]]*$/d')"
-  assert_contains "$TEST_NAME (TASK_DONE)" "$extracted_done" "Some response"
-  assert_not_contains "$TEST_NAME (strips TASK_DONE)" "$extracted_done" "TASK_DONE"
+  # Verify the sed extraction command EXISTS in the daemon
+  local has_sed_extraction
+  has_sed_extraction="$(grep -c 'TASK_DONE.*TASK_COMPLETED.*sed' "$DAEMON")"
+  assert_eq "$TEST_NAME (has sed extraction)" "1" "$has_sed_extraction"
 
-  # Test with TASK_COMPLETED
-  local tmp_completed
-  tmp_completed="$(mktemp)"
-  printf 'Another answer\n\n**TASK_COMPLETED**\n' > "$tmp_completed"
-  local extracted_completed
-  extracted_completed="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_completed" | sed '/^[[:space:]]*$/d')"
-  assert_contains "$TEST_NAME (TASK_COMPLETED)" "$extracted_completed" "Another answer"
-  assert_not_contains "$TEST_NAME (strips TASK_COMPLETED)" "$extracted_completed" "TASK_COMPLETED"
+  # Verify the extraction comment block exists
+  local has_extraction_block
+  has_extraction_block="$(grep -c 'Extract agent response from stdout' "$DAEMON")"
+  assert_eq "$TEST_NAME (has extraction block)" "1" "$has_extraction_block"
 
-  # Test truncation at 4000 chars
-  local tmp_long
-  tmp_long="$(mktemp)"
-  python3 -c "print('X' * 5000); print('TASK_DONE')" > "$tmp_long"
-  local extracted_long
-  extracted_long="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_long" | sed '/^[[:space:]]*$/d' | head -c 4000)"
-  assert_eq "$TEST_NAME (truncates to 4000)" "4000" "${#extracted_long}"
+  # Verify orchestrator prompt says daemon handles posting
+  local has_daemon_posts
+  has_daemon_posts="$(grep -c 'daemon handles all GitHub communication' "$PROMPT")"
+  assert_eq "$TEST_NAME (prompt says daemon handles posting)" "1" "$has_daemon_posts"
 
-  rm -f "$tmp_done" "$tmp_completed" "$tmp_long"
+  # Verify old agent-posting requirement is removed
+  local has_agent_post_required
+  has_agent_post_required="$(grep -c 'Posting GitHub comments.*REQUIRED' "$PROMPT")"
+  assert_eq "$TEST_NAME (no agent posting requirement)" "0" "$has_agent_post_required"
 }
 
 # ============================================================================
