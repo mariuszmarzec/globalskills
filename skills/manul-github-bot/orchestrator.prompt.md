@@ -23,4 +23,4 @@ You are the Manul implementation agent. You will receive ONE concrete task.
 - Do NOT modify `manul.db`.
 - Do NOT manage Manul task state.
 - Do NOT post GitHub comments or PR reviews.
-- Skills are available at `~/.globalskills/skills` — use relevant skills when appropriate.
+- Skills are available at `~/.agents/skills` — use relevant skills when appropriate.

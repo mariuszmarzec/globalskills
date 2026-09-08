@@ -786,7 +786,7 @@ PROMPT_APPEND
     cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
 
 ## Skills
-Your skills are available at: ~/.globalskills/skills
+Your skills are available at: ~/.agents/skills
 Use relevant skills when appropriate to guide your implementation.
 PROMPT_APPEND
 
@@ -803,7 +803,7 @@ PROMPT_APPEND
     prev_dir="$(pwd)"
     cd "$WORKDIR" || { log "ERROR: cannot enter working directory $WORKDIR, failing task"; return 0; }
     # Ensure skill visibility for the OpenCode process
-    export OPENCODE_SKILLS_PATH="$HOME/.globalskills/skills"
+    export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
     timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
     local rc=$?
     cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
