@@ -71,7 +71,7 @@ route every new session through the orchestrator.
 ## Manul 🐈
 
 Manul (kot stepowy, Pallas's cat) — the GitHub command bot living in this repo's
-skills. Watches configured repositories, reacts to `/manul` in issues/PR
+skills. Watches configured repositories, reacts to `/manul` in issue/PR
 comments, implements tasks on `manul/*` branches, opens PRs, and replies
 signed `— manul 🐈`.
 
@@ -86,6 +86,4 @@ Full setup, baseline semantics, and troubleshooting: `skills/manul-github-bot/SK
 ## Usage
 
 OpenCode automatically loads skills from `~/.agents/skills/` (symlinked to `~/.globalskills/skills/`). Skills are matched by name and invoked when a task matches their description.
-Agents are loaded from `~/.config/opencode/agents/` (symlinked to `~/.globalskills/agents/`).
-
-TEST LINE - GitHub connector write test
+Agents are loaded from `~/.config/opencode/agents/` (symlinked to `~/.globalskills/agents/).
