@@ -823,6 +823,17 @@ PROMPT_APPEND
       fi
     fi
 
+    # 7.1 Extract agent response from stdout for inclusion in GitHub comment.
+    # The daemon is responsible for posting results back to GitHub; the agent
+    # must NOT post comments itself. Extract everything before the completion
+    # marker so the user sees the agent's actual work in the GitHub thread.
+    local AGENT_RESPONSE=""
+    if [ -f "$STDOUT_FILE" ]; then
+      AGENT_RESPONSE="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$STDOUT_FILE" | sed '/^[[:space:]]*$/d')"
+      # Truncate to 4000 chars to keep GitHub comments readable
+      AGENT_RESPONSE="$(printf '%s' "$AGENT_RESPONSE" | head -c 4000)"
+    fi
+
     # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
     if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
       local repo_state_clean="true"
@@ -887,7 +898,13 @@ PROMPT_APPEND
       fi
 
       if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        FINAL_COMMENT="✅ Manul completed the task successfully."
+        if [ -n "$AGENT_RESPONSE" ]; then
+          FINAL_COMMENT="✅ Manul completed the task successfully.
+
+${AGENT_RESPONSE}"
+        else
+          FINAL_COMMENT="✅ Manul completed the task successfully."
+        fi
         log "dispatch: task $COMMENT_ID completed successfully"
       else
         FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
@@ -902,11 +919,21 @@ PROMPT_APPEND
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
 
       if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
+        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}${AGENT_RESPONSE:+
+
+---
+
+Agent output (last attempt):
+${AGENT_RESPONSE}}"
         log "dispatch: task $COMMENT_ID failed (max attempts reached)"
         lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
       else
-        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
+        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}${AGENT_RESPONSE:+
+
+---
+
+Agent output (last attempt):
+${AGENT_RESPONSE}}"
         log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
         lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
       fi

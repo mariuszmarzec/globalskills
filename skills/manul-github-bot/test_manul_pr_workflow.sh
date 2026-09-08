@@ -61,6 +61,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local label="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    ok "$label"
+  else
+    fail "$label (expected NOT to contain '$needle')"
+  fi
+}
+
 extract_new_count() {
   local output="$1"
   echo "$output" | grep -o '"new":[0-9]*' | cut -d: -f2
@@ -352,6 +361,118 @@ test_flock_singleton() {
 }
 
 # ============================================================================
+# Test 12: Agent response is included in final GitHub comment (regression for #12)
+# ============================================================================
+test_agent_response_in_github_comment() {
+  TEST_NAME="agent_response_in_github_comment"
+  echo "=== Test 12: Agent response included in GitHub comment ==="
+
+  # Simulate an agent stdout file with a realistic response
+  local tmp_stdout
+  tmp_stdout="$(mktemp)"
+  cat > "$tmp_stdout" <<'EOF'
+Here is the complete list of skills available in the system:
+
+1. **agent-orchestration** — Multi-agent orchestration rules
+2. **ai-commit-attribution** — AI commit attribution
+3. **feature-branching-strategy** — Branching strategy for AI changes
+4. **manul-github-bot** — GitHub command bot setup and operation
+5. **review-strategy** — Code review methodology
+
+These skills are located at ~/.agents/skills/ and are loaded automatically.
+**TASK_DONE**
+EOF
+
+  # Verify the sed extraction logic works correctly
+  local extracted
+  extracted="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_stdout" | sed '/^[[:space:]]*$/d')"
+
+  assert_contains "$TEST_NAME (extracts response)" "$extracted" "agent-orchestration"
+  assert_not_contains "$TEST_NAME (strips TASK_DONE)" "$extracted" "TASK_DONE"
+  assert_contains "$TEST_NAME (contains skill count)" "$extracted" "5"
+
+  # Verify the final comment assembly logic
+  local FINAL_COMMENT=""
+  local AGENT_RESPONSE="$extracted"
+  if [ -n "$AGENT_RESPONSE" ]; then
+    FINAL_COMMENT="✅ Manul completed the task successfully.
+
+${AGENT_RESPONSE}"
+  else
+    FINAL_COMMENT="✅ Manul completed the task successfully."
+  fi
+
+  assert_contains "$TEST_NAME (comment includes header)" "$FINAL_COMMENT" "✅ Manul completed the task successfully."
+  assert_contains "$TEST_NAME (comment includes agent response)" "$FINAL_COMMENT" "agent-orchestration"
+  assert_not_contains "$TEST_NAME (comment strips TASK_DONE)" "$FINAL_COMMENT" "TASK_DONE"
+
+  rm -f "$tmp_stdout"
+}
+
+# ============================================================================
+# Test 13: Gateway-only output is NOT sufficient — GitHub post is required
+# ============================================================================
+test_github_post_required_for_completion() {
+  TEST_NAME="github_post_required_for_completion"
+  echo "=== Test 13: GitHub post required for completion ==="
+
+  # Verify the daemon checks COMMENT_POST_SUCCESS before finalizing
+  local comment_post_check
+  comment_post_check="$(grep -c 'COMMENT_POST_SUCCESS' "$DAEMON")"
+  if [ "$comment_post_check" -ge 2 ]; then
+    ok "$TEST_NAME (checks comment post success)"
+  else
+    fail "$TEST_NAME (checks comment post success) (expected >=2, got=$comment_post_check)"
+  fi
+
+  # Verify the daemon re-queues if comment post fails
+  local post_failure_handling
+  post_failure_handling="$(grep -A5 'comment post failed' "$DAEMON" | head -10)"
+  assert_contains "$TEST_NAME (handles post failure)" "$post_failure_handling" "failed"
+
+  # Verify the daemon does NOT mark task completed without successful post
+  local completion_after_post
+  completion_after_post="$(grep -B2 'status=.completed' "$DAEMON" | grep -c 'COMMENT_POST_SUCCESS.*true\|comment posted')"
+  assert_eq "$TEST_NAME (requires post before completion)" "1" "$completion_after_post"
+}
+
+# ============================================================================
+# Test 14: Response extraction handles both TASK_DONE and TASK_COMPLETED
+# ============================================================================
+test_response_extraction_markers() {
+  TEST_NAME="response_extraction_markers"
+  echo "=== Test 14: Response extraction handles both markers ==="
+
+  # Test with TASK_DONE
+  local tmp_done
+  tmp_done="$(mktemp)"
+  printf 'Some response\n\n**TASK_DONE**\n' > "$tmp_done"
+  local extracted_done
+  extracted_done="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_done" | sed '/^[[:space:]]*$/d')"
+  assert_contains "$TEST_NAME (TASK_DONE)" "$extracted_done" "Some response"
+  assert_not_contains "$TEST_NAME (strips TASK_DONE)" "$extracted_done" "TASK_DONE"
+
+  # Test with TASK_COMPLETED
+  local tmp_completed
+  tmp_completed="$(mktemp)"
+  printf 'Another answer\n\n**TASK_COMPLETED**\n' > "$tmp_completed"
+  local extracted_completed
+  extracted_completed="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_completed" | sed '/^[[:space:]]*$/d')"
+  assert_contains "$TEST_NAME (TASK_COMPLETED)" "$extracted_completed" "Another answer"
+  assert_not_contains "$TEST_NAME (strips TASK_COMPLETED)" "$extracted_completed" "TASK_COMPLETED"
+
+  # Test truncation at 4000 chars
+  local tmp_long
+  tmp_long="$(mktemp)"
+  python3 -c "print('X' * 5000); print('TASK_DONE')" > "$tmp_long"
+  local extracted_long
+  extracted_long="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$tmp_long" | sed '/^[[:space:]]*$/d' | head -c 4000)"
+  assert_eq "$TEST_NAME (truncates to 4000)" "4000" "${#extracted_long}"
+
+  rm -f "$tmp_done" "$tmp_completed" "$tmp_long"
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 echo ""
@@ -374,6 +495,9 @@ test_install_script
 test_allowed_users_filter
 test_completion_markers
 test_flock_singleton
+test_agent_response_in_github_comment
+test_github_post_required_for_completion
+test_response_extraction_markers
 
 echo ""
 echo "========================================"
@@ -385,65 +509,3 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 exit 0
-
-# Test 25: Issue comment detection with Unicode signature (em dash + space + manul + space + cat emoji)
-test_issue_comment_detection() {
-  local test_name="Issue comment detection with Unicode signature"
-  echo -n "Test 25: $test_name ... "
-  
-  # Create a test issue with comments containing the signature
-  local test_issue
-  test_issue=$(gh create issue --repo mariuszmarzec/test-automation --title "Test Signature Detection" --body "Testing signature matching" 2>/dev/null)
-  
-  if [ -z "$test_issue" ]; then
-    echo "SKIP (could not create test issue)"
-    return 0
-  fi
-  
-  # Extract issue number
-  local issue_num
-  issue_num=$(echo "$test_issue" | grep -oE '#[0-9]+' | tr -d '#')
-  
-  # Post comments with various signature patterns
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Normal comment without signature" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Manul completed task successfully.
-  
-— manul 🐈" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "This has partial signature — manul but should not match" 2>/dev/null
-  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Another correct signature:
-  
-   — manul 🐈" 2>/dev/null
-  
-  # Test the signature matching logic
-  local test_sig='— manul 🐈'
-  local expected_count=2
-  local actual_count=0
-  
-  local comments_json
-  comments_json=$(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" 2>/dev/null)
-  
-  if [ -n "$comments_json" ]; then
-    actual_count=$(echo "$comments_json" | python3 -c "
-import sys, json
-sig = '$test_sig'
-comments = json.load(sys.stdin)
-count = sum(1 for c in comments if sig in c.get('body', ''))
-print(count)
-" 2>/dev/null)
-  fi
-  
-  # Cleanup
-  for id in $(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" --jq '.[] | .id' 2>/dev/null); do
-    gh api -X DELETE "repos/mariuszmarzec/test-automation/issues/comments/$id" 2>/dev/null
-  done
-  gh issue delete --repo mariuszmarzec/test-automation --number "$issue_num" 2>/dev/null
-  
-  if [ "$actual_count" -eq "$expected_count" ]; then
-    echo "PASS ($actual_count comments detected)"
-    return 0
-  else
-    echo "FAIL (expected $expected_count, got $actual_count)"
-    return 1
-  fi
-}
-test_issue_comment_detection
