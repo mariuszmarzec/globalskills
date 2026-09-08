@@ -14,7 +14,8 @@
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul}"
-DB="${MANUL_DIR}/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 CONFIG="${MANUL_DIR}/config.json"
 CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 POLL="${CANONICAL_DIR}/poll.sh"

@@ -16,7 +16,8 @@
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
-MANUL_DB="${MANUL_DB:-$MANUL_DIR/manul.db}"
+# DB on native ext4 (NOT on 9p /mnt/f)
+MANUL_DB="/home/marzec/.openclaw/manul/manul.db"
 
 # Configuration defaults (can be overridden via config.json)
 DEFAULT_MAX_RUNNING_TIME=1800      # 30 minutes max task runtime

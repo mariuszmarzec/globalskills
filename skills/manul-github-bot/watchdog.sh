@@ -16,7 +16,8 @@ CONFIG="${MANUL_DIR}/config.json"
 LOCK="$MANUL_DIR/lock"
 PID_FILE="$MANUL_DIR/daemon.pid"
 LOG="$MANUL_DIR/watchdog.log"
-DB="$MANUL_DIR/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-1800}"  # 30 minutes
 MAX_ATTEMPTS="${MANUL_MAX_ATTEMPTS:-3}"
 
@@ -37,6 +38,7 @@ log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 # --- 1) daemon liveness ----------------------------------------------------
 if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
     log "daemon not running (no pid / pid not alive) → starting"
+    rm -f "$PID_FILE"  # Clear stale PID file before starting
     "$MANUL_DIR/manul-daemon.sh" start >>"$LOG" 2>&1
     exit 0
 fi

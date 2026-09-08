@@ -11,7 +11,8 @@
 #   --health-check    Run comprehensive health check
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
-DB="${MANUL_DIR}/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 LOG="${MANUL_DIR}/task-recovery.log"
 
 log() { echo "[$(date -Is)] $*"; }

@@ -24,7 +24,8 @@ LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
 PID_FILE="$MANUL_DIR/daemon.pid"
 LAST_POLL_FILE="$MANUL_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
-DB="$MANUL_DIR/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 CONFIG="$MANUL_DIR/config.json"
 
 # If the configured MANUL_DIR has a stale PID (process not alive),
@@ -63,7 +64,8 @@ if [ -f "$PID_FILE" ]; then
             PID_FILE="$MANUL_DIR/daemon.pid"
             LAST_POLL_FILE="$MANUL_DIR/last-poll"
             CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
-            DB="$MANUL_DIR/manul.db"
+            # DB on native ext4 (NOT on 9p /mnt/f)
+            DB="/home/marzec/.openclaw/manul/manul.db"
             CONFIG="$MANUL_DIR/config.json"
         fi
     fi

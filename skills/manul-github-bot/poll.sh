@@ -20,7 +20,8 @@ set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 CONFIG="${MANUL_DIR}/config.json"
-DB="${MANUL_DIR}/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 LOCK="${MANUL_DIR}/lock"
 LOG="${MANUL_DIR}/poll.log"
 LOCK_TTL_SECONDS="${MANUL_LOCK_TTL_SECONDS:-1800}"

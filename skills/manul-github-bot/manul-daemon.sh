@@ -14,6 +14,8 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # prompt, validate the result via explicit markers, update SQLite, and post the
 # final result comment.
 set -uo pipefail
+# ERR trap: log any unhandled command failure with context
+trap 'local failed_lineno=$LINENO; local failed_cmd="$BASH_COMMAND"; local failed_rc=$?; log "FATAL_ERR: line=$failed_lineno cmd=\"$failed_cmd\" rc=$failed_rc" >&2; echo "[$(date -Is)] FATAL_ERR line=$failed_lineno cmd=$failed_cmd rc=$failed_rc" >> "$LIFECYCLE_LOG" 2>/dev/null' ERR
 
 # Ensure standard PATH is available when running via setsid/nohup
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -33,7 +35,8 @@ LAST_POLL_FILE="$MANUL_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
 LOCK="$MANUL_DIR/lock"
 FLOCK_FILE="$MANUL_DIR/daemon.flock"
-DB="$MANUL_DIR/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-1800}"   # seconds for the agent turn
@@ -415,6 +418,8 @@ start_heartbeat() {
   local comment_id="$1"
   local pid=$$
   HEARTBEAT_PIDS["$comment_id"]=$pid
+  # Write PID file for verification
+  echo "$pid" > "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
   log "started heartbeat for task $comment_id (pid $pid)"
   lc_log "HEARTBEAT_START" "task=$comment_id pid=$pid interval=${HEARTBEAT_INTERVAL}s"
 }
@@ -422,8 +427,17 @@ start_heartbeat() {
 stop_heartbeat() {
   local comment_id="$1"
   unset HEARTBEAT_PIDS["$comment_id"]
-  log "stopped heartbeat for task $comment_id (pid ${HEARTBEAT_PIDS[$comment_id]:-unknown})"
+  rm -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
+  log "stopped heartbeat for task $comment_id"
   lc_log "HEARTBEAT_STOP" "task=$comment_id"
+}
+
+# Refresh heartbeatAt in database to prevent watchdog timeout
+refresh_heartbeat() {
+  local comment_id="$1"
+  if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
+    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+  fi
 }
 
 start() {
@@ -622,6 +636,8 @@ run_once() {
 
     # Start heartbeat for long-running task
     start_heartbeat "$COMMENT_ID"
+    # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
+    refresh_heartbeat "$COMMENT_ID"
 
     # 4. Post "in progress" comment BEFORE invoking the LLM
     # Gather task metadata for an informative status comment
@@ -798,15 +814,19 @@ PROMPT_APPEND
     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
     set_activity "$COMMENT_ID" "working"
 
-    # Change to repository directory and invoke agent
-    local prev_dir
-    prev_dir="$(pwd)"
-    cd "$WORKDIR" || { log "ERROR: cannot enter working directory $WORKDIR, failing task"; return 0; }
-    # Ensure skill visibility for the OpenCode process
-    export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
-    timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
-    local rc=$?
-    cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+     # Change to repository directory and invoke agent
+     local prev_dir
+     prev_dir="$(pwd)"
+     cd "$WORKDIR" || { log "ERROR: cannot enter working directory $WORKDIR, failing task"; return 1; }
+     # Ensure skill visibility for the OpenCode process
+     export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
+     # Refresh heartbeat before agent to prevent timeout during long runs
+     refresh_heartbeat "$COMMENT_ID"
+     timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+     local rc=$?
+     cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+     # Refresh heartbeat after agent completes (if still running)
+     refresh_heartbeat "$COMMENT_ID"
 
     log "dispatch: agent finished rc=$rc for task $COMMENT_ID"
     lc_log "WORKER_FINISH" "task=$COMMENT_ID rc=$rc"
@@ -816,9 +836,9 @@ PROMPT_APPEND
     local FAIL_REASON=""
 
     if [ $rc -eq 0 ]; then
-      if grep -qE '^(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?$' "$STDOUT_FILE"; then
+      if [ -f "$STDOUT_FILE" ] && grep -qE '^(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?$' "$STDOUT_FILE"; then
         SUCCESS="true"
-      elif grep -qE '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE"; then
+      elif [ -f "$STDOUT_FILE" ] && grep -qE '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE"; then
         FAIL_REASON="$(grep -E '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE" | head -1 | sed -E 's/^(\*\*)?TASK_FAILED: //')"
       fi
     fi
@@ -961,9 +981,7 @@ ${AGENT_RESPONSE}}"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
     elif [ "$COMPLETION_SUCCESS" = "true" ]; then
       # Both agent succeeded AND comment posted - finalize as completed
-      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null; then
-        log "ERROR: Failed to update task state to completed for $COMMENT_ID"
-      fi
+      # NOTE: Status was already set to 'completed' by complete_task_with_verification above
       set_activity "$COMMENT_ID" "completed"
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
