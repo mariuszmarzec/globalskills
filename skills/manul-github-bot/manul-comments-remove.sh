@@ -117,15 +117,38 @@ api() {
 # --- collect IDs to delete ---
 echo "Scanning comments..."
 
+# Helper function to extract comment IDs containing the signature
+extract_ids() {
+  local api_url="$1"
+  gh api "$api_url" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = sys.stdin.read()
+    if not data.strip():
+        sys.exit(0)
+    comments = json.loads(data)
+    sig = '$SIG'
+    for c in comments:
+        body = c.get('body', '')
+        if sig in body:
+            print(c['id'])
+except Exception as e:
+    sys.exit(0)
+"
+}
+
 # PR review comments (only for PRs)
-mapfile -t review_ids < <(gh pr review list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+review_ids=()
+if [ -n "$is_pr" ]; then
+  mapfile -t review_ids < <(extract_ids "repos/$repo/pulls/$issue/comments")
+fi
 
 # Issue / PR conversation comments on the issue/PR itself
-mapfile -t issue_ids < <(gh issue comment list --repo "$repo" --number "$issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+mapfile -t issue_ids < <(extract_ids "repos/$repo/issues/$issue/comments")
 
 # Issue / PR conversation comments on linked issues
 for linked_issue in "${linked_issues[@]}"; do
-  mapfile -t more_ids < <(gh issue comment list --repo "$repo" --number "$linked_issue" --json id,author,body 2>/dev/null | jq --arg sig "$SIG" -r '.[] | select(.body | contains($sig)) | .id')
+  mapfile -t more_ids < <(extract_ids "repos/$repo/issues/$linked_issue/comments")
   issue_ids+=("${more_ids[@]}")
   if [ ${#more_ids[@]} -gt 0 ]; then
     echo "  Found ${#more_ids[@]} matching comment(s) on linked issue #$linked_issue"
