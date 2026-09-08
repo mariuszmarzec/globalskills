@@ -385,3 +385,65 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 exit 0
+
+# Test 25: Issue comment detection with Unicode signature (em dash + space + manul + space + cat emoji)
+test_issue_comment_detection() {
+  local test_name="Issue comment detection with Unicode signature"
+  echo -n "Test 25: $test_name ... "
+  
+  # Create a test issue with comments containing the signature
+  local test_issue
+  test_issue=$(gh create issue --repo mariuszmarzec/test-automation --title "Test Signature Detection" --body "Testing signature matching" 2>/dev/null)
+  
+  if [ -z "$test_issue" ]; then
+    echo "SKIP (could not create test issue)"
+    return 0
+  fi
+  
+  # Extract issue number
+  local issue_num
+  issue_num=$(echo "$test_issue" | grep -oE '#[0-9]+' | tr -d '#')
+  
+  # Post comments with various signature patterns
+  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Normal comment without signature" 2>/dev/null
+  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Manul completed task successfully.
+  
+— manul 🐈" 2>/dev/null
+  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "This has partial signature — manul but should not match" 2>/dev/null
+  gh issue comment --repo mariuszmarzec/test-automation --number "$issue_num" --body "Another correct signature:
+  
+   — manul 🐈" 2>/dev/null
+  
+  # Test the signature matching logic
+  local test_sig='— manul 🐈'
+  local expected_count=2
+  local actual_count=0
+  
+  local comments_json
+  comments_json=$(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" 2>/dev/null)
+  
+  if [ -n "$comments_json" ]; then
+    actual_count=$(echo "$comments_json" | python3 -c "
+import sys, json
+sig = '$test_sig'
+comments = json.load(sys.stdin)
+count = sum(1 for c in comments if sig in c.get('body', ''))
+print(count)
+" 2>/dev/null)
+  fi
+  
+  # Cleanup
+  for id in $(gh api "repos/mariuszmarzec/test-automation/issues/$issue_num/comments" --jq '.[] | .id' 2>/dev/null); do
+    gh api -X DELETE "repos/mariuszmarzec/test-automation/issues/comments/$id" 2>/dev/null
+  done
+  gh issue delete --repo mariuszmarzec/test-automation --number "$issue_num" 2>/dev/null
+  
+  if [ "$actual_count" -eq "$expected_count" ]; then
+    echo "PASS ($actual_count comments detected)"
+    return 0
+  else
+    echo "FAIL (expected $expected_count, got $actual_count)"
+    return 1
+  fi
+}
+test_issue_comment_detection
