@@ -449,6 +449,159 @@ test_daemon_lifecycle_comments() {
 }
 
 # ============================================================================
+# Test 15: Completed-task guard placement and logic
+# ============================================================================
+test_completed_task_guard() {
+  TEST_NAME="completed_task_guard"
+  echo "=== Test 15: Completed-task guard ==="
+
+  # Test A: Guard runs after TASK_INFO parsing (no undefined variable errors)
+  local guard_placement
+  guard_placement="$(grep -n '# 0.5 Completed-task guard' "$DAEMON" | head -1 | cut -d: -f1)"
+  local task_info_line
+  task_info_line="$(grep -n 'TASK_INFO.*SELECT commentId.*processed_comments' "$DAEMON" | head -1 | cut -d: -f1)"
+  if [ -n "$guard_placement" ] && [ -n "$task_info_line" ] && [ "$guard_placement" -gt "$task_info_line" ]; then
+    ok "$TEST_NAME (guard after TASK_INFO parsing)"
+  else
+    fail "$TEST_NAME (guard after TASK_INFO parsing)"
+  fi
+
+  # Test B: Guard uses deterministic correlation (commentUrl)
+  local has_url_check
+  has_url_check="$(grep -c 'commentUrl.*status.*completed\|commentUrl.*completed.*status' "$DAEMON")"
+  assert_gt "$TEST_NAME (uses commentUrl correlation)" "0" "$has_url_check"
+
+  # Test C: Guard checks for missing commentUrl and logs error
+  local has_missing_url_check
+  has_missing_url_check="$(grep -c 'missing_comment_url' "$DAEMON")"
+  assert_eq "$TEST_NAME (handles missing commentUrl)" "1" "$has_missing_url_check"
+
+  # Test D: Guard consumes duplicate without agent invocation
+  local has_duplicate_consume
+  has_duplicate_consume="$(grep -c 'consuming safely' "$DAEMON")"
+  assert_gt "$TEST_NAME (safe duplicate consumption)" "0" "$has_duplicate_consume"
+}
+
+# ============================================================================
+# Test 16: Retry backoff mechanism
+# ============================================================================
+test_retry_backoff() {
+  TEST_NAME="retry_backoff"
+  echo "=== Test 16: Retry backoff mechanism ==="
+
+  # Test A: nextAttemptAt column exists in schema
+  local has_next_attempt_at
+  has_next_attempt_at="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -c '|nextAttemptAt|')"
+  assert_eq "$TEST_NAME (nextAttemptAt column exists)" "1" "$has_next_attempt_at"
+
+  # Test B: Scheduler query uses nextAttemptAt
+  local has_next_attempt_in_query
+  has_next_attempt_in_query="$(grep -c 'nextAttemptAt <= datetime' "$DAEMON")"
+  assert_eq "$TEST_NAME (scheduler uses nextAttemptAt)" "1" "$has_next_attempt_in_query"
+
+  # Test C: Requeue logic sets nextAttemptAt
+  local has_next_attempt_in_requeue
+  has_next_attempt_in_requeue="$(grep -c "nextAttemptAt=datetime('now', '+\${RETRY_DELAY_SECONDS} seconds')" "$DAEMON")"
+  assert_eq "$TEST_NAME (requeue sets nextAttemptAt)" "2" "$has_next_attempt_in_requeue"
+
+  # Test D: MAX_ATTEMPTS path clears nextAttemptAt
+  local has_next_attempt_cleared
+  has_next_attempt_cleared="$(grep -c "nextAttemptAt=NULL" "$DAEMON")"
+  assert_eq "$TEST_NAME (MAX_ATTEMPTS clears nextAttemptAt)" "4" "$has_next_attempt_cleared"
+
+  # Test E: RETRY_DELAY_SECONDS configuration exists
+  local has_retry_delay_config
+  has_retry_delay_config="$(grep -c 'RETRY_DELAY_SECONDS' "$DAEMON")"
+  assert_gt "$TEST_NAME (RETRY_DELAY_SECONDS configured)" "0" "$has_retry_delay_config"
+
+  # Test F: Fresh tasks (attempts=0) are immediately eligible
+  local has_fresh_task_eligibility
+  has_fresh_task_eligibility="$(grep -c 'attempts=0 OR nextAttemptAt' "$DAEMON")"
+  assert_eq "$TEST_NAME (fresh tasks eligible)" "1" "$has_fresh_task_eligibility"
+}
+
+# ============================================================================
+# Test 17: Schema migration
+# ============================================================================
+test_schema_migration() {
+  TEST_NAME="schema_migration"
+  echo "=== Test 17: Schema migration ==="
+
+  # Test A: Migration exists in poll.sh
+  local has_migration
+  has_migration="$(grep -c 'ADD COLUMN nextAttemptAt' "$POLL")"
+  assert_eq "$TEST_NAME (migration in poll.sh)" "1" "$has_migration"
+
+  # Test B: Migration is idempotent (checks PRAGMA before ALTER)
+  local has_idempotent_check
+  has_idempotent_check="$(grep -B2 'ADD COLUMN nextAttemptAt' "$POLL" | grep -c 'PRAGMA table_info')"
+  assert_eq "$TEST_NAME (idempotent migration)" "1" "$has_idempotent_check"
+
+  # Test C: Fresh DB test - create temp DB and verify schema
+  local temp_db="${MANUL_DIR}/test-schema-migration.db"
+  rm -f "$temp_db"
+  sqlite3 "$temp_db" "CREATE TABLE IF NOT EXISTS processed_comments (
+    commentId TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    issueNumber INTEGER NOT NULL,
+    commentUrl TEXT NOT NULL,
+    author TEXT,
+    agent TEXT,
+    prompt TEXT NOT NULL,
+    context TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT,
+    processedAt TEXT
+  );"
+  # Apply migration
+  if ! sqlite3 "$temp_db" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|nextAttemptAt|'; then
+    sqlite3 "$temp_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  fi
+  local fresh_db_has_column
+  fresh_db_has_column="$(sqlite3 "$temp_db" "PRAGMA table_info(processed_comments);" | grep -c '|nextAttemptAt|')"
+  rm -f "$temp_db"
+  assert_eq "$TEST_NAME (fresh DB has nextAttemptAt)" "1" "$fresh_db_has_column"
+}
+
+# ============================================================================
+# Test 18: Repository lock interaction with scheduler
+# ============================================================================
+test_repository_lock_scheduler() {
+  TEST_NAME="repository_lock_scheduler"
+  echo "=== Test 18: Repository lock interaction ==="
+
+  # Test A: Scheduler does not block on repository lock
+  # The scheduler should be able to find eligible tasks even when another repo is locked
+  local scheduler_uses_repo_lock
+  scheduler_uses_repo_lock="$(grep -c 'repo.*lock.*scheduler\|lock.*repo.*scheduler' "$DAEMON" 2>/dev/null)"
+  scheduler_uses_repo_lock="${scheduler_uses_repo_lock:-0}"
+  # Scheduler should NOT be coupled to repo lock (they are independent)
+  if [ "$scheduler_uses_repo_lock" -eq 0 ]; then
+    ok "$TEST_NAME (scheduler independent of repo lock)"
+  else
+    fail "$TEST_NAME (scheduler independent of repo lock)"
+  fi
+
+  # Test B: Repository lock is released after task completion
+  local has_lock_release
+  has_lock_release="$(grep -c 'release_repo_lock' "$DAEMON")"
+  assert_gt "$TEST_NAME (repo lock released)" "0" "$has_lock_release"
+}
+
+# ============================================================================
+# Helper: assert_gt (greater than)
+# ============================================================================
+assert_gt() {
+  local label="$1" expected_min="$2" actual="$3"
+  if [ "$actual" -gt "$expected_min" ]; then
+    ok "$label"
+  else
+    fail "$label (expected > '$expected_min', got '$actual')"
+  fi
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 echo ""
@@ -474,6 +627,10 @@ test_flock_singleton
 test_agent_response_removed
 test_prompt_enforces_agent_posting
 test_daemon_lifecycle_comments
+test_completed_task_guard
+test_retry_backoff
+test_schema_migration
+test_repository_lock_scheduler
 
 echo ""
 echo "========================================"

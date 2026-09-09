@@ -51,6 +51,8 @@ CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/nu
 LEASE_TIMEOUT="${MANUL_LEASE_TIMEOUT:-${CFG_LEASE_TIMEOUT:-900}}"
 CFG_LOCK_TTL="$(jq -r '.automation.lockTtl // empty' "$CONFIG" 2>/dev/null)"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-${CFG_LOCK_TTL:-1800}}"
+CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
+RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 
@@ -515,6 +517,27 @@ sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+# Ensure nextAttemptAt column exists in processed_comments
+# Idempotent: safe to call multiple times, works on fresh and existing DBs
+ensure_nextattemptat_column() {
+  local has_column
+  has_column="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -c '|nextAttemptAt|' || echo "0")"
+  if [ "$has_column" -eq 0 ]; then
+    log "migration: adding nextAttemptAt column to processed_comments"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;" 2>>"$LOG" || {
+      log "ERROR: failed to add nextAttemptAt column"
+      return 1
+    }
+    # Initialize existing queued retry tasks (attempts > 0) with a sensible backoff
+    sqlite3 "$DB" "UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL;" 2>>"$LOG" || {
+      log "ERROR: failed to initialize nextAttemptAt for existing retries"
+      return 1
+    }
+    log "migration: nextAttemptAt column added and initialized"
+  fi
+  return 0
+}
+
 post_github_comment() {
   local repo="$1"
   local issue="$2"
@@ -575,13 +598,13 @@ run_once() {
       return 0
     fi
 
-    # 1. Find oldest queued task using proper SQLite query
+    # 1. Find next eligible task using proper SQLite query with retry backoff
     # Query only the fields we need, not the prompt (which may contain |)
     local TASK_INFO
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' ORDER BY createdAt ASC LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now')) ORDER BY nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
-      log "dispatch: fire:true but no queued task found"
+      log "dispatch: fire:true but no eligible queued task found"
       lc_log "NO_TASK" "fire=true but_queue_empty"
       release_task_lock
       return 0
@@ -591,6 +614,48 @@ run_once() {
     local COMMENT_ID REPO ISSUE_NUM ATTEMPTS
     IFS='|' read -r COMMENT_ID REPO ISSUE_NUM ATTEMPTS <<< "$TASK_INFO"
     [ -n "$COMMENT_ID" ] || { release_task_lock; return 0; }
+
+    # 0.5 Completed-task guard - check if GitHub trigger is already completed
+    # This must run AFTER TASK_INFO parsing so COMMENT_ID, REPO, ISSUE_NUM are available
+    # Uses deterministic correlation via commentUrl to identify exact task completion
+    local safe_comment_id_for_guard
+    safe_comment_id_for_guard="$(sql_escape "$COMMENT_ID")"
+    local safe_comment_url_for_guard
+    safe_comment_url_for_guard="$(sql_escape "$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id_for_guard';" 2>/dev/null)")"
+
+    if [ -n "$safe_comment_url_for_guard" ]; then
+      # Check if this exact task is already completed by commentId
+      local already_completed
+      already_completed="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$safe_comment_id_for_guard' AND status='completed';" 2>/dev/null || echo "0")"
+
+      if [ "$already_completed" -gt 0 ]; then
+        log "dispatch: task $COMMENT_ID already completed (duplicate detected via commentId), consuming safely"
+        lc_log "DUPLICATE_COMPLETE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM reason=already_completed"
+        # Mark as completed to consume the duplicate without losing history
+        sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id_for_guard' AND status='queued';" 2>/dev/null
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+
+      # Also check if an equivalent task with same commentUrl was completed
+      # This handles cases where the trigger was re-issued with a new commentId but same source
+      local duplicate_by_url
+      duplicate_by_url="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentUrl='$safe_comment_url_for_guard' AND status='completed';" 2>/dev/null || echo "0")"
+
+      if [ "$duplicate_by_url" -gt 0 ]; then
+        log "dispatch: task $COMMENT_ID already completed (duplicate detected via commentUrl), consuming safely"
+        lc_log "DUPLICATE_COMPLETE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM reason=by_url"
+        sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id_for_guard' AND status='queued';" 2>/dev/null
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+    else
+      # GitHub lookup failed or commentUrl is empty - leave task queued and log error
+      log "WARN: dispatch: could not retrieve commentUrl for task $COMMENT_ID, leaving queued"
+      lc_log "GUARD_ERROR" "task=$COMMENT_ID reason=missing_comment_url"
+    fi
 
     # Escape for SQL
     local safe_comment_id
@@ -610,7 +675,7 @@ run_once() {
     if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to complete the task after $ACTUAL_ATTEMPTS attempts (max reached)."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       release_task_lock
@@ -669,7 +734,7 @@ run_once() {
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -781,7 +846,7 @@ PROMPT_EOF
     if [ $? -ne 0 ]; then
       log "dispatch: FAILED to ensure repository $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -794,7 +859,7 @@ PROMPT_EOF
     if ! verify_repo "$REPO" "$REPO_DIR"; then
       log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -1005,9 +1070,9 @@ PROMPT_APPEND
       # NOTE: Status was already set to 'completed' by complete_task_with_verification above
       set_activity "$COMMENT_ID" "completed"
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
     else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
     fi
 
     # Stop heartbeat after task completion/failure
@@ -1025,6 +1090,12 @@ PROMPT_APPEND
 }
 
 loop() {
+  # Ensure nextAttemptAt column exists before any scheduler query
+  if ! ensure_nextattemptat_column; then
+    log "FATAL: schema migration failed, cannot start loop"
+    exit 1
+  fi
+
   # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
   exec 200>"$FLOCK_FILE"
   if ! flock -n 200; then

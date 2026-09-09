@@ -32,6 +32,8 @@ if [ -f "$CONFIG" ]; then
 fi
 
 HEARTBEAT_TIMEOUT="${CFG_HEARTBEAT_TIMEOUT:-900}"
+CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
+RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
@@ -86,14 +88,14 @@ if [ -f "$DB" ]; then
                 log "  → marking as FAILED (exceeded max attempts: $MAX_ATTEMPTS)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
                     WHERE commentId='$comment_id';
                 " 2>/dev/null
             else
                 log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
                     WHERE commentId='$comment_id';
                 " 2>/dev/null
             fi

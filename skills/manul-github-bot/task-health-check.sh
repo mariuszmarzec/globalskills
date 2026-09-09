@@ -30,7 +30,10 @@ if [ -f "$MANUL_DIR/config.json" ]; then
     [ -n "$LOADED_MAX_RUNNING" ] && DEFAULT_MAX_RUNNING_TIME="$LOADED_MAX_RUNNING"
     LOADED_MAX_FAILURES="$(jq -r '.automation.maxAttemptsBeforeFail // empty' "$MANUL_DIR/config.json" 2>/dev/null)"
     [ -n "$LOADED_MAX_FAILURES" ] && DEFAULT_MAX_FAILURES="$LOADED_MAX_FAILURES"
+    LOADED_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$MANUL_DIR/config.json" 2>/dev/null || echo "60")"
+    [ -n "$LOADED_RETRY_DELAY" ] && RETRY_DELAY_SECONDS="$LOADED_RETRY_DELAY"
 fi
+RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${RETRY_DELAY_SECONDS:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$MANUL_DIR/task-health.log"; }
 
@@ -44,8 +47,8 @@ mark_task_failed() {
     local comment_id="$1"
     local attempts="$2"
     sqlite3 "$MANUL_DB" "
-        UPDATE processed_comments 
-        SET status='failed', attempts=attempts+1, processedAt=NULL 
+        UPDATE processed_comments
+        SET status='failed', attempts=attempts+1, processedAt=NULL, nextAttemptAt=NULL
         WHERE commentId='$comment_id';
     " 2>/dev/null
     log "FAILED task: $comment_id (attempts=$((attempts+1)))"
@@ -56,8 +59,8 @@ reset_task_to_queued() {
     local comment_id="$1"
     local current_status="$2"
     sqlite3 "$MANUL_DB" "
-        UPDATE processed_comments 
-        SET status='queued', processedAt=NULL 
+        UPDATE processed_comments
+        SET status='queued', processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE commentId='$comment_id';
     " 2>/dev/null
     log "RESET task: $comment_id from $current_status to QUEUED"

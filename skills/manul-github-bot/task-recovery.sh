@@ -14,6 +14,8 @@ MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="/home/marzec/.openclaw/manul/manul.db"
 LOG="${MANUL_DIR}/task-recovery.log"
+CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
+RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*"; }
 
@@ -36,7 +38,7 @@ reset_task() {
     log "Resetting task $comment_id to queued"
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE commentId='$comment_id' AND status='running';
     " 2>/dev/null
 }
@@ -46,7 +48,7 @@ mark_task_failed() {
     log "Marking task $comment_id as failed"
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+        SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
         WHERE commentId='$comment_id' AND status='running';
     " 2>/dev/null
 }
@@ -60,7 +62,7 @@ reset_all_tasks() {
     fi
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE status='running';
     " 2>/dev/null
     log "All running tasks reset"
