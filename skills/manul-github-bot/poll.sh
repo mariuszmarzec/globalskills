@@ -20,7 +20,8 @@ set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 CONFIG="${MANUL_DIR}/config.json"
-DB="${MANUL_DIR}/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 LOCK="${MANUL_DIR}/lock"
 LOG="${MANUL_DIR}/poll.log"
 LOCK_TTL_SECONDS="${MANUL_LOCK_TTL_SECONDS:-1800}"
@@ -188,6 +189,13 @@ fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|workerPid|'; then
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;" 2>>"$LOG"
   log "migration: added workerPid column"
+fi
+# migration for existing DBs (pre-nextAttemptAt column)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|nextAttemptAt|'; then
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;" 2>>"$LOG"
+  # Set nextAttemptAt for existing retry tasks (attempts > 0) to allow gradual eligibility
+  sqlite3 "$DB" "UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL;" 2>>"$LOG"
+  log "migration: added nextAttemptAt column"
 fi
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 

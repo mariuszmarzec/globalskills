@@ -7,6 +7,7 @@
   "repositories": ["mariuszmarzec/caracal-rag", "mariuszmarzec/todo", "mariuszmarzec/test-manul-e2e", "mariuszmarzec/shoppingListGenerator"],
   "retryConfig": {
     "maxAttempts": 3,
+    "delaySeconds": 60,
     "sessionTimeoutSeconds": 300,
     "contextStrategy": "progressive",
     "contextLimits": [240000, 120000, 60000],

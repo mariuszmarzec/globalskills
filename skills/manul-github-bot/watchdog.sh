@@ -14,9 +14,10 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 CONFIG="${MANUL_DIR}/config.json"
 LOCK="$MANUL_DIR/lock"
-PID_FILE="$MANUL_DIR/daemon.pid"
+PID_FILE="/home/marzec/.openclaw/manul/daemon.pid"
 LOG="$MANUL_DIR/watchdog.log"
-DB="$MANUL_DIR/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-1800}"  # 30 minutes
 MAX_ATTEMPTS="${MANUL_MAX_ATTEMPTS:-3}"
 
@@ -31,12 +32,15 @@ if [ -f "$CONFIG" ]; then
 fi
 
 HEARTBEAT_TIMEOUT="${CFG_HEARTBEAT_TIMEOUT:-900}"
+CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
+RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
 # --- 1) daemon liveness ----------------------------------------------------
 if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
     log "daemon not running (no pid / pid not alive) → starting"
+    rm -f "$PID_FILE"  # Clear stale PID file before starting
     "$MANUL_DIR/manul-daemon.sh" start >>"$LOG" 2>&1
     exit 0
 fi
@@ -84,14 +88,14 @@ if [ -f "$DB" ]; then
                 log "  → marking as FAILED (exceeded max attempts: $MAX_ATTEMPTS)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
                     WHERE commentId='$comment_id';
                 " 2>/dev/null
             else
                 log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL
+                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
                     WHERE commentId='$comment_id';
                 " 2>/dev/null
             fi

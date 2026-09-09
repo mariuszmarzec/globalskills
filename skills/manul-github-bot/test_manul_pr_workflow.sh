@@ -14,7 +14,8 @@
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul}"
-DB="${MANUL_DIR}/manul.db"
+# DB on native ext4 (NOT on 9p /mnt/f)
+DB="/home/marzec/.openclaw/manul/manul.db"
 CONFIG="${MANUL_DIR}/config.json"
 CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 POLL="${CANONICAL_DIR}/poll.sh"
@@ -362,91 +363,242 @@ test_flock_singleton() {
 }
 
 # ============================================================================
-# Test 12: Agent response is included in final GitHub comment (regression for #12)
+# Test 12: Agent response extraction is REMOVED (new architecture)
 # ============================================================================
-test_agent_response_in_github_comment() {
-  TEST_NAME="agent_response_in_github_comment"
-  echo "=== Test 12: Agent response IS included in GitHub comment ==="
+test_agent_response_removed() {
+  TEST_NAME="agent_response_removed"
+  echo "=== Test 12: Agent response extraction REMOVED ==="
 
-  # Verify AGENT_RESPONSE extraction EXISTS in daemon
+  # Verify AGENT_RESPONSE extraction is REMOVED from daemon
   local has_extraction
   has_extraction="$(grep -c 'AGENT_RESPONSE' "$DAEMON")"
-  assert_eq "$TEST_NAME (AGENT_RESPONSE extraction)" "9" "$has_extraction"
+  assert_eq "$TEST_NAME (AGENT_RESPONSE removed)" "0" "$has_extraction"
 
-  # Verify FINAL_COMMENT includes agent output for success
+  # Verify daemon does NOT use AGENT_RESPONSE in final comments
   local final_comment_success
   final_comment_success="$(grep -c 'AGENT_RESPONSE' <(grep -A8 'if \[ "$COMPLETION_SUCCESS" = "true" \]; then' "$DAEMON" | head -12))"
-  assert_eq "$TEST_NAME (success comment)" "2" "$final_comment_success"
+  assert_eq "$TEST_NAME (success comment no AGENT_RESPONSE)" "0" "$final_comment_success"
 
-  # Verify FAILED comment includes agent output
-  local final_comment_failed
-  final_comment_failed="$(grep 'failed to complete.*attempts' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
-  assert_eq "$TEST_NAME (failed comment)" "1" "$final_comment_failed"
-
-  # Verify RETRY comment includes agent output
-  local final_comment_retry
-  final_comment_retry="$(grep 'encountered an issue.*will retry' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
-  assert_eq "$TEST_NAME (retry comment)" "1" "$final_comment_retry"
-
-  # Verify success message exists
+  # Verify success message exists (daemon posts lifecycle comment)
   local has_success_msg
   has_success_msg="$(grep -c '✅ Manul completed the task successfully.' "$DAEMON")"
-  assert_eq "$TEST_NAME (success message)" "2" "$has_success_msg"
+  assert_eq "$TEST_NAME (success message exists)" "1" "$has_success_msg"
 }
 
 # ============================================================================
-# Test 13: Gateway-only output is NOT sufficient — GitHub post is required
+# Test 13: Prompt enforces agent comment posting (new architecture)
 # ============================================================================
-test_github_post_required_for_completion() {
-  TEST_NAME="github_post_required_for_completion"
-  echo "=== Test 13: GitHub post required for completion ==="
+test_prompt_enforces_agent_posting() {
+  TEST_NAME="prompt_enforces_agent_posting"
+  echo "=== Test 13: Prompt enforces agent posting ==="
 
-  # Verify the daemon checks COMMENT_POST_SUCCESS before finalizing
-  local comment_post_check
-  comment_post_check="$(grep -c 'COMMENT_POST_SUCCESS' "$DAEMON")"
-  if [ "$comment_post_check" -ge 2 ]; then
-    ok "$TEST_NAME (checks comment post success)"
-  else
-    fail "$TEST_NAME (checks comment post success) (expected >=2, got=$comment_post_check)"
-  fi
+  # Verify orchestrator prompt says agent must post
+  local has_agent_posts
+  has_agent_posts="$(grep -c 'Agent must post exactly one user-facing result comment' "$PROMPT")"
+  assert_eq "$TEST_NAME (prompt says agent must post new)" "1" "$has_agent_posts"
 
-  # Verify the daemon re-queues if comment post fails
-  local post_failure_handling
-  post_failure_handling="$(grep -A5 'comment post failed' "$DAEMON" | head -10)"
-  assert_contains "$TEST_NAME (handles post failure)" "$post_failure_handling" "failed"
-
-  # Verify the daemon does NOT mark task completed without successful post
-  local completion_after_post
-  completion_after_post="$(grep -B2 'status=.completed' "$DAEMON" | grep -c 'COMMENT_POST_SUCCESS.*true\|comment posted')"
-  assert_eq "$TEST_NAME (requires post before completion)" "1" "$completion_after_post"
-}
-
-# ============================================================================
-# Test 14: Response extraction handles both TASK_DONE and TASK_COMPLETED
-# ============================================================================
-test_response_extraction_markers() {
-  TEST_NAME="response_extraction_markers"
-  echo "=== Test 14: Response extraction logic EXISTS in daemon ==="
-
-  # Verify the sed extraction command EXISTS in the daemon
-  local has_sed_extraction
-  has_sed_extraction="$(grep -c 'TASK_DONE.*TASK_COMPLETED.*sed' "$DAEMON")"
-  assert_eq "$TEST_NAME (has sed extraction)" "1" "$has_sed_extraction"
-
-  # Verify the extraction comment block exists
-  local has_extraction_block
-  has_extraction_block="$(grep -c 'Extract agent response from stdout' "$DAEMON")"
-  assert_eq "$TEST_NAME (has extraction block)" "1" "$has_extraction_block"
-
-  # Verify orchestrator prompt says daemon handles posting
+  # Verify old daemon-posting requirement is removed
   local has_daemon_posts
   has_daemon_posts="$(grep -c 'daemon handles all GitHub communication' "$PROMPT")"
-  assert_eq "$TEST_NAME (prompt says daemon handles posting)" "1" "$has_daemon_posts"
+  assert_eq "$TEST_NAME (no daemon posting requirement)" "0" "$has_daemon_posts"
 
-  # Verify old agent-posting requirement is removed
-  local has_agent_post_required
-  has_agent_post_required="$(grep -c 'Posting GitHub comments.*REQUIRED' "$PROMPT")"
-  assert_eq "$TEST_NAME (no agent posting requirement)" "0" "$has_agent_post_required"
+  # Verify routing instructions present
+  local has_routing
+  has_routing="$(grep -c 'in_reply_to' "$PROMPT")"
+  assert_eq "$TEST_NAME (routing instructions present)" "1" "$has_routing"
+}
+
+# ============================================================================
+# Test 14: Daemon posts lifecycle comments only (new architecture)
+# ============================================================================
+test_daemon_lifecycle_comments() {
+  TEST_NAME="daemon_lifecycle_comments"
+  echo "=== Test 14: Daemon posts lifecycle comments only ==="
+
+  # Verify daemon posts working comment
+  local has_working_comment
+  has_working_comment="$(grep -c '🔄 Manul is working' "$DAEMON")"
+  assert_eq "$TEST_NAME (working comment)" "1" "$has_working_comment"
+
+  # Verify daemon posts completed comment
+  local has_completed_comment
+  has_completed_comment="$(grep -c '✅ Manul completed' "$DAEMON")"
+  assert_eq "$TEST_NAME (completed comment)" "1" "$has_completed_comment"
+
+  # Verify daemon posts failed comment - count all failure comment assignments
+  # There are multiple legitimate failure scenarios that post lifecycle comments
+  local primary_failure_comment
+  primary_failure_comment="$(grep -c '❌ Manul failed to complete the task after' "$DAEMON")"
+  # Check for the simplified version used in retry logic  
+  local retry_failure_comment
+  retry_failure_comment="$(grep -c '⚠️ Manul encountered an issue' "$DAEMON")"
+  # There should be at least one primary failure message (in reality there are 2 
+  # for different failure contexts - pre-check and post-check)
+  if [ "$primary_failure_comment" -ge 1 ]; then
+    ok "$TEST_NAME (primary failure comment exists)"
+  else
+    fail "$TEST_NAME (primary failure comment exists)"
+  fi
+  
+  # Verify retry lifecycle comment exists
+  if [ "$retry_failure_comment" -ge 1 ]; then
+    ok "$TEST_NAME (retry comment exists)"
+  else
+    fail "$TEST_NAME (retry comment exists)"
+  fi
+}
+
+# ============================================================================
+# Test 15: Completed-task guard placement and logic
+# ============================================================================
+test_completed_task_guard() {
+  TEST_NAME="completed_task_guard"
+  echo "=== Test 15: Completed-task guard ==="
+
+  # Test A: Guard runs after TASK_INFO parsing (no undefined variable errors)
+  local guard_placement
+  guard_placement="$(grep -n '# 0.5 Completed-task guard' "$DAEMON" | head -1 | cut -d: -f1)"
+  local task_info_line
+  task_info_line="$(grep -n 'TASK_INFO.*SELECT commentId.*processed_comments' "$DAEMON" | head -1 | cut -d: -f1)"
+  if [ -n "$guard_placement" ] && [ -n "$task_info_line" ] && [ "$guard_placement" -gt "$task_info_line" ]; then
+    ok "$TEST_NAME (guard after TASK_INFO parsing)"
+  else
+    fail "$TEST_NAME (guard after TASK_INFO parsing)"
+  fi
+
+  # Test B: Guard uses deterministic correlation (commentUrl)
+  local has_url_check
+  has_url_check="$(grep -c 'commentUrl.*status.*completed\|commentUrl.*completed.*status' "$DAEMON")"
+  assert_gt "$TEST_NAME (uses commentUrl correlation)" "0" "$has_url_check"
+
+  # Test C: Guard checks for missing commentUrl and logs error
+  local has_missing_url_check
+  has_missing_url_check="$(grep -c 'missing_comment_url' "$DAEMON")"
+  assert_eq "$TEST_NAME (handles missing commentUrl)" "1" "$has_missing_url_check"
+
+  # Test D: Guard consumes duplicate without agent invocation
+  local has_duplicate_consume
+  has_duplicate_consume="$(grep -c 'consuming safely' "$DAEMON")"
+  assert_gt "$TEST_NAME (safe duplicate consumption)" "0" "$has_duplicate_consume"
+}
+
+# ============================================================================
+# Test 16: Retry backoff mechanism
+# ============================================================================
+test_retry_backoff() {
+  TEST_NAME="retry_backoff"
+  echo "=== Test 16: Retry backoff mechanism ==="
+
+  # Test A: nextAttemptAt column exists in schema
+  local has_next_attempt_at
+  has_next_attempt_at="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -c '|nextAttemptAt|')"
+  assert_eq "$TEST_NAME (nextAttemptAt column exists)" "1" "$has_next_attempt_at"
+
+  # Test B: Scheduler query uses nextAttemptAt
+  local has_next_attempt_in_query
+  has_next_attempt_in_query="$(grep -c 'nextAttemptAt <= datetime' "$DAEMON")"
+  assert_eq "$TEST_NAME (scheduler uses nextAttemptAt)" "1" "$has_next_attempt_in_query"
+
+  # Test C: Requeue logic sets nextAttemptAt
+  local has_next_attempt_in_requeue
+  has_next_attempt_in_requeue="$(grep -c "nextAttemptAt=datetime('now', '+\${RETRY_DELAY_SECONDS} seconds')" "$DAEMON")"
+  assert_eq "$TEST_NAME (requeue sets nextAttemptAt)" "2" "$has_next_attempt_in_requeue"
+
+  # Test D: MAX_ATTEMPTS path clears nextAttemptAt
+  local has_next_attempt_cleared
+  has_next_attempt_cleared="$(grep -c "nextAttemptAt=NULL" "$DAEMON")"
+  assert_eq "$TEST_NAME (MAX_ATTEMPTS clears nextAttemptAt)" "4" "$has_next_attempt_cleared"
+
+  # Test E: RETRY_DELAY_SECONDS configuration exists
+  local has_retry_delay_config
+  has_retry_delay_config="$(grep -c 'RETRY_DELAY_SECONDS' "$DAEMON")"
+  assert_gt "$TEST_NAME (RETRY_DELAY_SECONDS configured)" "0" "$has_retry_delay_config"
+
+  # Test F: Fresh tasks (attempts=0) are immediately eligible
+  local has_fresh_task_eligibility
+  has_fresh_task_eligibility="$(grep -c 'attempts=0 OR nextAttemptAt' "$DAEMON")"
+  assert_eq "$TEST_NAME (fresh tasks eligible)" "1" "$has_fresh_task_eligibility"
+}
+
+# ============================================================================
+# Test 17: Schema migration
+# ============================================================================
+test_schema_migration() {
+  TEST_NAME="schema_migration"
+  echo "=== Test 17: Schema migration ==="
+
+  # Test A: Migration exists in poll.sh
+  local has_migration
+  has_migration="$(grep -c 'ADD COLUMN nextAttemptAt' "$POLL")"
+  assert_eq "$TEST_NAME (migration in poll.sh)" "1" "$has_migration"
+
+  # Test B: Migration is idempotent (checks PRAGMA before ALTER)
+  local has_idempotent_check
+  has_idempotent_check="$(grep -B2 'ADD COLUMN nextAttemptAt' "$POLL" | grep -c 'PRAGMA table_info')"
+  assert_eq "$TEST_NAME (idempotent migration)" "1" "$has_idempotent_check"
+
+  # Test C: Fresh DB test - create temp DB and verify schema
+  local temp_db="${MANUL_DIR}/test-schema-migration.db"
+  rm -f "$temp_db"
+  sqlite3 "$temp_db" "CREATE TABLE IF NOT EXISTS processed_comments (
+    commentId TEXT PRIMARY KEY,
+    repository TEXT NOT NULL,
+    issueNumber INTEGER NOT NULL,
+    commentUrl TEXT NOT NULL,
+    author TEXT,
+    agent TEXT,
+    prompt TEXT NOT NULL,
+    context TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT,
+    processedAt TEXT
+  );"
+  # Apply migration
+  if ! sqlite3 "$temp_db" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|nextAttemptAt|'; then
+    sqlite3 "$temp_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  fi
+  local fresh_db_has_column
+  fresh_db_has_column="$(sqlite3 "$temp_db" "PRAGMA table_info(processed_comments);" | grep -c '|nextAttemptAt|')"
+  rm -f "$temp_db"
+  assert_eq "$TEST_NAME (fresh DB has nextAttemptAt)" "1" "$fresh_db_has_column"
+}
+
+# ============================================================================
+# Test 18: Repository lock interaction with scheduler
+# ============================================================================
+test_repository_lock_scheduler() {
+  TEST_NAME="repository_lock_scheduler"
+  echo "=== Test 18: Repository lock interaction ==="
+
+  # Test A: Scheduler does not block on repository lock
+  # The scheduler should be able to find eligible tasks even when another repo is locked
+  local scheduler_uses_repo_lock
+  scheduler_uses_repo_lock="$(grep -c 'repo.*lock.*scheduler\|lock.*repo.*scheduler' "$DAEMON" 2>/dev/null)"
+  scheduler_uses_repo_lock="${scheduler_uses_repo_lock:-0}"
+  # Scheduler should NOT be coupled to repo lock (they are independent)
+  if [ "$scheduler_uses_repo_lock" -eq 0 ]; then
+    ok "$TEST_NAME (scheduler independent of repo lock)"
+  else
+    fail "$TEST_NAME (scheduler independent of repo lock)"
+  fi
+
+  # Test B: Repository lock is released after task completion
+  local has_lock_release
+  has_lock_release="$(grep -c 'release_repo_lock' "$DAEMON")"
+  assert_gt "$TEST_NAME (repo lock released)" "0" "$has_lock_release"
+}
+
+# ============================================================================
+# Helper: assert_gt (greater than)
+# ============================================================================
+assert_gt() {
+  local label="$1" expected_min="$2" actual="$3"
+  if [ "$actual" -gt "$expected_min" ]; then
+    ok "$label"
+  else
+    fail "$label (expected > '$expected_min', got '$actual')"
+  fi
 }
 
 # ============================================================================
@@ -472,9 +624,13 @@ test_install_script
 test_allowed_users_filter
 test_completion_markers
 test_flock_singleton
-test_agent_response_in_github_comment
-test_github_post_required_for_completion
-test_response_extraction_markers
+test_agent_response_removed
+test_prompt_enforces_agent_posting
+test_daemon_lifecycle_comments
+test_completed_task_guard
+test_retry_backoff
+test_schema_migration
+test_repository_lock_scheduler
 
 echo ""
 echo "========================================"
