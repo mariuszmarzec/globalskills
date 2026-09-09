@@ -107,6 +107,25 @@ Previously, the agent posted nothing to GitHub — the daemon extracted agent ou
 - **Lifecycle comments:** The daemon continues to post lifecycle/status comments (`🔄 working`, `✅ completed`, `❌ failed`) on its own responsibility.
 - **No comment posting rules:** The orchestrator prompt no longer restricts agents from posting GitHub comments — posting a result comment is now required.
 
+**Result Comment Marker (deterministic task/attempt correlation):**
+
+Every agent result comment MUST include an invisible HTML comment marker that identifies the exact task execution attempt:
+
+```
+<!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
+```
+
+Where:
+- `<COMMENT_ID>` is the task's `commentId` from the database (e.g. `5599133859`)
+- `<ATTEMPT>` is the current attempt number (1-based, incremented on each claim)
+
+This marker enables the daemon to verify that the result comment belongs to the exact task+attempt, preventing:
+- Cross-contamination between retry attempts
+- False matches from lifecycle comments (which share the `— manul 🐈` signature)
+- Stale results from previous attempts satisfying current verification
+
+The daemon rejects any comment lacking this marker, including lifecycle comments (`🔄`, `✅`, `❌`, `⚠️`) which carry the same author and signature but no marker.
+
 **Dispatch is synchronous (daemon waits for the agent turn), so runs never
 overlap; `lock` is a backstop with 30 min TTL.**
 
