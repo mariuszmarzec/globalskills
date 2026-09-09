@@ -363,91 +363,89 @@ test_flock_singleton() {
 }
 
 # ============================================================================
-# Test 12: Agent response is included in final GitHub comment (regression for #12)
+# Test 12: Agent response extraction is REMOVED (new architecture)
 # ============================================================================
-test_agent_response_in_github_comment() {
-  TEST_NAME="agent_response_in_github_comment"
-  echo "=== Test 12: Agent response IS included in GitHub comment ==="
+test_agent_response_removed() {
+  TEST_NAME="agent_response_removed"
+  echo "=== Test 12: Agent response extraction REMOVED ==="
 
-  # Verify AGENT_RESPONSE extraction EXISTS in daemon
+  # Verify AGENT_RESPONSE extraction is REMOVED from daemon
   local has_extraction
   has_extraction="$(grep -c 'AGENT_RESPONSE' "$DAEMON")"
-  assert_eq "$TEST_NAME (AGENT_RESPONSE extraction)" "9" "$has_extraction"
+  assert_eq "$TEST_NAME (AGENT_RESPONSE removed)" "0" "$has_extraction"
 
-  # Verify FINAL_COMMENT includes agent output for success
+  # Verify daemon does NOT use AGENT_RESPONSE in final comments
   local final_comment_success
   final_comment_success="$(grep -c 'AGENT_RESPONSE' <(grep -A8 'if \[ "$COMPLETION_SUCCESS" = "true" \]; then' "$DAEMON" | head -12))"
-  assert_eq "$TEST_NAME (success comment)" "2" "$final_comment_success"
+  assert_eq "$TEST_NAME (success comment no AGENT_RESPONSE)" "0" "$final_comment_success"
 
-  # Verify FAILED comment includes agent output
-  local final_comment_failed
-  final_comment_failed="$(grep 'failed to complete.*attempts' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
-  assert_eq "$TEST_NAME (failed comment)" "1" "$final_comment_failed"
-
-  # Verify RETRY comment includes agent output
-  local final_comment_retry
-  final_comment_retry="$(grep 'encountered an issue.*will retry' "$DAEMON" | grep -c 'AGENT_RESPONSE')"
-  assert_eq "$TEST_NAME (retry comment)" "1" "$final_comment_retry"
-
-  # Verify success message exists
+  # Verify success message exists (daemon posts lifecycle comment)
   local has_success_msg
   has_success_msg="$(grep -c '✅ Manul completed the task successfully.' "$DAEMON")"
-  assert_eq "$TEST_NAME (success message)" "2" "$has_success_msg"
+  assert_eq "$TEST_NAME (success message exists)" "1" "$has_success_msg"
 }
 
 # ============================================================================
-# Test 13: Gateway-only output is NOT sufficient — GitHub post is required
+# Test 13: Prompt enforces agent comment posting (new architecture)
 # ============================================================================
-test_github_post_required_for_completion() {
-  TEST_NAME="github_post_required_for_completion"
-  echo "=== Test 13: GitHub post required for completion ==="
+test_prompt_enforces_agent_posting() {
+  TEST_NAME="prompt_enforces_agent_posting"
+  echo "=== Test 13: Prompt enforces agent posting ==="
 
-  # Verify the daemon checks COMMENT_POST_SUCCESS before finalizing
-  local comment_post_check
-  comment_post_check="$(grep -c 'COMMENT_POST_SUCCESS' "$DAEMON")"
-  if [ "$comment_post_check" -ge 2 ]; then
-    ok "$TEST_NAME (checks comment post success)"
-  else
-    fail "$TEST_NAME (checks comment post success) (expected >=2, got=$comment_post_check)"
-  fi
+  # Verify orchestrator prompt says agent must post
+  local has_agent_posts
+  has_agent_posts="$(grep -c 'Agent must post exactly one user-facing result comment' "$PROMPT")"
+  assert_eq "$TEST_NAME (prompt says agent must post new)" "1" "$has_agent_posts"
 
-  # Verify the daemon re-queues if comment post fails
-  local post_failure_handling
-  post_failure_handling="$(grep -A5 'comment post failed' "$DAEMON" | head -10)"
-  assert_contains "$TEST_NAME (handles post failure)" "$post_failure_handling" "failed"
-
-  # Verify the daemon does NOT mark task completed without successful post
-  local completion_after_post
-  completion_after_post="$(grep -B2 'status=.completed' "$DAEMON" | grep -c 'COMMENT_POST_SUCCESS.*true\|comment posted')"
-  assert_eq "$TEST_NAME (requires post before completion)" "1" "$completion_after_post"
-}
-
-# ============================================================================
-# Test 14: Response extraction handles both TASK_DONE and TASK_COMPLETED
-# ============================================================================
-test_response_extraction_markers() {
-  TEST_NAME="response_extraction_markers"
-  echo "=== Test 14: Response extraction logic EXISTS in daemon ==="
-
-  # Verify the sed extraction command EXISTS in the daemon
-  local has_sed_extraction
-  has_sed_extraction="$(grep -c 'TASK_DONE.*TASK_COMPLETED.*sed' "$DAEMON")"
-  assert_eq "$TEST_NAME (has sed extraction)" "1" "$has_sed_extraction"
-
-  # Verify the extraction comment block exists
-  local has_extraction_block
-  has_extraction_block="$(grep -c 'Extract agent response from stdout' "$DAEMON")"
-  assert_eq "$TEST_NAME (has extraction block)" "1" "$has_extraction_block"
-
-  # Verify orchestrator prompt says daemon handles posting
+  # Verify old daemon-posting requirement is removed
   local has_daemon_posts
   has_daemon_posts="$(grep -c 'daemon handles all GitHub communication' "$PROMPT")"
-  assert_eq "$TEST_NAME (prompt says daemon handles posting)" "1" "$has_daemon_posts"
+  assert_eq "$TEST_NAME (no daemon posting requirement)" "0" "$has_daemon_posts"
 
-  # Verify old agent-posting requirement is removed
-  local has_agent_post_required
-  has_agent_post_required="$(grep -c 'Posting GitHub comments.*REQUIRED' "$PROMPT")"
-  assert_eq "$TEST_NAME (no agent posting requirement)" "0" "$has_agent_post_required"
+  # Verify routing instructions present
+  local has_routing
+  has_routing="$(grep -c 'in_reply_to' "$PROMPT")"
+  assert_eq "$TEST_NAME (routing instructions present)" "1" "$has_routing"
+}
+
+# ============================================================================
+# Test 14: Daemon posts lifecycle comments only (new architecture)
+# ============================================================================
+test_daemon_lifecycle_comments() {
+  TEST_NAME="daemon_lifecycle_comments"
+  echo "=== Test 14: Daemon posts lifecycle comments only ==="
+
+  # Verify daemon posts working comment
+  local has_working_comment
+  has_working_comment="$(grep -c '🔄 Manul is working' "$DAEMON")"
+  assert_eq "$TEST_NAME (working comment)" "1" "$has_working_comment"
+
+  # Verify daemon posts completed comment
+  local has_completed_comment
+  has_completed_comment="$(grep -c '✅ Manul completed' "$DAEMON")"
+  assert_eq "$TEST_NAME (completed comment)" "1" "$has_completed_comment"
+
+  # Verify daemon posts failed comment - count all failure comment assignments
+  # There are multiple legitimate failure scenarios that post lifecycle comments
+  local primary_failure_comment
+  primary_failure_comment="$(grep -c '❌ Manul failed to complete the task after' "$DAEMON")"
+  # Check for the simplified version used in retry logic  
+  local retry_failure_comment
+  retry_failure_comment="$(grep -c '⚠️ Manul encountered an issue' "$DAEMON")"
+  # There should be at least one primary failure message (in reality there are 2 
+  # for different failure contexts - pre-check and post-check)
+  if [ "$primary_failure_comment" -ge 1 ]; then
+    ok "$TEST_NAME (primary failure comment exists)"
+  else
+    fail "$TEST_NAME (primary failure comment exists)"
+  fi
+  
+  # Verify retry lifecycle comment exists
+  if [ "$retry_failure_comment" -ge 1 ]; then
+    ok "$TEST_NAME (retry comment exists)"
+  else
+    fail "$TEST_NAME (retry comment exists)"
+  fi
 }
 
 # ============================================================================
@@ -473,9 +471,9 @@ test_install_script
 test_allowed_users_filter
 test_completion_markers
 test_flock_singleton
-test_agent_response_in_github_comment
-test_github_post_required_for_completion
-test_response_extraction_markers
+test_agent_response_removed
+test_prompt_enforces_agent_posting
+test_daemon_lifecycle_comments
 
 echo ""
 echo "========================================"

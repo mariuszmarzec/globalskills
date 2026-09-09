@@ -33,5 +33,17 @@ For informational tasks, provide the complete answer directly.
 ## Constraints
 - Do NOT modify `manul.db`.
 - Do NOT manage Manul task state.
-- Do NOT post GitHub comments or PR reviews. The daemon handles all GitHub communication automatically.
+- **Agent must post exactly one user-facing result comment**: Your ENTIRE output (everything before the `TASK_DONE` marker) will be posted as a GitHub comment. You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
+  - Format: `run gh api repos/REPO/issues/COMMENT_ID/comments -f body="YOUR_RESULT_COMMENT" --jq .id`
+  - If replying to another comment: `run gh api repos/REPO/issues/COMMENT_ID/comments -f body="YOUR_REPLY" -f in_reply_to=ORIGINAL_COMMENT_ID --jq .id`
+  - EXACT SUCCESS COMMENT STRUCTURE:
+    # Summary: [brief summary]
+
+    [Your detailed response here]
+
+    — manul 🐈
+  - The result comment MUST be posted BEFORE emitting TASK_DONE
+  - The comment MUST clearly summarize implementation progress
+  - No static templates - write actual response content
+  - The daemon will ALWAYS post lifecycle comments (🔄 working, ✅ completed, ❌ failed)
 - Skills are available at `~/.agents/skills` — use relevant skills when appropriate.

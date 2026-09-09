@@ -15,7 +15,7 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # final result comment.
 set -uo pipefail
 # ERR trap: log any unhandled command failure with context
-trap 'local failed_lineno=$LINENO; local failed_cmd="$BASH_COMMAND"; local failed_rc=$?; log "FATAL_ERR: line=$failed_lineno cmd=\"$failed_cmd\" rc=$failed_rc" >&2; echo "[$(date -Is)] FATAL_ERR line=$failed_lineno cmd=$failed_cmd rc=$failed_rc" >> "$LIFECYCLE_LOG" 2>/dev/null' ERR
+trap 'echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null' ERR
 
 # Ensure standard PATH is available when running via setsid/nohup
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -96,8 +96,8 @@ ensure_repo() {
   local repo="$1"
   local repo_slug
   repo_slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local repo_dir="/mnt/f/ubuntu-workspace/.openclaw/manul/workspace/$repo_slug"
-  local lockfile="/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks/${repo_slug}.lock"
+  local repo_dir="${MANUL_DIR}/workspace/$repo_slug"
+  local lockfile="${MANUL_DIR}/repo-locks/${repo_slug}.lock"
 
   # Check if repo already exists and is up-to-date
   if [ -d "$repo_dir" ] && [ -d "$repo_dir/.git" ]; then
@@ -184,7 +184,7 @@ acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="${REPO_LOCK_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks}/${slug}.lock"
+  local lockfile="${REPO_LOCK_DIR:-${MANUL_DIR}/repo-locks}/${slug}.lock"
 
   if [ -f "$lockfile" ]; then
     local age
@@ -243,7 +243,15 @@ update_task_completion() {
   # Validate state transitions
   case "$status" in
     "completed")
-      if [ "$current_status" != "running" ]; then
+      # Allow completion if already completed (idempotent)
+      if [ "$current_status" = "completed" ]; then
+        log "SUCCESS: Task $comment_id already completed (idempotent)"
+        return 0
+      fi
+      # Allow completion if currently queued (race condition recovery)
+      if [ "$current_status" = "queued" ]; then
+        log "WARN: Task $comment_id was requeued during processing, completing anyway"
+      elif [ "$current_status" != "running" ]; then
         log "ERROR: Cannot complete task $comment_id from current status: $current_status"
         return 1
       fi
@@ -332,14 +340,20 @@ verify_finalization() {
     return 1
   fi
 
-  # Verify heartbeat is stopped (no running heartbeat)
+  # Verify heartbeat is stopped (no running heartbeat from a different process)
+  # Note: heartbeat PID file may contain this daemon's own PID (from start_heartbeat using $$)
+  # In that case, the heartbeat is managed by this daemon and is not a separate process
   local heartbeat_pid
   heartbeat_pid="$(cat "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null)"
 
-  if [ -n "$heartbeat_pid" ] && kill -0 "$heartbeat_pid" 2>/dev/null; then
-    log "ERROR: Task $comment_id still has a running heartbeat (pid: $heartbeat_pid)"
-    return 1
+  if [ -n "$heartbeat_pid" ] && [ "$heartbeat_pid" != "$(get_daemon_pid)" ]; then
+    # Heartbeat belongs to a different process - check if it's still running
+    if kill -0 "$heartbeat_pid" 2>/dev/null; then
+      log "ERROR: Task $comment_id still has a running heartbeat (pid: $heartbeat_pid)"
+      return 1
+    fi
   fi
+  # If heartbeat_pid is empty or equals daemon PID, heartbeat is considered stopped
 
   # Verify workerPid is cleared
   local worker_pid
@@ -723,7 +737,42 @@ If the task is informational, respond directly in your output with the answer an
 5. If you cannot complete the task, output exactly: \`TASK_FAILED: <brief reason>\`
 6. Do NOT modify \`manul.db\`.
 7. Do NOT manage Manul task state.
-8. Do NOT post GitHub comments or PR reviews.
+
+## GitHub Comment Posting (CRITICAL)
+You MUST post exactly one user-facing result comment to GitHub using the \`run\` tool:
+
+\`\`\`bash
+gh api repos/REPO/issues/ISSUE_NUM/comments \
+  -f body="YOUR_RESULT_COMMENT" \
+  --jq .id
+\`\`\`
+
+Replace REPO, ISSUE_NUM, and YOUR_RESULT_COMMENT with actual values.
+Use the in_reply_to parameter if this is a reply:
+\`\`\`bash
+gh api repos/REPO/issues/ISSUE_NUM/comments \
+  -f body="YOUR_REPLY" \
+  -f in_reply_to=ORIGINAL_COMMENT_ID \
+  --jq .id
+\`\`\`
+
+Your comment MUST:
+- Start with the task summary
+- Include your actual work/output
+- End with: "— manul 🐈"
+- Be posted BEFORE emitting TASK_DONE
+
+Example informational task response:
+\`\`\`
+# Available Skills
+
+[Your skill listing here]
+
+— manul 🐈
+\`\`\`
+
+The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed).
+You handle the result comment.
 PROMPT_EOF
 
     # Repository Management: Ensure target repository exists and is authoritative
@@ -843,16 +892,8 @@ PROMPT_APPEND
       fi
     fi
 
-    # 7.1 Extract agent response from stdout for inclusion in GitHub comment.
-    # The daemon is responsible for posting results back to GitHub; the agent
-    # must NOT post comments itself. Extract everything before the completion
-    # marker so the user sees the agent's actual work in the GitHub thread.
-    local AGENT_RESPONSE=""
-    if [ -f "$STDOUT_FILE" ]; then
-      AGENT_RESPONSE="$(sed -E '/^[[:space:]]*(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?[[:space:]]*$/d' "$STDOUT_FILE" | sed '/^[[:space:]]*$/d')"
-      # Truncate to 4000 chars to keep GitHub comments readable
-      AGENT_RESPONSE="$(printf '%s' "$AGENT_RESPONSE" | head -c 4000)"
-    fi
+    # 7.1 Daemon posts only lifecycle comments; agent posts result comment directly.
+    # No extraction needed - agent handles its own GitHub communication.
 
     # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
     if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
@@ -918,13 +959,7 @@ PROMPT_APPEND
       fi
 
       if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        if [ -n "$AGENT_RESPONSE" ]; then
-          FINAL_COMMENT="✅ Manul completed the task successfully.
-
-${AGENT_RESPONSE}"
-        else
-          FINAL_COMMENT="✅ Manul completed the task successfully."
-        fi
+        FINAL_COMMENT="✅ Manul completed the task successfully."
         log "dispatch: task $COMMENT_ID completed successfully"
       else
         FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
@@ -939,46 +974,32 @@ ${AGENT_RESPONSE}"
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
 
       if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}${AGENT_RESPONSE:+
-
----
-
-Agent output (last attempt):
-${AGENT_RESPONSE}}"
+        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID failed (max attempts reached)"
         lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
       else
-        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}${AGENT_RESPONSE:+
-
----
-
-Agent output (last attempt):
-${AGENT_RESPONSE}}"
+        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
         lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
       fi
     fi
 
-    # 9. Post final result comment to the SAME GitHub thread
+    # 9. Post lifecycle comment to the SAME GitHub thread
+    # The agent posts its own result comment; daemon posts lifecycle markers only.
     # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
-    # The GitHub comment is the sole source of truth for completion.
-    # If comment posting fails, we must NOT mark the task as completed.
     local COMMENT_POST_SUCCESS="false"
     if [ -n "$FINAL_COMMENT" ]; then
       if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
         COMMENT_POST_SUCCESS="true"
       else
-        log "ERROR: failed to post final comment for $COMMENT_ID - task cannot be marked complete"
+        log "ERROR: failed to post lifecycle comment for $COMMENT_ID"
       fi
     fi
 
-    # Verify comment was posted before finalizing task state
+    # Verify lifecycle comment was posted
     if [ "$COMPLETION_SUCCESS" = "true" ] && [ "$COMMENT_POST_SUCCESS" != "true" ]; then
-      # Agent succeeded but comment posting failed - mark as failed instead
-      log "ERROR: Task $COMMENT_ID agent succeeded but GitHub comment post failed"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$safe_comment_id';" 2>/dev/null
-      FINAL_COMMENT="❌ Manul completed the work but failed to post the required GitHub comment."
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
+      # Agent succeeded but lifecycle comment posting failed - still mark complete
+      log "WARN: Task $COMMENT_ID agent succeeded but lifecycle comment post failed"
     elif [ "$COMPLETION_SUCCESS" = "true" ]; then
       # Both agent succeeded AND comment posted - finalize as completed
       # NOTE: Status was already set to 'completed' by complete_task_with_verification above
