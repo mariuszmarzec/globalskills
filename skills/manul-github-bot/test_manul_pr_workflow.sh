@@ -392,15 +392,30 @@ test_prompt_enforces_agent_posting() {
   TEST_NAME="prompt_enforces_agent_posting"
   echo "=== Test 13: Prompt enforces agent posting ==="
 
-  # Verify orchestrator prompt says agent must post
-  local has_agent_posts
-  has_agent_posts="$(grep -c 'Agent must post exactly one user-facing result comment' "$PROMPT")"
-  assert_eq "$TEST_NAME (prompt says agent must post new)" "1" "$has_agent_posts"
+  # Verify prompt requires exactly one user-facing result comment via GitHub
+  local has_result_comment_requirement
+  has_result_comment_requirement="$(grep -c 'result comment to GitHub using the' "$PROMPT")"
+  assert_eq "$TEST_NAME (exactly one result comment required)" "1" "$has_result_comment_requirement"
 
-  # Verify old daemon-posting requirement is removed
+  # Verify posting is mandatory (not optional)
+  local has_mandatory
+  has_mandatory="$(grep -c 'Result comment is mandatory' "$PROMPT")"
+  assert_eq "$TEST_NAME (mandatory posting)" "1" "$has_mandatory"
+
+  # Verify result is posted BEFORE TASK_DONE
+  local has_before_task_done
+  has_before_task_done="$(grep -c 'BEFORE emitting.*TASK_DONE\|before emitting.*TASK_DONE' "$PROMPT")"
+  assert_gt "$TEST_NAME (posted before TASK_DONE)" "0" "$has_before_task_done"
+
+  # Verify old daemon-posting requirement is removed (agent, not daemon, posts result)
   local has_daemon_posts
   has_daemon_posts="$(grep -c 'daemon handles all GitHub communication' "$PROMPT")"
   assert_eq "$TEST_NAME (no daemon posting requirement)" "0" "$has_daemon_posts"
+
+  # Verify old stdout-as-result contract is removed
+  local has_stdout_result
+  has_stdout_result="$(grep -c 'stdout.*user-facing\|output.*posted as.*GitHub comment' "$PROMPT")"
+  assert_eq "$TEST_NAME (no stdout-as-result contract)" "0" "$has_stdout_result"
 
   # Verify routing instructions present
   local has_routing
@@ -422,7 +437,7 @@ test_daemon_lifecycle_comments() {
 
   # Verify daemon posts completed comment
   local has_completed_comment
-  has_completed_comment="$(grep -c '✅ Manul completed' "$DAEMON")"
+  has_completed_comment="$(grep -v '^[[:space:]]*#' "$DAEMON" | grep -c '✅ Manul completed')" 
   assert_eq "$TEST_NAME (completed comment)" "1" "$has_completed_comment"
 
   # Verify daemon posts failed comment - count all failure comment assignments

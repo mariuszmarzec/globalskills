@@ -567,6 +567,90 @@ post_github_comment() {
   fi
 }
 
+# Verify the agent posted a result comment to GitHub for THIS exact task/attempt.
+# Uses deterministic task/attempt marker: <!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
+# Fails closed on any error (missing commentUrl, API failure, no matching comment).
+# Rejects lifecycle comments (🔄, ✅, ❌, ⚠️) — they share the signature but lack the marker.
+verify_result_comment() {
+  local repo="$1"
+  local issue="$2"
+  local comment_id="$3"
+  local safe_comment_id="$4"
+  local attempt="$5"
+
+  # Get the task's commentUrl for correlation
+  local comment_url
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+
+  if [ -z "$comment_url" ]; then
+    log "ERROR: verify_result_comment: missing commentUrl for task $comment_id — fail-closed"
+    lc_log "RESULT_VERIFY_ERROR" "task=$comment_id reason=missing_commentUrl"
+    return 1
+  fi
+
+  # Extract issue/PR number from commentUrl
+  local url_issue_num
+  url_issue_num="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || echo "")"
+  if [ -z "$url_issue_num" ]; then
+    log "ERROR: verify_result_comment: could not extract issue number from commentUrl=$comment_url — fail-closed"
+    lc_log "RESULT_VERIFY_ERROR" "task=$comment_id reason=unextractable_issue_number"
+    return 1
+  fi
+
+  # Deterministic task/attempt marker
+  local marker
+  marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
+
+  # Query all Manul comments; filter for author and marker
+  # Use jq to extract body directly from author-filtered results
+  local result_count
+  result_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+    --jq '.[] | select(.author?.login // "" | test("Manul"; "i")) | select(.in_reply_to_id == null) | .body // ""' \
+    2>>"$LOG" | while IFS= read -r body; do
+      # Exclude lifecycle comments (daemon posts these with same author/signature)
+      # Reject lifecycle comments based on structural prefix (starts with emoji)
+      # A valid result may contain these emojis in its body, but lifecycle comments
+      # always start with them immediately (e.g., "✅ Manul completed...")
+      if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
+        continue
+      fi
+      # Require exact deterministic marker
+      if [[ "$body" == *"$marker"* ]]; then
+        echo "found"
+      fi
+    done | wc -l)
+
+  if [ "$result_count" -eq 1 ]; then
+    log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
+    return 0
+  fi
+
+  # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
+  local reply_count
+  reply_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+    --jq '.[] | select(.in_reply_to_id != null) | select(.author?.login // "" | test("Manul"; "i")) | .body // ""' \
+    2>>"$LOG" | while IFS= read -r body; do
+      # Reject lifecycle comments based on structural prefix (starts with emoji)
+      if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
+        continue
+      fi
+      # Require exact deterministic marker
+      if [[ "$body" == *"$marker"* ]]; then
+        echo "found"
+      fi
+    done | wc -l)
+
+  if [ "$reply_count" -eq 1 ]; then
+    log "verify_result_comment: found reply result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
+    return 0
+  fi
+
+  log "ERROR: verify_result_comment: no result comment with marker '$marker' found for task $comment_id attempt $attempt on $repo#$url_issue_num"
+  lc_log "MISSING_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt"
+  return 1
+}
+
+
 run_once() {
   local out
   out="$("$POLL")"
@@ -792,7 +876,7 @@ Before taking any action, determine whether this task is:
 - **Informational**: The user is asking a question, requesting an explanation, or seeking advice. Reply with a thoughtful answer via GitHub comment. Do NOT modify any repository files.
 - **Repository Change**: The user wants code changes, fixes, features, or other modifications. Proceed with implementation on the appropriate branch.
 
-If the task is informational, respond directly in your output with the answer and emit \`TASK_DONE\`. No repository changes are needed.
+If the task is informational, you MUST post a thoughtful answer as a GitHub comment using the `run` tool (see GitHub Comment Posting section below), then emit `TASK_DONE`. Do NOT modify any repository files.
 
 ## Rules
 1. Inspect the local repository and implement the requested change.
@@ -823,12 +907,14 @@ gh api repos/REPO/issues/ISSUE_NUM/comments \
 
 Your comment MUST:
 - Start with the task summary
+- Include the deterministic task/attempt marker: `<!-- manul-task:<COMMENT_ID>:attempt:${current_attempt} -->`
 - Include your actual work/output
 - End with: "— manul 🐈"
 - Be posted BEFORE emitting TASK_DONE
 
 Example informational task response:
 \`\`\`
+<!-- manul-task:<COMMENT_ID>:attempt:${current_attempt} -->
 # Available Skills
 
 [Your skill listing here]
@@ -959,6 +1045,17 @@ PROMPT_APPEND
 
     # 7.1 Daemon posts only lifecycle comments; agent posts result comment directly.
     # No extraction needed - agent handles its own GitHub communication.
+
+    # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
+    if [ "$SUCCESS" = "true" ]; then
+      local current_attempt=$((ACTUAL_ATTEMPTS + 1))
+      if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+        log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
+        lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+        SUCCESS="false"
+        FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
+      fi
+    fi
 
     # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
     if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
