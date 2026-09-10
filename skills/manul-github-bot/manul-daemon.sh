@@ -1070,10 +1070,10 @@ PROMPT_APPEND
     local FAIL_REASON=""
 
     if [ $rc -eq 0 ]; then
-      if [ -f "$STDOUT_FILE" ] && grep -qE '^(\*\*)?(TASK_DONE|TASK_COMPLETED)(\*\*)?$' "$STDOUT_FILE"; then
+      if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
         SUCCESS="true"
-      elif [ -f "$STDOUT_FILE" ] && grep -qE '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE"; then
-        FAIL_REASON="$(grep -E '^(\*\*)?TASK_FAILED:(.+)$' "$STDOUT_FILE" | head -1 | sed -E 's/^(\*\*)?TASK_FAILED: //')"
+      elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
+        FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
       fi
     fi
 
