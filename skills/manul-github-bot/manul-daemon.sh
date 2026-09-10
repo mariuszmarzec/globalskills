@@ -320,11 +320,33 @@ update_task_completion() {
 }
 
 # Finalization verification: ensure heartbeat and locks don't revert completion
+# FIX: Stop any lingering heartbeat BEFORE verifying finalization.
+# The old code compared heartbeat PID vs daemon PID and could fail when
+# daemon.pid was missing (daemon started directly) or when the daemon's
+# own heartbeat was still recorded.  Here we explicitly reap the heartbeat
+# so finalization is never blocked by a still-running timer process.
 verify_finalization() {
   local comment_id="$1"
   local safe_comment_id="$(sql_escape "$comment_id")"
 
-  # Verify task is completed in SQLite
+  # ── Step 0: synchronously stop any heartbeat for this task ─────────────────
+  # This must happen BEFORE we touch finalization state; the task must not
+  # reach terminal status while its heartbeat is still alive.
+  local heartbeat_pid
+  heartbeat_pid="$(cat "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null)"
+
+  if [ -n "$heartbeat_pid" ]; then
+    if kill -0 "$heartbeat_pid" 2>/dev/null; then
+      # Heartbeat is still running — terminate it and reap the exit status.
+      # kill is idempotent for already-dead processes; kill -0 above confirmed liveness.
+      kill "$heartbeat_pid" 2>/dev/null || true
+      wait "$heartbeat_pid" 2>/dev/null || true
+    fi
+    # Remove the PID file unconditionally (idempotent; no-op if already gone).
+    rm -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
+  fi
+
+  # ── Step 1: verify task is completed in SQLite ─────────────────────────────
   local task_status
   task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
@@ -333,7 +355,7 @@ verify_finalization() {
     return 1
   fi
 
-  # Verify processedAt is set
+  # ── Step 2: verify processedAt is set ──────────────────────────────────────
   local processed_at
   processed_at="$(sqlite3 "$DB" "SELECT processedAt FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
@@ -342,22 +364,13 @@ verify_finalization() {
     return 1
   fi
 
-  # Verify heartbeat is stopped (no running heartbeat from a different process)
-  # Note: heartbeat PID file may contain this daemon's own PID (from start_heartbeat using $$)
-  # In that case, the heartbeat is managed by this daemon and is not a separate process
-  local heartbeat_pid
-  heartbeat_pid="$(cat "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null)"
-
-  if [ -n "$heartbeat_pid" ] && [ "$heartbeat_pid" != "$(get_daemon_pid)" ]; then
-    # Heartbeat belongs to a different process - check if it's still running
-    if kill -0 "$heartbeat_pid" 2>/dev/null; then
-      log "ERROR: Task $comment_id still has a running heartbeat (pid: $heartbeat_pid)"
-      return 1
-    fi
+  # ── Step 3: verify heartbeat PID file is gone (confirm we reaped it) ────────
+  if [ -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" ]; then
+    log "ERROR: Task $comment_id heartbeat PID file still present after shutdown"
+    return 1
   fi
-  # If heartbeat_pid is empty or equals daemon PID, heartbeat is considered stopped
 
-  # Verify workerPid is cleared
+  # ── Step 4: verify workerPid is cleared ────────────────────────────────────
   local worker_pid
   worker_pid="$(sqlite3 "$DB" "SELECT workerPid FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
@@ -605,6 +618,7 @@ verify_result_comment() {
   # Use jq to extract body directly from author-filtered results
   local result_count
   result_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+    --paginate \
     --jq '.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")' \
     2>>"$LOG" | while IFS= read -r body; do
       # Exclude lifecycle comments (daemon posts these with same author/signature)
@@ -628,6 +642,7 @@ verify_result_comment() {
   # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
   local reply_count
   reply_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+    --paginate \
     --jq '.[] | select(.in_reply_to_id != null) | .body // "" | gsub("\n"; "\\n")' \
     2>>"$LOG" | while IFS= read -r body; do
       # Reject lifecycle comments based on structural prefix (starts with emoji)

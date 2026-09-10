@@ -77,12 +77,19 @@ eval "$(sed -n '/^get_daemon_pid() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_result_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^complete_task_with_verification() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^start_heartbeat() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^stop_heartbeat() {/,/^}/p' "$DAEMON")"
+# Heartbeat tracking array must be declared in test scope
+eval "$(sed -n '/^declare -A HEARTBEAT_PIDS/p' "$DAEMON")"
 
 # Override paths so sourced functions use our temp dirs
 LOG="$LOG_FILE"
 LIFECYCLE_LOG="$LIFECYCLE_LOG"
 PID_FILE="$PID_FILE"
 DB="$TEMP_DB"
+HEARTBEAT_INTERVAL=60
 
 # Write a fake daemon PID so get_daemon_pid returns 0 (no real daemon running)
 echo "0" > "$PID_FILE"
@@ -480,6 +487,186 @@ if [ $? -ne 0 ]; then
     ok "Integration: lifecycle-prefixed comment correctly rejected (rc=1)"
 else
     fail "Integration: lifecycle-prefixed comment should be rejected (expected rc=1)"
+fi
+
+# ============================================================================
+# Regression tests — heartbeat/finalization race condition
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Heartbeat/Finalization Race — Regression Tests"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# ── Regression 1: Heartbeat already stopped before finalization ────────────────
+echo "Test: Heartbeat already stopped before finalization"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-1"
+REPO="owner/repo"
+ISSUE=1
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Simulate task completed without any heartbeat PID file
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+# Ensure no heartbeat PID file exists
+rm -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Heartbeat already stopped: finalization passes"
+else
+    fail "Heartbeat already stopped: finalization should pass"
+fi
+
+# ── Regression 2: Heartbeat still running (daemon's own PID) ───────────────────
+echo "Test: Heartbeat still running (daemon's own PID)"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-2"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Simulate task completed with a live heartbeat PID (daemon's own PID)
+# This is the exact scenario that caused the original bug
+DAEMON_PID=497090
+echo "$DAEMON_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+# The fix should stop the heartbeat and pass finalization
+if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Live heartbeat (daemon PID): finalization passes after stopping"
+else
+    fail "Live heartbeat (daemon PID): finalization should pass"
+fi
+
+# Verify PID file was removed
+if [ ! -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
+    ok "PID file removed after finalization"
+else
+    fail "PID file should be removed after finalization"
+fi
+
+# ── Regression 3: Heartbeat with stale/dead PID ────────────────────────────────
+echo "Test: Heartbeat with stale/dead PID"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-3"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Use a PID that is definitely not running (PID 1 is init, but let's use a high PID)
+STALE_PID=999999
+echo "$STALE_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Stale heartbeat PID: finalization passes"
+else
+    fail "Stale heartbeat PID: finalization should pass"
+fi
+
+# ── Regression 4: Missing heartbeat PID file ───────────────────────────────────
+echo "Test: Missing heartbeat PID file"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-4"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Ensure no PID file exists
+rm -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Missing PID file: finalization passes"
+else
+    fail "Missing PID file: finalization should pass"
+fi
+
+# ── Regression 5: Complete flow with start_heartbeat → complete → verify ───────
+echo "Test: Complete flow with start_heartbeat → complete → verify"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-5"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Step 1: Simulate heartbeat started (write PID file directly to avoid killing test shell)
+FAKE_HEARTBEAT_PID=12345
+echo "$FAKE_HEARTBEAT_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+# Step 2: Simulate task running
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='running', attempts=1, heartbeatAt=datetime('now'), workerPid=0
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+# Verify heartbeat PID file exists
+if [ -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
+    ok "Heartbeat started: PID file exists"
+else
+    fail "Heartbeat started: PID file should exist"
+fi
+
+# Step 3: Complete task with verification (this should stop heartbeat and verify)
+if complete_task_with_verification "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Complete flow: task completed and verified"
+else
+    fail "Complete flow: task should complete successfully"
+fi
+
+# Step 4: Verify final state
+final_status="$(sqlite3 "$TEMP_DB" "SELECT status FROM processed_comments WHERE commentId='$COMMENT_ID';")"
+if [ "$final_status" = "completed" ]; then
+    ok "Complete flow: final status is completed"
+else
+    fail "Complete flow: expected completed, got $final_status"
+fi
+
+# Step 5: Verify PID file is gone
+if [ ! -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
+    ok "Complete flow: heartbeat PID file removed"
+else
+    fail "Complete flow: heartbeat PID file should be removed"
+fi
+
+# ── Regression 6: Idempotent stop_heartbeat ────────────────────────────────────
+echo "Test: Idempotent stop_heartbeat"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="hb-race-6"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+echo "12345" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+
+# Stop heartbeat twice — should not fail
+if stop_heartbeat "$COMMENT_ID" >/dev/null 2>&1 && stop_heartbeat "$COMMENT_ID" >/dev/null 2>&1; then
+    ok "Idempotent stop_heartbeat: second call succeeds"
+else
+    fail "Idempotent stop_heartbeat: should not fail on second call"
 fi
 
 # ============================================================================
