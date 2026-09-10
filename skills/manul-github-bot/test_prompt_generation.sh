@@ -248,7 +248,7 @@ else
 fi
 
 # Test B: Shell metacharacters remain literal in task/context
-echo -n "Test: Shell metacharhers remain literal ... "
+echo -n "Test: Shell metacharacters remain literal ... "
 rm -f "$WORK/prompt.md"
 generate_prompt \
     "$WORK/prompt.md" \
