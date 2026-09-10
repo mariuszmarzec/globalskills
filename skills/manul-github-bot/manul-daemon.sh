@@ -795,6 +795,7 @@ run_once() {
 
     log "dispatch: claimed task $COMMENT_ID ($REPO#$ISSUE_NUM), attempts now $((ACTUAL_ATTEMPTS + 1))"
     lc_log "CLAIMED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$((ACTUAL_ATTEMPTS + 1))"
+    local current_attempt=$((ACTUAL_ATTEMPTS + 1))
     set_activity "$COMMENT_ID" "claimed"
 
     # Start heartbeat for long-running task
@@ -853,24 +854,33 @@ run_once() {
       fi
     fi
 
-    cat > "$TASK_PROMPT_FILE" <<PROMPT_EOF
+    cat > "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
 # Manul Task:
 
 You are the Manul implementation agent. Complete ONE task and then emit exactly one of the completion markers.
 
 ## Task
-- Repository: $REPO
-- Issue/PR: #$ISSUE_NUM
-- Comment ID: $COMMENT_ID
-- Comment URL: $COMMENT_URL
-- Task Type: $TASK_TYPE
+- Repository: __REPO__
+- Issue/PR: #__ISSUE_NUM__
+- Comment ID: __COMMENT_ID__
+- Comment URL: __COMMENT_URL__
+- Task Type: __TASK_TYPE__
 
 ## User Request
-$TASK_PROMPT
+PROMPT_EOF
+
+    # Append multiline task prompt (literal, no shell expansion)
+    printf '%s\n' "$TASK_PROMPT" >> "$TASK_PROMPT_FILE"
+
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
 
 ## Context
-$TASK_CONTEXT
+PROMPT_EOF
 
+    # Append multiline task context (literal, no shell expansion)
+    printf '%s\n' "$TASK_CONTEXT" >> "$TASK_PROMPT_FILE"
+
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
 ## Command Intent Guidance
 Before taking any action, determine whether this task is:
 - **Informational**: The user is asking a question, requesting an explanation, or seeking advice. Reply with a thoughtful answer via GitHub comment. Do NOT modify any repository files.
@@ -882,45 +892,45 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 1. Inspect the local repository and implement the requested change.
 2. Run appropriate tests/validation.
 3. Make the requested code changes.
-4. When finished, output exactly: \`TASK_DONE\`
-5. If you cannot complete the task, output exactly: \`TASK_FAILED: <brief reason>\`
-6. Do NOT modify \`manul.db\`.
+4. When finished, output exactly: `TASK_DONE`
+5. If you cannot complete the task, output exactly: `TASK_FAILED: <brief reason>`
+6. Do NOT modify `manul.db`.
 7. Do NOT manage Manul task state.
 
 ## GitHub Comment Posting (CRITICAL)
-You MUST post exactly one user-facing result comment to GitHub using the \`run\` tool:
+You MUST post exactly one user-facing result comment to GitHub using the `run` tool:
 
-\`\`\`bash
-gh api repos/REPO/issues/ISSUE_NUM/comments \
+```bash
+gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
   -f body="YOUR_RESULT_COMMENT" \
   --jq .id
-\`\`\`
+```
 
 Replace REPO, ISSUE_NUM, and YOUR_RESULT_COMMENT with actual values.
 Use the in_reply_to parameter if this is a reply:
-\`\`\`bash
-gh api repos/REPO/issues/ISSUE_NUM/comments \
+```bash
+gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
   -f body="YOUR_REPLY" \
   -f in_reply_to=ORIGINAL_COMMENT_ID \
   --jq .id
-\`\`\`
+```
 
 Your comment MUST:
 - Start with the task summary
-- Include the deterministic task/attempt marker: `<!-- manul-task:<COMMENT_ID>:attempt:${current_attempt} -->`
+- Include the deterministic task/attempt marker: `<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`
 - Include your actual work/output
 - End with: "— manul 🐈"
 - Be posted BEFORE emitting TASK_DONE
 
 Example informational task response:
-\`\`\`
-<!-- manul-task:<COMMENT_ID>:attempt:${current_attempt} -->
+```
+<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->
 # Available Skills
 
 [Your skill listing here]
 
 — manul 🐈
-\`\`\`
+```
 
 The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed).
 You handle the result comment.
@@ -964,47 +974,71 @@ PROMPT_EOF
     local timestamp
     timestamp="$(date +%s)"
 
+    # Compute current/default branches safely (avoid command substitution in heredoc)
+    local CURRENT_BRANCH
+    CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
+    local DEFAULT_BRANCH
+    DEFAULT_BRANCH="$(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
+
     # Update prompt to include authoritative repository path and branch policy
-    cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
 ## Authoritative Repository
-The target repository for this task is located at: $REPO_DIR
+The target repository for this task is located at: __REPO_DIR__
 
 ## Working Directory
 You will execute in the repository directory:
-$WORKDIR
+__WORKDIR__
 
 ## Branch Policy
 PROMPT_APPEND
 
     if [ -n "$PR_HEAD_BRANCH" ]; then
       # PR-tied task: operate on the PR's head branch
-      cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
-- This task is tied to PR #$ISSUE_NUM
-- PR head branch: \`$PR_HEAD_BRANCH\`
-- Switch to the PR head branch (\`git checkout $PR_HEAD_BRANCH\`) before making any changes
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This task is tied to PR #__ISSUE_NUM__
+- PR head branch: `__PR_HEAD_BRANCH__`
+- Switch to the PR head branch (`git checkout __PR_HEAD_BRANCH__`) before making any changes
 - Commit and push changes to the same PR head branch
 - Do NOT create a new branch for this task
 PROMPT_APPEND
     else
       # Issue or non-PR task: create a dedicated task branch
-      cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
-- Current branch: $(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")
-- Default branch: $(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")
+- Current branch: __CURRENT_BRANCH__
+- Default branch: __DEFAULT_BRANCH__
 - Create a dedicated task branch from the default branch BEFORE making any changes
-- Branch name format: \`manul-task-$COMMENT_ID-$timestamp\`
+- Branch name format: `manul-task-__COMMENT_ID__-__TIMESTAMP__`
 - Do NOT make any repository changes while on the default branch
 - After completing changes, commit and push to your task branch
 PROMPT_APPEND
     fi
 
-    cat >> "$TASK_PROMPT_FILE" <<PROMPT_APPEND
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
 ## Skills
 Your skills are available at: ~/.agents/skills
 Use relevant skills when appropriate to guide your implementation.
 PROMPT_APPEND
+
+    # Substitute all single-line placeholders with actual runtime values
+    # Using bash parameter expansion (safe: replacement is literal, no command substitution)
+    local prompt_content
+    prompt_content="$(cat "$TASK_PROMPT_FILE")"
+    prompt_content="${prompt_content//__REPO__/$REPO}"
+    prompt_content="${prompt_content//__ISSUE_NUM__/$ISSUE_NUM}"
+    prompt_content="${prompt_content//__COMMENT_ID__/$COMMENT_ID}"
+    prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
+    prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
+    prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
+    prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
+    prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
+    prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
+    prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
+    prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
+    prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
     local STDOUT_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stdout"
@@ -1048,7 +1082,7 @@ PROMPT_APPEND
 
     # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
     if [ "$SUCCESS" = "true" ]; then
-      local current_attempt=$((ACTUAL_ATTEMPTS + 1))
+      current_attempt=$((ACTUAL_ATTEMPTS + 1))
       if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
         log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
         lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
