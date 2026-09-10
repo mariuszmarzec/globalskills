@@ -605,7 +605,7 @@ verify_result_comment() {
   # Use jq to extract body directly from author-filtered results
   local result_count
   result_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
-    --jq '.[] | select(.author?.login // "" | test("Manul"; "i")) | select(.in_reply_to_id == null) | .body // ""' \
+    --jq '.[] | select(.user?.login // "" | test("Manul"; "i")) | select(.in_reply_to_id == null) | .body // ""' \
     2>>"$LOG" | while IFS= read -r body; do
       # Exclude lifecycle comments (daemon posts these with same author/signature)
       # Reject lifecycle comments based on structural prefix (starts with emoji)
@@ -628,7 +628,7 @@ verify_result_comment() {
   # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
   local reply_count
   reply_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
-    --jq '.[] | select(.in_reply_to_id != null) | select(.author?.login // "" | test("Manul"; "i")) | .body // ""' \
+    --jq '.[] | select(.in_reply_to_id != null) | select(.user?.login // "" | test("Manul"; "i")) | .body // ""' \
     2>>"$LOG" | while IFS= read -r body; do
       # Reject lifecycle comments based on structural prefix (starts with emoji)
       if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
