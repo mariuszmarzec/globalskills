@@ -72,6 +72,11 @@ run_and_test() {
   run_test "$name" "$rc"
 }
 
+# Helper to reset pool between tests
+reset_pool() {
+  workspace_pool_init 0 reset
+}
+
 # Self-check: verify test discovery
 self_check() {
   local expected_tests=8
@@ -97,7 +102,7 @@ echo "════════════════════════�
 echo ""
 echo "=== Test 1: Same repo concurrent tasks get different workspaces ==="
 test_same_repo_different_workspaces() {
-  workspace_pool_init 5
+  workspace_pool_init 5 reset
   
   local ws1 ws2
   ws1="$(workspace_lease "task-repo1-a")"
@@ -120,7 +125,7 @@ run_and_test "Test 1: Same repo different workspaces" test_same_repo_different_w
 echo ""
 echo "=== Test 2: Completed workspace reuse ==="
 test_workspace_reuse() {
-  workspace_pool_init 2
+  workspace_pool_init 2 reset
   
   local ws1
   ws1="$(workspace_lease "task-reuse-1")"
@@ -139,7 +144,7 @@ run_and_test "Test 2: Workspace reuse after completion" test_workspace_reuse
 echo ""
 echo "=== Test 3: Same conversation concurrent tasks isolation ==="
 test_conversation_isolation() {
-  workspace_pool_init 3
+  workspace_pool_init 3 reset
   
   local ws1 ws2
   ws1="$(workspace_lease "conv-A-task-1")"
@@ -158,7 +163,7 @@ run_and_test "Test 3: Same conversation isolation" test_conversation_isolation
 echo ""
 echo "=== Test 4: Sequential conversation tasks workspace reuse ==="
 test_sequential_conversation() {
-  workspace_pool_init 2
+  workspace_pool_init 2 reset
   
   local ws1
   ws1="$(workspace_lease "conv-B-task-1")"
@@ -202,7 +207,7 @@ run_and_test "Test 5: Different conversations isolation" test_different_conversa
 echo ""
 echo "=== Test 6: Workspace exclusivity ==="
 test_workspace_exclusivity() {
-  workspace_pool_init 1
+  workspace_pool_init 1 reset
   
   local ws1
   ws1="$(workspace_lease "exclusive-task-1")"
@@ -224,7 +229,7 @@ run_and_test "Test 6: Workspace exclusivity" test_workspace_exclusivity
 echo ""
 echo "=== Test 7: Pool exhaustion ==="
 test_pool_exhaustion() {
-  workspace_pool_init 2
+  workspace_pool_init 2 reset
   
   local ws1 ws2
   ws1="$(workspace_lease "exhaust-1")"
@@ -251,7 +256,7 @@ run_and_test "Test 7: Pool exhaustion and recovery" test_pool_exhaustion
 echo ""
 echo "=== Test 8: Stale workspace cleanup ==="
 test_stale_cleanup() {
-  workspace_pool_init 3
+  workspace_pool_init 3 reset
   
   local ws
   ws="$(workspace_lease "stale-task")"

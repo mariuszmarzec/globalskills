@@ -562,18 +562,15 @@ sql_escape() {
 
 # Ensure nextAttemptAt column exists in processed_comments
 # Idempotent: safe to call multiple times, works on fresh and existing DBs
+# Uses BEGIN IMMEDIATE to prevent race when multiple workers start concurrently
 ensure_nextattemptat_column() {
   local has_column
   has_column="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -c '|nextAttemptAt|' || echo "0")"
   if [ "$has_column" -eq 0 ]; then
     log "migration: adding nextAttemptAt column to processed_comments"
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;" 2>>"$LOG" || {
+    # Use BEGIN IMMEDIATE to serialize concurrent migration attempts
+    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT; UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL; COMMIT;" 2>>"$LOG" || {
       log "ERROR: failed to add nextAttemptAt column"
-      return 1
-    }
-    # Initialize existing queued retry tasks (attempts > 0) with a sensible backoff
-    sqlite3 "$DB" "UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL;" 2>>"$LOG" || {
-      log "ERROR: failed to initialize nextAttemptAt for existing retries"
       return 1
     }
     log "migration: nextAttemptAt column added and initialized"
@@ -813,11 +810,11 @@ run_once() {
     fi
 
     # 2. Atomically claim the task (queued -> running, attempts+1)
-    # Include workerPid check to prevent stealing from another worker
+    # Prevent claiming if another worker already owns this task
     local CURRENT_DAEMON_PID
     CURRENT_DAEMON_PID="$(get_daemon_pid)"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0 OR NOT EXISTS (SELECT 1 FROM processed_comments pc2 WHERE pc2.commentId='$safe_comment_id' AND pc2.workerPid=$CURRENT_DAEMON_PID AND pc2.status='running' AND pc2.workerPid != $CURRENT_DAEMON_PID)); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"

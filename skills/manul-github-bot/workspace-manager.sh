@@ -39,20 +39,24 @@ workspace_init() {
 
 # Create a new workspace in the pool
 # Arguments: $1 = pool_size (number of workspaces to create)
+#             $2 = reset (optional, "reset" clears existing pool - for testing only)
 workspace_pool_init() {
   local pool_size="${1:-$((MAX_CONCURRENT_TASKS / 1))}"
+  local reset="${2:-}"
 
   # Initialize table
   workspace_init
 
-  # Reset pool to exact size (remove any leftover state from prior tests)
-  sqlite3 "$DB" "DELETE FROM workspaces;" 2>/dev/null || true
-  
+  # Reset pool if requested (testing only)
+  if [ "$reset" = "reset" ]; then
+    sqlite3 "$DB" "DELETE FROM workspaces;" 2>/dev/null || true
+  fi
+
   # Get current pool size
   local current_size
   current_size="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces;" 2>/dev/null || echo 0)"
-  
-  # Create missing workspaces
+
+  # Only add missing workspaces — never destroy existing pool state
   local i
   for ((i = current_size; i < pool_size; i++)); do
     local ws_id="ws-$i-$(date +%s)"
@@ -67,30 +71,40 @@ workspace_pool_init() {
 # Arguments: $1 = task_id
 workspace_lease() {
   local task_id="$1"
-  
-  # Find first IDLE workspace
-  local ws_id
-  ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE status='IDLE' LIMIT 1;" 2>/dev/null)"
-  
-  if [ -z "$ws_id" ]; then
+
+  # Atomic SELECT+UPDATE using changes() to prevent TOCTOU race
+  # This performs the selection and update in a single transaction
+  local result
+  result="$(sqlite3 "$DB" "
+    BEGIN IMMEDIATE;
+    UPDATE workspaces SET status='BUSY', currentTaskId='$task_id', lastUsedAt=datetime('now')
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='IDLE' LIMIT 1);
+    SELECT changes();
+    COMMIT;
+  " 2>/dev/null)"
+
+  if [ "${result:-0}" -eq 0 ]; then
     return 1
   fi
-  
-  # Check for stale workspaces (BUSY for too long without a live worker)
-  local lease_age
-  local current_pid
-  current_pid="$(get_daemon_pid)"
-  
-  # Update workspace to BUSY
-  sqlite3 "$DB" "UPDATE workspaces SET status='BUSY', currentTaskId='$task_id', lastUsedAt=datetime('now') WHERE workspaceId='$ws_id';"
-  
-  printf '%s' "$ws_id"
+
+  # Return the workspaceId that was just updated
+  sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE currentTaskId='$task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
 }
 
 # Release a workspace back to the pool
+# Verifies ownership before releasing to prevent unauthorized releases
 # Arguments: $1 = workspace_id
 workspace_release() {
   local ws_id="$1"
+
+  # Verify workspace exists and is BUSY before releasing
+  local owns
+  owns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$ws_id' AND status='BUSY';" 2>/dev/null)"
+
+  if [ "${owns:-0}" -eq 0 ]; then
+    return 1
+  fi
+
   sqlite3 "$DB" "UPDATE workspaces SET status='IDLE', currentTaskId=NULL WHERE workspaceId='$ws_id';"
 }
 
