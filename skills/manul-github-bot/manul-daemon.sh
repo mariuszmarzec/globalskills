@@ -49,6 +49,14 @@ CFG_HEARTBEAT_TIMEOUT="$(jq -r '.automation.heartbeatTimeout // 900' "$CONFIG" 2
 HEARTBEAT_TIMEOUT="${MANUL_HEARTBEAT_TIMEOUT:-${CFG_HEARTBEAT_TIMEOUT:-900}}"
 CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
 LEASE_TIMEOUT="${MANUL_LEASE_TIMEOUT:-${CFG_LEASE_TIMEOUT:-900}}"
+# Read concurrency configuration from config.json
+CFG_MAX_CONCURRENT="$(jq -r '.automation.maxConcurrentTasks // 1' "$CONFIG" 2>/dev/null || echo 1)"
+MAX_CONCURRENT_TASKS="${MANUL_MAX_CONCURRENT_TASKS:-${CFG_MAX_CONCURRENT:-1}}"
+# Validate maxConcurrentTasks is a positive integer
+if ! [[ "$MAX_CONCURRENT_TASKS" =~ ^[0-9]+$ ]] || [ "$MAX_CONCURRENT_TASKS" -lt 1 ]; then
+  log "WARN: invalid maxConcurrentTasks ($MAX_CONCURRENT_TASKS), defaulting to 1"
+  MAX_CONCURRENT_TASKS=1
+fi
 CFG_LOCK_TTL="$(jq -r '.automation.lockTtl // empty' "$CONFIG" 2>/dev/null)"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-${CFG_LOCK_TTL:-1800}}"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
@@ -470,6 +478,10 @@ refresh_heartbeat() {
 }
 
 start() {
+  # Initialize workspace pool
+  source "$MANUL_DIR/workspace-manager.sh"
+  workspace_pool_init "$MAX_CONCURRENT_TASKS"
+  
   # Singleton check: verify no other daemon is running
   if [ -f "$PID_FILE" ]; then
     local existing_pid
@@ -494,15 +506,33 @@ start() {
     fi
   fi
 
+  # Check workspace availability
+  local available_ws
+  available_ws="$(workspace_available_count)"
+  if [ "$available_ws" -lt "$MAX_CONCURRENT_TASKS" ]; then
+    log "ERROR: insufficient workspaces for concurrency (have=$available_ws, need=$MAX_CONCURRENT_TASKS)"
+    return 1
+  fi
+
   # Atomically write PID file under flock to prevent concurrent start races
   exec 200>"$FLOCK_FILE"
   flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
-  setsid nohup "$0" loop >>"$LOG" 2>&1 &
-  local new_pid=$!
-  echo "$new_pid" >"$PID_FILE"
+  
+  # Spawn worker pool
+  local i worker_pid
+  local master_pid=$$
+  for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+    setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+    worker_pid=$!
+    echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
+    log "spawned worker $i (pid=$worker_pid)"
+  done
+  
+  # Write master PID
+  echo "$master_pid" >"$PID_FILE"
   flock -u 200
-  lc_log "DAEMON_START" "pid=$new_pid interval=${INTERVAL}s"
-  echo "manul daemon started (pid $new_pid, interval ${INTERVAL}s)"
+  lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
+  echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
 }
 
 stop() {
@@ -532,18 +562,15 @@ sql_escape() {
 
 # Ensure nextAttemptAt column exists in processed_comments
 # Idempotent: safe to call multiple times, works on fresh and existing DBs
+# Uses BEGIN IMMEDIATE to prevent race when multiple workers start concurrently
 ensure_nextattemptat_column() {
   local has_column
   has_column="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -c '|nextAttemptAt|' || echo "0")"
   if [ "$has_column" -eq 0 ]; then
     log "migration: adding nextAttemptAt column to processed_comments"
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;" 2>>"$LOG" || {
+    # Use BEGIN IMMEDIATE to serialize concurrent migration attempts
+    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT; UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL; COMMIT;" 2>>"$LOG" || {
       log "ERROR: failed to add nextAttemptAt column"
-      return 1
-    }
-    # Initialize existing queued retry tasks (attempts > 0) with a sensible backoff
-    sqlite3 "$DB" "UPDATE processed_comments SET nextAttemptAt = datetime('now', '+60 seconds') WHERE status='queued' AND attempts > 0 AND nextAttemptAt IS NULL;" 2>>"$LOG" || {
-      log "ERROR: failed to initialize nextAttemptAt for existing retries"
       return 1
     }
     log "migration: nextAttemptAt column added and initialized"
@@ -783,11 +810,11 @@ run_once() {
     fi
 
     # 2. Atomically claim the task (queued -> running, attempts+1)
-    # Include workerPid check to prevent stealing from another worker
+    # Prevent claiming if another worker already owns this task
     local CURRENT_DAEMON_PID
     CURRENT_DAEMON_PID="$(get_daemon_pid)"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0 OR NOT EXISTS (SELECT 1 FROM processed_comments pc2 WHERE pc2.commentId='$safe_comment_id' AND pc2.workerPid=$CURRENT_DAEMON_PID AND pc2.status='running' AND pc2.workerPid != $CURRENT_DAEMON_PID)); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
@@ -983,7 +1010,38 @@ PROMPT_EOF
     # 6. Set working directory to the repository root
     local WORKDIR="$REPO_DIR"
 
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR"
+    # 6.5. Lease workspace for exclusive task access
+    source "$MANUL_DIR/workspace-manager.sh"
+    local WORKSPACE_ID
+    WORKSPACE_ID="$(workspace_lease "$COMMENT_ID")"
+    if [ -z "$WORKSPACE_ID" ]; then
+      log "dispatch: no workspace available for task $COMMENT_ID, retrying"
+      lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+    
+    # Update task with workspace association
+    sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
+    
+    # If conversation has a previously used workspace, try to reuse it
+    local conversation_id
+    conversation_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    if [ -n "$conversation_id" ]; then
+      local prev_workspace
+      prev_workspace="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE conversationId='$conversation_id' AND status IN ('completed','failed') ORDER BY processedAt DESC LIMIT 1;" 2>/dev/null)"
+      if [ -n "$prev_workspace" ]; then
+        # Release the newly leased workspace and re-lease the previous one
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        WORKSPACE_ID="$prev_workspace"
+        sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
+        log "dispatch: reusing previous workspace $WORKSPACE_ID for conversation $conversation_id"
+      fi
+    fi
+
+    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID"
 
     # Generate timestamp for unique branch name
     local timestamp
@@ -1225,6 +1283,15 @@ PROMPT_APPEND
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
 
+    # Release workspace back to pool
+    local task_workspace_id
+    task_workspace_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    if [ -n "$task_workspace_id" ]; then
+      workspace_release "$task_workspace_id" "$COMMENT_ID"
+      log "dispatch: released workspace $task_workspace_id for task $COMMENT_ID"
+      lc_log "WORKSPACE_RELEASE" "task=$COMMENT_ID workspace=$task_workspace_id"
+    fi
+
     # Release repository lock
     release_repo_lock "$REPO"
 
@@ -1236,26 +1303,47 @@ PROMPT_APPEND
 }
 
 loop() {
+  # Parse arguments for worker mode
+  local worker_id=""
+  for arg in "$@"; do
+    case "$arg" in
+      --worker=*) worker_id="${arg#--worker=}" ;;
+    esac
+  done
+
   # Ensure nextAttemptAt column exists before any scheduler query
   if ! ensure_nextattemptat_column; then
     log "FATAL: schema migration failed, cannot start loop"
     exit 1
   fi
 
-  # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
-  exec 200>"$FLOCK_FILE"
-  if ! flock -n 200; then
-    log "daemon already running (flock held); exiting"
-    exit 1
-  fi
-  # Lock held for lifetime of daemon process
+  # Source workspace manager
+  source "$MANUL_DIR/workspace-manager.sh"
 
-  log "daemon loop started (interval ${INTERVAL}s)"
-  lc_log "LOOP_START" "interval=${INTERVAL}s"
-  while true; do
-    run_once
-    sleep "$INTERVAL"
-  done
+  # In worker mode, skip flock (each worker has its own lock)
+  if [ -n "$worker_id" ]; then
+    log "daemon loop started as worker $worker_id (interval ${INTERVAL}s)"
+    lc_log "LOOP_START" "worker=$worker_id interval=${INTERVAL}s"
+    while true; do
+      run_once
+      sleep "$INTERVAL"
+    done
+  else
+    # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
+    exec 200>"$FLOCK_FILE"
+    if ! flock -n 200; then
+      log "daemon already running (flock held); exiting"
+      exit 1
+    fi
+    # Lock held for lifetime of daemon process
+
+    log "daemon loop started (interval ${INTERVAL}s)"
+    lc_log "LOOP_START" "interval=${INTERVAL}s"
+    while true; do
+      run_once
+      sleep "$INTERVAL"
+    done
+  fi
 }
 
 case "${1:-}" in
@@ -1263,7 +1351,7 @@ case "${1:-}" in
   stop) stop ;;
   status) status ;;
   run-once) run_once ;;
-  loop) loop ;;
-  *) echo "usage: $0 start|stop|status|run-once" >&2; exit 2 ;;
+  loop) shift; loop "$@" ;;
+  *) echo "usage: $0 start|stop|status|run-once [loop]" >&2; exit 2 ;;
 esac
 
