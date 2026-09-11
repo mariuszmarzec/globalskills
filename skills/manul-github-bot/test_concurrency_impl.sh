@@ -5,7 +5,7 @@
 # ===== Test A: maxConcurrentTasks=2 allows parallel execution =====
 test_a() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Setup config with concurrency
   cat > "$CONFIG" << 'CONFIGEOF'
@@ -54,7 +54,7 @@ CONFIGEOF
 # ===== Test B: Same conversation shares workspace =====
 test_b() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   source skills/manul-github-bot/workspace-manager.sh
   workspace_pool_init 5
@@ -81,7 +81,7 @@ test_b() {
 # ===== Test C: Different conversations isolate workspaces =====
 test_c() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   source skills/manul-github-bot/workspace-manager.sh
   workspace_pool_init 5
@@ -101,7 +101,7 @@ test_c() {
 # ===== Test D: Workspace lease/release lifecycle =====
 test_d() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   source skills/manul-github-bot/workspace-manager.sh
   workspace_pool_init 3
@@ -129,7 +129,7 @@ test_d() {
 # ===== Test E: Daemon fails with insufficient workspaces =====
 test_e() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # This test validates the guard in start() that checks workspace availability
   # For mock testing, we verify the logic exists
@@ -142,7 +142,7 @@ test_e() {
 # ===== Test F: Schema migration adds fields =====
 test_f() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Create a minimal DB without the new columns
   rm -f "$DB"
@@ -185,7 +185,7 @@ test_f() {
 # ===== Test G: Existing DB accepts new tasks post-migration =====
 test_g() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Setup with migration
   test_f  # Ensure columns exist
@@ -205,7 +205,7 @@ test_g() {
 # ===== Test H: Legacy tasks have no workspace/conversation fields =====
 test_h() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Check that legacy tasks (inserted before migration) have NULL values
   sqlite3 "$DB" "UPDATE processed_comments SET conversationId=NULL, parentTaskId=NULL, workspaceId=NULL WHERE commentId='test-g-task';"
@@ -220,7 +220,7 @@ test_h() {
 # ===== Test I: Default behavior unchanged =====
 test_i() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Without maxConcurrentTasks, should default to 1
   cat > "$CONFIG" << 'CONFIGEOF'
@@ -247,7 +247,7 @@ CONFIGEOF
 # ===== Test J: conversationId populated =====
 test_j() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Verify that when tasks are created, conversationId is set
   # This tests the queue creation logic
@@ -266,13 +266,13 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber
 # ===== Test K: CLI manul-submit =====
 test_k() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Create a mock CLI wrapper
   cat > /tmp/manul-submit << 'CLIEOF'
 #!/bin/bash
-source /home/marzec/globalskills-temp/skills/manul-github-bot/workspace-manager.sh
-source /home/marzec/globalskills-temp/skills/manul-github-bot/poll.sh
+source "$(dirname "$0")/../../../skills/manul-github-bot/workspace-manager.sh"
+source "$(dirname "$0")/../../../skills/manul-github-bot/poll.sh"
 
 # Parse arguments
 repo=""
@@ -318,13 +318,13 @@ echo "$result" | jq -e '.status' >/dev/null 2>&1 || return 1
 # ===== Test L: CLI manul-status =====
 test_l() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Create a mock CLI wrapper
   cat > /tmp/manul-status << 'CLIEOF'
 #!/bin/bash
-source /home/marzec/globalskills-temp/skills/manul-github-bot/workspace-manager.sh
-source /home/marzec/globalskills-temp/skills/manul-github-bot/poll.sh
+source "$(dirname "$0")/../../../skills/manul-github-bot/workspace-manager.sh"
+source "$(dirname "$0")/../../../skills/manul-github-bot/poll.sh"
 
 # Report status
 queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';")"
@@ -351,7 +351,7 @@ echo "$result" | jq -e '.running' >/dev/null 2>&1 || return 1
 # ===== Test M: CLI manul-result =====
 test_m() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Create a test result JSON file
   local result_file="$TEST_DIR/result.json"
@@ -367,8 +367,8 @@ JSONEOF
   # Create a mock CLI wrapper
   cat > /tmp/manul-result << 'CLIEOF'
 #!/bin/bash
-source /home/marzec/globalskills-temp/skills/manul-github-bot/workspace-manager.sh
-source /home/marzec/globalskills-temp/skills/manul-github-bot/poll.sh
+source "$(dirname "$0")/../../../skills/manul-github-bot/workspace-manager.sh"
+source "$(dirname "$0")/../../../skills/manul-github-bot/poll.sh"
 
 task_id="${1:-}"
 if [ -z "$task_id" ]; then
@@ -401,7 +401,7 @@ echo "$result" | jq -e '.taskId' >/dev/null 2>&1 || return 1
 # ===== Test N: TASK_DONE emits structured JSON =====
 test_n() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Mock a TASK_DONE output with structured JSON
   local stdout_file="$TEST_DIR/task-done-stdout.txt"
@@ -421,7 +421,7 @@ STDOUTEOF
 # ===== Test O: TASK_FAILED emits structured JSON =====
 test_o() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Mock a TASK_FAILED output with structured JSON
   local stdout_file="$TEST_DIR/task-failed-stdout.txt"
@@ -441,7 +441,7 @@ STDOUTEOF
 # ===== Test P: Subtask inherits conversationId =====
 test_p() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Insert parent task
   sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status, conversationId)
@@ -467,7 +467,7 @@ test_p() {
 # ===== Test Q: Worker queue independence =====
 test_q() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Simulate two workers processing independently
   source skills/manul-github-bot/workspace-manager.sh
@@ -497,7 +497,7 @@ test_q() {
 # ===== Test R: Workspace sharing rules =====
 test_r() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Verify workspace is exclusive per task
   source skills/manul-github-bot/workspace-manager.sh
@@ -522,7 +522,7 @@ test_r() {
 # ===== Test S: Stale workspace reclamation =====
 test_s() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   source skills/manul-github-bot/workspace-manager.sh
   workspace_pool_init 3
@@ -550,7 +550,7 @@ test_s() {
 # ===== Test T: Worker pool lifecycle =====
 test_t() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Verify worker pool start/stop logic
   # Check that start() uses workspace_pool_init
@@ -567,7 +567,7 @@ test_t() {
 # ===== Test U: Backward compatibility =====
 test_u() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Run existing tests to ensure they still pass
   bash skills/manul-github-bot/test_prompt_generation.sh >/dev/null 2>&1
@@ -582,7 +582,7 @@ test_u() {
 # ===== Test V: Production safety guards =====
 test_v() {
   local start_dir="$PWD"
-  cd /home/marzec/globalskills-temp
+  cd "$(dirname "$0")/../.."
   
   # Verify safety guards exist
   grep -q "acquire_task_lock" skills/manul-github-bot/manul-daemon.sh
