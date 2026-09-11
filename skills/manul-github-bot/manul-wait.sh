@@ -1,142 +1,143 @@
 #!/bin/bash
-# manul-wait.sh - Wait for a task to complete
+# manul-wait.sh - Wait for a Manul task to complete
 #
 # Usage:
-#   manul-wait.sh [OPTIONS] TASK_ID
+#   manul-wait.sh --task-id ID [--timeout SECONDS] [--json]
 #
-# Options:
-#   --timeout SECONDS  Maximum time to wait (default: 300)
-#   --interval SECONDS Polling interval (default: 5)
-#   --json             Output JSON format
-#   --follow           Follow mode: print status updates as they happen
+# Polls the Manul database until the task completes or times out.
 #
-# Returns:
-#   Final task result in JSON format
-#   Exit code 0 on successful completion
-#   Exit code 1 on failure or timeout
-#
-# Examples:
-#   manul-wait.sh cli-abc123
-#   manul-wait.sh --timeout 600 --json cli-abc123
-#   manul-wait.sh --follow cli-abc123
+# Exit codes:
+#   0 - Task completed successfully
+#   1 - Task failed
+#   2 - Task not found
+#   4 - Timeout
 
 set -euo pipefail
 
-# Configuration
 MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
-DB="$MANUL_DIR/manul.db"
-TIMEOUT=300
-INTERVAL=5
-OUTPUT_FORMAT="text"
-FOLLOW_MODE=false
-TASK_ID="${1:-}"
+DB="${MANUL_DIR}/manul.db"
 
-# Parse options
+JSON_OUTPUT=false
+TASK_ID=""
+TIMEOUT=600
+
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --json) JSON_OUTPUT=true; shift ;;
+    --task-id) TASK_ID="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
-    --interval) INTERVAL="$2"; shift 2 ;;
-    --json) OUTPUT_FORMAT="json"; shift ;;
-    --follow) FOLLOW_MODE=true; shift ;;
-    *) TASK_ID="$1"; shift ;;
+    *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
 done
 
-# Validate required argument
 if [ -z "$TASK_ID" ]; then
-  echo "Error: TASK_ID is required" >&2
-  echo "Usage: manul-wait.sh [OPTIONS] TASK_ID" >&2
-  exit 1
+  echo "Error: --task-id is required" >&2
+  exit 3
 fi
 
-# Ensure database exists
+# Check if database exists
 if [ ! -f "$DB" ]; then
-  echo "Error: Manul database not found at $DB" >&2
-  exit 1
+  output="{\"taskId\": \"$TASK_ID\", \"status\": \"not_found\", \"error\": \"Manul database not found at $DB\"}"
+  if [ "$JSON_OUTPUT" = true ]; then
+    echo "$output" | jq .
+  else
+    echo "Error: Manul database not found at $DB"
+  fi
+  exit 2
 fi
 
-# Escape task ID for SQL
-sql_escape() {
-  printf '%s' "$1" | sed "s/'/''/g"
-}
-ESCAPED_TASK_ID="$(sql_escape "$TASK_ID")"
+# Poll for task completion
+elapsed=0
+interval=5
 
-# Track elapsed time
-START_TIME=$(date +%s)
-END_TIME=$((START_TIME + TIMEOUT))
+while [ "$elapsed" -lt "$TIMEOUT" ]; do
+  # Query task status
+  task_info="$(sqlite3 "$DB" "SELECT status, prNumber, commentUrl FROM processed_comments WHERE commentId='$(printf '%s' "$TASK_ID" | sed "s/'/''/g")';" 2>/dev/null || echo "")"
 
-# Store task_id for later use
-_STORED_TASK_ID="$TASK_ID"
+  if [ -n "$task_info" ]; then
+    IFS='|' read -r status pr_number comment_url <<< "$task_info"
 
-while true; do
-  CURRENT_TIME=$(date +%s)
+    case "$status" in
+      completed)
+        # Get result from result file if available
+        result_file="$MANUL_DIR/results/${TASK_ID}.json"
+        result="{}"
+        if [ -f "$result_file" ]; then
+          result="$(cat "$result_file")"
+        fi
 
-  # Check timeout
-  if [ "$CURRENT_TIME" -ge "$END_TIME" ]; then
-    if [ "$OUTPUT_FORMAT" = "json" ]; then
-      printf '{"error": "Timeout", "taskId": "%s", "timeoutSeconds": %s}\n' "$TASK_ID" "$TIMEOUT"
-    else
-      echo "Error: Timeout waiting for task '$TASK_ID'" >&2
-    fi
-    exit 1
-  fi
+        # Build output
+        output=$(jq -n \
+          --arg taskId "$TASK_ID" \
+          --arg status "completed" \
+          --arg prNumber "${pr_number:-}" \
+          --arg prUrl "${comment_url:-}" \
+          --argjson result "$result" \
+          '{
+            taskId: $taskId,
+            status: $status,
+            prNumber: ($prNumber | tonumber? // null),
+            prUrl: $prUrl,
+            result: $result
+          }')
 
-  # Query task status directly (no sourcing to avoid stdout pollution)
-  STATUS="$(sqlite3 "$DB" "SELECT status, processedAt FROM processed_comments WHERE commentId='$ESCAPED_TASK_ID';" 2>/dev/null)" || {
-    echo "Error: Failed to query task status" >&2
-    exit 1
-  }
-
-  if [ -z "$STATUS" ]; then
-    if [ "$OUTPUT_FORMAT" = "json" ]; then
-      printf '{"error": "Task not found", "taskId": "%s"}\n' "$TASK_ID"
-    else
-      echo "Error: Task '$TASK_ID' not found" >&2
-    fi
-    exit 1
-  fi
-
-  IFS='|' read -r status completed_at <<< "$STATUS"
-
-  if [ "$FOLLOW_MODE" = true ]; then
-    echo "Status: $status" >&2
-  fi
-
-  # Check if task is complete
-  if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
-    if [ "$FOLLOW_MODE" = true ]; then
-      echo "Task $status" >&2
-    fi
-
-    # Return final result by querying directly
-    RESULT="$(sqlite3 "$DB" "
-      SELECT commentId, status, COALESCE(resultSummary, context) as summary_data, processedAt, attempts
-      FROM processed_comments
-      WHERE commentId='$ESCAPED_TASK_ID';" 2>/dev/null)"
-
-    if [ "$OUTPUT_FORMAT" = "json" ]; then
-      IFS='|' read -r rid rstatus rsummary rcompleted rattempts <<< "$RESULT"
-      if [ "$rstatus" = "completed" ]; then
-        printf '{"taskId": "%s", "status": "%s", "success": true, "summary": "%s", "completedAt": "%s", "attempts": %s}\n' \
-          "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+        if [ "$JSON_OUTPUT" = true ]; then
+          echo "$output" | jq .
+        else
+          echo "Task $TASK_ID completed"
+          if [ -n "$pr_number" ]; then
+            echo "  PR: #$pr_number"
+          fi
+        fi
         exit 0
-      else
-        printf '{"taskId": "%s", "status": "%s", "success": false, "error": "%s", "completedAt": "%s", "attempts": %s}\n' \
-          "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+        ;;
+      failed)
+        output="{\"taskId\": \"$TASK_ID\", \"status\": \"failed\"}"
+        if [ "$JSON_OUTPUT" = true ]; then
+          echo "$output" | jq .
+        else
+          echo "Task $TASK_ID failed"
+        fi
         exit 1
-      fi
-    else
-      echo "Task $status"
-      if [ "$status" = "completed" ]; then
-        echo "Summary: ${rsummary:-Done}"
-        exit 0
-      else
-        echo "Error: ${rsummary:-Unknown}"
+        ;;
+      queued|running)
+        # Still waiting
+        ;;
+      *)
+        # Unknown status, treat as failed
+        output="{\"taskId\": \"$TASK_ID\", \"status\": \"unknown\", \"error\": \"Unexpected status: $status\"}"
+        if [ "$JSON_OUTPUT" = true ]; then
+          echo "$output" | jq .
+        else
+          echo "Task $TASK_ID has unknown status: $status"
+        fi
         exit 1
+        ;;
+    esac
+  else
+    # Task not found in database
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+    if [ "$elapsed" -ge "$TIMEOUT" ]; then
+      output="{\"taskId\": \"$TASK_ID\", \"status\": \"timeout\", \"error\": \"Task not found in database after ${TIMEOUT}s\"}"
+      if [ "$JSON_OUTPUT" = true ]; then
+        echo "$output" | jq .
+      else
+        echo "Task $TASK_ID not found (timeout)"
       fi
+      exit 4
     fi
   fi
 
-  # Task still pending/running, wait and poll again
-  sleep "$INTERVAL"
+  sleep "$interval"
+  elapsed=$((elapsed + interval))
 done
+
+# Timeout
+output="{\"taskId\": \"$TASK_ID\", \"status\": \"timeout\", \"error\": \"Wait timed out after ${TIMEOUT}s\"}"
+if [ "$JSON_OUTPUT" = true ]; then
+  echo "$output" | jq .
+else
+  echo "Task $TASK_ID wait timed out after ${TIMEOUT}s"
+fi
+exit 4
