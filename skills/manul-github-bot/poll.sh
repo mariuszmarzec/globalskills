@@ -228,6 +228,19 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;" 2>>"$LOG"
     log "migration: added result fields"
 fi
+# migration for existing DBs (pre-baseId field for idempotency)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|baseId|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "CREATE UNIQUE INDEX IF NOT EXISTS idx_base_status ON processed_comments(baseId, status);" 2>>"$LOG"
+    log "migration: added baseId column and unique index for idempotency"
+fi
+# migration for submission claims table (atomic idempotency)
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS submission_claims (
+    baseId TEXT PRIMARY KEY,
+    commentId TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    createdAt TEXT DEFAULT datetime('now')
+);" 2>>"$LOG"
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"

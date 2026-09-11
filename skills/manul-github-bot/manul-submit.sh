@@ -93,25 +93,6 @@ if [[ ! "$ISSUE" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# Generate comment ID (stable for idempotency when same params)
-# Uses repo+issue+comment+prompt hash as primary key, appends timestamp+PID for uniqueness
-_HASH_INPUT="$(printf '%s-%s-%s-%s' "$REPO" "$ISSUE" "$COMMENT_URL" "$PROMPT")"
-_BASE_ID="cli-$(printf '%s' "$_HASH_INPUT" | md5sum | cut -d' ' -f1)"
-COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
-
-# For true idempotency: if a recent queued task exists with same base ID, return it
-if [ -f "$DB" ]; then
-  _ESCAPED_BASE="$(printf '%s' "$_BASE_ID" | sed "s/'/''/g")"
-  _SQL_QUERY="SELECT commentId FROM processed_comments WHERE commentId LIKE '$_ESCAPED_BASE-%' AND status='queued' ORDER BY createdAt DESC LIMIT 1;"
-  EXISTING="$(sqlite3 "$DB" "$_SQL_QUERY" 2>/dev/null || echo "")"
-  if [ -n "$EXISTING" ]; then
-    COMMENT_ID="$EXISTING"
-  else
-    # No existing queued task - generate new unique ID with timestamp+PID
-    COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
-  fi
-fi
-
 # Generate conversation ID if not provided
 if [ -z "$CONVERSATION" ]; then
   if [ -n "$COMMENT_URL" ]; then
@@ -145,12 +126,100 @@ ESCAPED_CONVERSATION="$(sql_escape "$CONVERSATION")"
 ESCAPED_PARENT="$(sql_escape "$PARENT_TASK_ID")"
 ESCAPED_AGENT="$(sql_escape "$AGENT")"
 
-# Insert or update task (idempotent by commentId)
-# Using INSERT OR REPLACE for idempotency
-sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments
-  (commentId, repository, issueNumber, commentUrl, prompt, status, conversationId, parentTaskId, agent, createdAt)
-  VALUES
-  ('$COMMENT_ID', '$ESCAPED_REPO', $ESCAPED_ISSUE, '$ESCAPED_COMMENT_URL', '$ESCAPED_PROMPT', 'queued', '$ESCAPED_CONVERSATION', '$ESCAPED_PARENT', '$ESCAPED_AGENT', datetime('now'));"
+# Generate comment ID (stable for idempotency when same params)
+# Uses repo+issue+comment+prompt hash as primary key, appends timestamp+PID for uniqueness
+_HASH_INPUT="$(printf '%s-%s-%s-%s' "$REPO" "$ISSUE" "$COMMENT_URL" "$PROMPT")"
+_BASE_ID="cli-$(printf '%s' "$_HASH_INPUT" | md5sum | cut -d' ' -f1)"
+
+# For true idempotency: use atomic claim + insert in single transaction
+# This ensures no race condition between claiming and creating the task
+if [ -f "$DB" ]; then
+  _ESCAPED_BASE="$(printf '%s' "$_BASE_ID" | sed "s/'/''/g")"
+  _COMMENT_ID_VAR="$_BASE_ID-$(date +%s)-$$"
+  _ESCAPED_COMMENT_ID="$(printf '%s' "$_COMMENT_ID_VAR" | sed "s/'/''/g")"
+  
+  # Single atomic transaction: claim + insert task in one go
+  # Returns: 'WINNER:<commentId>' if we won, 'LOSER' if we lost, '' if locked
+  _WINNER_RESULT=""
+  _MAX_RETRIES=100
+  _RETRY=0
+  while [ -z "$_WINNER_RESULT" ] && [ "$_RETRY" -lt "$_MAX_RETRIES" ]; do
+    # Try to claim and insert in a single transaction
+    _WINNER_RESULT=$(sqlite3 "$DB" "
+      BEGIN IMMEDIATE;
+      INSERT OR IGNORE INTO submission_claims (baseId, commentId, status) VALUES ('$_ESCAPED_BASE', 'claimed', 'queued');
+      SELECT CASE WHEN changes() > 0 THEN 'WINNER' ELSE 'LOSER' END;
+      COMMIT;
+    " 2>/dev/null)
+    
+    if [ "$_WINNER_RESULT" = "WINNER" ]; then
+      # We won the claim - insert the task atomically
+      _INSERT_OK=$(sqlite3 "$DB" "
+        BEGIN IMMEDIATE;
+        INSERT INTO processed_comments 
+          (commentId, repository, issueNumber, commentUrl, prompt, status, conversationId, parentTaskId, agent, createdAt, baseId)
+        VALUES
+          ('$_ESCAPED_COMMENT_ID', '$ESCAPED_REPO', $ESCAPED_ISSUE, '$ESCAPED_COMMENT_URL', '$ESCAPED_PROMPT', 'queued', '$ESCAPED_CONVERSATION', '$ESCAPED_PARENT', '$ESCAPED_AGENT', datetime('now'), '$_ESCAPED_BASE');
+        SELECT changes();
+        COMMIT;
+      " 2>/dev/null)
+      if [ "$_INSERT_OK" = "1" ]; then
+        COMMENT_ID="$_ESCAPED_COMMENT_ID"
+      else
+        # Insert failed - should not happen, but handle gracefully
+        _WINNER_RESULT=""
+        _RETRY=$((_RETRY + 1))
+        _COMMENT_ID_VAR="$_BASE_ID-$(date +%s)-$$"
+        _ESCAPED_COMMENT_ID="$(printf '%s' "$_COMMENT_ID_VAR" | sed "s/'/''/g")"
+        sleep 0.05
+      fi
+    elif [ "$_WINNER_RESULT" = "LOSER" ]; then
+      # We lost the claim - find the existing task
+      _EXISTING=$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE baseId='$_ESCAPED_BASE' AND status='queued' ORDER BY createdAt ASC LIMIT 1;" 2>/dev/null)
+      if [ -n "$_EXISTING" ]; then
+        COMMENT_ID="$_EXISTING"
+      else
+        # Task not found yet - race with winner who just claimed
+        # Retry to see if we can win next time or task appears
+        _WINNER_RESULT=""
+        _RETRY=$((_RETRY + 1))
+        _COMMENT_ID_VAR="$_BASE_ID-$(date +%s)-$$"
+        _ESCAPED_COMMENT_ID="$(printf '%s' "$_COMMENT_ID_VAR" | sed "s/'/''/g")"
+        sleep 0.05
+      fi
+    else
+      # Database locked - retry
+      _WINNER_RESULT=""
+      _RETRY=$((_RETRY + 1))
+      _COMMENT_ID_VAR="$_BASE_ID-$(date +%s)-$$"
+      _ESCAPED_COMMENT_ID="$(printf '%s' "$_COMMENT_ID_VAR" | sed "s/'/''/g")"
+      sleep 0.05
+    fi
+  done
+  
+  if [ -z "${COMMENT_ID:-}" ]; then
+    # All retries exhausted - this is a fallback that should rarely be reached
+    # Generate unique ID and insert with retry to handle any remaining races
+    _FALLBACK_RETRIES=10
+    _FALLBACK_RETRY=0
+    while [ -z "${COMMENT_ID:-}" ] && [ "$_FALLBACK_RETRY" -lt "$_FALLBACK_RETRIES" ]; do
+      COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
+      _INSERT_FALLOK=$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments 
+        (commentId, repository, issueNumber, commentUrl, prompt, status, conversationId, parentTaskId, agent, createdAt, baseId)
+      VALUES
+        ('$COMMENT_ID', '$ESCAPED_REPO', $ESCAPED_ISSUE, '$ESCAPED_COMMENT_URL', '$ESCAPED_PROMPT', 'queued', '$ESCAPED_CONVERSATION', '$ESCAPED_PARENT', '$ESCAPED_AGENT', datetime('now'), '$_ESCAPED_BASE');
+      SELECT changes();" 2>/dev/null)
+      if [ "$_INSERT_FALLOK" = "1" ]; then
+        break
+      fi
+      _FALLBACK_RETRY=$((_FALLBACK_RETRY + 1))
+      sleep 0.1
+    done
+  fi
+else
+  # No DB yet - generate unique ID
+  COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
+fi
 
 # Output result
 if [ "$OUTPUT_FORMAT" = "json" ]; then
