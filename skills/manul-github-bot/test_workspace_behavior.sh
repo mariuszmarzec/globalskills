@@ -27,7 +27,7 @@ cat > "$CONFIG" << 'CONFIGEOF'
 CONFIGEOF
 
 # Source only workspace manager (not full poll.sh to avoid dependencies)
-source "$(dirname "$0")/../../../skills/manul-github-bot/workspace-manager.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/workspace-manager.sh"
 
 # Copy generate_conversation_id from poll.sh
 generate_conversation_id() {
