@@ -1034,7 +1034,7 @@ PROMPT_EOF
       prev_workspace="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE conversationId='$conversation_id' AND status IN ('completed','failed') ORDER BY processedAt DESC LIMIT 1;" 2>/dev/null)"
       if [ -n "$prev_workspace" ]; then
         # Release the newly leased workspace and re-lease the previous one
-        workspace_release "$WORKSPACE_ID"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
         WORKSPACE_ID="$prev_workspace"
         sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
         log "dispatch: reusing previous workspace $WORKSPACE_ID for conversation $conversation_id"
@@ -1287,7 +1287,7 @@ PROMPT_APPEND
     local task_workspace_id
     task_workspace_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     if [ -n "$task_workspace_id" ]; then
-      workspace_release "$task_workspace_id"
+      workspace_release "$task_workspace_id" "$COMMENT_ID"
       log "dispatch: released workspace $task_workspace_id for task $COMMENT_ID"
       lc_log "WORKSPACE_RELEASE" "task=$COMMENT_ID workspace=$task_workspace_id"
     fi

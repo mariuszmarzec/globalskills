@@ -93,16 +93,26 @@ workspace_lease() {
 
 # Release a workspace back to the pool
 # Verifies ownership before releasing to prevent unauthorized releases
-# Arguments: $1 = workspace_id
+# Arguments: $1 = workspace_id, $2 = task_id (optional, for ownership verification)
 workspace_release() {
   local ws_id="$1"
+  local task_id="${2:-}"
 
-  # Verify workspace exists and is BUSY before releasing
+  # Verify workspace exists and is BUSY
   local owns
   owns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$ws_id' AND status='BUSY';" 2>/dev/null)"
 
   if [ "${owns:-0}" -eq 0 ]; then
     return 1
+  fi
+
+  # If task_id provided, verify ownership
+  if [ -n "$task_id" ]; then
+    local correct_owner
+    correct_owner="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$ws_id' AND currentTaskId='$task_id';" 2>/dev/null)"
+    if [ "${correct_owner:-0}" -eq 0 ]; then
+      return 1
+    fi
   fi
 
   sqlite3 "$DB" "UPDATE workspaces SET status='IDLE', currentTaskId=NULL WHERE workspaceId='$ws_id';"
