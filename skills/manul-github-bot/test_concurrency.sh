@@ -61,7 +61,7 @@ CONFIGEOF
 # Source required functions
 source skills/manul-github-bot/workspace-manager.sh
 source skills/manul-github-bot/poll.sh
-source "$(dirname "$0")/test_concurrency_impl.sh"
+source skills/manul-github-bot/test_concurrency_impl.sh
 
 PASSED=0
 FAILED=0
