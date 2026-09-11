@@ -46,7 +46,7 @@ Examples:
 }
 ```
 
-**Idempotency:** Multiple submissions with the same repo/issue/comment create separate tasks (timestamp-based ID). To achieve true idempotency, pass the same `--conversation` ID.
+**Idempotency:** Submissions with the same `--repo`, `--issue`, `--comment`, and `--prompt` return the same task ID (if task is still queued). The idempotency key is derived from `repo + issue + comment URL + prompt` using MD5 hash. To submit a duplicate task after completion/failure, use a different prompt or add a unique suffix.
 
 ---
 

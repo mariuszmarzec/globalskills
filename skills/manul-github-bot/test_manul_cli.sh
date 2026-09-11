@@ -92,7 +92,14 @@ init_db() {
     resultSummary TEXT,
     resultJson TEXT,
     workerPid INTEGER,
-    nextAttemptAt TEXT
+    nextAttemptAt TEXT,
+    baseId TEXT
+  );"
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS submission_claims (
+    baseId TEXT PRIMARY KEY,
+    commentId TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    createdAt TEXT
   );"
   sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);"
 }
@@ -169,19 +176,19 @@ test_submit() {
   OUTPUT1=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
     --repo owner/repo --issue 44 --prompt "Idempotent test" --json 2>&1)
   TASK_ID1="$(printf '%s' "$OUTPUT1" | jq -r '.commentId')"
-  
+
   # Wait a moment to ensure different timestamp would produce different ID
   sleep 1
-  
+
   OUTPUT2=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
     --repo owner/repo --issue 44 --prompt "Idempotent test" --json 2>&1)
   TASK_ID2="$(printf '%s' "$OUTPUT2" | jq -r '.commentId')"
-  
-  # Since we use timestamp in ID, they should be different
-  if [ -n "$TASK_ID1" ] && [ -n "$TASK_ID2" ]; then
-    pass "Submission creates unique task IDs"
+
+  # Idempotency: same params should return SAME task ID
+  if [ -n "$TASK_ID1" ] && [ -n "$TASK_ID2" ] && [ "$TASK_ID1" = "$TASK_ID2" ]; then
+    pass "Idempotent submission returns same task ID"
   else
-    fail "Submission creates unique task IDs" "valid task IDs" "got empty"
+    fail "Idempotent submission returns same task ID" "$TASK_ID1" "$TASK_ID2"
   fi
   
   # Test 7: Custom conversation ID
