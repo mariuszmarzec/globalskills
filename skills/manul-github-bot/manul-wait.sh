@@ -55,37 +55,37 @@ if [ ! -f "$DB" ]; then
   exit 1
 fi
 
-# Source manul-status for JSON formatting
-source "$MANUL_DIR/manul-status.sh" 2>/dev/null || true
-
 # Track elapsed time
 START_TIME=$(date +%s)
 END_TIME=$((START_TIME + TIMEOUT))
 
-echo "Waiting for task '$TASK_ID' to complete (timeout: ${TIMEOUT}s, interval: ${INTERVAL}s)" >&2
+# Store task_id for later use
+_STORED_TASK_ID="$TASK_ID"
 
 while true; do
   CURRENT_TIME=$(date +%s)
-  
+
   # Check timeout
   if [ "$CURRENT_TIME" -ge "$END_TIME" ]; then
-    echo "Error: Timeout waiting for task '$TASK_ID'" >&2
     if [ "$OUTPUT_FORMAT" = "json" ]; then
       printf '{"error": "Timeout", "taskId": "%s", "timeoutSeconds": %s}\n' "$TASK_ID" "$TIMEOUT"
+    else
+      echo "Error: Timeout waiting for task '$TASK_ID'" >&2
     fi
     exit 1
   fi
 
-  # Query task status
-  STATUS=$(sqlite3 "$DB" "SELECT status, processedAt FROM processed_comments WHERE commentId='$TASK_ID';" 2>/dev/null) || {
+  # Query task status directly (no sourcing to avoid stdout pollution)
+  STATUS="$(sqlite3 "$DB" "SELECT status, processedAt FROM processed_comments WHERE commentId='$TASK_ID';" 2>/dev/null)" || {
     echo "Error: Failed to query task status" >&2
     exit 1
   }
 
   if [ -z "$STATUS" ]; then
-    echo "Error: Task '$TASK_ID' not found" >&2
     if [ "$OUTPUT_FORMAT" = "json" ]; then
       printf '{"error": "Task not found", "taskId": "%s"}\n' "$TASK_ID"
+    else
+      echo "Error: Task '$TASK_ID' not found" >&2
     fi
     exit 1
   fi
@@ -101,14 +101,29 @@ while true; do
     if [ "$FOLLOW_MODE" = true ]; then
       echo "Task $status" >&2
     fi
-    
-    # Return final result
-    if command -v manul-result >/dev/null 2>&1; then
-      manul-result --json "$TASK_ID"
+
+    # Return final result by querying directly
+    RESULT="$(sqlite3 "$DB" "
+      SELECT commentId, status, COALESCE(resultSummary, context) as summary_data, processedAt, attempts
+      FROM processed_comments
+      WHERE commentId='$TASK_ID';" 2>/dev/null)"
+
+    if [ "$OUTPUT_FORMAT" = "json" ]; then
+      IFS='|' read -r rid rstatus rsummary rcompleted rattempts <<< "$RESULT"
+      if [ "$rstatus" = "completed" ]; then
+        printf '{"taskId": "%s", "status": "%s", "success": true, "summary": "%s", "completedAt": "%s", "attempts": %s}\n' \
+          "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+      else
+        printf '{"taskId": "%s", "status": "%s", "success": false, "error": "%s", "completedAt": "%s", "attempts": %s}\n' \
+          "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+      fi
     else
-      # Fallback: inline JSON
-      printf '{"taskId": "%s", "status": "%s", "completedAt": "%s"}\n' \
-        "$TASK_ID" "$status" "${completed_at:-}"
+      echo "Task $status"
+      if [ "$status" = "completed" ]; then
+        echo "Summary: ${rsummary:-Done}"
+      else
+        echo "Error: ${rsummary:-Unknown}"
+      fi
     fi
     exit 0
   fi

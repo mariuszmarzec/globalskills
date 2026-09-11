@@ -93,8 +93,21 @@ if [[ ! "$ISSUE" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# Generate comment ID (stable for idempotency)
-COMMENT_ID="cli-$(printf '%s-%s-%s' "$REPO" "$ISSUE" "$COMMENT_URL" | md5sum | cut -d' ' -f1)-$(date +%s)-$$"
+# Generate comment ID (stable for idempotency when same params)
+# Uses repo+issue+comment+prompt hash as primary key, appends timestamp+PID for uniqueness
+_HASH_INPUT="$(printf '%s-%s-%s-%s' "$REPO" "$ISSUE" "$COMMENT_URL" "$PROMPT")"
+_BASE_ID="cli-$(printf '%s' "$_HASH_INPUT" | md5sum | cut -d' ' -f1)"
+COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
+
+# For true idempotency: if a recent queued task exists with same base ID, return it
+if [ -f "$DB" ]; then
+  _ESCAPED_BASE="$(printf '%s' "$_BASE_ID" | sed "s/'/''/g")"
+  _SQL_QUERY="SELECT commentId FROM processed_comments WHERE commentId LIKE '$_ESCAPED_BASE-%' AND status='queued' ORDER BY createdAt DESC LIMIT 1;"
+  EXISTING="$(sqlite3 "$DB" "$_SQL_QUERY" 2>/dev/null || echo "")"
+  if [ -n "$EXISTING" ]; then
+    COMMENT_ID="$EXISTING"
+  fi
+fi
 
 # Generate conversation ID if not provided
 if [ -z "$CONVERSATION" ]; then

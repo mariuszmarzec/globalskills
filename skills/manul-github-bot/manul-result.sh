@@ -66,10 +66,10 @@ sql_escape() {
 
 ESCAPED_TASK_ID="$(sql_escape "$TASK_ID")"
 
-# Query task result
+# Query task result - check resultSummary first, fall back to context
 RESULT="$(sqlite3 "$DB" "
   SELECT commentId, status, conversationId, attempts, processedAt,
-         prompt, context
+         prompt, COALESCE(resultSummary, context) as summary_data
   FROM processed_comments
   WHERE commentId='$ESCAPED_TASK_ID' AND status IN ('completed', 'failed');
 " 2>/dev/null)" || {
@@ -86,17 +86,17 @@ if [ -z "$RESULT" ]; then
   exit 1
 fi
 
-IFS='|' read -r tid status conv attempts completed_at prompt context <<< "$RESULT"
+IFS='|' read -r tid status conv attempts completed_at prompt summary_data <<< "$RESULT"
 
 # Determine success based on status
 if [ "$status" = "completed" ]; then
   SUCCESS="true"
-  SUMMARY="${context:-"Task completed successfully"}"
+  SUMMARY="${summary_data:-"Task completed successfully"}"
   ERROR="null"
 else
   SUCCESS="false"
   SUMMARY="null"
-  ERROR="$(printf '%s' "$context" | sed 's/"/\\"/g')"
+  ERROR="$(printf '%s' "$summary_data" | sed 's/"/\\"/g')"
 fi
 
 if [ "$OUTPUT_FORMAT" = "json" ]; then
