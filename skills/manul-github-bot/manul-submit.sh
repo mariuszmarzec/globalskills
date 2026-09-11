@@ -106,6 +106,9 @@ if [ -f "$DB" ]; then
   EXISTING="$(sqlite3 "$DB" "$_SQL_QUERY" 2>/dev/null || echo "")"
   if [ -n "$EXISTING" ]; then
     COMMENT_ID="$EXISTING"
+  else
+    # No existing queued task - generate new unique ID with timestamp+PID
+    COMMENT_ID="$_BASE_ID-$(date +%s)-$$"
   fi
 fi
 
