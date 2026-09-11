@@ -55,6 +55,12 @@ if [ ! -f "$DB" ]; then
   exit 1
 fi
 
+# Escape task ID for SQL
+sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+ESCAPED_TASK_ID="$(sql_escape "$TASK_ID")"
+
 # Track elapsed time
 START_TIME=$(date +%s)
 END_TIME=$((START_TIME + TIMEOUT))
@@ -76,7 +82,7 @@ while true; do
   fi
 
   # Query task status directly (no sourcing to avoid stdout pollution)
-  STATUS="$(sqlite3 "$DB" "SELECT status, processedAt FROM processed_comments WHERE commentId='$TASK_ID';" 2>/dev/null)" || {
+  STATUS="$(sqlite3 "$DB" "SELECT status, processedAt FROM processed_comments WHERE commentId='$ESCAPED_TASK_ID';" 2>/dev/null)" || {
     echo "Error: Failed to query task status" >&2
     exit 1
   }
@@ -106,26 +112,29 @@ while true; do
     RESULT="$(sqlite3 "$DB" "
       SELECT commentId, status, COALESCE(resultSummary, context) as summary_data, processedAt, attempts
       FROM processed_comments
-      WHERE commentId='$TASK_ID';" 2>/dev/null)"
+      WHERE commentId='$ESCAPED_TASK_ID';" 2>/dev/null)"
 
     if [ "$OUTPUT_FORMAT" = "json" ]; then
       IFS='|' read -r rid rstatus rsummary rcompleted rattempts <<< "$RESULT"
       if [ "$rstatus" = "completed" ]; then
         printf '{"taskId": "%s", "status": "%s", "success": true, "summary": "%s", "completedAt": "%s", "attempts": %s}\n' \
           "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+        exit 0
       else
         printf '{"taskId": "%s", "status": "%s", "success": false, "error": "%s", "completedAt": "%s", "attempts": %s}\n' \
           "$TASK_ID" "$rstatus" "$(printf '%s' "$rsummary" | sed 's/"/\\"/g')" "${rcompleted:-}" "${rattempts:-0}"
+        exit 1
       fi
     else
       echo "Task $status"
       if [ "$status" = "completed" ]; then
         echo "Summary: ${rsummary:-Done}"
+        exit 0
       else
         echo "Error: ${rsummary:-Unknown}"
+        exit 1
       fi
     fi
-    exit 0
   fi
 
   # Task still pending/running, wait and poll again
