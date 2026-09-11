@@ -229,4 +229,4 @@ echo "════════════════════════�
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"
 
-[ "$FAILED" -eq 0 ]
+exit "$FAILED"
