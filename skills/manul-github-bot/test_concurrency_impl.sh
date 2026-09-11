@@ -247,131 +247,71 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber
 test_k() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
+
+  # Test the real manul-submit.sh script
+  local result
+  result="$(MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-submit.sh \
+    --repo test/repo --issue 1 --prompt "Test submission" --json 2>&1)"
   
-  # Create a mock CLI wrapper
-  cat > /tmp/manul-submit << 'CLIEOF'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/workspace-manager.sh"
-source "$SCRIPT_DIR/poll.sh"
-
-# Parse arguments
-repo=""
-issue=""
-comment=""
-conversation=""
-
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --repo) repo="$2"; shift 2 ;;
-    --issue) issue="$2"; shift 2 ;;
-    --comment) comment="$2"; shift 2 ;;
-    --conversation) conversation="$2"; shift 2 ;;
-    *) echo "Unknown option: $1" >&2; exit 1 ;;
-  esac
-done
-
-# Generate commentId
-comment_id="cli-$(date +%s)-$$"
-
-# Generate conversationId if not provided
-if [ -z "$conversation" ]; then
-  conversation="conv-$(date +%s)"
-fi
-
-# Insert into queue
-sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status, conversationId, createdAt)
-  VALUES('$comment_id', '$repo', $issue, 'https://github.com/$repo/issues/$issue', 'test prompt', 'queued', '$conversation', datetime('now'));"
-
-echo "{\"commentId\": \"$comment_id\", \"conversationId\": \"$conversation\", \"status\": \"queued\"}"
-CLIEOF
-chmod +x /tmp/manul-submit
-
-# Test submission
-result="$(/tmp/manul-submit --repo test/repo --issue 1 --comment "Fix bug" --conversation conv-test)"
+  # Verify JSON output with required fields
+  printf '%s' "$result" | jq -e '.commentId' > /dev/null 2>&1
+  local exit_code=$?
   
+  # Cleanup
   cd "$start_dir"
+  return $exit_code
 }
 
 # ===== Test L: CLI manul-status =====
 test_l() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
+
+  # Create test tasks
+  MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-submit.sh \
+    --repo test/repo --issue 1 --prompt "Status test 1" > /dev/null 2>&1
+  MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-submit.sh \
+    --repo test/repo --issue 2 --prompt "Status test 2" > /dev/null 2>&1
   
-  # Create a mock CLI wrapper
-  cat > /tmp/manul-status << 'CLIEOF'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/workspace-manager.sh"
-source "$SCRIPT_DIR/poll.sh"
-
-# Report status
-queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';")"
-running="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='running';")"
-completed="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='completed';")"
-failed="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='failed';")"
-
-echo "{\"queued\": $queued, \"running\": $running, \"completed\": $completed, \"failed\": $failed}"
-CLIEOF
-chmod +x /tmp/manul-status
-
-# Insert test tasks
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status) VALUES('status-test-1', 'test/repo', 1, 'https://github.com/test/repo/issues/1', 'test prompt', 'queued');"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status) VALUES('status-test-2', 'test/repo', 2, 'https://github.com/test/repo/issues/2', 'test prompt', 'running');"
-
-# Test status command
-result="$(/tmp/manul-status)"
+  # Test the real manul-status.sh script
+  local result
+  result="$(MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-status.sh \
+    --list --json 2>&1)"
+  
+  # Verify JSON array output
+  printf '%s' "$result" | jq -e 'type == "array"' > /dev/null 2>&1
+  local exit_code=$?
   
   cd "$start_dir"
+  return $exit_code
 }
 
 # ===== Test M: CLI manul-result =====
 test_m() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
+
+  # Create a completed task
+  MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-submit.sh \
+    --repo test/repo --issue 1 --prompt "Result test" > /dev/null 2>&1
   
-  # Create a test result JSON file
-  local result_file="$TEST_DIR/result.json"
-  cat > "$result_file" << 'JSONEOF'
-{
-  "success": true,
-  "taskId": "result-test-1",
-  "output": "Task completed successfully",
-  "attempts": 1
-}
-JSONEOF
-
-  # Create a mock CLI wrapper
-  cat > /tmp/manul-result << 'CLIEOF'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/workspace-manager.sh"
-source "$SCRIPT_DIR/poll.sh"
-
-task_id="${1:-}"
-if [ -z "$task_id" ]; then
-  echo "Usage: manul-result <task-id>" >&2
-  exit 1
-fi
-
-result_file="$MANUL_DIR/results/${task_id}.json"
-if [ ! -f "$result_file" ]; then
-  echo "{\"error\": \"No result found for task: $task_id\"}"
-  exit 1
-fi
-
-cat "$result_file"
-CLIEOF
-chmod +x /tmp/manul-result
-
-# Create result directory and file
-mkdir -p "$MANUL_DIR/results"
-cp "$result_file" "$MANUL_DIR/results/result-test-1.json"
-
-# Test result command
-result="$(/tmp/manul-result result-test-1)"
+  local task_id
+  task_id="$(sqlite3 "$TEST_DIR/manul/manul.db" "SELECT commentId FROM processed_comments ORDER BY createdAt DESC LIMIT 1;")"
+  
+  # Mark as completed
+  sqlite3 "$TEST_DIR/manul/manul.db" "UPDATE processed_comments SET status='completed', context='Done', processedAt='now' WHERE commentId='$task_id';"
+  
+  # Test the real manul-result.sh script
+  local result
+  result="$(MANUL_DIR="$TEST_DIR/manul" bash skills/manul-github-bot/manul-result.sh \
+    "$task_id" --json 2>&1)"
+  
+  # Verify JSON output
+  printf '%s' "$result" | jq -e '.success == true' > /dev/null 2>&1
+  local exit_code=$?
   
   cd "$start_dir"
+  return $exit_code
 }
 
 # ===== Test N: TASK_DONE emits structured JSON =====
