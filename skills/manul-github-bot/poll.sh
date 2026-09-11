@@ -222,6 +222,12 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;" 2>>"$LOG"
     log "migration: added concurrency fields"
 fi
+# migration for existing DBs (pre-result fields)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|resultSummary|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;" 2>>"$LOG"
+    log "migration: added result fields"
+fi
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"

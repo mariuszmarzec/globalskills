@@ -1272,6 +1272,24 @@ PROMPT_APPEND
     elif [ "$COMPLETION_SUCCESS" = "true" ]; then
       # Both agent succeeded AND comment posted - finalize as completed
       # NOTE: Status was already set to 'completed' by complete_task_with_verification above
+      
+      # Save result metadata for local API access
+      local result_json=""
+      if [ -f "$STDOUT_FILE" ]; then
+        # Extract JSON from stdout if present (after TASK_DONE marker)
+        result_json="$(grep -A 100 'TASK_DONE' "$STDOUT_FILE" 2>/dev/null | tail -n +2 | head -1 | tr -d '\n' || echo "")"
+      fi
+      
+      # Escape for SQL
+      local escaped_summary escaped_result
+      escaped_summary="$(printf '%s' "$REPO#$ISSUE_NUM" | sed "s/'/''/g")"
+      escaped_result="$(printf '%s' "$result_json" | sed "s/'/''/g")"
+      
+      sqlite3 "$DB" "UPDATE processed_comments SET 
+        resultSummary='$escaped_summary', 
+        resultJson='$escaped_result'
+        WHERE commentId='$safe_comment_id';" 2>/dev/null
+      
       set_activity "$COMMENT_ID" "completed"
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
