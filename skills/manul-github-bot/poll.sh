@@ -665,17 +665,40 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       is_res="$(jq -r '.isResolved // false' <<<"$obj")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
-      if [ "${ins:-0}" -gt 0 ]; then
-        NEW=$((NEW + 1))
-        ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
-        if [ -n "$ctx" ]; then
-          esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-          sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-          log "context enriched for $id on $repo#$issue (PR + linked issues)"
-        fi
-        log "queued $id on $repo#$issue (agent=${agent:-default})"
-      fi
+       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
+       if [ "${ins:-0}" -gt 0 ]; then
+         NEW=$((NEW + 1))
+         ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
+         if [ -n "$ctx" ]; then
+           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+           sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+           log "context enriched for $id on $repo#$issue (PR + linked issues)"
+         fi
+         # GitHub control protocol integration: process review events
+         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -f "$MANUL_DIR/manul-conversation-linker.sh" ]; then
+           pr_num="$issue"
+           review_id="${id#review:}"
+           review_body="$fullBody"
+           conv_id="$(generate_conversation_id "$repo" "$pr_num" "$url")"
+           # Check if review contains /manul command for conversation linking
+           if [ -n "$prompt" ]; then
+             # Link this review to the PR's conversation
+             if [ -n "$conv_id" ]; then
+               sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
+             fi
+           fi
+           # Post TASK_STARTED event marker if this is a new queued task
+           if [ -f "$MANUL_DIR/manul-result-feedback.sh" ]; then
+             "$MANUL_DIR/manul-result-feedback.sh" post-started \
+               --repo "$repo" \
+               --issue "$pr_num" \
+               --comment-id "$id" \
+               --task-id "$id" \
+               --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_STARTED event for $id"
+           fi
+         fi
+         log "queued $id on $repo#$issue (agent=${agent:-default})"
+       fi
     done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
       .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
