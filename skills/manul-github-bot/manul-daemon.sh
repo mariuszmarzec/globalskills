@@ -869,6 +869,20 @@ run_once() {
 
     log "dispatch: posted in-progress comment for $COMMENT_ID"
 
+    # 4b. Emit TASK_STARTED event marker (GitHub control protocol)
+    lc_log "TASK_STARTED_EMITTED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
+      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      "$MANUL_DIR/manul-result-feedback.sh" post-started \
+        --repo "$REPO" \
+        --issue "$ISSUE_NUM" \
+        --comment-id "$COMMENT_ID" \
+        --task-id "$COMMENT_ID" \
+        --pr-number "${task_pr_num:-}" \
+        --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_STARTED event for $COMMENT_ID"
+    fi
+
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_DIR/tasks"
     mkdir -p "$TASK_PROMPT_DIR"
@@ -1300,6 +1314,38 @@ PROMPT_APPEND
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
+
+    # GitHub control protocol: post structured result feedback
+    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
+      task_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "1")"
+      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ "$COMPLETION_SUCCESS" = "true" ]; then
+        # Extract summary from result
+        local result_summary=""
+        if [ -f "$STDOUT_FILE" ]; then
+          result_summary="$(grep -oP '(?<=TASK_DONE\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
+        fi
+        "$MANUL_DIR/manul-result-feedback.sh" post-done \
+          --repo "$REPO" \
+          --issue "$ISSUE_NUM" \
+          --comment-id "$COMMENT_ID" \
+          --task-id "$COMMENT_ID" \
+          --summary "${result_summary:-Task completed successfully}" \
+          --pr-number "${task_pr_num:-}" \
+          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_DONE event for $COMMENT_ID"
+      else
+        fail_reason="${FAIL_REASON:-Task failed}"
+        "$MANUL_DIR/manul-result-feedback.sh" post-failed \
+          --repo "$REPO" \
+          --issue "$ISSUE_NUM" \
+          --comment-id "$COMMENT_ID" \
+          --task-id "$COMMENT_ID" \
+          --error "${fail_reason:0:500}" \
+          --pr-number "${task_pr_num:-}" \
+          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_FAILED event for $COMMENT_ID"
+      fi
+    fi
 
     # Release workspace back to pool
     local task_workspace_id

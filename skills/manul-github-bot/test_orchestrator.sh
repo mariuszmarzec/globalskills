@@ -2,6 +2,10 @@
 # test_orchestrator.sh — Comprehensive tests for Manul external orchestrator
 set -uo pipefail
 
+# Resolve script directory portably
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
+
 TEST_DIR="$(mktemp -d)"
 export MANUL_DIR="$TEST_DIR/manul"
 export ORCHESTRATOR_DIR="$TEST_DIR/orchestrator"
@@ -12,11 +16,11 @@ RESULTS_DIR="$TEST_DIR/results"
 mkdir -p "$MANUL_DIR" "$ORCHESTRATOR_DIR" "$RESULTS_DIR"
 
 # Create symlinks to the actual scripts
-ln -s "$(pwd)/skills/manul-github-bot/manul-conversation.sh" "$ORCHESTRATOR_DIR/manul-conversation.sh"
-ln -s "$(pwd)/skills/manul-github-bot/manul-wait.sh" "$ORCHESTRATOR_DIR/manul-wait.sh" 2>/dev/null || true
+ln -s "$SCRIPT_DIR/manul-conversation.sh" "$ORCHESTRATOR_DIR/manul-conversation.sh"
+ln -s "$SCRIPT_DIR/manul-wait.sh" "$ORCHESTRATOR_DIR/manul-wait.sh" 2>/dev/null || true
 
-ORCHESTRATOR="skills/manul-github-bot/manul-orchestrator.sh"
-REVIEWER="skills/manul-github-bot/orchestrator-reviewer.sh"
+ORCHESTRATOR="$SCRIPT_DIR/manul-orchestrator.sh"
+REVIEWER="$SCRIPT_DIR/orchestrator-reviewer.sh"
 
 PASSED=0
 FAILED=0
@@ -205,8 +209,8 @@ test_max_review_cycles() {
 
 # Test 15: manul-wait.sh exists and is executable
 test_wait_script_exists() {
-  [ -f "$(pwd)/skills/manul-github-bot/manul-wait.sh" ]
-  [ -x "$(pwd)/skills/manul-github-bot/manul-wait.sh" ]
+  [ -f "$SCRIPT_DIR/manul-wait.sh" ]
+  [ -x "$SCRIPT_DIR/manul-wait.sh" ]
 }
 
 echo "═══════════════════════════════════════════════════════════════"

@@ -665,17 +665,28 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       is_res="$(jq -r '.isResolved // false' <<<"$obj")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
-      if [ "${ins:-0}" -gt 0 ]; then
-        NEW=$((NEW + 1))
-        ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
-        if [ -n "$ctx" ]; then
-          esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-          sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-          log "context enriched for $id on $repo#$issue (PR + linked issues)"
-        fi
-        log "queued $id on $repo#$issue (agent=${agent:-default})"
-      fi
+       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
+       if [ "${ins:-0}" -gt 0 ]; then
+         NEW=$((NEW + 1))
+         ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
+         if [ -n "$ctx" ]; then
+           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+           sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+           log "context enriched for $id on $repo#$issue (PR + linked issues)"
+         fi
+         # GitHub control protocol integration: process review events
+         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
+           pr_num="$issue"
+           review_id="${id#review:}"
+           review_body="$fullBody"
+           conv_id="$(generate_conversation_id "$repo" "$pr_num" "$url")"
+           # Link this review to the PR's conversation
+           if [ -n "$conv_id" ]; then
+             sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
+           fi
+         fi
+         log "queued $id on $repo#$issue (agent=${agent:-default})"
+       fi
     done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
       .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
@@ -700,6 +711,63 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         diffHunk: (.diff_hunk // ""),
         isResolved: (.in_reply_to_id // null | . != null)
       }' 2>>"$LOG" || true)
+
+    # 2b) PR review events (REQUEST_CHANGES -> REVIEW_FIX tasks)
+    # The pulls/comments API returns individual comments, not review events.
+    # We need the reviews API to get the review state (APPROVED, CHANGES_REQUESTED, etc.)
+    if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
+      # Fetch open PRs and their reviews
+      while IFS= read -r pr_obj; do
+        [ -n "$pr_obj" ] || continue
+        pr_num="$(jq -r '.number' <<<"$pr_obj")"
+        [ -n "$pr_num" ] || continue
+        [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+
+        # Fetch reviews for this PR
+        reviews_json="$(gh api "repos/$repo/pulls/$pr_num/reviews?per_page=100" 2>>"$LOG" || echo '[]')"
+        now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        while IFS= read -r review; do
+          [ -n "$review" ] || continue
+          review_id="$(jq -r '.id // empty' <<<"$review")"
+          [ -n "$review_id" ] || continue
+          review_state="$(jq -r '.state // empty' <<<"$review")"
+          review_body="$(jq -r '.body // ""' <<<"$review")"
+          review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
+          review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
+          [ -n "$review_created" ] || review_created="$now"
+
+          # Only create REVIEW_FIX tasks for REQUEST_CHANGES
+          if [ "$review_state" = "CHANGES_REQUESTED" ]; then
+            log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
+            # Ensure a conversation exists for this PR; create one if missing
+            existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
+            if [ -z "$existing_conv" ]; then
+               new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null || echo "https://github.com/$repo/pull/$pr_num")")"
+              sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, 'https://github.com/$repo/pull/$pr_num', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
+              log "auto-created conversation $new_conv_id for $repo#$pr_num"
+            fi
+            if "$MANUL_DIR/manul-pr-review.sh" handle \
+              --repo "$repo" \
+              --pr-number "$pr_num" \
+              --review-id "$review_id" \
+              --review-state "REQUEST_CHANGES" \
+              --body "$review_body" \
+              --author "$review_author" \
+              --created "$review_created" \
+              --json >>"$LOG" 2>&1; then
+              log "review $review_id on $repo#$pr_num processed successfully"
+            else
+              log "WARN: failed to process review $review_id on $repo#$pr_num"
+            fi
+          elif [ "$review_state" = "APPROVED" ]; then
+            log "received APPROVE on $repo#$pr_num (no fix task created)"
+          else
+            log "received $review_state review on $repo#$pr_num (no action)"
+          fi
+        done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
+      done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
+    fi
 
     # 3) Drain pending skip comments from a previous failed run (GitHub as
     # primary frontend: comments are queued to skip-comments.log when feedback.sh
