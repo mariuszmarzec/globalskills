@@ -38,7 +38,7 @@ REVIEWER_TYPE="${REVIEWER_TYPE:-mock}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --json) JSON_OUTPUT=true; shift ;;
+    --json) JSON_OUTPUT=true; shift 1 ;;
     --repo) REPO="$2"; shift 2 ;;
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
     --review-id) REVIEW_ID="$2"; shift 2 ;;
@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
     --body) BODY="$2"; shift 2 ;;
     --author) AUTHOR="$2"; shift 2 ;;
     --created) CREATED="$2"; shift 2 ;;
-    handle|get-conversation|list-reviews) ACTION="$1"; shift ;;
+    handle|get-conversation|list-reviews) ACTION="$1"; shift 1 ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
 done
@@ -104,9 +104,9 @@ get_pr_pending_task() {
     return
   fi
 
-  # Find the latest running/completed task for this PR
+  # Find the latest running/completed task for this PR (exclude REVIEW actions and queued tasks)
   local task_id
-  task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed', 'queued') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
+  task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW', 'queued') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
 
   echo "$task_id"
 }
@@ -195,54 +195,29 @@ cmd_handle() {
       ;;
   esac
 
-  # Check for existing review (deduplication)
+  # Check for existing review (deduplication) - check both completed and running
   local existing_review
-  existing_review="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE repository='$(sql_escape "$REPO")' AND prNumber=$PR_NUMBER AND action='REVIEW' AND commentId='$(sql_escape "${REVIEW_ID:-}")' LIMIT 1;" 2>/dev/null || echo "")"
+  existing_review="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE repository='$(sql_escape "$REPO")' AND prNumber=$PR_NUMBER AND action='REVIEW' AND commentId='$(sql_escape "${REVIEW_ID:-}")' LIMIT 1;" 2>/dev/null || echo "")"
 
   if [ -n "$existing_review" ]; then
-    # Already processed this review
-    local result
-    result="{\"reviewId\": \"$REVIEW_ID\", \"action\": \"$action\", \"processed\": true, \"skipped\": true, \"reason\": \"duplicate_review\"}"
-    echo "$result" | jq .
-    return 0
+    # Already processed this review - check if it's completed to determine skip vs retry
+    if [ "$existing_review" = "completed" ]; then
+      # Review already completed successfully, skip
+      local result
+      result="{\"reviewId\": \"$REVIEW_ID\", \"action\": \"$action\", \"processed\": true, \"skipped\": true, \"reason\": \"duplicate_review\"}"
+      echo "$result" | jq .
+      return 0
+    else
+      # Review still running/failed, will be retried
+      # Clear the existing record to allow retry (idempotency)
+      sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='$(sql_escape "$REPO")' AND prNumber=$PR_NUMBER AND action='REVIEW' AND commentId='$(sql_escape "${REVIEW_ID:-}")';" 2>/dev/null || true
+    fi
   fi
 
-  # Record the review event
-  local now
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # For all review types (APPROVE/DISMISS/COMMENT/REQUEST_CHANGES):
+  # REVIEW bookkeeping is recorded ONLY after successful processing
 
-  if [ -n "$DB" ] && [ -f "$DB" ]; then
-    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$(sql_escape "${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}")', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'completed', '$now', '$(sql_escape "${conv_id:-}")', $PR_NUMBER);" 2>/dev/null || true
-  fi
-
-  # If APPROVE, update conversation state but don't create task
-  if [ "$should_create_task" = false ]; then
-    local result
-    result=$(jq -n \
-      --arg reviewId "$REVIEW_ID" \
-      --arg action "$action" \
-      --arg conversationId "$conv_id" \
-      --arg taskId "${task_id:-}" \
-      --argjson prNumber "$PR_NUMBER" \
-      '{
-        reviewId: $reviewId,
-        action: $action,
-        conversationId: $conversationId,
-        taskId: $taskId,
-        prNumber: $prNumber,
-        createdTask: false,
-        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-      }')
-    echo "$result" | jq .
-    return 0
-  fi
-
-  # REQUEST_CHANGES: Create REVIEW_FIX task
-  if [ -z "$conv_id" ]; then
-    error_exit "No conversation found for PR #$PR_NUMBER" 2
-  fi
-
-  # Parse review body for additional instructions
+  # Parse review body for additional instructions (needed for all types)
   local review_prompt="$BODY"
   if [ -n "$BODY" ] && [[ "$BODY" == *"/manul"* ]]; then
     # Extract command if present
@@ -255,7 +230,7 @@ cmd_handle() {
       --body "$BODY" \
       --author "$AUTHOR" \
       --created "$CREATED" \
-      --json 2>/dev/null)" || true
+      --json 2>/dev/null)" || cmd_output=""
 
     if [ -n "$cmd_output" ]; then
       local parsed_action
@@ -266,80 +241,143 @@ cmd_handle() {
     fi
   fi
 
-  # Submit review-fix task
-  local submit_args=(
-    --conversation-id "$conv_id"
-    --prompt "$review_prompt"
-    --action REVIEW_FIX
-    --pr-number "$PR_NUMBER"
-  )
-
-  if [ -n "$task_id" ]; then
-    submit_args+=(--parent-task-id "$task_id")
-  fi
-
-  # Use manul-conversation.sh to submit
-  local submit_output=""
-  if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
-    submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || true
-  fi
-
-  local new_task_id=""
-  local submit_success=false
-
-  if [ -n "$submit_output" ]; then
-    new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
-    if [ -n "$new_task_id" ]; then
-      submit_success=true
+  if [ "$should_create_task" = true ]; then
+    # REQUEST_CHANGES: Create REVIEW_FIX task
+    if [ -z "$conv_id" ]; then
+      error_exit "No conversation found for PR #$PR_NUMBER" 2
     fi
-  fi
 
-  if [ "$submit_success" = false ]; then
-    # Submit failed - return explicit failure result
-    local fail_result
-    fail_result=$(jq -n \
+    # Submit review-fix task
+    local submit_args=(
+      --conversation-id "$conv_id"
+      --prompt "$review_prompt"
+      --action REVIEW_FIX
+      --pr-number "$PR_NUMBER"
+    )
+
+    if [ -n "$task_id" ]; then
+      submit_args+=(--parent-task-id "$task_id")
+    fi
+
+    # Use manul-conversation.sh to submit
+    local submit_output=""
+    if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
+      submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
+        local fail_result
+        fail_result=$(jq -n \
+          --arg reviewId "$REVIEW_ID" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: null,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            createdTask: false,
+            error: "submit_failed",
+            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          }')
+        echo "$fail_result" | jq .
+        return 1
+      }
+    fi
+
+    local new_task_id=""
+    local submit_success=false
+
+    if [ -n "$submit_output" ]; then
+      new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
+      if [ -n "$new_task_id" ]; then
+        submit_success=true
+      fi
+    fi
+
+    if [ "$submit_success" = false ]; then
+      # Submit failed - return explicit failure result (review NOT recorded, will be retried)
+      local fail_result
+      fail_result=$(jq -n \
+        --arg reviewId "$REVIEW_ID" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          createdTask: false,
+          error: "submit_failed",
+          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+        }')
+      echo "$fail_result" | jq .
+      return 1
+    fi
+
+    # Successful REVIEW_FIX task submission - record review
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$(sql_escape "${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}")', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'completed', '$now', '$(sql_escape "${conv_id:-}")', $PR_NUMBER);" 2>/dev/null || true
+    fi
+
+    local result
+    result=$(jq -n \
       --arg reviewId "$REVIEW_ID" \
       --arg action "$action" \
       --arg conversationId "$conv_id" \
+      --arg newTaskId "$new_task_id" \
       --arg parentTaskId "${task_id:-}" \
+      --argjson prNumber "$PR_NUMBER" \
+      --arg reviewPrompt "${review_prompt:0:200}" \
+      '{
+        reviewId: $reviewId,
+        action: $action,
+        conversationId: $conversationId,
+        newTaskId: $newTaskId,
+        parentTaskId: $parentTaskId,
+        prNumber: $prNumber,
+        reviewPrompt: $reviewPrompt,
+        createdTask: true,
+        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+      }')
+
+    echo "$result" | jq .
+    return 0
+
+  else
+    # APPROVE/DISMISS/COMMENT: no task created, but still need to process review
+    # Record review for idempotency (REMOVED immediate recording)
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$(sql_escape "${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}")', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'completed', '$now', '$(sql_escape "${conv_id:-}")', $PR_NUMBER);" 2>/dev/null || true
+    fi
+
+    local result
+    result=$(jq -n \
+      --var reviewId "$REVIEW_ID" \
+      --var action "$action" \
+      --var conversationId "$conv_id" \
+      --var taskId "${task_id:-}" \
       --argjson prNumber "$PR_NUMBER" \
       '{
         reviewId: $reviewId,
         action: $action,
         conversationId: $conversationId,
-        newTaskId: null,
-        parentTaskId: $parentTaskId,
+        taskId: $taskId,
         prNumber: $prNumber,
         createdTask: false,
-        error: "submit_failed",
         timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
       }')
-    echo "$fail_result" | jq .
-    return 1
+
+    echo "$result" | jq .
+    return 0
   fi
-
-  local result
-  result=$(jq -n \
-    --arg reviewId "$REVIEW_ID" \
-    --arg action "$action" \
-    --arg conversationId "$conv_id" \
-    --arg newTaskId "$new_task_id" \
-    --arg parentTaskId "${task_id:-}" \
-    --argjson prNumber "$PR_NUMBER" \
-    --arg reviewPrompt "${review_prompt:0:200}" \
-    '{
-      reviewId: $reviewId,
-      action: $action,
-      conversationId: $conversationId,
-      newTaskId: $newTaskId,
-      parentTaskId: $parentTaskId,
-      prNumber: $prNumber,
-      reviewPrompt: $reviewPrompt,
-      createdTask: true,
-      timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-    }')
-
-  echo "$result" | jq .
 }
 
 # Get conversation info for a PR

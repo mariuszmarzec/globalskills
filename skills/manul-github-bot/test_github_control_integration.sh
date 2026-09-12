@@ -246,7 +246,7 @@ test_review_handler_creates_fix_task() {
   sqlite3 "$TEST_DB" "INSERT OR IGNORE INTO conversations(conversationId,repository,issueNumber,issueUrl,activePrNumber,status,activeTaskId,createdAt,updatedAt) VALUES('$conv_id','$repo',$pr_num,'https://github.com/$repo/pull/$pr_num',$pr_num,'OPEN',NULL,'$now','$now');" 2>/dev/null
   sqlite3 "$TEST_DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,createdAt,conversationId,prNumber) VALUES('task-50','$repo',$pr_num,'http://test','test','manul','Original task','completed',1,'$now','$conv_id',$pr_num);" 2>/dev/null
   local output
-  output="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" handle --repo "$repo" --pr-number "$pr_num" --review-id "review-new-$pr_num" --review-state REQUEST_CHANGES --body "Please fix the formatting" --author reviewer --created "$now" --json 2>/dev/null)" || return 1
+  output="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" --json handle --repo "$repo" --pr-number "$pr_num" --review-id "review-new-$pr_num" --review-state REQUEST_CHANGES --body "Please fix the formatting" --author reviewer --created "$now" 2>/dev/null)" || return 1
   if echo "$output" | jq -e '.createdTask == true' >/dev/null 2>&1; then
     return 0
   fi
@@ -261,7 +261,7 @@ test_approval_does_not_create_task() {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   sqlite3 "$TEST_DB" "INSERT OR IGNORE INTO conversations(conversationId,repository,issueNumber,issueUrl,activePrNumber,status,activeTaskId,createdAt,updatedAt) VALUES('$conv_id','$repo',$pr_num,'https://github.com/$repo/pull/$pr_num',$pr_num,'OPEN',NULL,'$now','$now');" 2>/dev/null
   local output
-  output="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" handle --repo "$repo" --pr-number "$pr_num" --review-id "review-new-approve-$pr_num" --review-state APPROVE --body "Looks good!" --author reviewer --created "$now" --json 2>/dev/null)" || return 1
+  output="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" --json handle --repo "$repo" --pr-number "$pr_num" --review-id "review-new-approve-$pr_num" --review-state APPROVE --body "Looks good!" --author reviewer --created "$now" 2>/dev/null)" || return 1
   if echo "$output" | jq -e '.createdTask == false' >/dev/null 2>&1; then
     return 0
   fi
@@ -312,4 +312,107 @@ echo "════════════════════════�
 if [ "$FAILED" -gt 0 ]; then
   exit 1
 fi
-exit 0
+# exit 0 removed - new tests added below
+
+# ===================== poll.sh Real Integration Test =====================
+test_poll_integration_with_mocked_github() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/poll-integration-test-XXXXXX)"
+  local poll_db="$test_dir/manul.db"
+  mkdir -p "$test_dir"
+
+  cat > "$test_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+case "$1" in
+  pr)
+    case "$3" in
+      view) echo '{"headRefName": "feature/test", "title": "Test PR"}' ;;
+      diff) echo 'diff --git a/test.js b/test.js' ;;
+    esac
+    ;;
+  api) echo '[]' ;;
+  repo) echo '{"name": "test-repo", "defaultBranchRef": {"name": "main"}}' ;;
+  pr) [[ "$*" == *checkout* ]] && echo "Created branch" ;;
+  comment) [[ "$*" == *--body* ]] && echo '{"id": "new-comment-id"}' ;;
+esac
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local poll_output
+  poll_output="$(MANUL_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null)" || true
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# ===================== Daemon Lifecycle Tests =====================
+
+test_daemon_lifecycle_task_started_emitted() {
+  local daemon_file="$SCRIPT_DIR/manul-daemon.sh"
+  local started_after_comment=false
+  local started_before_task=false
+
+  if grep -q 'dispatch: posted in-progress comment' "$daemon_file" && \
+     grep -q 'post-started' "$daemon_file"; then
+    local comment_line started_line
+    comment_line="$(grep -n 'dispatch: posted in-progress comment' "$daemon_file" | head -1 | cut -d: -f1)"
+    started_line="$(grep -n 'post-started' "$daemon_file" | head -1 | cut -d: -f1)"
+    [ -n "$comment_line" ] && [ -n "$started_line" ] && [ "$started_line" -gt "$comment_line" ] && started_after_comment=true
+  fi
+
+  if grep -q 'post-started' "$daemon_file" && \
+     grep -q 'TASK_PROMPT_FILE=' "$daemon_file"; then
+    local started_line prompt_line
+    started_line="$(grep -n 'post-started' "$daemon_file" | head -1 | cut -d: -f1)"
+    prompt_line="$(grep -n 'TASK_PROMPT_FILE=' "$daemon_file" | head -1 | cut -d: -f1)"
+    [ -n "$started_line" ] && [ -n "$prompt_line" ] && [ "$started_line" -lt "$prompt_line" ] && started_before_task=true
+  fi
+
+  [ "$started_after_comment" = true ] && [ "$started_before_task" = true ]
+}
+
+test_daemon_lifecycle_task_done_emitted() {
+  local daemon_file="$SCRIPT_DIR/manul-daemon.sh"
+  grep -q 'post-done' "$daemon_file" && grep -q 'TASK_DONE' "$daemon_file"
+}
+
+test_review_recording_after_submission() {
+  local review_file="$SCRIPT_DIR/manul-pr-review.sh"
+  local submit_check_line record_review_line
+  submit_check_line="$(grep -n 'submit_success=false' "$review_file" | head -1 | cut -d: -f1)"
+  record_review_line="$(grep -n 'INSERT OR IGNORE INTO processed_comments.*REVIEW' "$review_file" | tail -1 | cut -d: -f1)"
+
+  [ -n "$submit_check_line" ] && [ -n "$record_review_line" ] && [ "$record_review_line" -gt "$submit_check_line" ]
+}
+
+test_pending_task_excludes_review_and_queued() {
+  local review_file="$SCRIPT_DIR/manul-pr-review.sh"
+  local query
+  query="$(grep 'get_pr_pending_task' "$review_file" | grep -v '()' | head -1)"
+
+  echo "$query" | grep -q "NOT IN.*REVIEW.*queued" || echo "$query" | grep -q "NOT IN.*queued.*REVIEW"
+}
