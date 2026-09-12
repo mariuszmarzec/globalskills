@@ -743,7 +743,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             # Ensure a conversation exists for this PR; create one if missing
             existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
             if [ -z "$existing_conv" ]; then
-              new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.[].url' 2>/dev/null || echo "https://github.com/$repo/pull/$pr_num")")"
+               new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null || echo "https://github.com/$repo/pull/$pr_num")")"
               sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, 'https://github.com/$repo/pull/$pr_num', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
               log "auto-created conversation $new_conv_id for $repo#$pr_num"
             fi
