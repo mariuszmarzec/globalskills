@@ -731,11 +731,880 @@ CFGEOF
   return 0
 }
 
+# ===================== PR Merge Auto-Close Tests =====================
+
+test_merged_pr_closes_conversation() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/merge-close-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+  local call_log="$test_dir/call_log.txt"
+  > "$call_log"
+
+  cat > "$mock_gh_dir/gh" <<MOCK_EOF
+#!/bin/bash
+log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+  log "gh pr list --repo test-org/test-repo"
+  if [[ "\$*" == *"--state merged"* ]]; then
+    echo '50'
+  elif [[ "\$*" == *"--state open"* ]]; then
+    echo '[]'
+  elif [[ "\$*" == *"--json number"* ]]; then
+    echo '50'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+  log "gh issue list"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "api" ]]; then
+  log "gh api \$*"
+  echo '[]'
+  exit 0
+fi
+log "UNHANDLED: \$*"
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  # Seed: conversation with activePrNumber=50, no tasks
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('merge-conv-1', 'test-org/test-repo', 50, 'https://github.com/test-org/test-repo/pull/50', 50, 'https://github.com/test-org/test-repo/pull/50', 'OPEN', '$now', '$now');"
+
+  # Run poll.sh
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+  local exit_code=$?
+
+  if [ $exit_code -ne 0 ]; then
+    echo "ERROR: poll.sh failed with exit code $exit_code"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify conversation is COMPLETED
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='merge-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "COMPLETED" ]; then
+    echo "ERROR: Expected COMPLETED, got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify activePrNumber is NULL
+  local active_pr
+  active_pr="$(sqlite3 "$poll_db" "SELECT activePrNumber FROM conversations WHERE conversationId='merge-conv-1';" 2>/dev/null)"
+  if [ -n "$active_pr" ]; then
+    echo "ERROR: Expected activePrNumber=NULL, got '$active_pr'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify activePrUrl is NULL
+  local active_pr_url
+  active_pr_url="$(sqlite3 "$poll_db" "SELECT activePrUrl FROM conversations WHERE conversationId='merge-conv-1';" 2>/dev/null)"
+  if [ -n "$active_pr_url" ]; then
+    echo "ERROR: Expected activePrUrl=NULL, got '$active_pr_url'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify historical data preserved
+  local issue_num
+  issue_num="$(sqlite3 "$poll_db" "SELECT issueNumber FROM conversations WHERE conversationId='merge-conv-1';" 2>/dev/null)"
+  if [ "$issue_num" != "50" ]; then
+    echo "ERROR: Expected issueNumber=50, got '$issue_num'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_repeated_poll_after_merge_no_state_change() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/merge-repeat-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '60'
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--json number"* ]]; then
+    echo '60'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  echo '[]'
+  exit 0
+fi
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('repeat-conv-1', 'test-org/test-repo', 60, 'https://github.com/test-org/test-repo/pull/60', 60, 'https://github.com/test-org/test-repo/pull/60', 'OPEN', '$now', '$now');"
+
+  # Run poll.sh three times
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  # Verify still COMPLETED, only one conversation
+  local conv_count
+  conv_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversations WHERE conversationId='repeat-conv-1' AND status='COMPLETED';" 2>/dev/null)"
+  if [ "$conv_count" != "1" ]; then
+    echo "ERROR: Expected 1 COMPLETED conversation, found $conv_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local active_pr
+  active_pr="$(sqlite3 "$poll_db" "SELECT activePrNumber FROM conversations WHERE conversationId='repeat-conv-1';" 2>/dev/null)"
+  if [ -n "$active_pr" ]; then
+    echo "ERROR: Expected activePrNumber=NULL after repeated polls, got '$active_pr'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_queued_task_prevents_auto_close_on_merge() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/merge-queued-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '70'
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--json number"* ]]; then
+    echo '70'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  echo '[]'
+  exit 0
+fi
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('queued-conv-1', 'test-org/test-repo', 70, 'https://github.com/test-org/test-repo/pull/70', 70, 'https://github.com/test-org/test-repo/pull/70', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId) VALUES('queued-task-1', 'test-org/test-repo', 70, 'https://github.com/test-org/test-repo/issues/70', 'user', 'manul', 'Do work', 'queued', '$now', 'queued-conv-1');"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='queued-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "OPEN" ]; then
+    echo "ERROR: Expected OPEN (queued task prevents close), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local active_pr
+  active_pr="$(sqlite3 "$poll_db" "SELECT activePrNumber FROM conversations WHERE conversationId='queued-conv-1';" 2>/dev/null)"
+  if [ "$active_pr" != "70" ]; then
+    echo "ERROR: Expected activePrNumber=70, got '$active_pr'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_running_task_prevents_auto_close_on_merge() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/merge-running-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '80'
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--json number"* ]]; then
+    echo '80'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  echo '[]'
+  exit 0
+fi
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('running-conv-1', 'test-org/test-repo', 80, 'https://github.com/test-org/test-repo/pull/80', 80, 'https://github.com/test-org/test-repo/pull/80', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId) VALUES('running-task-1', 'test-org/test-repo', 80, 'https://github.com/test-org/test-repo/issues/80', 'user', 'manul', 'Do work', 'running', '$now', 'running-conv-1');"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='running-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "OPEN" ]; then
+    echo "ERROR: Expected OPEN (running task prevents close), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_new_pr_after_merge_attaches_to_issue_conversation() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/new-pr-after-merge-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '[{"number":90,"merged_at":"2024-01-01T00:00:00Z"}]'
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[{"number":91,"headRefName":"feature/v2","baseRefName":"main","title":"New PR","url":"https://github.com/test-org/test-repo/pull/91"}]'
+  elif [[ "$*" == *"--json number"* && "$*" == *"--state merged"* ]]; then
+    echo '90'
+  elif [[ "$*" == *"--json number"* ]]; then
+    echo '91'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  if [[ "$*" == *"/reviews"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  echo '{"url":"https://github.com/test-org/test-repo/pull/91"}'
+  exit 0
+fi
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('new-pr-conv', 'test-org/test-repo', 90, 'https://github.com/test-org/test-repo/pull/90', NULL, NULL, 'COMPLETED', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('old-task-1', 'test-org/test-repo', 90, 'https://github.com/test-org/test-repo/issues/90', 'user', 'manul', 'Old task', 'completed', '$now', 'new-pr-conv', 'IMPLEMENT', 90);"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+  local exit_code=$?
+
+  if [ $exit_code -ne 0 ]; then
+    echo "ERROR: poll.sh failed with exit code $exit_code"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local old_status
+  old_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='new-pr-conv';" 2>/dev/null)"
+  if [ "$old_status" != "COMPLETED" ]; then
+    echo "ERROR: Expected old conversation to remain COMPLETED, got '$old_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_review_fix_chain_no_premature_close() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/review-fix-chain-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[{"number":100,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/100"}]'
+  elif [[ "$*" == *"--json number"* ]]; then
+    echo '100'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  if [[ "$*" == *"/reviews"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('review-chain-conv', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/pull/100', 100, 'https://github.com/test-org/test-repo/pull/100', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('impl-task-1', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/issues/100', 'user', 'manul', 'Implement', 'completed', '$now', 'review-chain-conv', 'IMPLEMENT', 100);"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber, parentTaskId) VALUES('review-fix-1', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/issues/100', 'reviewer', 'manul', 'Fix review', 'queued', '$now', 'review-chain-conv', 'REVIEW_FIX', 100, 'impl-task-1');"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+  local exit_code=$?
+
+  if [ $exit_code -ne 0 ]; then
+    echo "ERROR: poll.sh failed with exit code $exit_code"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='review-chain-conv';" 2>/dev/null)"
+  if [ "$conv_status" != "OPEN" ]; then
+    echo "ERROR: Expected OPEN (REVIEW_FIX still queued), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local active_pr
+  active_pr="$(sqlite3 "$poll_db" "SELECT activePrNumber FROM conversations WHERE conversationId='review-chain-conv';" 2>/dev/null)"
+  if [ "$active_pr" != "100" ]; then
+    echo "ERROR: Expected activePrNumber=100, got '$active_pr'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# ===================== Daemon Task-Drain Auto-Close Tests =====================
+
+test_daemon_auto_closes_on_task_drain() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/daemon-drain-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('drain-conv-1', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/issues/100', 100, 'https://github.com/test-org/test-repo/pull/100', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-1', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/issues/100', 'user', 'manul', 'Implement feature', 'completed', '$now', 'drain-conv-1', 'IMPLEMENT', 100);"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-2', 'test-org/test-repo', 100, 'https://github.com/test-org/test-repo/issues/100', 'user', 'manul', 'Write tests', 'completed', '$now', 'drain-conv-1', 'IMPLEMENT', 100);"
+
+  # Simulate what daemon does: check if all tasks finalized
+  local task_final_status
+  task_final_status="$(sqlite3 "$poll_db" "SELECT status FROM processed_comments WHERE commentId='task-2' LIMIT 1;" 2>/dev/null)"
+  if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+    local task_conv_id_for_close
+    task_conv_id_for_close="$(sqlite3 "$poll_db" "SELECT conversationId FROM processed_comments WHERE commentId='task-2' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_conv_id_for_close" ]; then
+      local remaining_tasks
+      remaining_tasks="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status IN ('queued', 'running');" 2>/dev/null || echo "0")"
+      if [ "$remaining_tasks" -eq 0 ]; then
+        local now_close
+        now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sqlite3 "$poll_db" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status != 'COMPLETED';" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='drain-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "COMPLETED" ]; then
+    echo "ERROR: Expected COMPLETED, got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local active_pr
+  active_pr="$(sqlite3 "$poll_db" "SELECT activePrNumber FROM conversations WHERE conversationId='drain-conv-1';" 2>/dev/null)"
+  if [ -n "$active_pr" ]; then
+    echo "ERROR: Expected activePrNumber=NULL, got '$active_pr'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local issue_num
+  issue_num="$(sqlite3 "$poll_db" "SELECT issueNumber FROM conversations WHERE conversationId='drain-conv-1';" 2>/dev/null)"
+  if [ "$issue_num" != "100" ]; then
+    echo "ERROR: Expected issueNumber=100, got '$issue_num'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_daemon_does_not_close_with_queued_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/daemon-queued-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('queued-conv-1', 'test-org/test-repo', 110, 'https://github.com/test-org/test-repo/issues/110', 110, 'https://github.com/test-org/test-repo/pull/110', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-1', 'test-org/test-repo', 110, 'https://github.com/test-org/test-repo/issues/110', 'user', 'manul', 'Implement feature', 'completed', '$now', 'queued-conv-1', 'IMPLEMENT', 110);"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-2', 'test-org/test-repo', 110, 'https://github.com/test-org/test-repo/issues/110', 'user', 'manul', 'Fix review', 'queued', '$now', 'queued-conv-1', 'REVIEW_FIX', 110);"
+
+  local task_final_status
+  task_final_status="$(sqlite3 "$poll_db" "SELECT status FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+  if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+    local task_conv_id_for_close
+    task_conv_id_for_close="$(sqlite3 "$poll_db" "SELECT conversationId FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_conv_id_for_close" ]; then
+      local remaining_tasks
+      remaining_tasks="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status IN ('queued', 'running');" 2>/dev/null || echo "0")"
+      if [ "$remaining_tasks" -eq 0 ]; then
+        local now_close
+        now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sqlite3 "$poll_db" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status != 'COMPLETED';" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='queued-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "OPEN" ]; then
+    echo "ERROR: Expected OPEN (queued task prevents close), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_daemon_auto_closes_on_failed_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/daemon-failed-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('failed-conv-1', 'test-org/test-repo', 120, 'https://github.com/test-org/test-repo/issues/120', 120, 'https://github.com/test-org/test-repo/pull/120', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-1', 'test-org/test-repo', 120, 'https://github.com/test-org/test-repo/issues/120', 'user', 'manul', 'Implement feature', 'failed', '$now', 'failed-conv-1', 'IMPLEMENT', 120);"
+
+  local task_final_status
+  task_final_status="$(sqlite3 "$poll_db" "SELECT status FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+  if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+    local task_conv_id_for_close
+    task_conv_id_for_close="$(sqlite3 "$poll_db" "SELECT conversationId FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_conv_id_for_close" ]; then
+      local remaining_tasks
+      remaining_tasks="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status IN ('queued', 'running');" 2>/dev/null || echo "0")"
+      if [ "$remaining_tasks" -eq 0 ]; then
+        local now_close
+        now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sqlite3 "$poll_db" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status != 'COMPLETED';" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='failed-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "COMPLETED" ]; then
+    echo "ERROR: Expected COMPLETED (failed task closes conversation), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+test_daemon_does_not_close_with_running_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/daemon-running-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, activePrUrl, status, createdAt, updatedAt) VALUES('running-conv-1', 'test-org/test-repo', 130, 'https://github.com/test-org/test-repo/issues/130', 130, 'https://github.com/test-org/test-repo/pull/130', 'OPEN', '$now', '$now');"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-1', 'test-org/test-repo', 130, 'https://github.com/test-org/test-repo/issues/130', 'user', 'manul', 'Implement feature', 'completed', '$now', 'running-conv-1', 'IMPLEMENT', 130);"
+  sqlite3 "$poll_db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('task-2', 'test-org/test-repo', 130, 'https://github.com/test-org/test-repo/issues/130', 'user', 'manul', 'Write tests', 'running', '$now', 'running-conv-1', 'IMPLEMENT', 130);"
+
+  local task_final_status
+  task_final_status="$(sqlite3 "$poll_db" "SELECT status FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+  if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+    local task_conv_id_for_close
+    task_conv_id_for_close="$(sqlite3 "$poll_db" "SELECT conversationId FROM processed_comments WHERE commentId='task-1' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_conv_id_for_close" ]; then
+      local remaining_tasks
+      remaining_tasks="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status IN ('queued', 'running');" 2>/dev/null || echo "0")"
+      if [ "$remaining_tasks" -eq 0 ]; then
+        local now_close
+        now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sqlite3 "$poll_db" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(echo "$task_conv_id_for_close" | sed "s/'/''/g")' AND status != 'COMPLETED';" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  local conv_status
+  conv_status="$(sqlite3 "$poll_db" "SELECT status FROM conversations WHERE conversationId='running-conv-1';" 2>/dev/null)"
+  if [ "$conv_status" != "OPEN" ]; then
+    echo "ERROR: Expected OPEN (running task prevents close), got '$conv_status'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
 # ===================== Run Additional Tests =====================
 run_test "daemon: lifecycle task started emitted" test_daemon_lifecycle_task_started_emitted
 run_test "daemon: lifecycle task done emitted" test_daemon_lifecycle_task_done_emitted
 run_test "daemon: review recorded after submission" test_review_recording_after_submission
 run_test "integration: poll with mocked github" test_poll_integration_with_mocked_github
+run_test "merge: auto-close on PR merge" test_merged_pr_closes_conversation
+run_test "merge: repeated poll idempotent" test_repeated_poll_after_merge_no_state_change
+run_test "merge: queued task prevents close" test_queued_task_prevents_auto_close_on_merge
+run_test "merge: running task prevents close" test_running_task_prevents_auto_close_on_merge
+run_test "merge: new PR after merge" test_new_pr_after_merge_attaches_to_issue_conversation
+run_test "merge: review fix chain safety" test_review_fix_chain_no_premature_close
+run_test "daemon: auto-close on task drain" test_daemon_auto_closes_on_task_drain
+run_test "daemon: does not close with queued task" test_daemon_does_not_close_with_queued_task
+run_test "daemon: auto-close on failed task" test_daemon_auto_closes_on_failed_task
+run_test "daemon: does not close with running task" test_daemon_does_not_close_with_running_task
 
 # ===================== Results =====================
 echo ""

@@ -156,6 +156,33 @@ generate_conversation_id() {
   fi
 }
 
+# Close conversations whose active PR has been merged and have no remaining tasks.
+# Idempotent: only touches conversations with status != 'COMPLETED'.
+close_merged_pr_conversations() {
+  local merged_pr_list="$1"
+  [ -z "$merged_pr_list" ] && return 0
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local escaped_list
+  escaped_list="$(printf '%s' "$merged_pr_list" | sed "s/'/''/g")"
+
+  # Find conversations with activePrNumber in merged PRs that have no queued/running tasks
+  while IFS='|' read -r conv_id; do
+    [ -n "$conv_id" ] || continue
+    sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now' WHERE conversationId='$(sql_escape "$conv_id")' AND status != 'COMPLETED';" 2>>"$LOG" || true
+    log "auto-closed conversation $conv_id (merged PR has no remaining tasks)"
+  done < <(sqlite3 "$DB" "
+    SELECT c.conversationId FROM conversations c
+    WHERE c.activePrNumber IN ($merged_pr_list)
+      AND c.status != 'COMPLETED'
+      AND NOT EXISTS (
+        SELECT 1 FROM processed_comments t
+        WHERE t.conversationId = c.conversationId
+          AND t.status IN ('queued', 'running')
+      );" 2>/dev/null || true)
+}
+
 if [ $# -gt 0 ]; then
   REPOS=("$@")
 else
@@ -516,6 +543,16 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
     while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG" || true)
     while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG" || true)
+
+    # Auto-close conversations for merged PRs that have no remaining active tasks.
+    if [ ${#MERGED_PRS[@]} -gt 0 ]; then
+      merged_pr_ids=""
+      for mp in "${!MERGED_PRS[@]}"; do
+        [ -n "$merged_pr_ids" ] && merged_pr_ids="$merged_pr_ids,"
+        merged_pr_ids="${merged_pr_ids}${mp}"
+      done
+      close_merged_pr_conversations "$merged_pr_ids"
+    fi
 
     # Drain pending skip comments from a previous failed run (GitHub as primary frontend: comments are queued to skip-comments.log when feedback.sh fails after all retries, and retried here).
   skip_log="$MANUL_DIR/skip-comments.log"
