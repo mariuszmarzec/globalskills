@@ -170,8 +170,11 @@ close_merged_pr_conversations() {
   # Find conversations with activePrNumber in merged PRs that have no queued/running tasks
   while IFS='|' read -r conv_id; do
     [ -n "$conv_id" ] || continue
-    sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now' WHERE conversationId='$(sql_escape "$conv_id")' AND status != 'COMPLETED';" 2>>"$LOG" || true
-    log "auto-closed conversation $conv_id (merged PR has no remaining tasks)"
+    if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now' WHERE conversationId='$(sql_escape "$conv_id")' AND status != 'COMPLETED';" 2>>"$LOG"; then
+      log "auto-closed conversation $conv_id (merged PR has no remaining tasks)"
+    else
+      log "ERROR: failed to close conversation $conv_id (merged PR)"
+    fi
   done < <(sqlite3 "$DB" "
     SELECT c.conversationId FROM conversations c
     WHERE c.activePrNumber IN ($merged_pr_list)

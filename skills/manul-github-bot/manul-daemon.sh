@@ -1324,8 +1324,11 @@ PROMPT_APPEND
         if [ "$remaining_tasks" -eq 0 ]; then
           local now_close
           now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG" || true
-          log "auto-closed conversation $task_conv_id_for_close (all tasks finalized, status=$task_final_status)"
+          if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG"; then
+            log "auto-closed conversation $task_conv_id_for_close (all tasks finalized, status=$task_final_status)"
+          else
+            log "ERROR: failed to close conversation $task_conv_id_for_close (task drain)"
+          fi
         fi
       fi
     fi

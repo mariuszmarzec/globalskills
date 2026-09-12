@@ -564,7 +564,7 @@ CFGEOF
   local call_log="$test_dir/call_log.txt"
   > "$call_log"
 
-  cat > "$mock_gh_dir/gh" <<MOCK_EOF
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 MOCK_GH_DIR="$test_dir"
 log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
