@@ -1320,8 +1320,10 @@ PROMPT_APPEND
       task_conv_id_for_close="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
       if [ -n "$task_conv_id_for_close" ]; then
         local remaining_tasks
-        remaining_tasks="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status IN ('queued', 'running');" 2>/dev/null || echo "0")"
-        if [ "$remaining_tasks" -eq 0 ]; then
+        remaining_tasks="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status IN ('queued', 'running');" 2>>"$LOG")" || remaining_tasks=""
+        if [ -z "$remaining_tasks" ]; then
+          log "ERROR: failed to count remaining tasks for conversation $task_conv_id_for_close (task drain)"
+        elif [ "$remaining_tasks" -eq 0 ]; then
           local now_close
           now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG"; then

@@ -168,14 +168,8 @@ close_merged_pr_conversations() {
   escaped_list="$(printf '%s' "$merged_pr_list" | sed "s/'/''/g")"
 
   # Find conversations with activePrNumber in merged PRs that have no queued/running tasks
-  while IFS='|' read -r conv_id; do
-    [ -n "$conv_id" ] || continue
-    if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now' WHERE conversationId='$(sql_escape "$conv_id")' AND status != 'COMPLETED';" 2>>"$LOG"; then
-      log "auto-closed conversation $conv_id (merged PR has no remaining tasks)"
-    else
-      log "ERROR: failed to close conversation $conv_id (merged PR)"
-    fi
-  done < <(sqlite3 "$DB" "
+  local query_err
+  query_err=$(sqlite3 "$DB" "
     SELECT c.conversationId FROM conversations c
     WHERE c.activePrNumber IN ($merged_pr_list)
       AND c.status != 'COMPLETED'
@@ -183,7 +177,19 @@ close_merged_pr_conversations() {
         SELECT 1 FROM processed_comments t
         WHERE t.conversationId = c.conversationId
           AND t.status IN ('queued', 'running')
-      );" 2>/dev/null || true)
+      );" 2>>"$LOG") || query_err="FAILED"
+  if [ "$query_err" = "FAILED" ]; then
+    log "ERROR: failed to query conversations for merged PR auto-close"
+  else
+    while IFS='|' read -r conv_id; do
+      [ -n "$conv_id" ] || continue
+      if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now' WHERE conversationId='$(sql_escape "$conv_id")' AND status != 'COMPLETED';" 2>>"$LOG"; then
+        log "auto-closed conversation $conv_id (merged PR has no remaining tasks)"
+      else
+        log "ERROR: failed to close conversation $conv_id (merged PR)"
+      fi
+    done <<<"$query_err"
+  fi
 }
 
 if [ $# -gt 0 ]; then
@@ -540,7 +546,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
     # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
     # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
-    declare -A OPEN_ISSUES CLOSED_ISSUES OPEN_PRS MERGED_PRS CLOSED_PRS
+    declare -A OPEN_ISSUES=() CLOSED_ISSUES=() OPEN_PRS=() MERGED_PRS=() CLOSED_PRS=()
     while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
     while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG" || true)
     while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
