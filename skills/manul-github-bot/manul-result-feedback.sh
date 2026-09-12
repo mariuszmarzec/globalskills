@@ -227,7 +227,7 @@ cmd_post_done() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
 
   echo "$result" | jq .
 }
@@ -305,7 +305,7 @@ cmd_post_failed() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
 
   echo "$result" | jq .
 }
@@ -371,7 +371,7 @@ cmd_post_started() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
 
   echo "$result" | jq .
 }

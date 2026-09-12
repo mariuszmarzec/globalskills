@@ -104,9 +104,9 @@ get_pr_pending_task() {
     return
   fi
 
-  # Find the latest running/completed task for this PR (exclude REVIEW actions and queued tasks)
+  # Find the latest running/completed task for this PR (exclude REVIEW actions only)
   local task_id
-  task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW', 'queued') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
+  task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
 
   echo "$task_id"
 }

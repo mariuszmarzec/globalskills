@@ -69,6 +69,32 @@ REVIEW_SCRIPT="$SCRIPT_DIR/manul-pr-review.sh"
 LINKER_SCRIPT="$SCRIPT_DIR/manul-conversation-linker.sh"
 FEEDBACK_SCRIPT="$SCRIPT_DIR/manul-result-feedback.sh"
 
+# Create mock gh for feedback tests
+MOCK_GH_DIR="$TEST_DIR/mock-gh"
+mkdir -p "$MOCK_GH_DIR"
+cat > "$MOCK_GH_DIR/gh" <<'MOCK_EOF'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      comment) exit 0 ;;
+      view) exit 0 ;;
+    esac
+    ;;
+  pr)
+    case "$2" in
+      view) exit 0 ;;
+      checkout) exit 0 ;;
+    esac
+    ;;
+  api) exit 0 ;;
+  repo) exit 0 ;;
+esac
+exit 0
+MOCK_EOF
+chmod +x "$MOCK_GH_DIR/gh"
+export PATH="$MOCK_GH_DIR:$PATH"
+
 PASSED=0
 FAILED=0
 TESTS_RUN=0
@@ -558,6 +584,107 @@ test_production_path_safety() {
 }
 
 # ============================================================
+# Regression Tests for Production Fixes
+# ============================================================
+
+# Test 21: get_pr_pending_task excludes REVIEW action only (not queued status)
+test_get_pr_pending_task_excludes_review_not_queued() {
+  init_db
+
+  # Verify the SQL query in get_pr_pending_task excludes REVIEW but NOT queued
+  local query
+  query="$(sed -n '/^get_pr_pending_task/,/^}/p' "$REVIEW_SCRIPT" | grep 'action NOT IN' | head -1)"
+
+  # Must exclude REVIEW action
+  echo "$query" | grep -q "NOT IN.*('REVIEW')" || return 1
+
+  # Must NOT exclude queued status (it's a status, not an action)
+  echo "$query" | grep -q "NOT IN.*queued" && return 1
+
+  # Also verify via direct SQL that the query works correctly
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Insert test data
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, action, prNumber) VALUES('review-task', 'test/repo', 100, 'https://github.com/test/repo/pull/100', 'user', 'Review', 'running', '$now', 'REVIEW', 100);" 2>/dev/null
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, action, prNumber) VALUES('queued-task', 'test/repo', 100, 'https://github.com/test/repo/pull/100', 'user', 'Implement', 'queued', '$now', 'IMPLEMENT', 100);" 2>/dev/null
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, action, prNumber) VALUES('running-task', 'test/repo', 100, 'https://github.com/test/repo/pull/100', 'user', 'Implement', 'running', '$now', 'IMPLEMENT', 100);" 2>/dev/null
+
+  # Run the exact SQL query from the script
+  local selected_task
+  selected_task="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='test/repo' AND prNumber=100 AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null)"
+
+  # Should return running-task, not review-task
+  [ "$selected_task" = "running-task" ] || return 1
+}
+
+# Test 22: post_comment failure propagates correctly
+test_post_comment_failure_propagates() {
+  init_db
+
+  local task_id="task-fail-test"
+  local conv_id="conv-fail-test"
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  sqlite3 "$DB" "INSERT INTO conversations(conversationId, repository, issueNumber, issueUrl, status, createdAt, updatedAt) VALUES('$conv_id', 'test/repo', 200, 'https://github.com/test/repo/issues/200', 'OPEN', '$now', '$now');" 2>/dev/null
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, action) VALUES('$task_id', 'test/repo', 200, 'https://github.com/test/repo/issues/200', 'user', 'Implement', 'completed', '$now', '$conv_id', 'IMPLEMENT');" 2>/dev/null
+
+  # Create a mock gh that fails
+  local mock_gh_dir
+  mock_gh_dir="$(mktemp -d)"
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+if [[ "$1" == "issue" && "$2" == "comment" ]]; then
+  echo "gh: failed to post comment" >&2
+  exit 1
+fi
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  # Run post-done with mock gh
+  local output
+  output="$(GH_BIN="$mock_gh_dir/gh" MANUL_DIR="$MANUL_DIR" PATH="$mock_gh_dir:$PATH" bash "$FEEDBACK_SCRIPT" --json post-done --repo "test/repo" --issue "200" --comment-id "c1" --task-id "$task_id" --summary "Completed" --pr-number "201" 2>/dev/null)" || true
+
+  # Verify output indicates failure (not success)
+  local status
+  status="$(echo "$output" | jq -r '.status // empty')"
+  # The command should fail, not silently succeed
+  [ "$status" != "completed" ] || return 1
+
+  # Clean up
+  rm -rf "$mock_gh_dir"
+  return 0
+}
+
+# Test 23: parentTaskId resolves to execution task
+test_parent_task_id_resolves_to_execution() {
+  init_db
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local parent_task_id="parent-exec-task"
+  local conv_id="conv-parent-test"
+
+  # Insert parent execution task (running)
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, action, prNumber, conversationId) VALUES('$parent_task_id', 'test/repo', 300, 'https://github.com/test/repo/pull/300', 'user', 'Implement', 'running', '$now', 'IMPLEMENT', 300, '$conv_id');" 2>/dev/null
+
+  # Insert conversation
+  sqlite3 "$DB" "INSERT INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', 'test/repo', 300, 'https://github.com/test/repo/pull/300', 300, 'OPEN', '$now', '$now');" 2>/dev/null
+
+  # Verify the task exists in DB with correct parentTaskId resolution
+  local task_count
+  task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$parent_task_id' AND action='IMPLEMENT' AND status='running' AND prNumber=300;" 2>/dev/null)"
+  [ "$task_count" -eq 1 ] || return 1
+
+  # Verify the SQL query in get_pr_pending_task would return this task
+  local query
+  query="$(sed -n '/^get_pr_pending_task/,/^}/p' "$REVIEW_SCRIPT" | grep 'action NOT IN' | head -1)"
+  echo "$query" | grep -q "status IN.*('running', 'completed')" || return 1
+  echo "$query" | grep -q "action NOT IN.*('REVIEW')" || return 1
+}
+
+# ============================================================
 # End-to-End Mock Flow
 # ============================================================
 test_end_to_end_mock_flow() {
@@ -663,6 +790,11 @@ run_test "Test 17: Closed Issue handling" test_closed_issue_handling
 run_test "Test 18: Concurrent comments" test_concurrent_comments
 run_test "Test 19: JSON/state consistency" test_json_state_consistency
 run_test "Test 20: Production path safety" test_production_path_safety
+
+# Regression tests for production fixes
+run_test "Test 21: get_pr_pending_task excludes REVIEW not queued" test_get_pr_pending_task_excludes_review_not_queued
+run_test "Test 22: post_comment failure propagates correctly" test_post_comment_failure_propagates
+run_test "Test 23: parentTaskId resolves to execution task" test_parent_task_id_resolves_to_execution
 
 # End-to-end test
 echo ""

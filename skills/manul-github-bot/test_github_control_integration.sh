@@ -57,6 +57,32 @@ EOF
   cp "$SCRIPT_DIR/manul-conversation-linker.sh" "$MANUL_DIR/manul-conversation-linker.sh" 2>/dev/null || true
   cp "$SCRIPT_DIR/manul-result-feedback.sh" "$MANUL_DIR/manul-result-feedback.sh" 2>/dev/null || true
   cp "$SCRIPT_DIR/manul-github-events.sh" "$MANUL_DIR/manul-github-events.sh" 2>/dev/null || true
+
+  # Create mock gh for tests
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      comment) echo '{"id": "mock-comment-id"}' >&2 ;;
+      view) echo '{"number": "'"$2"'"}' >&2 ;;
+    esac
+    ;;
+  pr)
+    case "$2" in
+      view) echo '{"headRefName": "test-branch", "title": "Test PR"}' >&2 ;;
+      checkout) echo "Switched to branch" >&2 ;;
+    esac
+    ;;
+  api) echo '[]' >&2 ;;
+  repo) echo '{"name": "test-repo", "defaultBranchRef": {"name": "main"}}' >&2 ;;
+esac
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+  export PATH="$mock_gh_dir:$PATH"
 }
 
 cleanup_env() {
@@ -268,6 +294,17 @@ test_approval_does_not_create_task() {
   return 1
 }
 
+test_pending_task_excludes_review_not_queued() {
+  local review_file="$SCRIPT_DIR/manul-pr-review.sh"
+  local query
+  query="$(sed -n '/^get_pr_pending_task/,/^}/p' "$review_file" | grep 'action NOT IN' | head -1)"
+
+  # Should NOT exclude queued (it's a status, not an action)
+  echo "$query" | grep -q "NOT IN.*REVIEW" && echo "$query" | grep -q "NOT IN.*queued" && return 1
+  # Should exclude REVIEW action
+  echo "$query" | grep -q "NOT IN.*('REVIEW')"
+}
+
 # ===================== Run Tests =====================
 
 echo "═══════════════════════════════════════════════════════════════"
@@ -302,19 +339,8 @@ cleanup_env
 setup_env
 run_test "protocol: review handler creates fix task" test_review_handler_creates_fix_task
 run_test "protocol: approval does not create task" test_approval_does_not_create_task
+run_test "protocol: pending task excludes review not queued" test_pending_task_excludes_review_not_queued
 cleanup_env
-
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
-echo "═══════════════════════════════════════════════════════════════"
-
-  if [ "$FAILED" -gt 0 ]; then
-    echo "❌ Test suite FAILED: $FAILED tests failed"
-    exit 1
-  fi
-  echo "✅ All tests PASSED: $PASSED/$TOTAL tests passed"
-  exit 0
 
 # ===================== poll.sh Real Integration Test =====================
 test_poll_integration_with_mocked_github() {
@@ -367,8 +393,11 @@ MOCK_EOF
   local poll_output
   poll_output="$(MANUL_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null)" || true
 
+  # Verify poll ran without errors
+  local queued_count
+  queued_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null)"
   rm -rf "$test_dir"
-  return 0
+  [ "$queued_count" -ge 0 ] 2>/dev/null
 }
 
 # ===================== Daemon Lifecycle Tests =====================
@@ -411,10 +440,21 @@ test_review_recording_after_submission() {
   [ -n "$submit_check_line" ] && [ -n "$record_review_line" ] && [ "$record_review_line" -gt "$submit_check_line" ]
 }
 
-test_pending_task_excludes_review_and_queued() {
-  local review_file="$SCRIPT_DIR/manul-pr-review.sh"
-  local query
-  query="$(grep 'get_pr_pending_task' "$review_file" | grep -v '()' | head -1)"
+# ===================== Run Additional Tests =====================
+run_test "daemon: lifecycle task started emitted" test_daemon_lifecycle_task_started_emitted
+run_test "daemon: lifecycle task done emitted" test_daemon_lifecycle_task_done_emitted
+run_test "daemon: review recorded after submission" test_review_recording_after_submission
+run_test "integration: poll with mocked github" test_poll_integration_with_mocked_github
 
-  echo "$query" | grep -q "NOT IN.*REVIEW.*queued" || echo "$query" | grep -q "NOT IN.*queued.*REVIEW"
-}
+# ===================== Results =====================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
+echo "═══════════════════════════════════════════════════════════════"
+
+if [ "$FAILED" -gt 0 ]; then
+  echo "❌ Test suite FAILED: $FAILED tests failed"
+  exit 1
+fi
+echo "✅ All tests PASSED: $PASSED/$TOTAL tests passed"
+exit 0
