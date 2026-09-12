@@ -309,10 +309,12 @@ echo "════════════════════════�
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
 echo "═══════════════════════════════════════════════════════════════"
 
-if [ "$FAILED" -gt 0 ]; then
-  exit 1
-fi
-# exit 0 removed - new tests added below
+  if [ "$FAILED" -gt 0 ]; then
+    echo "❌ Test suite FAILED: $FAILED tests failed"
+    exit 1
+  fi
+  echo "✅ All tests PASSED: $PASSED/$TOTAL tests passed"
+  exit 0
 
 # ===================== poll.sh Real Integration Test =====================
 test_poll_integration_with_mocked_github() {

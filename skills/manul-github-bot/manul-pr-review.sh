@@ -360,10 +360,10 @@ cmd_handle() {
 
     local result
     result=$(jq -n \
-      --var reviewId "$REVIEW_ID" \
-      --var action "$action" \
-      --var conversationId "$conv_id" \
-      --var taskId "${task_id:-}" \
+      --arg reviewId "$REVIEW_ID" \
+      --arg action "$action" \
+      --arg conversationId "$conv_id" \
+      --arg taskId "${task_id:-}" \
       --argjson prNumber "$PR_NUMBER" \
       '{
         reviewId: $reviewId,
