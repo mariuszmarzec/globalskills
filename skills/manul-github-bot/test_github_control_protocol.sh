@@ -39,6 +39,13 @@ MANUL_DIR="$TEST_DIR/manul"
 mkdir -p "$MANUL_DIR"
 DB="$MANUL_DIR/manul.db"
 
+# Create symlinks to actual scripts
+ln -s "$SCRIPT_DIR/manul-conversation.sh" "$MANUL_DIR/manul-conversation.sh" 2>/dev/null || true
+ln -s "$SCRIPT_DIR/manul-github-events.sh" "$MANUL_DIR/manul-github-events.sh" 2>/dev/null || true
+ln -s "$SCRIPT_DIR/manul-pr-review.sh" "$MANUL_DIR/manul-pr-review.sh" 2>/dev/null || true
+ln -s "$SCRIPT_DIR/manul-conversation-linker.sh" "$MANUL_DIR/manul-conversation-linker.sh" 2>/dev/null || true
+ln -s "$SCRIPT_DIR/manul-result-feedback.sh" "$MANUL_DIR/manul-result-feedback.sh" 2>/dev/null || true
+
 # Create proper config
 cat > "$MANUL_DIR/config.json" << 'CONFIGEOF'
 {
@@ -98,6 +105,7 @@ init_db() {
     issueNumber INTEGER NOT NULL,
     commentUrl TEXT NOT NULL,
     author TEXT,
+    agent TEXT,
     prompt TEXT NOT NULL,
     context TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
@@ -126,6 +134,7 @@ init_db() {
     issueUrl TEXT,
     activePrNumber INTEGER,
     activePrUrl TEXT,
+    activeTaskId TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL

@@ -675,26 +675,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
            log "context enriched for $id on $repo#$issue (PR + linked issues)"
          fi
          # GitHub control protocol integration: process review events
-         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -f "$MANUL_DIR/manul-conversation-linker.sh" ]; then
+         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
            pr_num="$issue"
            review_id="${id#review:}"
            review_body="$fullBody"
            conv_id="$(generate_conversation_id "$repo" "$pr_num" "$url")"
-           # Check if review contains /manul command for conversation linking
-           if [ -n "$prompt" ]; then
-             # Link this review to the PR's conversation
-             if [ -n "$conv_id" ]; then
-               sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
-             fi
-           fi
-           # Post TASK_STARTED event marker if this is a new queued task
-           if [ -f "$MANUL_DIR/manul-result-feedback.sh" ]; then
-             "$MANUL_DIR/manul-result-feedback.sh" post-started \
-               --repo "$repo" \
-               --issue "$pr_num" \
-               --comment-id "$id" \
-               --task-id "$id" \
-               --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_STARTED event for $id"
+           # Link this review to the PR's conversation
+           if [ -n "$conv_id" ]; then
+             sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
            fi
          fi
          log "queued $id on $repo#$issue (agent=${agent:-default})"
@@ -723,6 +711,56 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         diffHunk: (.diff_hunk // ""),
         isResolved: (.in_reply_to_id // null | . != null)
       }' 2>>"$LOG" || true)
+
+    # 2b) PR review events (REQUEST_CHANGES -> REVIEW_FIX tasks)
+    # The pulls/comments API returns individual comments, not review events.
+    # We need the reviews API to get the review state (APPROVED, CHANGES_REQUESTED, etc.)
+    if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
+      # Fetch open PRs and their reviews
+      while IFS= read -r pr_obj; do
+        [ -n "$pr_obj" ] || continue
+        pr_num="$(jq -r '.number' <<<"$pr_obj")"
+        [ -n "$pr_num" ] || continue
+        [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+
+        # Fetch reviews for this PR
+        reviews_json="$(gh api "repos/$repo/pulls/$pr_num/reviews?per_page=100" 2>>"$LOG" || echo '[]')"
+        now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        while IFS= read -r review; do
+          [ -n "$review" ] || continue
+          review_id="$(jq -r '.id // empty' <<<"$review")"
+          [ -n "$review_id" ] || continue
+          review_state="$(jq -r '.state // empty' <<<"$review")"
+          review_body="$(jq -r '.body // ""' <<<"$review")"
+          review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
+          review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
+          [ -n "$review_created" ] || review_created="$now"
+
+          # Only create REVIEW_FIX tasks for REQUEST_CHANGES
+          if [ "$review_state" = "CHANGES_REQUESTED" ]; then
+            log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
+            if "$MANUL_DIR/manul-pr-review.sh" handle \
+              --repo "$repo" \
+              --pr-number "$pr_num" \
+              --review-id "$review_id" \
+              --review-state "REQUEST_CHANGES" \
+              --body "$review_body" \
+              --author "$review_author" \
+              --created "$review_created" \
+              --json >>"$LOG" 2>&1; then
+              log "review $review_id on $repo#$pr_num processed successfully"
+            else
+              log "WARN: failed to process review $review_id on $repo#$pr_num"
+            fi
+          elif [ "$review_state" = "APPROVED" ]; then
+            log "received APPROVE on $repo#$pr_num (no fix task created)"
+          else
+            log "received $review_state review on $repo#$pr_num (no action)"
+          fi
+        done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
+      done < <(gh pr list --repo "$repo" --state open --json number --jq '.[]' 2>>"$LOG" || true)
+    fi
 
     # 3) Drain pending skip comments from a previous failed run (GitHub as
     # primary frontend: comments are queued to skip-comments.log when feedback.sh

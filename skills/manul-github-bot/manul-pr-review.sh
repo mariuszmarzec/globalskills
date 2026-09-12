@@ -285,13 +285,37 @@ cmd_handle() {
   fi
 
   local new_task_id=""
+  local submit_success=false
+
   if [ -n "$submit_output" ]; then
     new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
+    if [ -n "$new_task_id" ]; then
+      submit_success=true
+    fi
   fi
 
-  if [ -z "$new_task_id" ]; then
-    # Fallback: generate task ID manually
-    new_task_id="task-${conv_id}-review-fix-$(date +%s)-$$"
+  if [ "$submit_success" = false ]; then
+    # Submit failed - return explicit failure result
+    local fail_result
+    fail_result=$(jq -n \
+      --arg reviewId "$REVIEW_ID" \
+      --arg action "$action" \
+      --arg conversationId "$conv_id" \
+      --arg parentTaskId "${task_id:-}" \
+      --argjson prNumber "$PR_NUMBER" \
+      '{
+        reviewId: $reviewId,
+        action: $action,
+        conversationId: $conversationId,
+        newTaskId: null,
+        parentTaskId: $parentTaskId,
+        prNumber: $prNumber,
+        createdTask: false,
+        error: "submit_failed",
+        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+      }')
+    echo "$fail_result" | jq .
+    return 1
   fi
 
   local result
