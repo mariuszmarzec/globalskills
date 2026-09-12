@@ -712,7 +712,7 @@ test_end_to_end_mock_flow() {
 
   # Create initial task with PR number set
   local task_id="task-e2e-init-$(date +%s)"
-  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, action, prNumber) VALUES('$task_id', 'test/e2e', 200, 'https://github.com/test/e2e/issues/200#comment-e2e-1', 'user1', 'Implement feature X', 'completed', '$now', '$conv_id', 'IMPLEMENT', $pr_number);" 2>/dev/null
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, status, createdAt, conversationId, action, prNumber) VALUES('$task_id', 'test/e2e', 200, 'https://github.com/test/e2e/issues/200#comment-e2e-1', 'user1', 'manul', 'Implement feature X', 'completed', '$now', '$conv_id', 'IMPLEMENT', $pr_number);" 2>/dev/null
 
   # Step 3: ChatGPT reviews with REQUEST_CHANGES
   local review_body="Please add error handling"
