@@ -129,6 +129,27 @@ build_event_marker() {
   echo "<!-- manul:event $(echo "$event_json" | jq -c .) -->"
 }
 
+# Post a comment to GitHub
+post_comment() {
+  local repo="$1"
+  local issue="$2"
+  local body="$3"
+
+  if [ -z "$repo" ] || [ -z "$issue" ] || [ -z "$body" ]; then
+    return 1
+  fi
+
+  local signature="— manul 🐈"
+  local signed_body
+  if [[ "$body" == *"$signature" ]]; then
+    signed_body="$body"
+  else
+    signed_body="${body}"$'\n\n'"${signature}"
+  fi
+
+  gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>/dev/null
+}
+
 # Post TASK_DONE event
 cmd_post_done() {
   if [ -z "$REPO" ] || [ -z "$TASK_ID" ]; then
@@ -205,6 +226,9 @@ cmd_post_done() {
       hasSummary: ($summary != "")
     }')
 
+  # Post the comment to GitHub
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
+
   echo "$result" | jq .
 }
 
@@ -280,6 +304,9 @@ cmd_post_failed() {
       hasError: ($error != "")
     }')
 
+  # Post the comment to GitHub
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
+
   echo "$result" | jq .
 }
 
@@ -342,6 +369,9 @@ cmd_post_started() {
       attempt: $attempt,
       eventMarker: $marker
     }')
+
+  # Post the comment to GitHub
+  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" || true
 
   echo "$result" | jq .
 }

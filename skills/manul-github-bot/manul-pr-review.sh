@@ -81,7 +81,7 @@ get_pr_conversation() {
 
   # Check if PR number exists in processed_comments
   local conv_id
-  conv_id="$(sqlite3 "$DB" "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
+  conv_id="$(sqlite3 "$DB" "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' AND action != 'REVIEW' ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
 
   if [ -n "$conv_id" ]; then
     echo "$conv_id"
