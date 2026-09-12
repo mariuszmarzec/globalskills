@@ -573,16 +573,16 @@ log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
   log "gh pr list --repo test-org/test-repo"
   echo '[{"number":200,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/200"}]'
-  return 0
+  exit 0
 elif [[ "$1" == "pr" && "$2" == "view" ]]; then
   local pr_num="$3"
   log "gh pr view $pr_num --repo test-org/test-repo"
   echo '{"number": 600, "headRefName": "feature/daemon", "baseRefName": "main", "title": "Daemon Test PR", "html_url": "https://github.com/test-org/test-repo/pull/600"}'
-  return 0
+  exit 0
 elif [[ "$1" == "api" ]]; then
   log "gh api repos/test-org/test-repo/pulls/600/reviews"
   echo '[]'
-  return 0
+  exit 0
 fi
 
 log "UNKNOWN: $1 $2 $3"
