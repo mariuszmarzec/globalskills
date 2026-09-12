@@ -1308,7 +1308,31 @@ PROMPT_APPEND
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
     else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>>"$LOG"
+    fi
+
+    # Auto-close conversation when all tasks are finalized (completed or failed).
+    # Skip if the task was requeued for retry.
+    local task_final_status
+    task_final_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+      local task_conv_id_for_close
+      task_conv_id_for_close="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ -n "$task_conv_id_for_close" ]; then
+        local remaining_tasks
+        remaining_tasks="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status IN ('queued', 'running');" 2>>"$LOG")" || remaining_tasks=""
+        if [ -z "$remaining_tasks" ]; then
+          log "ERROR: failed to count remaining tasks for conversation $task_conv_id_for_close (task drain)"
+        elif [ "$remaining_tasks" -eq 0 ]; then
+          local now_close
+          now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG"; then
+            log "auto-closed conversation $task_conv_id_for_close (all tasks finalized, status=$task_final_status)"
+          else
+            log "ERROR: failed to close conversation $task_conv_id_for_close (task drain)"
+          fi
+        fi
+      fi
     fi
 
     # Stop heartbeat after task completion/failure
