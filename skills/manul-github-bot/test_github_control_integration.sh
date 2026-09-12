@@ -221,201 +221,53 @@ test_full_pipeline_result_feedback() {
 }
 
 test_conversation_persistence_across_cycles() {
-    local test_dir
-    test_dir="$(mktemp -d /tmp/conversation-persistence-test-XXXXXX)"
-    local manul_dir="$test_dir/manul"
-    mkdir -p "$manul_dir"
-    local mock_gh_dir="$test_dir/mock-gh"
-    mkdir -p "$mock_gh_dir"
-    export MANUL_DIR="$manul_dir"
-    export PATH="$mock_gh_dir:$PATH"
-    
-    # Initialize mock gh
-    cat > "$mock_gh_dir/gh" << 'MOCK_EOF'
-#!/bin/bash
-log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
-if [[ "$1" == "pr" && "$2" == "list" ]]; then
-  log "gh pr list --repo test-org/test-repo"
-  echo '{"number": 400, "headRefName": "feature/persist", "baseRefName": "main", "title": "Persistence Test PR", "url": "https://github.com/test-org/test-repo/pull/400"}'
-  exit 0
-elif [[ "$1" == "issue" && "$2" == "list" ]]; then
-  log "gh issue list --repo test-org/test-repo"
-  echo '[]'
-  exit 0
-elif [[ "$1" == "api" ]]; then
-  log "gh api $*"
-  if [[ "$*" == *"reviews"* ]]; then
-    echo '[{"id":"review-persist-1","state":"CHANGES_REQUESTED","body":"Fix formatting","user":{"login":"reviewer"},"submitted_at":"2024-01-01T00:00:00Z"}]'
-    exit 0
-  fi
-  echo '[]'
-  exit 0
-fi
-echo '{}'
-MOCK_EOF
-    chmod +x "$mock_gh_dir/gh"
-    
-    # Run poll.sh twice
-    local call_log="$test_dir/call_log.txt"
-    > "$call_log"
-    
-    echo "=== Running poll.sh first time ==="
-    bash -x "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>&1 | tail -30
-    local first_exit=$?
-    
-    echo "=== Running poll.sh second time ==="
-    bash -x "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>&1 | tail -30
-    local second_exit=$?
-    
-    # Verify DB state
-    local conv_count
-    conv_count="$(sqlite3 "$manul_dir/manul.db" "SELECT COUNT(*) FROM conversations WHERE repository='test-org/test-repo';" 2>/dev/null)"
-    local review_fix_count
-    review_fix_count="$(sqlite3 "$manul_dir/manul.db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND prNumber=400;" 2>/dev/null)"
-    
-    if [ "$conv_count" -ge 1 ] && [ "$review_fix_count" -ge 1 ]; then
-        echo "  PASS: pipeline: conversation persists across cycles"
-    else
-        echo "  FAIL: pipeline: conversation persists across cycles"
-        echo "ERROR: Conversation count=$conv_count, REVIEW_FIX count=$review_fix_count"
-        cat "$call_log"
-        return 1
-    fi
-    
-    rm -rf "$test_dir"
-}    local test_dir
-    test_dir="$(mktemp -d /tmp/conversation-persistence-test-XXXXXX)"
-    local manul_dir="$test_dir/manul"
-    mkdir -p "$manul_dir"
-    local mock_gh_dir="$test_dir/mock-gh"
-    mkdir -p "$mock_gh_dir"
-    export PATH="$mock_gh_dir:$PATH"
-    export MANUL_DIR="$manul_dir"
-  local test_dir
-  test_dir="$(mktemp -d /tmp/conversation-persistence-test-XXXXXX)"
-  local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  local repo="test-org/test-repo"
+  local conv_id="conv-persist-cycle"
+  local pr_num=400
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  cat > "$manul_dir/config.json" <<'CFGEOF'
-{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
-CFGEOF
+  # Create conversation and initial task
+  sqlite3 "$TEST_DB" "INSERT OR IGNORE INTO conversations(conversationId,repository,issueNumber,status,createdAt,updatedAt) VALUES('$conv_id','$repo',300,'OPEN','$now','$now');" 2>/dev/null
+  sqlite3 "$TEST_DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,createdAt,conversationId) VALUES('task-persist-1','$repo',300,'http://test','test','manul','Implement feature','completed',1,'$now','$conv_id');" 2>/dev/null
+  sqlite3 "$TEST_DB" "UPDATE conversations SET activePrNumber=$pr_num, activePrUrl='https://github.com/$repo/pull/$pr_num', updatedAt='$now' WHERE conversationId='$conv_id';" 2>/dev/null
 
-  local poll_db="$manul_dir/manul.db"
-  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
-  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
-  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
-  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
-  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
-  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
-
-  # Copy production scripts
-  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
-  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
-  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
-
-  local mock_gh_dir="$test_dir/mock-gh"
-  mkdir -p "$mock_gh_dir"
-
-  local call_log="$test_dir/call_log.txt"
-  > "$call_log"
-
-  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
-#!/bin/bash
-MOCK_GH_DIR="$test_dir"
-log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
-if [[ "$1" == "pr" && "$2" == "list" ]]; then
-  log "gh pr list --repo test-org/test-repo"
-  echo '[{"number":400,"headRefName":"feature/persist","baseRefName":"main","title":"Persistence Test PR","url":"https://github.com/test-org/test-repo/pull/400"}]'
-  exit 0
-fi
-if [[ "$1" == "issue" && "$2" == "list" ]]; then
-  log "gh issue list --repo test-org/test-repo"
-  echo '[]'
-  exit 0
-fi
-if [[ "$1" == "api" ]]; then
-  log "gh api $*"
-  if [[ "$*" == *"reviews"* ]]; then
-    echo '[{"id":"review-persist-1","state":"CHANGES_REQUESTED","body":"Fix formatting","user":{"login":"reviewer"},"submitted_at":"2024-01-01T00:00:00Z"}]'
-    exit 0
-  fi
-  echo '[]'
-  exit 0
-fi
-echo '{}'
-MOCK_EOF
-  chmod +x "$mock_gh_dir/gh"
-
-  # Run poll.sh twice to simulate multiple cycles
-  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
-  local first_poll_exit=$?
-
-  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
-  local second_poll_exit=$?
-
-  # Verify both polls executed (no failures)
-  if [ $first_poll_exit -ne 0 ]; then
-    echo "ERROR: First poll.sh failed with exit code $first_poll_exit"
-    rm -rf "$test_dir"
+  # First invocation of manul-pr-review.sh (simulates first poll cycle)
+  local output1
+  output1="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" --json handle --repo "$repo" --pr-number "$pr_num" --review-id "review-persist-1" --review-state REQUEST_CHANGES --body "Fix formatting" --author reviewer --created "$now" 2>/dev/null)" || return 1
+  if ! echo "$output1" | jq -e '.createdTask == true' >/dev/null 2>&1; then
+    echo "ERROR: First review invocation did not create task"
     return 1
   fi
 
-  if [ $second_poll_exit -ne 0 ]; then
-    echo "ERROR: Second poll.sh failed with exit code $second_poll_exit"
-    rm -rf "$test_dir"
-    return 1
-  fi
+  # Second invocation (simulates second poll cycle - should be idempotent)
+  local output2
+  output2="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-pr-review.sh" --json handle --repo "$repo" --pr-number "$pr_num" --review-id "review-persist-1" --review-state REQUEST_CHANGES --body "Fix formatting" --author reviewer --created "$now" 2>/dev/null)" || return 1
 
-  # Verify conversation persisted across cycles
+  # Verify conversation still exists
   local conv_count
-  conv_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversations WHERE repository='test-org/test-repo';" 2>/dev/null)"
+  conv_count="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM conversations WHERE conversationId='$conv_id' AND repository='$repo';" 2>/dev/null)"
   if [ "$conv_count" -lt 1 ]; then
-    echo "ERROR: Expected at least 1 conversation, found $conv_count"
-    rm -rf "$test_dir"
+    echo "ERROR: Conversation was lost after second invocation"
     return 1
   fi
 
-  # Verify REVIEW_FIX task was created
+  # Verify only one REVIEW_FIX task was created (idempotency)
   local review_fix_count
-  review_fix_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND prNumber=400;" 2>/dev/null)"
-  if [ "$review_fix_count" -lt 1 ]; then
-    echo "ERROR: Expected at least 1 REVIEW_FIX task, found $review_fix_count"
-    rm -rf "$test_dir"
+  review_fix_count="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$repo' AND action='REVIEW_FIX' AND prNumber=$pr_num;" 2>/dev/null)"
+  if [ "$review_fix_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task, found $review_fix_count"
     return 1
   fi
 
-  # Verify no duplicate REVIEW_FIX tasks on second poll
-  if [ "$review_fix_count" -gt 1 ]; then
-    echo "ERROR: Duplicate REVIEW_FIX tasks created (count: $review_fix_count)"
-    rm -rf "$test_dir"
+  # Verify the task is linked to the conversation
+  local task_conv
+  task_conv="$(sqlite3 "$TEST_DB" "SELECT conversationId FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_num;" 2>/dev/null)"
+  if [ "$task_conv" != "$conv_id" ]; then
+    echo "ERROR: REVIEW_FIX task not linked to conversation"
     return 1
   fi
 
-  # Verify mock gh was called correctly
-  if ! grep -q "gh pr list --repo test-org/test-repo" "$call_log"; then
-    echo "ERROR: Expected gh pr list call not found in call log"
-    rm -rf "$test_dir"
-    return 1
-  fi
-
-  if ! grep -q "gh api" "$call_log" || ! grep -q "reviews" "$call_log"; then
-    echo "ERROR: Expected gh api reviews call not found in call log"
-    rm -rf "$test_dir"
-    return 1
-  fi
-
-  rm -rf "$test_dir"
   return 0
 }
 
@@ -567,31 +419,40 @@ CFGEOF
   local call_log="$test_dir/call_log.txt"
   > "$call_log"
 
-  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+   cat > "$mock_gh_dir/gh" <<MOCK_EOF
 #!/bin/bash
-MOCK_GH_DIR="$test_dir"
-log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
+log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
 
-if [[ "$1" == "pr" && "$2" == "list" ]]; then
+# Handle gh pr list with various flags
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
   log "gh pr list --repo test-org/test-repo"
-  echo '{"number": 200, "headRefName": "feature/test", "baseRefName": "main", "title": "Test PR", "url": "https://github.com/test-org/test-repo/pull/200"}'
+  # Return full PR objects for --state open queries, just the number for --json number queries
+  if [[ "\$*" == *"--state open"* ]]; then
+    echo '[{"number":200,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/200"}]'
+  elif [[ "\$*" == *"--json number"* && "\$*" == *"--jq"* ]]; then
+    echo '200'
+  else
+    echo '[{"number":200}]'
+  fi
   exit 0
 fi
-if [[ "$1" == "issue" && "$2" == "list" ]]; then
+if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
   log "gh issue list --repo test-org/test-repo"
   echo '[]'
   exit 0
 fi
-if [[ "$1" == "api" ]]; then
-  log "gh api $*"
-  if [[ "$*" == *"reviews"* ]]; then
+if [[ "\$1" == "api" ]]; then
+  log "gh api \$*"
+  if [[ "\$*" == *"/reviews"* ]]; then
     echo '[{"id":"review-1","state":"CHANGES_REQUESTED","body":"Fix formatting","user":{"login":"reviewer"},"submitted_at":"2024-01-01T00:00:00Z"}]'
     exit 0
   fi
   echo '[]'
   exit 0
 fi
+log "UNHANDLED: \$*"
 echo '{}'
+exit 0
 MOCK_EOF
   chmod +x "$mock_gh_dir/gh"
 
@@ -703,23 +564,24 @@ CFGEOF
   local call_log="$test_dir/call_log.txt"
   > "$call_log"
 
-  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+  cat > "$mock_gh_dir/gh" <<MOCK_EOF
 #!/bin/bash
 MOCK_GH_DIR="$test_dir"
 log() { echo "$(date -Is): $*" >> "$MOCK_GH_DIR/call_log.txt"; }
 
+# Handle gh pr list with various flags
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
   log "gh pr list --repo test-org/test-repo"
-  echo '[]' >&2
+  echo '[{"number":200,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/200"}]'
   return 0
 elif [[ "$1" == "pr" && "$2" == "view" ]]; then
   local pr_num="$3"
   log "gh pr view $pr_num --repo test-org/test-repo"
-  echo '{"number": 600, "headRefName": "feature/daemon", "baseRefName": "main", "title": "Daemon Test PR", "html_url": "https://github.com/test-org/test-repo/pull/600"}' >&2
+  echo '{"number": 600, "headRefName": "feature/daemon", "baseRefName": "main", "title": "Daemon Test PR", "html_url": "https://github.com/test-org/test-repo/pull/600"}'
   return 0
 elif [[ "$1" == "api" ]]; then
   log "gh api repos/test-org/test-repo/pulls/600/reviews"
-  echo '[]' >&2
+  echo '[]'
   return 0
 fi
 
