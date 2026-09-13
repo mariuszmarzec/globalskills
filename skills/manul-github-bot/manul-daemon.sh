@@ -1,10 +1,4 @@
 #!/usr/bin/bash
-# Source guard: prevent CLI execution when sourced for testing
-MANUL_TESTING="${MANUL_TESTING:-false}"
-if [[ "${MANUL_TESTING}" == "true" ]]; then
-  return 0
-fi
-
 set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches pipeline errors
 # manul-daemon.sh — background poll loop for the manul GitHub bot.
 #
@@ -1454,6 +1448,12 @@ loop() {
     done
   fi
 }
+
+# Source guard: prevent CLI execution when sourced for testing
+MANUL_TESTING="${MANUL_TESTING:-false}"
+if [[ "${MANUL_TESTING}" == "true" ]]; then
+  return 0
+fi
 
 case "${1:-}" in
   start) start ;;

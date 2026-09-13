@@ -18,33 +18,43 @@ mkdir -p "$FAKE_BIN"
 FAKE_GH="$FAKE_BIN/gh"
 cat > "$FAKE_GH" << 'GH_EOF'
 #!/bin/bash
-if [[ "$1" == "api" && "$2" == "repos/"* ]]; then
+# Match: gh api repos/test/repo/issues/42/comments --paginate --jq '...'
+if [[ "$1" == "api" && "$2" == repos/* ]]; then
     path="${2#repos/}"
-    repo="${path%%/issues/*}"
+    # Extract repo name (everything before /issues)
+    repo="${path%%/issues*}"
     remainder="${path#*/issues/}"
     issue_num="${remainder%%/*}"
     remainder="${remainder#*/}"
 
     if [[ "$remainder" == "comments" ]]; then
-        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}]'
-    elif [[ "$remainder" =~ ^/[0-9]+$ ]]; then
-        echo '{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}'
+        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\nSuccessfully processed the task\n\n— manul 🐈", "in_reply_to_id": null}]'
     else
-        echo '{}'
+        echo '[]'
     fi
 else
-    echo '{}'
+    echo '[]'
 fi
 GH_EOF
 chmod +x "$FAKE_GH"
 
-# Fake jq for JSON processing
+# Fake jq for config reading
 FAKE_JQ="$FAKE_BIN/jq"
 cat > "$FAKE_JQ" << 'JQ_EOF'
 #!/bin/bash
-echo '{"body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈"}'
+# Return defaults for config reads
+echo "null"
 JQ_EOF
 chmod +x "$FAKE_JQ"
+
+# Fake sqlite3 for database operations
+FAKE_SQLITE="$FAKE_BIN/sqlite3"
+cat > "$FAKE_SQLITE" << 'SQL_EOF'
+#!/bin/bash
+# Route to real sqlite3 but with our test DB
+/usr/bin/sqlite3 "$@"
+SQL_EOF
+chmod +x "$FAKE_SQLITE"
 
 export PATH="$FAKE_BIN:$PATH"
 
