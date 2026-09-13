@@ -746,30 +746,30 @@ evaluate_task_completion() {
   fi
   
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-  if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
+  if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
     local repo_state_issues=""
-    
+
     # Check for staged changes
-    if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
+    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
       repo_state_clean="false"
       repo_state_issues+="staged_changes "
     fi
-    
+
     # Check for unstaged changes
-    if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
+    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
       repo_state_clean="false"
       repo_state_issues+="unstaged_changes "
     fi
-    
+
     # Check for untracked files
     local untracked
-    untracked="$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)"
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null)"
     if [ -n "$untracked" ]; then
       repo_state_clean="false"
       repo_state_issues+="untracked_files "
     fi
-    
+
     if [ "$repo_state_clean" = "false" ]; then
       SUCCESS="false"
       FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
@@ -1315,7 +1315,7 @@ PROMPT_APPEND
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
     # Call production completion evaluation function
-    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR"
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR"
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
