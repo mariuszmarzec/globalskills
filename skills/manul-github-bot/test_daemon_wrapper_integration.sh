@@ -7,54 +7,34 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Create a temporary directory for test files
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+TEST_TMPDIR=$(mktemp -d)
+trap "rm -rf $TEST_TMPDIR" EXIT
 
 # Create fake executables for external dependencies
-FAKE_BIN="$TMPDIR/fake_bin"
+FAKE_BIN="$TEST_TMPDIR/fake_bin"
 mkdir -p "$FAKE_BIN"
 
 # Fake gh executable for GitHub API mocking
 FAKE_GH="$FAKE_BIN/gh"
 cat > "$FAKE_GH" << 'GH_EOF'
 #!/bin/bash
-# Match: gh api repos/test/repo/issues/42/comments --paginate --jq '...'
-if [[ "$1" == "api" && "$2" == repos/* ]]; then
-    path="${2#repos/}"
-    # Extract repo name (everything before /issues)
-    repo="${path%%/issues*}"
-    remainder="${path#*/issues/}"
-    issue_num="${remainder%%/*}"
-    remainder="${remainder#*/}"
-
-    if [[ "$remainder" == "comments" ]]; then
-        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\nSuccessfully processed the task\n\n— manul 🐈", "in_reply_to_id": null}]'
-    else
-        echo '[]'
-    fi
-else
-    echo '[]'
+if [[ "$1" == "api" ]]; then
+    for arg in "$@"; do
+        if [[ "$arg" == repos/* ]]; then
+            path="$arg"
+            path="${path#repos/}"
+            remainder="${path#*/issues/}"
+            remainder="${remainder#*/}"
+            if [[ "$remainder" == "comments" ]]; then
+                printf '[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest"}]'
+                exit 0
+            fi
+        fi
+    done
 fi
+echo '[]'
 GH_EOF
 chmod +x "$FAKE_GH"
-
-# Fake jq for config reading
-FAKE_JQ="$FAKE_BIN/jq"
-cat > "$FAKE_JQ" << 'JQ_EOF'
-#!/bin/bash
-# Return defaults for config reads
-echo "null"
-JQ_EOF
-chmod +x "$FAKE_JQ"
-
-# Fake sqlite3 for database operations
-FAKE_SQLITE="$FAKE_BIN/sqlite3"
-cat > "$FAKE_SQLITE" << 'SQL_EOF'
-#!/bin/bash
-# Route to real sqlite3 but with our test DB
-/usr/bin/sqlite3 "$@"
-SQL_EOF
-chmod +x "$FAKE_SQLITE"
 
 export PATH="$FAKE_BIN:$PATH"
 
@@ -62,10 +42,10 @@ export PATH="$FAKE_BIN:$PATH"
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 
 # Setup test environment
-LOG_FILE="$TMPDIR/daemon.log"
-LIFECYCLE_LOG="$TMPDIR/lifecycle.log"
-PID_FILE="$TMPDIR/daemon.pid"
-DB="$TMPDIR/manul_test.db"
+LOG_FILE="$TEST_TMPDIR/daemon.log"
+LIFECYCLE_LOG="$TEST_TMPDIR/lifecycle.log"
+PID_FILE="$TEST_TMPDIR/daemon.pid"
+DB="$TEST_TMPDIR/manul_test.db"
 HEARTBEAT_INTERVAL=60
 LOG="$LOG_FILE"
 LIFECYCLE_LOG="$LIFECYCLE_LOG"
@@ -101,7 +81,7 @@ echo "0" > "$PID_FILE"
 
 # ─── Test A: rc=0 + TASK_DONE + valid result comment -> COMPLETION_SUCCESS=true ─
 echo "=== Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true ==="
-STDOUT_FILE="$TMPDIR/stdoutA.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutA.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
@@ -119,7 +99,7 @@ echo "✓ Test A: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test B: rc=0 + TASK_DONE + missing result comment -> COMPLETION_SUCCESS=false ─
 echo "=== Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false ==="
-STDOUT_FILE="$TMPDIR/stdoutB.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutB.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
@@ -137,7 +117,7 @@ echo "✓ Test B: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test C: rc=0 + TASK_DONE + invalid/unrelated result -> COMPLETION_SUCCESS=false ─
 echo "=== Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false ==="
-STDOUT_FILE="$TMPDIR/stdoutC.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutC.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 echo "some unrelated output" >> "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -152,7 +132,7 @@ echo "✓ Test C: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false ─
 echo "=== Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false ==="
-STDOUT_FILE="$TMPDIR/stdoutD.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutD.txt"
 echo "some output without marker" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
@@ -166,7 +146,7 @@ echo "✓ Test D: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false ─
 echo "=== Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false ==="
-STDOUT_FILE="$TMPDIR/stdoutE.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutE.txt"
 echo "TASK_FAILED: orchestration error" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
@@ -184,7 +164,7 @@ echo "✓ Test E: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test F: timeout/signal + no TASK_DONE -> COMPLETION_SUCCESS=false ─
 echo "=== Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false ==="
-STDOUT_FILE="$TMPDIR/stdoutF.txt"
+STDOUT_FILE="$TEST_TMPDIR/stdoutF.txt"
 echo "timeout occurred" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
