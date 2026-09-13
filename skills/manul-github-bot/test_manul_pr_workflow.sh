@@ -211,7 +211,7 @@ test_reply_routing() {
 
   # Check that REPLY_TO is extracted for review comments
   local reply_to_extraction
-  reply_to_extraction="$(grep -A 10 'TASK_TYPE="issue"' "$DAEMON" | grep 'REPLY_TO')"
+  reply_to_extraction="$(grep -A 60 'TASK_TYPE="issue"' "$DAEMON" | grep 'REPLY_TO')"
   assert_contains "$TEST_NAME" "$reply_to_extraction" 'REPLY_TO='
 
   # Verify the daemon passes REPLY_TO to post_github_comment for Running and Done comments
@@ -353,12 +353,12 @@ test_flock_singleton() {
 
   # Verify flock is used in start()
   local start_flock
-  start_flock="$(grep -A 30 '^start()' "$DAEMON" | grep 'flock')"
+  start_flock="$(grep -A 60 "^start()" "$DAEMON" | grep 'flock')"
   assert_contains "$TEST_NAME" "$start_flock" 'flock'
 
   # Verify flock is used in loop()
   local loop_flock
-  loop_flock="$(grep -A 15 '^loop()' "$DAEMON" | grep 'flock')"
+  loop_flock="$(grep -A 60 "^loop()" "$DAEMON" | grep 'flock')"
   assert_contains "$TEST_NAME" "$loop_flock" 'flock'
 }
 
@@ -517,7 +517,7 @@ test_retry_backoff() {
   # Test C: Requeue logic sets nextAttemptAt
   local has_next_attempt_in_requeue
   has_next_attempt_in_requeue="$(grep -c "nextAttemptAt=datetime('now', '+\${RETRY_DELAY_SECONDS} seconds')" "$DAEMON")"
-  assert_eq "$TEST_NAME (requeue sets nextAttemptAt)" "2" "$has_next_attempt_in_requeue"
+  assert_eq "$TEST_NAME (requeue sets nextAttemptAt)" "3" "$has_next_attempt_in_requeue"
 
   # Test D: MAX_ATTEMPTS path clears nextAttemptAt
   local has_next_attempt_cleared

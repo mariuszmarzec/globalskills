@@ -38,7 +38,7 @@ DB="$MANUL_DIR/manul.db"
 export CONFIG="$TEST_DIR/config.json"
 export RESULTS_DIR="$TEST_DIR/results"
 
-CONVERSATION_SCRIPT="/home/marzec/globalskills-temp/skills/manul-github-bot/manul-conversation.sh"
+CONVERSATION_SCRIPT="/home/marzec/.globalskills/skills/manul-github-bot/manul-conversation.sh"
 
 # Cleanup on exit
 cleanup() {
@@ -805,7 +805,7 @@ test_github_manul_regression() {
   # Verify existing poll.sh still works
   local poll_script="$TEST_DIR/../poll.sh"
   if [ ! -f "$poll_script" ]; then
-    poll_script="/home/marzec/globalskills-temp/skills/manul-github-bot/poll.sh"
+    poll_script="/home/marzec/.globalskills/skills/manul-github-bot/poll.sh"
   fi
   
   if [ -f "$poll_script" ]; then
