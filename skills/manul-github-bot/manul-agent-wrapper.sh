@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/bin/bash
 # manul-agent-wrapper.sh - Wrapper to ensure TASK_DONE is emitted by the agent
 #
 # Usage: manul-agent-wrapper.sh <prompt-file> <stdout-file> <stderr-file>

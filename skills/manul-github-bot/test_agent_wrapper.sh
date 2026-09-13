@@ -2,10 +2,12 @@
 # test_agent_wrapper.sh - Regression tests for manul-agent-wrapper.sh
 # Tests wrapper behavior: rc=0 -> TASK_DONE, rc!=0 -> TASK_FAILED
 
-set -uo pipefail
+set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WRAPPER="$SCRIPT_DIR/manul-agent-wrapper.sh"
+
+export OPENCLAW_BIN="$SCRIPT_DIR/mock_orchestrator.sh"
 
 PASS=0
 FAIL=0
@@ -45,15 +47,15 @@ echo "Test 1: rc=0 → TASK_DONE + rc=0"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-MOCK_ORCHESTRATOR="$TMPDIR/mock_orchestrator.sh"
-cat > "$MOCK_ORCHESTRATOR" << 'MOCK1'
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
+set -u
 echo "orchestrator stdout"
 echo "orchestrator stderr" >&2
 exit 0
-MOCK1
-chmod +x "$MOCK_ORCHESTRATOR"
-export OPENCLAW_BIN="$MOCK_ORCHESTRATOR"
+MOCK_EOF
+chmod +x "$TMPDIR/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
 
 STDOUT_FILE="$TMPDIR/stdout1.txt"
 STDERR_FILE="$TMPDIR/stderr1.txt"
@@ -72,13 +74,13 @@ fi
 
 # Test 2: rc!=0 → TASK_FAILED + original rc
 echo "Test 2: rc!=0 → TASK_FAILED + original rc"
-MOCK_ORCHESTRATOR="$TMPDIR/mock_orchestrator.sh"
-cat > "$MOCK_ORCHESTRATOR" << 'MOCK2'
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
+set -u
 echo "orchestrator stdout"
 echo "orchestrator stderr" >&2
 exit 42
-MOCK2
+MOCK_EOF
 chmod +x "$TMPDIR/mock_orchestrator.sh"
 export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
 
@@ -99,13 +101,13 @@ fi
 
 # Test 3: timeout → no TASK_DONE
 echo "Test 3: timeout → no TASK_DONE"
-MOCK_ORCHESTRATOR="$TMPDIR/mock_orchestrator.sh"
-cat > "$MOCK_ORCHESTRATOR" << 'MOCK3'
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
+set -u
 sleep 30
 echo "should not reach here" >&2
 exit 0
-MOCK3
+MOCK_EOF
 chmod +x "$TMPDIR/mock_orchestrator.sh"
 export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
 
@@ -124,13 +126,13 @@ fi
 
 # Test 4: signal termination → no TASK_DONE
 echo "Test 4: signal termination → no TASK_DONE"
-MOCK_ORCHESTRATOR="$TMPDIR/mock_orchestrator.sh"
-cat > "$MOCK_ORCHESTRATOR" << 'MOCK4'
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
+set -u
 sleep 30
 echo "should not reach here" >&2
 exit 0
-MOCK4
+MOCK_EOF
 chmod +x "$TMPDIR/mock_orchestrator.sh"
 export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
 
@@ -155,14 +157,14 @@ fi
 
 # Test 5: orchestrator stdout preserved, stderr preserved, exactly one completion marker
 echo "Test 5: orchestrator stdout preserved, stderr preserved, exactly one completion marker"
-MOCK_ORCHESTRATOR="$TMPDIR/mock_orchestrator.sh"
-cat > "$MOCK_ORCHESTRATOR" << 'MOCK5'
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
+set -u
 echo "line1"
 echo "line2"
 echo "line3" >&2
 exit 0
-MOCK5
+MOCK_EOF
 chmod +x "$TMPDIR/mock_orchestrator.sh"
 export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
 
