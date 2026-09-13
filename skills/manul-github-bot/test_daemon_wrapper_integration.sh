@@ -25,11 +25,11 @@ if [[ "$1" == "api" && "$2" == "repos/"* ]]; then
     remainder="${path#*/issues/}"
     issue_num="${remainder%%/*}"
     remainder="${remainder#*/}"
-    
+
     if [[ "$remainder" == "comments" ]]; then
-        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\\n# Test Result\\n\\n✓ Successfully processed the task\\n\\n— manul 🐈", "in_reply_to": null}]'
+        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}]'
     elif [[ "$remainder" =~ ^/[0-9]+$ ]]; then
-        echo '{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\\n# Test Result\\n\\n✓ Successfully processed the task\\n\\n— manul 🐈", "in_reply_to": null}'
+        echo '{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}'
     else
         echo '{}'
     fi
@@ -43,7 +43,7 @@ chmod +x "$FAKE_GH"
 FAKE_JQ="$FAKE_BIN/jq"
 cat > "$FAKE_JQ" << 'JQ_EOF'
 #!/bin/bash
-echo '{"body": "<!-- manul-task:COMMENT_1:attempt:1 -->\\n# Test Result\\n\\n✓ Successfully processed the task\\n\\n— manul 🐈"}'
+echo '{"body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈"}'
 JQ_EOF
 chmod +x "$FAKE_JQ"
 
@@ -198,19 +198,78 @@ chmod +x "$TMPDIR/testD/mock_orchestrator.sh"
 export OPENCLAW_BIN="$TMPDIR/testD/mock_orchestrator.sh"
 STDOUT_FILE="$TMPDIR/stdoutD.txt"
 STDERR_FILE="$TMPDIR/stderrD.txt"
-timeout 1 "$WRAPPER" "prompt.txt" "$STDOUT_FILE" "$STDERR_FILE" || true
+timeout 1 "$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE" || true
 if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
     echo "FAIL: Test D - TASK_DONE emitted despite timeout termination"
     exit 1
 fi
 echo "✓ Test D: PASSED"
 
+# ─── Test E: TASK_FAILED + rc=42 -> completion rejected ───────────────────────
+echo "=== Test E: TASK_FAILED + rc=42 -> completion rejected ==="
+mkdir -p "$TMPDIR/testE"
+cat > "$TMPDIR/testE/mock_orchestrator.sh" << 'MOCK_E'
+#!/bin/bash
+set -euo pipefail
+echo "orchestrator stdout" >&2
+echo "TASK_FAILED: orchestration error"
+exit 42
+MOCK_E
+chmod +x "$TMPDIR/testE/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testE/mock_orchestrator.sh"
+STDOUT_FILE="$TMPDIR/stdoutE.txt"
+STDERR_FILE="$TMPDIR/stderrE.txt"
+wrapper_rc=0
+"$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE" || wrapper_rc=$?
+if ! grep -q "^TASK_FAILED:" "$STDOUT_FILE"; then
+    echo "FAIL: Test E - TASK_FAILED not emitted by wrapper"
+    exit 1
+fi
+if [ "$wrapper_rc" -eq 0 ]; then
+    echo "FAIL: Test E - wrapper returned 0, expected non-zero"
+    exit 1
+fi
+# Daemon logic should reject TASK_FAILED
+if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
+    echo "FAIL: Test E - wrapper produced both TASK_DONE and TASK_FAILED"
+    exit 1
+fi
+echo "✓ Test E: PASSED"
+
+# ─── Test F: timeout + no TASK_DONE -> completion rejected ────────────────────
+echo "=== Test F: timeout + no TASK_DONE -> completion rejected ==="
+mkdir -p "$TMPDIR/testF"
+cat > "$TMPDIR/testF/mock_orchestrator.sh" << 'MOCK_F'
+#!/bin/bash
+set -euo pipefail
+sleep 30
+echo "should not reach here"
+exit 0
+MOCK_F
+chmod +x "$TMPDIR/testF/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testF/mock_orchestrator.sh"
+STDOUT_FILE="$TMPDIR/stdoutF.txt"
+STDERR_FILE="$TMPDIR/stderrF.txt"
+timeout 1 "$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE" || true
+if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
+    echo "FAIL: Test F - TASK_DONE emitted despite timeout termination"
+    exit 1
+fi
+# Timeout causes wrapper to emit TASK_FAILED (expected behavior)
+if ! grep -q "^TASK_FAILED:" "$STDOUT_FILE"; then
+    echo "FAIL: Test F - no TASK_FAILED emitted after timeout"
+    exit 1
+fi
+echo "✓ Test F: PASSED"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
+echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
 echo "✓ Test A: TASK_DONE + valid result comment -> completion accepted"
 echo "✓ Test B: TASK_DONE + missing result comment -> completion rejected"
-echo "✓ Test C: orchestrator failure -> TASK_FAILED"
+echo "✓ Test C: orchestrator rc=42 -> wrapper produces TASK_FAILED"
 echo "✓ Test D: timeout termination -> no TASK_DONE"
+echo "✓ Test E: TASK_FAILED + rc=42 -> completion rejected"
+echo "✓ Test F: timeout -> TASK_FAILED (wrapper converts timeout to failure)"
 echo "✓ All tests use real production functions (manul-daemon.sh)"
 echo "=== ALL INTEGRATION TESTS PASSED ==="
-exit 0

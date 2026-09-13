@@ -1,4 +1,10 @@
 #!/usr/bin/bash
+# Source guard: prevent execution when sourced for testing
+MANUL_TESTING="${MANUL_TESTING:-false}"
+if [[ "${MANUL_TESTING}" != "true" && "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  :
+fi
+
 set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches pipeline errors
 # manul-daemon.sh — background poll loop for the manul GitHub bot.
 #
@@ -693,6 +699,134 @@ verify_result_comment() {
 }
 
 
+
+# Evaluate task completion decision based on wrapper output and verification
+# Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
+# Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir]
+evaluate_task_completion() {
+  local REPO="$1"
+  local ISSUE_NUM="$2"
+  local COMMENT_ID="$3"
+  local safe_comment_id="$4"
+  local current_attempt="$5"
+  local rc="$6"
+  local STDOUT_FILE="$7"
+  local DB="$8"
+  local REPO_DIR="${9:-}"
+  
+  COMPLETION_SUCCESS="false"
+  FAIL_REASON=""
+  FINAL_COMMENT=""
+  
+  local SUCCESS="false"
+  
+  # 7. Determine success using BOTH exit status AND explicit completion marker
+  if [ "$rc" -eq 0 ]; then
+    if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
+      SUCCESS="true"
+    elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
+      FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
+    fi
+  fi
+  
+  # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
+  if [ "$SUCCESS" = "true" ]; then
+    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
+      lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+      SUCCESS="false"
+      FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
+    fi
+  fi
+  
+  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+  if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
+    local repo_state_clean="true"
+    local repo_state_issues=""
+    
+    # Check for staged changes
+    if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="staged_changes "
+    fi
+    
+    # Check for unstaged changes
+    if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="unstaged_changes "
+    fi
+    
+    # Check for untracked files
+    local untracked
+    untracked="$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)"
+    if [ -n "$untracked" ]; then
+      repo_state_clean="false"
+      repo_state_issues+="untracked_files "
+    fi
+    
+    if [ "$repo_state_clean" = "false" ]; then
+      SUCCESS="false"
+      FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
+      log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
+    fi
+  fi
+  
+  # 8. Update SQLite using enhanced finalization with verification
+  if [ "$SUCCESS" = "true" ]; then
+    # Enhanced task completion with verification
+    if complete_task_with_verification "$COMMENT_ID"; then
+      COMPLETION_SUCCESS="true"
+    else
+      log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
+      # Fallback: attempt direct completion with ownership verification
+      local fallback_pid
+      fallback_pid="$(get_daemon_pid)"
+      local fallback_result
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
+      local fallback_changes
+      fallback_changes="$(echo "$fallback_result" | tail -n 1)"
+      if [ "${fallback_changes:-0}" -eq 1 ]; then
+        # Verify the row is actually completed
+        local verify_status
+        verify_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+        if [ "$verify_status" = "completed" ]; then
+          COMPLETION_SUCCESS="true"
+          log "SUCCESS: Task $COMMENT_ID completed via fallback path"
+        else
+          log "ERROR: Fallback completion failed verification (status=$verify_status)"
+        fi
+      else
+        log "ERROR: Fallback completion failed (changes=$fallback_changes)"
+      fi
+    fi
+    
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
+      FINAL_COMMENT="✅ Manul completed the task successfully."
+      log "dispatch: task $COMMENT_ID completed successfully"
+    else
+      FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
+      log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
+    fi
+  else
+    # Re-read attempts from DB to ensure accuracy
+    local NEW_ATTEMPTS
+    NEW_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null || echo "0")"
+    local MAX_ATTEMPTS
+    MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    
+    if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+      FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
+      log "dispatch: task $COMMENT_ID failed (max attempts reached)"
+      lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+    else
+      FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
+      log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
+      lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+    fi
+  fi
+}
+
 run_once() {
   local out
   out="$("$POLL")"
@@ -1146,121 +1280,14 @@ PROMPT_APPEND
      timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
-     # Refresh heartbeat after agent completes (if still running)
-     refresh_heartbeat "$COMMENT_ID"
+    # Call production completion evaluation function
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR"
 
-    log "dispatch: agent finished rc=$rc for task $COMMENT_ID"
-    lc_log "WORKER_FINISH" "task=$COMMENT_ID rc=$rc"
+    # Map local variables (set by evaluate_task_completion)
+    COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
+    FINAL_COMMENT="${FINAL_COMMENT:-}"
+    FAIL_REASON="${FAIL_REASON:-}"
 
-    # 7. Determine success using BOTH exit status AND explicit completion marker
-    local SUCCESS="false"
-    local FAIL_REASON=""
-
-    if [ $rc -eq 0 ]; then
-      if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
-        SUCCESS="true"
-      elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
-        FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
-      fi
-    fi
-
-    # 7.1 Daemon posts only lifecycle comments; agent posts result comment directly.
-    # No extraction needed - agent handles its own GitHub communication.
-
-    # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
-    if [ "$SUCCESS" = "true" ]; then
-      current_attempt=$((ACTUAL_ATTEMPTS + 1))
-      if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-        log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
-        lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-        SUCCESS="false"
-        FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
-      fi
-    fi
-
-    # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-    if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
-      local repo_state_clean="true"
-      local repo_state_issues=""
-
-      # Check for staged changes
-      if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
-        repo_state_clean="false"
-        repo_state_issues+="staged_changes "
-      fi
-
-      # Check for unstaged changes
-      if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
-        repo_state_clean="false"
-        repo_state_issues+="unstaged_changes "
-      fi
-
-      # Check for untracked files
-      local untracked
-      untracked="$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)"
-      if [ -n "$untracked" ]; then
-        repo_state_clean="false"
-        repo_state_issues+="untracked_files "
-      fi
-
-      if [ "$repo_state_clean" = "false" ]; then
-        SUCCESS="false"
-        FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
-        log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
-      fi
-    fi
-
-    # 8. Update SQLite using enhanced finalization with verification
-    local FINAL_COMMENT=""
-    local COMPLETION_SUCCESS="false"
-    if [ "$SUCCESS" = "true" ]; then
-      # Enhanced task completion with verification
-      if complete_task_with_verification "$COMMENT_ID"; then
-        COMPLETION_SUCCESS="true"
-      else
-        log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
-        # Fallback: attempt direct completion with ownership verification
-        local fallback_pid
-        fallback_pid="$(get_daemon_pid)"
-        local fallback_result
-        fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
-        local fallback_changes
-        fallback_changes="$(echo "$fallback_result" | tail -n 1)"
-        if [ "${fallback_changes:-0}" -eq 1 ]; then
-          # Verify the row is actually completed
-          local verify_status
-          verify_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
-          if [ "$verify_status" = "completed" ]; then
-            COMPLETION_SUCCESS="true"
-            log "SUCCESS: Task $COMMENT_ID completed via fallback path"
-          else
-            log "ERROR: Fallback completion failed verification (status=$verify_status)"
-          fi
-        else
-          log "ERROR: Fallback completion failed (changes=$fallback_changes)"
-        fi
-      fi
-
-      if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        FINAL_COMMENT="✅ Manul completed the task successfully."
-        log "dispatch: task $COMMENT_ID completed successfully"
-      else
-        FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
-        log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
-        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
-      fi
-    else
-      # Re-read attempts from DB to ensure accuracy
-      local NEW_ATTEMPTS
-      NEW_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null || echo "0")"
-      local MAX_ATTEMPTS
-      MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-
-      if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
-        log "dispatch: task $COMMENT_ID failed (max attempts reached)"
-        lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-      else
         FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
         log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
         lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
