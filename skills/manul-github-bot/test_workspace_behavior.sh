@@ -324,31 +324,49 @@ test_cross_repo_isolation() {
 }
 run_and_test "Test 10: Cross-repository workspace isolation" test_cross_repo_isolation
 
-# Test 11: Concurrent lease prevents stealing reclaimed workspace
+# Test 11: Concurrent lease atomicity — two simultaneous lease attempts on pool of 1
 echo ""
 echo "=== Test 11: Concurrent lease atomicity ==="
 test_concurrent_lease() {
   workspace_pool_init 1 reset
 
-  local ws
-  ws="$(workspace_lease "task-1")"
-  [ -n "$ws" ] || return 1
+  # Use background processes to create true concurrency
+  local ws1 ws2
+  ( ws1="$(workspace_lease "concurrent-task-1")"; echo "$ws1" > /tmp/ws1.out ) &
+  local pid1=$!
+  local pid1=$!
+  ( ws2="$(workspace_lease "concurrent-task-2")"; echo "$ws2" > /tmp/ws2.out ) &
+  local pid2=$!
+  local pid2=$!
 
+  wait "$pid1" 2>/dev/null || true
+  wait "$pid2" 2>/dev/null || true
+
+  ws1="$(cat /tmp/ws1.out 2>/dev/null)"
+  ws2="$(cat /tmp/ws2.out 2>/dev/null)"
+  rm -f /tmp/ws1.out /tmp/ws2.out
+
+  # Exactly one should succeed
+  local got_one=false
+  if [ -n "$ws1" ] && [ -z "$ws2" ]; then
+    got_one=true
+  elif [ -z "$ws1" ] && [ -n "$ws2" ]; then
+    got_one=true
+  fi
+  [ "$got_one" = "true" ] || return 1
+
+  # The winner should have BUSY status
+  local winner="${ws1:-$ws2}"
   local status
-  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws';")"
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$winner';")"
   [ "$status" = "BUSY" ] || return 1
 
-  workspace_release "$ws"
-  
-  local ws2
-  ws2="$(workspace_lease "task-2")"
-  [ -n "$ws2" ] || return 1
-  [ "$ws2" = "$ws" ] || return 1
+  # Verify DB has exactly one owner for this workspace
+  local owner_count
+  owner_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$winner' AND status='BUSY';")"
+  [ "$owner_count" = "1" ] || return 1
 
-  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws2';")"
-  [ "$status" = "BUSY" ] || return 1
-
-  workspace_release "$ws2"
+  workspace_release "$winner"
 }
 run_and_test "Test 11: Concurrent lease atomicity" test_concurrent_lease
 
