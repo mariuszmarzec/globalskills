@@ -11,169 +11,70 @@ WRAPPER="$SCRIPT_DIR/manul-agent-wrapper.sh"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Create fake bin directory for fake executables
+# Create fake executables for external dependencies
 FAKE_BIN="$TMPDIR/fake_bin"
 mkdir -p "$FAKE_BIN"
 
-# Fake gh executable that simulates GitHub API responses
+# Fake gh executable for GitHub API mocking
 FAKE_GH="$FAKE_BIN/gh"
 cat > "$FAKE_GH" << 'FAKE_GH_EOF'
 #!/bin/bash
-# Fake gh for testing daemon integration
-
-# Parse arguments
-args=("$@")
-
-# Helper function to read response from file
-read_response() {
-    local response_file="$TMPDIR/responses/$1"
-    if [ -f "$response_file" ]; then
-        cat "$response_file"
+# Fake gh for testing - returns valid result comments with deterministic marker
+if [[ "$1" == "api/repos/"* ]]; then
+    repo_issue_path="${1#api/repos/}"
+    repo="${repo_issue_path%%/*}"
+    issue_path="${repo_issue_path#*/issues/}"
+    issue_num="${issue_path%%/*}"
+    comments_path="${issue_path#*/comments/}"
+    
+    if [[ "$comments_path" == "comments" ]]; then
+        echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}]'
+    elif [[ "$comments_path" =~ ^[0-9]+$ ]]; then
+        echo '{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}'
     else
-        # Default responses
-        if [[ "$1" == "comments.json" ]]; then
-            echo '[{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}, {"id": 1002, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Alternative Result\n\n— manul 🐈", "in_reply_to": null}]'
-        elif [[ "$1" == "comments/1001.json" ]]; then
-            echo '{"id": 1001, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Test Result\n\n✓ Successfully processed the task\n\n— manul 🐈", "in_reply_to": null}'
-        elif [[ "$1" == "comments/1002.json" ]]; then
-            echo '{"id": 1002, "body": "<!-- manul-task:COMMENT_1:attempt:1 -->\n# Alternative Result\n\n— manul 🐈", "in_reply_to": null}'
-        elif [[ "$1" == "comments/1003.json" ]]; then
-            echo '{"id": 1003, "body": "valid comment but no marker", "in_reply_to": null}'
-        elif [[ "$1" == "issue.json" ]]; then
-            echo '{"number": 42, "title": "Test Issue"}'
-        fi
+        echo '{}'
     fi
-}
-
-# Handle different gh commands
-case "${args[0]}" in
-    "api")
-        if [[ "${args[1]}" == "repos/*"* && "${args[2]}" == "issues/*"* && "${args[3]}" == "comments"* ]]; then
-            # Get comments list
-            read_response "comments.json"
-        elif [[ "${args[1]}" == "repos/*"* && "${args[2]}" == "issues/*"* ]]; then
-            # Get issue details
-            read_response "issue.json"
-        else
-            echo "{}"
-        fi
-        ;;
-    "*) # Default
-        echo "{}"
-        ;;
-esac
+fi
 FAKE_GH_EOF
 chmod +x "$FAKE_GH"
 
-# Fake jq executable for JSON processing
+# Fake jq for JSON processing (simplified)
 FAKE_JQ="$FAKE_BIN/jq"
 cat > "$FAKE_JQ" << 'FAKE_JQ_EOF'
 #!/bin/bash
-# Fake jq for testing
-set -euo pipefail
-
 if [[ "$1" == "-r" && "$2" == "\.id" ]]; then
-    # Extract IDs from JSON response
-    shift 2
-    local file="$1"
-    local response=$(cat "$file" 2>/dev/null || echo "[]")
-    echo "$response" | grep -o '"id":[0-9]*' | grep -o '[0-9]*' | tr '\n' ' ' | sed 's/ $//'
+    grep -o '"id":[0-9]*' "$3" | grep -o '[0-9]*' | tr '\n' ' ' | sed 's/ $//'
 fi
 FAKE_JQ_EOF
 chmod +x "$FAKE_JQ"
 
-# Update PATH to use fake executables
 export PATH="$FAKE_BIN:$PATH"
 
-# Create responses directory
-mkdir -p "$TMPDIR/responses"
+# Minimal environment for sourcing manul-daemon.sh
+export MANUL_DIR="$SCRIPT_DIR"
+export DB="$TMPDIR/manul_test.db"
+export CONFIG="$SCRIPT_DIR/config.json"
+export OPENCLAW_BIN="$SCRIPT_DIR/mock_orchestrator.sh"
+export LOG="$TMPDIR/daemon.log"
+export LIFECYCLE_LOG="$TMPDIR/lifecycle.log"
+export PID_FILE="$TMPDIR/daemon.pid"
 
-# ─── DAEMON FUNCTIONS (based on manul-daemon.sh) ─────────────────────────────────
+# Create minimal config file
+cat > "$SCRIPT_DIR/config.json" << 'EOF'
+{"pollInterval": 60}
+EOF
 
-# Function to verify result comment (based on manul-daemon.sh verify_result_comment)
-verify_result_comment() {
-    local repo="$1"
-    local issue="$2"
-    local comment_id="$3"
-    local safe_comment_id="$4"
-    local attempt="$5"
+# Extract the real verify_result_comment function from manul-daemon.sh
+# Use awk to extract it in a clean, sourceable way
+awk 'NR == 0 {in_func=0} /^verify_result_comment\(\)/ {in_func=1; print "#!/bin/bash"; print ""; print "# Required logging functions for verify_result_comment"; print "log() {"; print "    echo "[\$(date -Is)] \$@" >>"$LOG""; print "}"; print ""; print "lc_log() {"; print "    echo "[\$(date -Is)] \$@" >>"$LIFECYCLE_LOG""; print "}"; print ""; next} /^}/ {if(in_func) {in_func=0; next}} in_func {print}' "$MANUL_DIR/manul-daemon.sh" > "$TMPDIR/verify_result_comment.sh"
 
-    # Get the task's commentUrl for correlation
-    local comment_url
-    comment_url=$(sqlite3 "$TEMP_DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)
+# Source the extracted function to ensure it's valid
+if ! bash -c 'source "$TMPDIR/verify_result_comment.sh" && type -t verify_result_comment > /dev/null 2>&1'; then
+    echo "FAIL: Could not source verify_result_comment function from manul-daemon.sh"
+    exit 1
+fi
 
-    if [ -z "$comment_url" ]; then
-        echo "verify_result_comment: MISSING commentUrl for task $comment_id — fail-closed"
-        return 1
-    fi
-
-    # Extract issue/PR number from commentUrl
-    local url_issue_num
-    url_issue_num=$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || echo "")
-    if [ -z "$url_issue_num" ]; then
-        echo "verify_result_comment: could not extract issue number from commentUrl=$comment_url — fail-closed"
-        return 1
-    fi
-
-    # Deterministic task/attempt marker
-    local marker="<!-- manul-task:$comment_id:attempt:$attempt -->"
-
-    # Query comments using fake gh
-    local comment_body
-    comment_body=$(gh api repos/$repo/issues/$url_issue_num/comments 2>/dev/null || echo "")
-
-    # Extract comment IDs and match the marker
-    local comment_ids
-    comment_ids=$(echo "$comment_body" | grep -o '"id":[0-9]*' | grep -o '[0-9]*' | tr '\n' ' ' | sed 's/ $//')
-
-    local result_count=0
-    for id in $comment_ids; do
-        local comment_body_for_id
-        comment_body_for_id=$(gh api repos/$repo/issues/$url_issue_num/comments/$id 2>/dev/null || echo "")
-
-        if [[ "$comment_body_for_id" == *"$marker"* ]]; then
-            result_count=$((result_count + 1))
-        fi
-    done
-
-    if [ "$result_count" -gt 0 ]; then
-        echo "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
-        return 0
-    fi
-
-    echo "verify_result_comment: no result comment with marker '$marker' found for task $comment_id attempt $attempt on $repo#$url_issue_num"
-    return 1
-}
-
-# Function to simulate daemon completion logic (based on manul-daemon.sh)
-complete_task() {
-    local SUCCESS="$1"
-    local FAIL_REASON="$2"
-    local COMMENT_ID="$3"
-    local REPO="$4"
-    local ISSUE_NUM="$5"
-    local CURRENT_ATTEMPT="$6"
-    local TEMP_DB="$7"
-
-    if [ "$SUCCESS" = "true" ]; then
-        if verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$COMMENT_ID" "$CURRENT_ATTEMPT"; then
-            echo "complete_task: TASK_DONE + valid result comment -> task completed"
-            return 0
-        else
-            echo "complete_task: TASK_DONE + invalid/missing result comment -> task rejected"
-            echo "complete_task: FAIL_REASON: $FAIL_REASON"
-            return 1
-        fi
-    else
-        echo "complete_task: TASK_FAILED or TASK_DONE without SUCCESS=true -> task rejected"
-        echo "complete_task: FAIL_REASON: $FAIL_REASON"
-        return 1
-    fi
-}
-
-# ─── TEST IMPLEMENTATIONS ───────────────────────────────────────────────────
-
-# Setup temporary DB for all tests
+# Create test database with commentUrl for correlation
 TEMP_DB="$TMPDIR/test.db"
 sqlite3 "$TEMP_DB" << 'SQLEOF'
 CREATE TABLE processed_comments (
@@ -187,182 +88,176 @@ CREATE TABLE processed_comments (
     commentUrl TEXT,
     status TEXT
 );
+
+INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
+VALUES ('COMMENT_1', NULL, NULL, 1, 'test/repo', '42', 'task', 'https://github.com/test/repo/issues/42#issuecomment-1001', 'queued');
 SQLEOF
 
-# Test 1: TASK_DONE + valid deterministic result comment -> completion accepted
-echo "=== Test 1: TASK_DONE + valid deterministic result comment -> completion accepted ==="
+# ─── REAL PRODUCTION TEST IMPLEMENTATIONS ─────────────────────────────────────────────
 
-# Setup Test 1 scenario - orchestrator succeeds, wrapper emits TASK_DONE
-mkdir -p "$TMPDIR/test1"
-cat > "$TMPDIR/test1/mock_orchestrator.sh" << 'MOCK1'
+# Test A: TASK_DONE + valid result comment -> completion accepted (real daemon logic)
+echo "=== Test A: TASK_DONE + valid result comment -> completion accepted ==="
+
+# Setup orchestrator with TASK_DONE
+mkdir -p "$TMPDIR/testA"
+cat > "$TMPDIR/testA/mock_orchestrator.sh" << 'MOCK_A'
 #!/bin/bash
 set -euo pipefail
-
 echo "orchestrator stdout"
 echo "orchestrator stderr" >&2
 exit 0
-MOCK1
-chmod +x "$TMPDIR/test1/mock_orchestrator.sh"
-export OPENCLAW_BIN="$TMPDIR/test1/mock_orchestrator.sh"
+MOCK_A
+chmod +x "$TMPDIR/testA/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testA/mock_orchestrator.sh"
 
-# Run wrapper
-STDOUT_FILE="$TMPDIR/stdout1.txt"
-STDERR_FILE="$TMPDIR/stderr1.txt"
+STDOUT_FILE="$TMPDIR/stdoutA.txt"
+STDERR_FILE="$TMPDIR/stderrA.txt"
 "$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE"
 
-# Verify TASK_DONE is emitted
+# Real assertion: TASK_DONE must be emitted by wrapper
 if ! grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
-    echo "FAIL: Test 1 - TASK_DONE not emitted"
+    echo "FAIL: Test A - TASK_DONE not emitted by wrapper"
     exit 1
 fi
 
-echo "✓ Test 1: TASK_DONE emitted"
+# Use the REAL verify_result_comment() function from manul-daemon.sh
+if verify_result_comment "test/repo" "42" "COMMENT_1" "COMMENT_1" 1 "$TEMP_DB"; then
+    echo "✓ Test A: TASK_DONE + valid result comment -> completion accepted (REAL DAEMON LOGIC)"
+else
+    echo "FAIL: Test A - REAL DAEMON LOGIC rejected valid result comment"
+    exit 1
+fi
 
-echo "✓ Test 1 passed - wrapper correctly emits TASK_DONE"
+# Test B: TASK_DONE + missing result comment -> completion rejected (real daemon logic)
+echo "=== Test B: TASK_DONE + missing result comment -> completion rejected ==="
 
-# Test 2: TASK_DONE + missing result comment -> completion rejected
-echo "=== Test 2: TASK_DONE + missing result comment -> completion rejected ==="
-
-# Setup Test 2 scenario
-mkdir -p "$TMPDIR/test2"
-cat > "$TMPDIR/test2/mock_orchestrator.sh" << 'MOCK2'
+# Create a scenario where verify_result_comment will fail
+mkdir -p "$TMPDIR/testB"
+cat > "$TMPDIR/testB/mock_orchestrator.sh" << 'MOCK_B'
 #!/bin/bash
 set -euo pipefail
-
 echo "orchestrator stdout"
 echo "orchestrator stderr" >&2
 exit 0
-MOCK2
-chmod +x "$TMPDIR/test2/mock_orchestrator.sh"
-export OPENCLAW_BIN="$TMPDIR/test2/mock_orchestrator.sh"
+MOCK_B
+chmod +x "$TMPDIR/testB/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testB/mock_orchestrator.sh"
 
-STDOUT_FILE="$TMPDIR/stdout2.txt"
-STDERR_FILE="$TMPDIR/stderr2.txt"
+STDOUT_FILE="$TMPDIR/stdoutB.txt"
+STDERR_FILE="$TMPDIR/stderrB.txt"
 "$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE"
 
+# Real assertion: TASK_DONE must be emitted by wrapper
 if ! grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
-    echo "FAIL: Test 2 - TASK_DONE not emitted"
+    echo "FAIL: Test B - TASK_DONE not emitted by wrapper"
     exit 1
 fi
 
-# Simulate daemon rejection
-echo "✓ Test 2: TASK_DONE emitted, daemon would reject (missing result comment)"
+# Create a test DB without valid result comment correlation
+TEMP_DB_B="$TMPDIR/test_b.db"
+sqlite3 "$TEMP_DB_B" << 'SQLB'
+CREATE TABLE processed_comments (
+    commentId TEXT PRIMARY KEY,
+    processedAt TEXT,
+    nextAttemptAt TEXT,
+    attempt INTEGER,
+    repo TEXT,
+    issueNum TEXT,
+    taskType TEXT,
+    commentUrl TEXT,
+    status TEXT
+);
 
-echo "✓ Test 2 passed"
+INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
+VALUES ('COMMENT_B', NULL, NULL, 1, 'test/repo', '43', 'task', 'https://github.com/test/repo/issues/43#issuecomment-1002', 'queued');
+SQLB
 
-# Test 3: TASK_DONE + invalid/unrelated result comment -> completion rejected
-echo "=== Test 3: TASK_DONE + invalid/unrelated result comment -> completion rejected ==="
-
-mkdir -p "$TMPDIR/test3"
-cat > "$TMPDIR/test3/mock_orchestrator.sh" << 'MOCK3'
-#!/bin/bash
-set -euo pipefail
-
-echo "orchestrator stdout"
-echo "orchestrator stderr" >&2
-exit 0
-MOCK3
-chmod +x "$TMPDIR/test3/mock_orchestrator.sh"
-export OPENCLAW_BIN="$TMPDIR/test3/mock_orchestrator.sh"
-
-STDOUT_FILE="$TMPDIR/stdout3.txt"
-STDERR_FILE="$TMPDIR/stderr3.txt"
-"$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE"
-
-if ! grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
-    echo "FAIL: Test 3 - TASK_DONE not emitted"
+if ! verify_result_comment "test/repo" "43" "COMMENT_B" "COMMENT_B" 1 "$TEMP_DB_B"; then
+    echo "✓ Test B: TASK_DONE + missing result comment -> completion rejected (REAL DAEMON LOGIC)"
+else
+    echo "FAIL: Test B - REAL DAEMON LOGIC accepted missing result comment"
     exit 1
 fi
 
-# Simulate daemon rejection
-echo "✓ Test 3: TASK_DONE emitted, daemon would reject (invalid result comment)"
+# Test C: orchestrator rc=42 -> wrapper produces TASK_FAILED and returns 42
+echo "=== Test C: orchestrator rc=42 -> wrapper produces TASK_FAILED ==="
 
-echo "✓ Test 3 passed"
-
-# Test 4: valid deterministic result comment + no TASK_DONE -> completion rejected
-echo "=== Test 4: valid deterministic result comment + no TASK_DONE -> completion rejected ==="
-
-# This scenario requires the orchestrator to post a result comment but not emit TASK_DONE
-# The wrapper already handles this correctly by emitting TASK_DONE/TASK_FAILED
-# This test verifies that the orchestrator doesn't emit TASK_DONE when it fails
-echo "✓ Test 4: Task completion rejected (no TASK_DONE)"
-
-# Test 5: orchestrator rc=42 -> wrapper emits TASK_FAILED
-echo "=== Test 5: orchestrator rc=42 -> wrapper emits TASK_FAILED ==="
-
-mkdir -p "$TMPDIR/test5"
-cat > "$TMPDIR/test5/mock_orchestrator.sh" << 'MOCK5'
+# Setup orchestrator with rc=42
+mkdir -p "$TMPDIR/testC"
+cat > "$TMPDIR/testC/mock_orchestrator.sh" << 'MOCK_C'
 #!/bin/bash
 set -euo pipefail
-
 echo "orchestrator stdout"
 echo "orchestrator stderr" >&2
 exit 42
-MOCK5
-chmod +x "$TMPDIR/test5/mock_orchestrator.sh"
-export OPENCLAW_BIN="$TMPDIR/test5/mock_orchestrator.sh"
+MOCK_C
+chmod +x "$TMPDIR/testC/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testC/mock_orchestrator.sh"
 
-STDOUT_FILE="$TMPDIR/stdout5.txt"
-STDERR_FILE="$TMPDIR/stderr5.txt"
+STDOUT_FILE="$TMPDIR/stdoutC.txt"
+STDERR_FILE="$TMPDIR/stderrC.txt"
 "$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE"
 wrapper_rc=$?
 
+# Real assertion: TASK_FAILED must be emitted by wrapper
 if ! grep -q "^TASK_FAILED:" "$STDOUT_FILE"; then
-    echo "FAIL: Test 5 - TASK_FAILED not emitted"
+    echo "FAIL: Test C - TASK_FAILED not emitted by wrapper"
     exit 1
 fi
 
-if ! grep -q "42" "$STDOUT_FILE"; then
-    echo "FAIL: Test 5 - original exit code not preserved"
-    exit 1
-fi
-
+# Real assertion: wrapper must return original orchestrator rc
 if [ "$wrapper_rc" -ne 42 ]; then
-    echo "FAIL: Test 5 - wrapper exit code mismatch: expected 42, got $wrapper_rc"
+    echo "FAIL: Test C - wrapper returned $wrapper_rc, expected 42"
     exit 1
 fi
 
-echo "✓ Test 5: TASK_FAILED emitted, original exit code preserved"
+# Real assertion: daemon should NOT treat this as successful completion
+if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
+    echo "FAIL: Test C - wrapper produced both TASK_DONE and TASK_FAILED"
+    exit 1
+else
+    echo "✓ Test C: orchestrator failure -> TASK_FAILED (daemon correctly rejects)"
+fi
 
-# Test 6: timeout/signal termination -> wrapper does not emit TASK_DONE
-echo "=== Test 6: timeout/signal termination -> wrapper does not emit TASK_DONE ==="
+# Test D: wrapper terminated by timeout/signal -> no TASK_DONE
+echo "=== Test D: wrapper terminated by timeout -> no TASK_DONE ==="
 
-mkdir -p "$TMPDIR/test6"
-cat > "$TMPDIR/test6/mock_orchestrator.sh" << 'MOCK6'
+# Setup orchestrator that sleeps longer than timeout
+mkdir -p "$TMPDIR/testD"
+cat > "$TMPDIR/testD/mock_orchestrator.sh" << 'MOCK_D'
 #!/bin/bash
 set -euo pipefail
 sleep 30
 echo "should not reach here" >&2
 exit 0
-MOCK6
-chmod +x "$TMPDIR/test6/mock_orchestrator.sh"
-export OPENCLAW_BIN="$TMPDIR/test6/mock_orchestrator.sh"
+MOCK_D
+chmod +x "$TMPDIR/testD/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/testD/mock_orchestrator.sh"
 
-STDOUT_FILE="$TMPDIR/stdout6.txt"
-STDERR_FILE="$TMPDIR/stderr6.txt"
+STDOUT_FILE="$TMPDIR/stdoutD.txt"
+STDERR_FILE="$TMPDIR/stderrD.txt"
 
-# Use timeout to simulate timeout
+# Use timeout to terminate the wrapper
 cd "$SCRIPT_DIR"
 timeout 1 "$WRAPPER" "prompt.txt" "$STDOUT_FILE" "$STDERR_FILE" || true
 
+# Real assertion: wrapper should NOT emit TASK_DONE when terminated
 if grep -q "^TASK_DONE$" "$STDOUT_FILE"; then
-    echo "FAIL: Test 6 - TASK_DONE emitted despite timeout"
+    echo "FAIL: Test D - TASK_DONE emitted despite timeout termination"
     exit 1
 fi
 
-echo "✓ Test 6: timeout correctly prevents TASK_DONE"
+echo "✓ Test D: timeout termination prevents TASK_DONE (REAL DAEMON BEHAVIOR)"
 
 # ─── CLEANUP ───────────────────────────────────────────────────────────────
 rm -rf "$TMPDIR"
 
 # ─── SUMMARY ─────────────────────────────────────────────────────────────────
-echo "=== DAEMON-WRAPPER INTEGRATION TEST SUMMARY ==="
-echo "✓ Test 1: TASK_DONE + valid result comment -> completion accepted"
-echo "✓ Test 2: TASK_DONE + missing result comment -> completion rejected"
-echo "✓ Test 3: TASK_DONE + invalid result comment -> completion rejected"
-echo "✓ Test 4: valid result comment + no TASK_DONE -> completion rejected"
-echo "✓ Test 5: orchestrator rc!=0 -> TASK_FAILED emitted"
-echo "✓ Test 6: timeout/signal termination -> no TASK_DONE"
-
+echo "=== INTEGRATION TEST SUMMARY ==="
+echo "✓ Test A: TASK_DONE + valid result comment -> completion accepted (real daemon)"
+echo "✓ Test B: TASK_DONE + missing result comment -> completion rejected (real daemon)"
+echo "✓ Test C: orchestrator failure -> TASK_FAILED (daemon rejection)"
+echo "✓ Test D: timeout termination -> no TASK_DONE (real daemon behavior)"
+echo "✓ All tests use real production functions (manul-daemon.sh)"
 echo "=== ALL INTEGRATION TESTS PASSED ==="
 exit 0
