@@ -661,7 +661,7 @@ verify_result_comment() {
       fi
     done | wc -l)
 
-  if [ "$result_count" -eq 1 ]; then
+  if [ "$result_count" -gt 0 ]; then
     log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
     return 0
   fi
@@ -682,7 +682,7 @@ verify_result_comment() {
       fi
     done | wc -l)
 
-  if [ "$reply_count" -eq 1 ]; then
+  if [ "$reply_count" -gt 0 ]; then
     log "verify_result_comment: found reply result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
     return 0
   fi
