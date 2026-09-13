@@ -1143,7 +1143,7 @@ PROMPT_APPEND
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
      # Refresh heartbeat before agent to prevent timeout during long runs
      refresh_heartbeat "$COMMENT_ID"
-     timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+     timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
      # Refresh heartbeat after agent completes (if still running)
