@@ -20,7 +20,7 @@ STDERR_FILE="$3"
 
 # Run the orchestrator, appending output to the designated files
 "$OPENCLAW_BIN" agent --agent main --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE"
-local rc=$?
+rc=$?
 
 if [ $rc -eq 0 ]; then
     echo "TASK_DONE" >>"$STDOUT_FILE"
