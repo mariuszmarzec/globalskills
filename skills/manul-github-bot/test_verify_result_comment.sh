@@ -304,16 +304,16 @@ run_test "Lifecycle comments rejected (no real result)" \
     "$REPO" 1 "result-4" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 1
 
-# ── Test 5: Multiple matching comments → FAIL ──────────────────────────────────
+# ── Test 5: Multiple matching comments → PASS (duplicate comments valid) ──────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
 [
   {"id": 107, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nFirst result"},
   {"id": 108, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nSecond result"}
 ]
 EOF
-run_test "Multiple matches rejected (ambiguity)" \
+run_test "Multiple matches accepted (valid duplicates)" \
     "$REPO" 1 "result-5" 1 \
-    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+    "$WORK/responses/owner__repo__issues__1__comments.json" 0
 
 # ── Test 6: Wrong attempt number ───────────────────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
@@ -432,7 +432,7 @@ else
     fail "Integration: re-verification should still pass"
 fi
 
-# Step I: Verify duplicate comment doesn't double-count
+# Step I: Verify duplicate comment is accepted (valid)
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << JSONEOF
 [
   {"id": 200, "user": {"login": "Agent-Fix"}, "in_reply_to_id": null, "body": "<!-- manul-task:${COMMENT_ID}:attempt:${ATTEMPT} -->\nFirst result"},
@@ -441,10 +441,10 @@ cat > "$WORK/responses/owner__repo__issues__1__comments.json" << JSONEOF
 JSONEOF
 
 verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    ok "Integration: duplicate comments correctly rejected (rc=1)"
+if [ $? -eq 0 ]; then
+    ok "Integration: duplicate comments are accepted (valid duplicates)"
 else
-    fail "Integration: duplicate comments should be rejected (expected rc=1)"
+    fail "Integration: duplicate comments should be accepted (expected rc=0)"
 fi
 
 # ── Integration Test 11: Fail-closed on missing commentUrl ────────────────────
