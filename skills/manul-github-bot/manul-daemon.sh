@@ -228,7 +228,7 @@ release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -f "${REPO_LOCK_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks}/${slug}.lock"
+  rm -f "${REPO_LOCK_DIR:-${MANUL_DIR}/repo-locks}/${slug}.lock"
 }
 
 # Enhanced SQLite UPDATE with verification and error handling
@@ -451,24 +451,36 @@ release_task_lock() {
 # Heartbeat tracking for long-running tasks
 declare -A HEARTBEAT_PIDS
 
+
 start_heartbeat() {
   local comment_id="$1"
-  local pid=$$
-  HEARTBEAT_PIDS["$comment_id"]=$pid
-  # Write PID file for verification
-  echo "$pid" > "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
-  log "started heartbeat for task $comment_id (pid $pid)"
-  lc_log "HEARTBEAT_START" "task=$comment_id pid=$pid interval=${HEARTBEAT_INTERVAL}s"
+  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  # Start a background heartbeat loop
+  (
+    while true; do
+      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      sleep "$HEARTBEAT_INTERVAL"
+    done
+  ) &
+  local heartbeat_pid=$!
+  echo "$heartbeat_pid" > "$pid_file" 2>/dev/null || true
+  HEARTBEAT_PIDS["$comment_id"]=$heartbeat_pid
+  log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
+  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s"
 }
 
 stop_heartbeat() {
   local comment_id="$1"
-  unset HEARTBEAT_PIDS["$comment_id"]
-  rm -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
+  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  local pid="${HEARTBEAT_PIDS[$comment_id]:-}"
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    unset HEARTBEAT_PIDS["$comment_id"]
+  fi
+  rm -f "$pid_file" 2>/dev/null || true
   log "stopped heartbeat for task $comment_id"
   lc_log "HEARTBEAT_STOP" "task=$comment_id"
 }
-
 # Refresh heartbeatAt in database to prevent watchdog timeout
 refresh_heartbeat() {
   local comment_id="$1"
@@ -1183,7 +1195,36 @@ PROMPT_EOF
       fi
     fi
 
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID"
+
+    # Get workspace path from lease
+    local workspace_path
+    workspace_path="$(workspace_get_path "$COMMENT_ID")"
+    if [ -z "$workspace_path" ]; then
+      log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
+      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+      release_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    # Clone repository into workspace if needed
+    if [ ! -d "$workspace_path/.git" ]; then
+      log "dispatch: cloning repository into workspace $workspace_path from $REPO_DIR"
+      git clone --local "$REPO_DIR" "$workspace_path" 2>/dev/null || {
+        log "dispatch: failed to clone repository into workspace, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      }
+    fi
+
+    # Use the workspace as the working directory for the agent
+    WORKDIR="$workspace_path"
+
+    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
     # Generate timestamp for unique branch name
     local timestamp
@@ -1191,10 +1232,9 @@ PROMPT_EOF
 
     # Compute current/default branches safely (avoid command substitution in heredoc)
     local CURRENT_BRANCH
-    CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
+    CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local DEFAULT_BRANCH
-    DEFAULT_BRANCH="$(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
-
+    DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 

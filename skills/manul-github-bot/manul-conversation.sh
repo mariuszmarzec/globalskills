@@ -169,27 +169,29 @@ ${PROMPT}
 EOF
 )"
   
-  local issue_url
-  issue_url=""
-  local issue_number=""
   
+  local issue_url
+  local issue_number
+
   if command -v gh >/dev/null 2>&1; then
-    issue_url="$(gh issue create \
+    local gh_response
+    gh_response="$(gh issue create \
       --repo "$REPO" \
       --title "$TITLE" \
       --body "$issue_body" \
       --json url,number \
-      2>/dev/null || echo "")"
-    
-    if [ -n "$issue_url" ]; then
-      issue_number="$(echo "$issue_url" | jq -r '.number // empty')"
-      issue_url="$(echo "$issue_url" | jq -r '.url // empty')"
+      2>/dev/null)" || {
+      error_exit "GitHub issue creation failed" 1
+    }
+
+    issue_number="$(printf '%s' "$gh_response" | jq -r '.number // empty' 2>/dev/null)"
+    issue_url="$(printf '%s' "$gh_response" | jq -r '.url // empty' 2>/dev/null)"
+
+    if [ -z "$issue_number" ] || ! [[ "$issue_number" =~ ^[0-9]+$ ]] || [ "$issue_number" -le 0 ] || [ -z "$issue_url" ]; then
+      error_exit "GitHub issue creation returned invalid response" 1
     fi
-  fi
-  
-  if [ -z "$issue_url" ]; then
-    issue_url="https://github.com/${REPO}/issues/0"
-    issue_number="0"
+  else
+    error_exit "GitHub CLI (gh) is required to create the conversation issue" 1
   fi
   
   # Insert conversation record

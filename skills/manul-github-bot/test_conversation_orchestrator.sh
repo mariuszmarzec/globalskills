@@ -854,6 +854,59 @@ test_github_manul_regression() {
 }
 
 # ============================================================================
+
+# Test: Conversation creation fails closed when gh fails
+test_conversation_creation_fails_closed() {
+  echo "  Testing conversation creation fails closed when gh fails..."
+  
+  # Create fake gh that fails on issue create
+  mkdir -p /tmp/manul_tests
+  cat > /tmp/manul_tests/gh <<'GHSCRIPT'
+#!/bin/bash
+if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
+  echo "gh issue create failed" >&2
+  exit 1
+fi
+exit 0
+GHSCRIPT
+  chmod +x /tmp/manul_tests/gh
+  
+  # Save original PATH
+  local original_path
+  original_path="$PATH"
+  
+  # Add mock to PATH
+  export PATH="/tmp/manul_tests:$PATH"
+  
+  # Save original GH repo
+  local original_github_repository
+  original_github_repository="${GITHUB_REPOSITORY:-}"
+  
+  # Set up failure scenario
+  GITHUB_REPOSITORY="manul-ai/tests"
+  
+  # Run create with FAIL_CLOSED=true
+  local output
+  output="$(bash "$CONVERSATION_SCRIPT" create --fail-closed=true 2>&1)" || true
+  
+  # Restore
+  rm -f /tmp/manul_tests/gh
+  export PATH="$original_path"
+  GITHUB_REPOSITORY="$original_github_repository"
+  
+  # Verify: should not create conversation with issue/0
+  if echo "$output" | grep -q "issue/0"; then
+    fail "Should not create conversation with issue/0 when gh fails"
+  elif echo "$output" | grep -q "FAIL_CLOSED=false"; then
+    ok "Failed closed as expected"
+  else
+    ok "Conversation creation failed (no issue/0 created)"
+  fi
+}
+
+# Test: Conversation creation fails closed when gh fails
+
+# Test: Conversation creation fails closed when gh fails
 # Main
 # ============================================================================
 echo ""
@@ -889,6 +942,7 @@ test_exit_codes
 test_duplicate_submission_idempotency
 test_stale_task_race
 test_production_path_safety
+test_conversation_creation_fails_closed
 test_github_manul_regression
 
 echo ""

@@ -247,6 +247,42 @@ cmd_handle() {
       error_exit "No conversation found for PR #$PR_NUMBER" 2
     fi
 
+    # Idempotency: check if review already processed BEFORE creating task
+    local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local review_id="${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}"
+    local review_comment_id="review:$review_id"
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      local existing_count
+      existing_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" 2>/dev/null || echo 0)"
+      if [ "$existing_count" -gt 0 ]; then
+        echo "dispatch: duplicate review $review_id, skipping task creation" >&2
+        local result
+        result=$(jq -n \
+          --arg reviewId "$review_id" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          --arg reviewPrompt "${review_prompt:0:200}" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: null,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            reviewPrompt: $reviewPrompt,
+            createdTask: false,
+            duplicate: true,
+            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          }')
+        echo "$result" | jq .
+        return 0
+      fi
+      # Insert REVIEW record BEFORE task creation to survive crashes
+      sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER);" 2>/dev/null || true
+    fi
+
     # Submit review-fix task
     local submit_args=(
       --conversation-id "$conv_id"
@@ -320,6 +356,10 @@ cmd_handle() {
       return 1
     fi
 
+    # Update REVIEW record to completed after successful task creation
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null || true
+    fi
     # Successful REVIEW_FIX task submission - record review
     local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [ -n "$DB" ] && [ -f "$DB" ]; then
