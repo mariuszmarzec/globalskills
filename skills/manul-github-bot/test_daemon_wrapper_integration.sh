@@ -19,6 +19,13 @@ FAKE_GH="$FAKE_BIN/gh"
 cat > "$FAKE_GH" << 'GH_EOF'
 #!/bin/bash
 if [[ "$1" == "api" ]]; then
+    has_jq=false
+    for arg in "$@"; do
+        if [[ "$arg" == "--jq" ]]; then
+            has_jq=true
+            break
+        fi
+    done
     for arg in "$@"; do
         if [[ "$arg" == repos/* ]]; then
             path="$arg"
@@ -26,13 +33,22 @@ if [[ "$1" == "api" ]]; then
             remainder="${path#*/issues/}"
             remainder="${remainder#*/}"
             if [[ "$remainder" == "comments" ]]; then
-                printf '[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest"}]'
+                json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                if [[ "$has_jq" == "true" ]]; then
+                    echo "$json_output" | jq -r '.[] | select(.in_reply_to_id == null) | .body // ""'
+                else
+                    echo "$json_output"
+                fi
                 exit 0
             fi
         fi
     done
 fi
-echo '[]'
+if [[ "$has_jq" == "true" ]]; then
+    echo '[]'
+else
+    echo '{}'
+fi
 GH_EOF
 chmod +x "$FAKE_GH"
 
@@ -52,31 +68,13 @@ LIFECYCLE_LOG="$LIFECYCLE_LOG"
 export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG="$SCRIPT_DIR/config.json"
 
 # Create test database
-sqlite3 "$DB" << 'SQLEOF'
-CREATE TABLE processed_comments (
-    commentId TEXT PRIMARY KEY,
-    processedAt TEXT,
-    nextAttemptAt TEXT,
-    attempt INTEGER,
-    repo TEXT,
-    issueNum TEXT,
-    taskType TEXT,
-    commentUrl TEXT,
-    status TEXT
-);
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_1', NULL, NULL, 1, 'test/repo', '42', 'task', 'https://github.com/test/repo/issues/42#issuecomment-1001', 'queued');
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_2', NULL, NULL, 1, 'test/repo', '43', 'task', 'https://github.com/test/repo/issues/43#issuecomment-1002', 'queued');
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_3', NULL, NULL, 1, 'test/repo', '44', 'task', 'https://github.com/test/repo/issues/44#issuecomment-1003', 'queued');
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_4', NULL, NULL, 1, 'test/repo', '45', 'task', 'https://github.com/test/repo/issues/45#issuecomment-1004', 'queued');
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_5', NULL, NULL, 1, 'test/repo', '46', 'task', 'https://github.com/test/repo/issues/46#issuecomment-1005', 'queued');
-INSERT INTO processed_comments (commentId, processedAt, nextAttemptAt, attempt, repo, issueNum, taskType, commentUrl, status)
-VALUES ('COMMENT_6', NULL, NULL, 1, 'test/repo', '47', 'task', 'https://github.com/test/repo/issues/47#issuecomment-1006', 'queued');
-SQLEOF
+sqlite3 "$DB" "CREATE TABLE processed_comments (commentId TEXT PRIMARY KEY, processedAt TEXT, nextAttemptAt TEXT, attempt INTEGER, repo TEXT, issueNum TEXT, taskType TEXT, commentUrl TEXT, status TEXT);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_1', NULL, NULL, 1, 'test/repo', '42', 'task', 'https://github.com/test/repo/issues/42#issuecomment-1001', 'queued');"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_2', NULL, NULL, 1, 'test/repo', '43', 'task', 'https://github.com/test/repo/issues/43#issuecomment-1002', 'queued');"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_3', NULL, NULL, 1, 'test/repo', '44', 'task', 'https://github.com/test/repo/issues/44#issuecomment-1003', 'queued');"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_4', NULL, NULL, 1, 'test/repo', '45', 'task', 'https://github.com/test/repo/issues/45#issuecomment-1004', 'queued');"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_5', NULL, NULL, 1, 'test/repo', '46', 'task', 'https://github.com/test/repo/issues/46#issuecomment-1005', 'queued');"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('COMMENT_6', NULL, NULL, 1, 'test/repo', '47', 'task', 'https://github.com/test/repo/issues/47#issuecomment-1006', 'queued');;"
 echo "0" > "$PID_FILE"
 
 # ─── Test A: rc=0 + TASK_DONE + valid result comment -> COMPLETION_SUCCESS=true ─
@@ -95,7 +93,7 @@ if [ -z "$FINAL_COMMENT" ]; then
     echo "FAIL: Test A - expected non-empty FINAL_COMMENT"
     exit 1
 fi
-echo "✓ Test A: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test A: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test B: rc=0 + TASK_DONE + missing result comment -> COMPLETION_SUCCESS=false ─
 echo "=== Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false ==="
@@ -113,7 +111,7 @@ if [ -z "$FAIL_REASON" ]; then
     echo "FAIL: Test B - expected non-empty FAIL_REASON"
     exit 1
 fi
-echo "✓ Test B: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test B: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test C: rc=0 + TASK_DONE + invalid/unrelated result -> COMPLETION_SUCCESS=false ─
 echo "=== Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false ==="
@@ -128,7 +126,7 @@ if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test C - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
 fi
-echo "✓ Test C: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test C: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false ─
 echo "=== Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false ==="
@@ -142,7 +140,7 @@ if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test D - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
 fi
-echo "✓ Test D: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test D: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false ─
 echo "=== Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false ==="
@@ -160,7 +158,7 @@ if [ -z "$FAIL_REASON" ]; then
     echo "FAIL: Test E - expected non-empty FAIL_REASON"
     exit 1
 fi
-echo "✓ Test E: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test E: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test F: timeout/signal + no TASK_DONE -> COMPLETION_SUCCESS=false ─
 echo "=== Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false ==="
@@ -174,16 +172,16 @@ if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test F - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
 fi
-echo "✓ Test F: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+echo "[OK] Test F: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
-echo "✓ Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true"
-echo "✓ Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false"
-echo "✓ Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false"
-echo "✓ Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false"
-echo "✓ Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
-echo "✓ Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
-echo "✓ All tests call real evaluate_task_completion() from manul-daemon.sh"
+echo "[OK] Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true"
+echo "[OK] Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
+echo "[OK] Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
+echo "[OK] All tests call real evaluate_task_completion() from manul-daemon.sh"
 echo "=== ALL INTEGRATION TESTS PASSED ==="
