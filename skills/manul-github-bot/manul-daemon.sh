@@ -1,8 +1,8 @@
 #!/usr/bin/bash
-# Source guard: prevent execution when sourced for testing
+# Source guard: prevent CLI execution when sourced for testing
 MANUL_TESTING="${MANUL_TESTING:-false}"
-if [[ "${MANUL_TESTING}" != "true" && "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  :
+if [[ "${MANUL_TESTING}" == "true" ]]; then
+  return 0
 fi
 
 set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches pipeline errors
@@ -1287,12 +1287,6 @@ PROMPT_APPEND
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
     FINAL_COMMENT="${FINAL_COMMENT:-}"
     FAIL_REASON="${FAIL_REASON:-}"
-
-        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
-        log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
-        lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-      fi
-    fi
 
     # 9. Post lifecycle comment to the SAME GitHub thread
     # The agent posts its own result comment; daemon posts lifecycle markers only.
