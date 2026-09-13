@@ -1224,6 +1224,40 @@ PROMPT_EOF
     # Use the workspace as the working directory for the agent
     WORKDIR="$workspace_path"
 
+
+    # Deterministic workspace preparation: ensure correct branch is checked out
+    if [ -n "$PR_HEAD_BRANCH" ]; then
+      # PR task: fetch and checkout the PR head branch explicitly
+      log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
+      if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
+        log "dispatch: failed to fetch PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      if ! git -C "$WORKDIR" checkout -B "$PR_HEAD_BRANCH" "FETCH_HEAD" 2>>"$LOG"; then
+        log "dispatch: failed to checkout PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      # Verify HEAD is the expected PR head branch
+      local verify_branch
+      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
+      if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
+        log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: verified PR head branch $verify_branch in workspace"
+    fi
     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
     # Generate timestamp for unique branch name
@@ -1253,7 +1287,7 @@ PROMPT_APPEND
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This task is tied to PR #__ISSUE_NUM__
 - PR head branch: `__PR_HEAD_BRANCH__`
-- Switch to the PR head branch (`git checkout __PR_HEAD_BRANCH__`) before making any changes
+- PR head branch `__PR_HEAD_BRANCH__` is already checked out and ready for work
 - Commit and push changes to the same PR head branch
 - Do NOT create a new branch for this task
 PROMPT_APPEND
