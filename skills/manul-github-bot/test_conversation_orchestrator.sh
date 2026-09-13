@@ -50,6 +50,39 @@ trap cleanup EXIT
 
 mkdir -p "$MANUL_DIR" "$RESULTS_DIR"
 
+# Create mock gh for tests (no real GitHub required)
+MOCK_GH_DIR="$TEST_DIR/mock-gh"
+mkdir -p "$MOCK_GH_DIR"
+cat > "$MOCK_GH_DIR/gh" <<'MOCK_EOF'
+#!/bin/bash
+# Mock gh that simulates issue creation
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        # Return a mock issue
+        echo '{"url": "https://github.com/test-owner/test-repo/issues/1", "number": 1}'
+        exit 0
+        ;;
+      view) exit 0 ;;
+      comment) exit 0 ;;
+    esac
+    ;;
+  pr)
+    case "$2" in
+      view) exit 0 ;;
+      checkout) exit 0 ;;
+    esac
+    ;;
+  api) exit 0 ;;
+  repo) exit 0 ;;
+  auth) exit 0 ;;
+esac
+exit 0
+MOCK_EOF
+chmod +x "$MOCK_GH_DIR/gh"
+export PATH="$MOCK_GH_DIR:$PATH"
+
 # Initialize config
 cat > "$CONFIG" << 'CONFIGEOF'
 {
