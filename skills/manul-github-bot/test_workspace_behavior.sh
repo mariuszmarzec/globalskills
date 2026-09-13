@@ -334,9 +334,7 @@ test_concurrent_lease() {
   local ws1 ws2
   ( ws1="$(workspace_lease "concurrent-task-1")"; echo "$ws1" > /tmp/ws1.out ) &
   local pid1=$!
-  local pid1=$!
   ( ws2="$(workspace_lease "concurrent-task-2")"; echo "$ws2" > /tmp/ws2.out ) &
-  local pid2=$!
   local pid2=$!
 
   wait "$pid1" 2>/dev/null || true
