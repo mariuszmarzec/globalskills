@@ -33,7 +33,34 @@ if [[ "$1" == "api" ]]; then
             remainder="${path#*/issues/}"
             remainder="${remainder#*/}"
             if [[ "$remainder" == "comments" ]]; then
-                json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                # Extract issue number from path like test/repo/issues/42/comments
+                issue_num="${path#*/issues/}"
+                issue_num="${issue_num%%/*}"
+                case "$issue_num" in
+                    42)
+                        # Test A: valid result for COMMENT_1
+                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
+                    43)
+                        # Test B: no result comment (missing result)
+                        json_output='[]'
+                        ;;
+                    44)
+                        # Test C: unrelated result (COMMENT_1, not COMMENT_3)
+                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
+                    45)
+                        # Test D: valid result for COMMENT_4 (but no TASK_DONE in stdout)
+                        json_output='[{"id":1004,"body":"<!-- manul-task:COMMENT_4:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
+                    46|47)
+                        # Tests E/F: rc!=0, verification skipped; return anything
+                        json_output='[{"id":1005,"body":"<!-- manul-task:COMMENT_5:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
+                    *)
+                        json_output='[]'
+                        ;;
+                esac
                 if [[ "$has_jq" == "true" ]]; then
                     echo "$json_output" | jq -r '.[] | select(.in_reply_to_id == null) | .body // ""'
                 else
