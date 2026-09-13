@@ -18,8 +18,19 @@ PROMPT_FILE="$1"
 STDOUT_FILE="$2"
 STDERR_FILE="$3"
 
-# Run the orchestrator, appending output to the designated files
-"$OPENCLAW_BIN" agent --agent main --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE"
+# Function to clean up on exit
+cleanup() {
+    if [ -n "${ORCHESTRATOR_PID:-}" ] && kill -0 "$ORCHESTRATOR_PID" 2>/dev/null; then
+        kill -TERM "$ORCHESTRATOR_PID" 2>/dev/null || true
+        wait "$ORCHESTRATOR_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+# Run the orchestrator in the background
+"$OPENCLAW_BIN" agent --agent main --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE" &
+ORCHESTRATOR_PID=$!
+wait "$ORCHESTRATOR_PID"
 rc=$?
 
 if [ $rc -eq 0 ]; then
