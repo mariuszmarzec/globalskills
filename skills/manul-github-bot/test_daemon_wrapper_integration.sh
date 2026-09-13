@@ -52,10 +52,9 @@ fi
 GH_EOF
 chmod +x "$FAKE_GH"
 
-export PATH="$FAKE_BIN:$PATH"
-
 # Source manul-daemon.sh with testing guard enabled
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
+export PATH="$FAKE_BIN:$PATH"
 
 # Setup test environment
 LOG_FILE="$TEST_TMPDIR/daemon.log"
