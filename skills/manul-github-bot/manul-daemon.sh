@@ -719,6 +719,8 @@ evaluate_task_completion() {
   local STDOUT_FILE="$7"
   local DB="$8"
   local REPO_DIR="${9:-}"
+  local WORKDIR="${10:-$REPO_DIR}"
+  local WORKDIR="${10:-$REPO_DIR}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""

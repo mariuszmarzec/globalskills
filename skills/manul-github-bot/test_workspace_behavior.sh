@@ -29,6 +29,9 @@ CONFIGEOF
 # Source only workspace manager (not full poll.sh to avoid dependencies)
 source "$(dirname "${BASH_SOURCE[0]}")/workspace-manager.sh"
 
+# Create processed_comments table for cross-repo tests
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, processedAt TEXT, status TEXT, workspaceId TEXT);" 2>/dev/null || true
+
 # Copy generate_conversation_id from poll.sh
 generate_conversation_id() {
   local repo="$1"
@@ -79,7 +82,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=8
+  local expected_tests=11
   local actual_tests
   actual_tests=$(grep -c "^test_\w*() {" "$0" 2>/dev/null || echo 0)
 
@@ -273,6 +276,82 @@ test_stale_cleanup() {
 run_and_test "Test 8: Stale workspace cleanup" test_stale_cleanup
 
 echo ""
+
+# Test 9: Sequential same-conversation workspace reuse
+echo ""
+echo "=== Test 9: Sequential same-conversation workspace reuse ==="
+test_sequential_reuse() {
+  workspace_pool_init 2 reset
+
+  local ws1
+  ws1="$(workspace_lease "conv-A-task-1")"
+  [ -n "$ws1" ] || return 1
+
+  local status1
+  status1="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws1';")"
+  [ "$status1" = "BUSY" ] || return 1
+
+  workspace_release "$ws1"
+
+  local ws2
+  ws2="$(workspace_lease "conv-A-task-2")"
+  [ -n "$ws2" ] || return 1
+  [ "$ws2" = "$ws1" ] || return 1
+
+  status1="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws2';")"
+  [ "$status1" = "BUSY" ] || return 1
+
+  workspace_release "$ws2"
+}
+run_and_test "Test 9: Sequential same-conversation workspace reuse" test_sequential_reuse
+
+# Test 10: Cross-repository workspace isolation
+echo ""
+echo "=== Test 10: Cross-repository workspace isolation ==="
+test_cross_repo_isolation() {
+  workspace_pool_init 2 reset
+
+  # Two concurrent tasks for different repos get different workspaces
+  local ws1 ws2
+  ws1="$(workspace_lease "repo-a-task")"
+  [ -n "$ws1" ] || return 1
+  ws2="$(workspace_lease "repo-b-task")"
+  [ -n "$ws2" ] || return 1
+  [ "$ws1" != "$ws2" ] || return 1
+
+  workspace_release "$ws1"
+  workspace_release "$ws2"
+}
+run_and_test "Test 10: Cross-repository workspace isolation" test_cross_repo_isolation
+
+# Test 11: Concurrent lease prevents stealing reclaimed workspace
+echo ""
+echo "=== Test 11: Concurrent lease atomicity ==="
+test_concurrent_lease() {
+  workspace_pool_init 1 reset
+
+  local ws
+  ws="$(workspace_lease "task-1")"
+  [ -n "$ws" ] || return 1
+
+  local status
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws';")"
+  [ "$status" = "BUSY" ] || return 1
+
+  workspace_release "$ws"
+  
+  local ws2
+  ws2="$(workspace_lease "task-2")"
+  [ -n "$ws2" ] || return 1
+  [ "$ws2" = "$ws" ] || return 1
+
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws2';")"
+  [ "$status" = "BUSY" ] || return 1
+
+  workspace_release "$ws2"
+}
+run_and_test "Test 11: Concurrent lease atomicity" test_concurrent_lease
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"

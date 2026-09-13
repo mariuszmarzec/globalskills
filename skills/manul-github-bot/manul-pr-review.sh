@@ -252,9 +252,12 @@ cmd_handle() {
     local review_id="${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}"
     local review_comment_id="review:$review_id"
     if [ -n "$DB" ] && [ -f "$DB" ]; then
-      local existing_count
-      existing_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" 2>/dev/null || echo 0)"
-      if [ "$existing_count" -gt 0 ]; then
+      # Atomic check-and-insert using BEGIN IMMEDIATE to prevent race conditions
+      local insert_result
+      insert_result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; SELECT COUNT(*) FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW'; INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); COMMIT;" 2>/dev/null)" || true
+      local existing_count="${insert_result%%$'
+'*}"
+      if [ "${existing_count:-0}" -gt 0 ]; then
         echo "dispatch: duplicate review $review_id, skipping task creation" >&2
         local result
         result=$(jq -n \
@@ -279,8 +282,6 @@ cmd_handle() {
         echo "$result" | jq .
         return 0
       fi
-      # Insert REVIEW record BEFORE task creation to survive crashes
-      sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER);" 2>/dev/null || true
     fi
 
     # Submit review-fix task
