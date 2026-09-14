@@ -18,11 +18,17 @@ PROMPT_FILE="$1"
 STDOUT_FILE="$2"
 STDERR_FILE="$3"
 
+# Flag to track if we're receiving a termination signal
+TERMINATING=0
+
 # Function to clean up on exit
 cleanup() {
-    if [ -n "${ORCHESTRATOR_PID:-}" ] && kill -0 "$ORCHESTRATOR_PID" 2>/dev/null; then
-        kill -TERM "$ORCHESTRATOR_PID" 2>/dev/null || true
-        wait "$ORCHESTRATOR_PID" 2>/dev/null || true
+    if [ "$TERMINATING" -eq 0 ]; then
+        TERMINATING=1
+        if [ -n "${ORCHESTRATOR_PID:-}" ] && kill -0 "$ORCHESTRATOR_PID" 2>/dev/null; then
+            kill -TERM "$ORCHESTRATOR_PID" 2>/dev/null || true
+            wait "$ORCHESTRATOR_PID" 2>/dev/null || true
+        fi
     fi
 }
 trap cleanup EXIT INT TERM
@@ -33,6 +39,12 @@ ORCHESTRATOR_PID=$!
 wait "$ORCHESTRATOR_PID"
 rc=$?
 
+# If we were interrupted by a signal, don't emit TASK_DONE/TASK_FAILED
+if [ "$TERMINATING" -eq 1 ]; then
+    log "WARNING: Agent wrapper interrupted by signal, not emitting task status"
+    exit 1
+fi
+
 if [ $rc -eq 0 ]; then
     echo "TASK_DONE" >>"$STDOUT_FILE"
 else
@@ -40,3 +52,4 @@ else
 fi
 
 exit $rc
+

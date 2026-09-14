@@ -128,8 +128,20 @@ workspace_repo_matches() {
   [ "$normalized_actual" = "$task_repo" ] && return 0
 
   # `git clone --local` can leave a local filesystem path as origin.
-  # Compare its final owner/repo path components without requiring a specific root.
+  # The workspace directory structure is $MANUL_DIR/workspace/<slug>
+  # where <slug> is derived from owner/repo by replacing '/' with '-'.
   if [[ "$actual_repo" == /* ]]; then
+    local resolved_path="${actual_repo%.git}"
+
+    # Check if this is a known workspace path pattern
+    if [[ "$resolved_path" == */workspace/* ]]; then
+      local slug="${resolved_path##*/workspace/}"
+      # Decode slug: replace '-' with '/' to get owner/repo
+      local decoded_owner_repo="${slug//-//}"
+      [ "$decoded_owner_repo" = "$task_repo" ] && return 0
+    fi
+
+    # Fallback: compare path components for arbitrary local paths
     local owner repo_name
     owner="$(basename "$(dirname "$actual_repo")")"
     repo_name="$(basename "$actual_repo")"

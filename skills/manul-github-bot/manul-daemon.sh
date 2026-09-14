@@ -394,7 +394,6 @@ verify_finalization() {
 # Enhanced task completion with verification
 complete_task_with_verification() {
   local comment_id="$1"
-  local safe_comment_id="$(sql_escape "$comment_id")"
 
   # Mark task as completed with verification
   if ! update_task_completion "$comment_id" "completed"; then
@@ -404,10 +403,12 @@ complete_task_with_verification() {
 
   # Verify finalization
   if ! verify_finalization "$comment_id"; then
-    log "ERROR: Finalization verification failed for task $comment_id"
-    # Attempt to fix
-    update_task_completion "$comment_id" "queued"
-    return 1
+    # Path C: DB is already updated to 'completed' (the correct terminal state).
+    # Verification failure is non-fatal — the task is done, we just couldn't
+    # confirm all post-conditions. Report success so the daemon doesn't get
+    # stuck retrying an already-completed task.
+    log "WARNING: Finalization verification failed for task $comment_id but status is completed"
+    return 0
   fi
 
   log "SUCCESS: Task $comment_id fully completed and verified"

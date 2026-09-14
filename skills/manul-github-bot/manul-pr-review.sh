@@ -114,7 +114,7 @@ init_schema() {
 
   # Migrate: add taskId column if missing (for review-task association)
   local has_task_id
-  has_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" | grep -c '|taskId|')"
+  has_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" | { grep -c '|taskId|' || true; })"
   if [ "$has_task_id" -eq 0 ]; then
     sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" || {
       echo "ERROR: failed to add taskId column to processed_comments" >&2
