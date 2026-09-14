@@ -10,12 +10,13 @@ if [ -f "$HOME/.config/opencode/opencode.env" ]; then
 fi
 
 if [ -z "${OPENCODE_API_KEY:-}" ]; then
-    echo "OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable until you add it to ~/.config/opencode/opencode.env."
+    echo "WARNING: OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable."
 fi
 
 # Ensure Ollama is running
-if ! pgrep -x "ollama" > /dev/null; then
-    nohup ollama serve > /tmp/ollama.log 2>&1 &
+if ! pgrep -x "ollama" >/dev/null; then
+    echo "Starting Ollama..."
+    nohup ollama serve >/tmp/ollama.log 2>&1 &
     sleep 3
 fi
 
@@ -23,39 +24,58 @@ fi
 if command -v pg_isready >/dev/null 2>&1; then
     if ! pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
         if command -v service >/dev/null 2>&1; then
-            sudo service postgresql start >/dev/null 2>&1 || true
+            sudo -n service postgresql start >/dev/null 2>&1 || true
         fi
         if command -v pg_ctlcluster >/dev/null 2>&1; then
-            pg_ctlcluster 12 main start >/dev/null 2>&1 || true
+            sudo -n pg_ctlcluster 12 main start >/dev/null 2>&1 || true
         fi
         sleep 3
     fi
+
     if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
-        if ! sudo -n -u postgres psql -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw 'litellm' 2>/dev/null; then
-            sudo -u postgres psql -c "CREATE USER litellm WITH PASSWORD 'litellm';" >/dev/null 2>&1 || true
-            sudo -u postgres psql -c "CREATE DATABASE litellm OWNER litellm;" >/dev/null 2>&1 || true
+        if ! sudo -n -u postgres psql -Atqc \
+            "SELECT 1 FROM pg_roles WHERE rolname='litellm'" 2>/dev/null | grep -qx '1'; then
+            echo "Creating PostgreSQL user/database for LiteLLM..."
+            sudo -n -u postgres psql \
+                -c "CREATE USER litellm WITH PASSWORD 'litellm';" \
+                >/dev/null 2>&1 || true
+            sudo -n -u postgres psql \
+                -c "CREATE DATABASE litellm OWNER litellm;" \
+                >/dev/null 2>&1 || true
         fi
     fi
 fi
 
 # Ensure LiteLLM is running
-if ! pgrep -f "litellm" > /dev/null; then
+if ! pgrep -f '[l]itellm' >/dev/null; then
     if [ -f "$HOME/litellm/.env" ]; then
         set -a
         . "$HOME/litellm/.env"
         set +a
     fi
-    nohup litellm --config "$HOME/litellm/config.yaml" --port 4000 > /tmp/litellm.log 2>&1 &
+    echo "Starting LiteLLM..."
+    nohup litellm \
+        --config "$HOME/litellm/config.yaml" \
+        --port 4000 \
+        >/tmp/litellm.log 2>&1 &
     sleep 3
 fi
 
-# Ensure OpenClaw Gateway is running (serves all LiteLLM models too)
+# Ensure OpenClaw Gateway is running
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 gateway_responding() {
-    curl -fsS --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}" >/dev/null 2>&1
+    curl -fsS --max-time 2 \
+        "http://127.0.0.1:${GATEWAY_PORT}" \
+        >/dev/null 2>&1
 }
+
 if ! gateway_responding; then
-    nohup openclaw gateway --force --allow-unconfigured --port "$GATEWAY_PORT" > /tmp/openclaw-gateway.log 2>&1 &
+    nohup openclaw gateway \
+        --force \
+        --allow-unconfigured \
+        --port "$GATEWAY_PORT" \
+        >/tmp/openclaw-gateway.log 2>&1 &
+
     echo "Waiting for OpenClaw Gateway to become ready on 127.0.0.1:${GATEWAY_PORT}..."
     ready=0
     for _ in $(seq 1 20); do
@@ -65,6 +85,7 @@ if ! gateway_responding; then
         fi
         sleep 1
     done
+
     if [ "$ready" -eq 1 ]; then
         echo "OpenClaw Gateway is up on http://127.0.0.1:${GATEWAY_PORT}"
     else
@@ -74,8 +95,26 @@ else
     echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
 fi
 
-# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
-"$HOME/.openclaw/manul/manul-daemon.sh" start >/dev/null 2>&1
+# Ensure manul GitHub bot daemon is running.
+# Never let a broken/hung daemon block OpenCode startup.
+MANUL_SCRIPT="$HOME/.openclaw/manul/manul-daemon.sh"
+MANUL_LOG="/tmp/manul-daemon.log"
+
+if [ -x "$MANUL_SCRIPT" ]; then
+    if timeout 5 "$MANUL_SCRIPT" start >"$MANUL_LOG" 2>&1; then
+        echo "Manul daemon ready."
+    else
+        rc=$?
+        if [ "$rc" -eq 124 ]; then
+            echo "WARNING: Manul daemon startup timed out after 5s; continuing with OpenCode."
+        else
+            echo "WARNING: Manul daemon startup failed (exit $rc); continuing with OpenCode."
+        fi
+        echo "See $MANUL_LOG for details."
+    fi
+else
+    echo "WARNING: Manul daemon script not found/executable: $MANUL_SCRIPT"
+fi
 
 # Launch OpenCode
 if [ -n "${OPENCODE_API_KEY:-}" ]; then
@@ -83,7 +122,13 @@ if [ -n "${OPENCODE_API_KEY:-}" ]; then
 else
     echo "No OPENCODE_API_KEY detected; Zen models unavailable."
 fi
+
 echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
-echo "OpenClaw Gateway: http://127.0.0.1:18789 (openclaw dashboard)"
+echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
+
+type -p opencode >/dev/null 2>&1 || {
+    echo "ERROR: opencode command not found in PATH." >&2
+    exit 127
+}
 
 exec opencode "$@" --auto
