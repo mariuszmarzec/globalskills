@@ -531,6 +531,7 @@ cmd_handle() {
     --prompt "$review_prompt"
     --action REVIEW_FIX
     --pr-number "$PR_NUMBER"
+    --review-id "$REVIEW_ID"
   )
 
   if [ -n "$task_id" ]; then

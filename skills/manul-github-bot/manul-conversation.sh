@@ -6,7 +6,7 @@
 #
 # Usage:
 #   manul-conversation create    --repo REPO --title TITLE --prompt PROMPT [--json]
-#   manul-conversation submit    --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--json]
+#   manul-conversation submit    --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--review-id ID] [--json]
 #   manul-conversation status    --conversation-id ID [--json]
 #   manul-conversation result    --task-id ID [--json]
 #   manul-conversation close     --conversation-id ID [--json]
@@ -41,6 +41,7 @@ AGENT=""
 PARENT_TASK_ID=""
 PR_NUMBER=""
 ACTION_TYPE=""
+REVIEW_ID=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -54,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --parent-task-id) PARENT_TASK_ID="$2"; shift 2 ;;
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
     --action) ACTION_TYPE="$2"; shift 2 ;;
+    --review-id) REVIEW_ID="$2"; shift 2 ;;
     create|status|submit|result|close) ACTION="$1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
@@ -276,7 +278,13 @@ cmd_submit() {
   
   # Generate task ID
   local task_id
-  task_id="task-${CONVERSATION_ID}-$(date +%s)-$$"
+  if [ "$action" = "REVIEW_FIX" ] && [ -n "$PR_NUMBER" ]; then
+    # Deterministic ID for crash-safe idempotency: same review always gets same task
+    local review_key="${REVIEW_ID:-${PR_NUMBER}}"
+    task_id="review-fix-${CONVERSATION_ID}-${review_key}"
+  else
+    task_id="task-${CONVERSATION_ID}-$(date +%s)-$$"
+  fi
   
   # Build context for task
   local context="action=${action};conversationId=${CONVERSATION_ID}"
