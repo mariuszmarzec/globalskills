@@ -63,6 +63,20 @@ sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+# SQLite retry helper - handles transient "database is locked" errors
+sqlite3_retry() {
+  local sql="$1"
+  local max_retries="${2:-3}"
+  local retry=0
+  local result=""
+  while [ $retry -lt $max_retries ]; do
+    result="$(sqlite3 "$DB" "$sql" 2>/dev/null)" && echo "$result" && return 0
+    retry=$((retry + 1))
+    sleep 0.01
+  done
+  return 1
+}
+
 # Error helper
 error_exit() {
   local msg="$1"
@@ -113,14 +127,8 @@ init_schema() {
   }
 
   # Migrate: add taskId column if missing (for review-task association)
-  local has_task_id
-  has_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" | { grep -c '|taskId|' || true; })"
-  if [ "$has_task_id" -eq 0 ]; then
-    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" || {
-      echo "ERROR: failed to add taskId column to processed_comments" >&2
-      return 1
-    }
-  fi
+  # Use atomic schema migration to avoid race conditions
+  sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>/dev/null || true
 }
 
 # Get the PR's associated conversation
@@ -475,7 +483,7 @@ cmd_handle() {
   if [ -n "$DB" ] && [ -f "$DB" ] && [ -z "$review_status" ]; then
     # No existing record - insert as pending
     local insert_result
-    insert_result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 2>/dev/null)" || {
+    insert_result="$(sqlite3_retry "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 5)" || {
       echo "ERROR: failed to claim review $review_id" >&2
       return 1
     }
@@ -543,12 +551,9 @@ cmd_handle() {
   local submit_output=""
   if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
     submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
-      # Submit failed - update review to failed state
+      # Submit failed - update review to failed state (with retry for SQLite lock)
       if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" || {
-          echo "ERROR: failed to mark review $review_id as failed (submit_failed)" >&2
-          return 1
-        }
+        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
       fi
       local fail_result
       fail_result=$(jq -n \
@@ -574,10 +579,7 @@ cmd_handle() {
   else
     # manul-conversation.sh not found - cannot create task
     if [ -n "$DB" ] && [ -f "$DB" ]; then
-      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null; then
-        echo "ERROR: failed to mark review $review_id as failed (conversation_script_missing)" >&2
-        return 1
-      fi
+      sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
     fi
     local fail_result
     fail_result=$(jq -n \
@@ -615,33 +617,45 @@ cmd_handle() {
   fi
 
   if [ "$submit_success" = false ]; then
-    # Submit returned no taskId - mark as failed
-    if [ -n "$DB" ] && [ -f "$DB" ]; then
-      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null; then
-        echo "ERROR: failed to mark review $review_id as failed (no_taskId)" >&2
-        return 1
-      fi
+    # Submit returned no taskId - check if concurrent process already created the task
+    local recovered_task_id=""
+    if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
+      # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
+      # Check if a concurrent process already created it
+      recovered_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 2>/dev/null || echo "")"
     fi
-    local fail_result
-    fail_result=$(jq -n \
-      --arg reviewId "$REVIEW_ID" \
-      --arg action "$action" \
-      --arg conversationId "$conv_id" \
-      --arg parentTaskId "${task_id:-}" \
-      --argjson prNumber "$PR_NUMBER" \
-      '{
-        reviewId: $reviewId,
-        action: $action,
-        conversationId: $conversationId,
-        newTaskId: null,
-        parentTaskId: $parentTaskId,
-        prNumber: $prNumber,
-        createdTask: false,
-        error: "submit_failed",
-        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-      }')
-    echo "$fail_result" | jq .
-    return 1
+
+    if [ -n "$recovered_task_id" ]; then
+      # Concurrent process created the task - recover and use it
+      echo "dispatch: review $review_id: concurrent process created task $recovered_task_id, recovering" >&2
+      new_task_id="$recovered_task_id"
+      submit_success=true
+    else
+      # No task found - genuinely failed
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+      fi
+      local fail_result
+      fail_result=$(jq -n \
+        --arg reviewId "$REVIEW_ID" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          createdTask: false,
+          error: "submit_failed",
+          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+        }')
+      echo "$fail_result" | jq .
+      return 1
+    fi
   fi
 
   # ========================================================================
@@ -658,7 +672,7 @@ cmd_handle() {
   if [ -n "$DB" ] && [ -f "$DB" ]; then
     # Atomic transition: only update if still pending (prevents race with concurrent reviews)
     local update_result
-    update_result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 2>/dev/null)" || {
+    update_result="$(sqlite3_retry "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 5)" || {
       echo "ERROR: failed to record taskId for review $review_id" >&2
       return 1
     }
@@ -667,36 +681,44 @@ cmd_handle() {
     if [ "${rows_updated:-0}" -eq 0 ]; then
       # Another process already claimed this review - look up their taskId
       echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
-      if ! new_task_id="$(sqlite3 "$DB" "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 2>/dev/null)"; then
+      local lookup_result
+      lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
         echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
         return 1
-      fi
+      }
+      new_task_id="$lookup_result"
       if [ -z "$new_task_id" ]; then
-        # Both processes failed - mark as failed
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" || {
-          echo "ERROR: failed to mark review $review_id as failed (concurrent_claim_failed)" >&2
+        # Check if task was created by concurrent process before marking as failed
+        local existing_task
+        existing_task="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
+        if [ -n "$existing_task" ]; then
+          # Task exists - another process created it successfully
+          new_task_id="$existing_task"
+          echo "dispatch: review $review_id: concurrent process created task $existing_task, recovering" >&2
+        else
+          # Both processes failed - mark as failed
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+          local fail_result
+          fail_result=$(jq -n \
+            --arg reviewId "$REVIEW_ID" \
+            --arg action "$action" \
+            --arg conversationId "$conv_id" \
+            --arg parentTaskId "${task_id:-}" \
+            --argjson prNumber "$PR_NUMBER" \
+            '{
+              reviewId: $reviewId,
+              action: $action,
+              conversationId: $conversationId,
+              newTaskId: null,
+              parentTaskId: $parentTaskId,
+              prNumber: $prNumber,
+              createdTask: false,
+              error: "concurrent_claim_failed",
+              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+            }')
+          echo "$fail_result" | jq .
           return 1
-        }
-        local fail_result
-        fail_result=$(jq -n \
-          --arg reviewId "$REVIEW_ID" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: null,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            createdTask: false,
-            error: "concurrent_claim_failed",
-            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-          }')
-        echo "$fail_result" | jq .
-        return 1
+        fi
       fi
     fi
   fi

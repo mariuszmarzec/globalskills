@@ -2192,17 +2192,18 @@ CFGEOF
 
 # Test 5: crash during task submission → retry creates exactly one task
 test_crash_during_task_creation() {
-  local test_dir
-  test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
-  local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+local test_dir
+   test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
+   local manul_dir="$test_dir/manul"
+   local db="$manul_dir/manul.db"
+   mkdir -p "$manul_dir"
 
-  cat > "$manul_dir/config.json" <<'CFGEOF'
+   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+   sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+   sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
@@ -2259,10 +2260,105 @@ CFGEOF
   return 0
 }
 
-# Test 6: two sequential identical reviews → exactly one task (idempotency)
+# Test 6: two concurrent identical reviews → exactly one task (race condition)
 test_identical_concurrent_reviews_exactly_one_task() {
+local test_dir
+   test_dir="$(mktemp -d /tmp/concurrent-identical-test-XXXXXX)"
+   local manul_dir="$test_dir/manul"
+   local db="$manul_dir/manul.db"
+   mkdir -p "$manul_dir"
+
+   cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+   sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+   sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('conc-ident-conv', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/pull/1100', 1100, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1100', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/issues/1100', 'user', 'Original task', 'completed', '$now', 'conc-ident-conv', 1100, 'IMPLEMENT');"
+
+  # Launch two SIMULTANEOUS calls with the SAME review ID (tests race condition)
+  local out1 out2
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 1100 \
+    --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
+    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" &
+  local pid1=$!
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 1100 \
+    --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
+    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" &
+  local pid2=$!
+   wait $pid1 2>/dev/null || true
+   wait $pid2 2>/dev/null || true
+
+   # Retry logic for transient SQLite locking failures
+   local max_retries=10
+   local retry=0
+   while [ $retry -lt $max_retries ]; do
+     # Should be exactly one REVIEW_FIX task (not two)
+     local fix_count
+     fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1100 AND action='REVIEW_FIX';" 2>/dev/null)"
+     if [ "$fix_count" -ne 1 ]; then
+       retry=$((retry + 1))
+       if [ $retry -ge $max_retries ]; then
+         echo "ERROR: Expected 1 REVIEW_FIX task for identical concurrent reviews, found $fix_count"
+         rm -rf "$test_dir"
+         return 1
+       fi
+       sleep 0.2
+       continue
+     fi
+
+     # Review should be in task_created state with deterministic taskId
+     local review_state review_task_id expected_task_id
+     review_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:conc-ident-1' AND action='REVIEW';" 2>/dev/null)"
+     review_task_id="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-ident-1' AND action='REVIEW';" 2>/dev/null)"
+     expected_task_id="review-fix-conc-ident-conv-conc-ident-1"
+     if [ "$review_state" = "task_created" ] && [ "$review_task_id" = "$expected_task_id" ]; then
+       break
+     fi
+
+     retry=$((retry + 1))
+     if [ $retry -ge $max_retries ]; then
+       echo "ERROR: Expected task_created with taskId='$expected_task_id', got state='$review_state' task='$review_task_id'"
+       rm -rf "$test_dir"
+       return 1
+     fi
+     sleep 0.2
+   done
+
+   rm -rf "$test_dir"
+   return 0
+ }
+
+# Test 7: two concurrent distinct reviews → exactly two tasks
+test_distinct_concurrent_reviews_create_two_tasks() {
   local test_dir
-  test_dir="$(mktemp -d /tmp/concurrent-identical-test-XXXXXX)"
+  test_dir="$(mktemp -d /tmp/concurrent-distinct-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
   local db="$manul_dir/manul.db"
   mkdir -p "$manul_dir"
@@ -2295,50 +2391,53 @@ CFGEOF
 
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('conc-ident-conv', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/pull/1100', 1100, 'OPEN', '$now', '$now');"
-  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1100', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/issues/1100', 'user', 'Original task', 'completed', '$now', 'conc-ident-conv', 1100, 'IMPLEMENT');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('conc-distinct-conv', 'test-org/test-repo', 1200, 'https://github.com/test-org/test-repo/pull/1200', 1200, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1200', 'test-org/test-repo', 1200, 'https://github.com/test-org/test-repo/issues/1200', 'user', 'Original task', 'completed', '$now', 'conc-distinct-conv', 1200, 'IMPLEMENT');"
 
-  # Run two sequential calls with the SAME review ID (tests idempotency)
+  # Launch two SIMULTANEOUS calls with DIFFERENT review IDs
   local out1 out2
   out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
-    --repo "test-org/test-repo" --pr-number 1100 \
-    --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
-    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" || true
+    --repo "test-org/test-repo" --pr-number 1200 \
+    --review-id "conc-distinct-1" --review-state REQUEST_CHANGES \
+    --body "Fix style" --author reviewer1 --created "$now" 2>/dev/null)" &
+  local pid1=$!
   out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
-    --repo "test-org/test-repo" --pr-number 1100 \
-    --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
-    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" || true
+    --repo "test-org/test-repo" --pr-number 1200 \
+    --review-id "conc-distinct-2" --review-state REQUEST_CHANGES \
+    --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" &
+  local pid2=$!
+  wait $pid1 2>/dev/null || true
+  wait $pid2 2>/dev/null || true
 
-  # First call should create the task
-  if ! echo "$out1" | grep -q '"createdTask": true'; then
-    echo "ERROR: First review did not create task: $out1"
-    rm -rf "$test_dir"
-    return 1
-  fi
-
-  # Second call should reuse the existing task (idempotent)
-  # Note: code returns createdTask:true with reused:true for existing tasks
-  if ! echo "$out2" | grep -q '"reused": true'; then
-    echo "ERROR: Second review should reuse existing task: $out2"
-    rm -rf "$test_dir"
-    return 1
-  fi
-
-  # Should be exactly one REVIEW_FIX task (not two)
+  # Should be exactly two REVIEW_FIX tasks (one per review)
   local fix_count
-  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1100 AND action='REVIEW_FIX';" 2>/dev/null)"
-  if [ "$fix_count" -ne 1 ]; then
-    echo "ERROR: Expected 1 REVIEW_FIX task for identical reviews, found $fix_count"
+  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1200 AND action='REVIEW_FIX';" 2>/dev/null)"
+  if [ "$fix_count" -ne 2 ]; then
+    echo "ERROR: Expected 2 REVIEW_FIX tasks for distinct concurrent reviews, found $fix_count"
     rm -rf "$test_dir"
     return 1
   fi
 
-  # Review should be in task_created state with taskId
-  local review_state review_task_id
-  review_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:conc-ident-1' AND action='REVIEW';" 2>/dev/null)"
-  review_task_id="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-ident-1' AND action='REVIEW';" 2>/dev/null)"
-  if [ "$review_state" != "task_created" ] || [ -z "$review_task_id" ]; then
-    echo "ERROR: Expected task_created with taskId, got state='$review_state' task='$review_task_id'"
+  # Each review should have its own deterministic taskId
+  local r1_task r2_task expected_r1 expected_r2
+  r1_task="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-distinct-1' AND action='REVIEW';" 2>/dev/null)"
+  r2_task="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-distinct-2' AND action='REVIEW';" 2>/dev/null)"
+  expected_r1="review-fix-conc-distinct-conv-conc-distinct-1"
+  expected_r2="review-fix-conc-distinct-conv-conc-distinct-2"
+  if [ "$r1_task" != "$expected_r1" ]; then
+    echo "ERROR: Expected r1 taskId='$expected_r1', got '$r1_task'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ "$r2_task" != "$expected_r2" ]; then
+    echo "ERROR: Expected r2 taskId='$expected_r2', got '$r2_task'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # TaskIds should be different
+  if [ "$r1_task" = "$r2_task" ]; then
+    echo "ERROR: Distinct reviews should have distinct taskIds"
     rm -rf "$test_dir"
     return 1
   fi
@@ -2347,7 +2446,7 @@ CFGEOF
   return 0
 }
 
-# Test 7: repeated retries after success → still exactly one task
+# Test 8: repeated retries after success → still exactly one task
 test_repeated_retries_after_success() {
   local test_dir
   test_dir="$(mktemp -d /tmp/repeated-retry-test-XXXXXX)"
