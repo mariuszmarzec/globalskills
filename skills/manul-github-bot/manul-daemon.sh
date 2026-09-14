@@ -493,7 +493,7 @@ start() {
   # Initialize workspace pool
   source "$MANUL_DIR/workspace-manager.sh"
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
-  
+
   # Singleton check: verify no other daemon is running
   if [ -f "$PID_FILE" ]; then
     local existing_pid
@@ -529,73 +529,81 @@ start() {
   # Atomically write PID file under flock to prevent concurrent start races
   exec 200>"$FLOCK_FILE"
   flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
-  
-  # This process IS the long-lived daemon. Write PID before spawning workers.
-  echo "$$" >"$PID_FILE"
 
-  # Spawn worker pool
-  local i worker_pid
-  local master_pid=$$
-  declare -a WORKER_PIDS=()
-  for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
-    setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
-    worker_pid=$!
-    echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
-    WORKER_PIDS+=("$worker_pid")
-    log "spawned worker $i (pid=$worker_pid)"
-  done
+  # Fork the daemon to run in background.
+  (
+    # Child process: we are the daemon.
+    # Write PID file under the lock (we already hold the lock via fd 200)
+    echo "$BASHPID" >"$PID_FILE"
 
-  flock -u 200
-  lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
-  echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
-
-  # Signal handler: stop all workers on termination
-  local stopping=0
-  handle_stop() {
-    if [ "$stopping" -eq 1 ]; then
-      return
-    fi
-    stopping=1
-    log "daemon received stop signal, terminating workers"
-    for wp in "${WORKER_PIDS[@]}"; do
-      kill "$wp" 2>/dev/null || true
+    # Spawn worker pool
+    local i worker_pid
+    local master_pid=$BASHPID
+    declare -a WORKER_PIDS=()
+    for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+      setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+      worker_pid=$!
+      echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
+      WORKER_PIDS+=("$worker_pid")
+      log "spawned worker $i (pid=$worker_pid)"
     done
-    wait 2>/dev/null || true
-    rm -f "$PID_FILE"
-    lc_log "DAEMON_STOP" "pid=$$"
-    exit 0
-  }
-  trap handle_stop TERM INT
 
-  # Stay alive as the long-lived daemon process, watching over workers
-  while true; do
-    # Wait for any worker to exit
-    if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
-      wait -n "${WORKER_PIDS[@]}" 2>/dev/null || true
-    else
-      sleep 1
-    fi
-    # Check if we should stop
-    if [ "$stopping" -eq 1 ]; then
-      break
-    fi
-    # Restart any dead workers
-    local new_pids=()
-    for i in "${!WORKER_PIDS[@]}"; do
-      if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
-        log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-        setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
-        worker_pid=$!
-        echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
-        new_pids+=("$worker_pid")
-      else
-        new_pids+=("${WORKER_PIDS[$i]}")
+    flock -u 200
+    lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
+    echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
+
+    # Signal handler: stop all workers on termination
+    local stopping=0
+    handle_stop() {
+      if [ "$stopping" -eq 1 ]; then
+        return
       fi
-    done
-    WORKER_PIDS=("${new_pids[@]}")
-  done
-}
+      stopping=1
+      log "daemon received stop signal, terminating workers"
+      for wp in "${WORKER_PIDS[@]}"; do
+        kill "$wp" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+      rm -f "$PID_FILE"
+      lc_log "DAEMON_STOP" "pid=$$"
+      exit 0
+    }
+    trap handle_stop TERM INT
 
+    # Stay alive as the long-lived daemon process, watching over workers
+    while true; do
+      # Wait for any worker to exit
+      if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
+        wait -n "${WORKER_PIDS[@]}" 2>/dev/null || true
+      else
+        sleep 1
+      fi
+      # Check if we should stop
+      if [ "$stopping" -eq 1 ]; then
+        break
+      fi
+      # Restart any dead workers
+      local new_pids=()
+      for i in "${!WORKER_PIDS[@]}"; do
+        if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
+          log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
+          setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+          worker_pid=$!
+          echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
+          new_pids+=("$worker_pid")
+        else
+          new_pids+=("${WORKER_PIDS[$i]}")
+        fi
+      done
+      WORKER_PIDS=("${new_pids[@]}")
+    done
+  ) &
+  local daemon_pid=$!
+
+  # Parent: we release the lock and return.
+  flock -u 200
+  return 0
+}
 stop() {
   if [ ! -f "$PID_FILE" ]; then
     echo "not running"
