@@ -1,0 +1,142 @@
+name: verification
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - '*'
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'Comma-separated CI test scripts. Empty = configured CI suite.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Keep this list limited to hermetic tests: no live GitHub state, OpenClaw, or LLM is required.
+# Update this list when adding/removing deterministic Manul CI suites.
+env:
+  MANUL_CI_TESTS: |
+    skills/manul-github-bot/test_manul_cli.sh
+    skills/manul-github-bot/test_orchestrator.sh
+    skills/manul-github-bot/test_workspace_behavior.sh
+    skills/manul-github-bot/test_concurrency.sh
+    skills/manul-github-bot/test_github_control_protocol.sh
+    skills/manul-github-bot/test_github_control_integration.sh
+    skills/manul-github-bot/test_verify_result_comment.sh
+    skills/manul-github-bot/test_prompt_generation.sh
+    skills/manul-github-bot/test_conversation_orchestrator.sh
+
+jobs:
+  verify:
+    name: Verify skills and Manul tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq sqlite3
+
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find skills/manul-github-bot -maxdepth 1 -type f -name '*.sh' -print | sort)
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo 'No shell scripts found under skills/manul-github-bot'
+            exit 1
+          fi
+
+          for script in "${scripts[@]}"; do
+            echo "bash -n $script"
+            bash -n "$script"
+          done
+
+      - name: Run configured Manul tests
+        env:
+          REQUESTED_TESTS: ${{ inputs.tests }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          test_list="${REQUESTED_TESTS:-$MANUL_CI_TESTS}"
+          mapfile -t configured < <(printf '%s\n' "$MANUL_CI_TESTS" | sed '/^[[:space:]]*$/d')
+          mapfile -t requested < <(printf '%s\n' "$test_list" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')
+
+          declare -A allowed=()
+          for script in "${configured[@]}"; do
+            allowed["$script"]=1
+          done
+
+          mkdir -p test-results
+          passed=0
+          failed=0
+
+          if [ "${#requested[@]}" -eq 0 ]; then
+            echo 'No tests configured.'
+            exit 1
+          fi
+
+          for script in "${requested[@]}"; do
+            if [ -z "${allowed[$script]:-}" ]; then
+              echo "Test is not part of the CI allowlist: $script"
+              echo 'Allowed tests:'
+              printf '  %s\n' "${configured[@]}"
+              exit 1
+            fi
+
+            if [ ! -f "$script" ]; then
+              echo "Configured test does not exist: $script"
+              exit 1
+            fi
+
+            name="$(basename "$script" .sh)"
+            log="test-results/${name}.log"
+            echo "=================================================="
+            echo "Running: $script"
+            echo "=================================================="
+
+            if bash "$script" 2>&1 | tee "$log"; then
+              passed=$((passed + 1))
+              echo "PASS: $script"
+            else
+              failed=$((failed + 1))
+              echo "FAIL: $script"
+            fi
+          done
+
+          {
+            echo '## Manul CI tests'
+            echo
+            echo "- Passed suites: $passed"
+            echo "- Failed suites: $failed"
+            echo
+            echo '### Executed'
+            for script in "${requested[@]}"; do
+              echo "- \`$script\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manul-ci-test-logs
+          path: test-results/
+          if-no-files-found: ignore
