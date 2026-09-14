@@ -1848,6 +1848,351 @@ run_test "daemon: SELECT failure keeps conversation OPEN" test_daemon_select_fai
 run_test "merge: GitHub query failure keeps conversation OPEN" test_poll_merge_query_failure_keeps_conversations_open
 run_test "merge: retry after transient failure closes correctly" test_retry_after_transient_failure_closes_correctly
 
+# ===================== Crash-Resilience Regression Tests =====================
+
+# Test: crash before task creation → retry creates exactly one task
+test_crash_before_task_creation_creates_one_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/crash-before-task-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  # Simulate crash: insert review in pending state (no task created yet)
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('crash-conv-1', 'test-org/test-repo', 600, 'https://github.com/test-org/test-repo/pull/600', 600, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('review:crash-1', 'test-org/test-repo', 600, 'https://github.com/test-org/test-repo/pull/600', 'reviewer', 'Fix formatting', 'REVIEW', 'pending', '$now', 'crash-conv-1', 600);"
+
+  # Also create an initial task on the PR
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-600', 'test-org/test-repo', 600, 'https://github.com/test-org/test-repo/issues/600', 'user', 'Original task', 'completed', '$now', 'crash-conv-1', 600, 'IMPLEMENT');"
+
+  # Recovery: run handle again (simulates poll cycle restart)
+  local output
+  output="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" \
+    --pr-number 600 \
+    --review-id "crash-1" \
+    --review-state REQUEST_CHANGES \
+    --body "Fix formatting" \
+    --author reviewer \
+    --created "$now" 2>/dev/null)" || return 1
+
+  # Should succeed and not create duplicate
+  if ! echo "$output" | jq -e '.createdTask == true' >/dev/null 2>&1; then
+    echo "ERROR: Expected createdTask=true on recovery, got: $output"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify only one REVIEW task exists (the pending one was updated, not duplicated)
+  local review_count
+  review_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:crash-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW record, found $review_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify the review is now in task_created state with a taskId
+  local review_state review_task_id
+  review_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:crash-1' AND action='REVIEW';" 2>/dev/null)"
+  review_task_id="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:crash-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_state" != "task_created" ]; then
+    echo "ERROR: Expected task_created state, got '$review_state'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ -z "$review_task_id" ]; then
+    echo "ERROR: Expected non-empty taskId on recovery"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# Test: concurrent reviews for same PR create separate tasks (not duplicate)
+test_concurrent_reviews_create_separate_tasks() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/concurrent-review-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('conc-conv', 'test-org/test-repo', 700, 'https://github.com/test-org/test-repo/pull/700', 700, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-700', 'test-org/test-repo', 700, 'https://github.com/test-org/test-repo/issues/700', 'user', 'Original task', 'completed', '$now', 'conc-conv', 700, 'IMPLEMENT');"
+
+  # First review
+  local out1
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 700 \
+    --review-id "conc-review-1" --review-state REQUEST_CHANGES \
+    --body "Fix style" --author reviewer1 --created "$now" 2>/dev/null)" || return 1
+
+  # Second review (different reviewer, same PR)
+  local out2
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 700 \
+    --review-id "conc-review-2" --review-state REQUEST_CHANGES \
+    --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" || return 1
+
+  # Both should succeed with createdTask=true
+  if ! echo "$out1" | jq -e '.createdTask == true' >/dev/null 2>&1; then
+    echo "ERROR: First review should create task, got: $out1"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! echo "$out2" | jq -e '.createdTask == true' >/dev/null 2>&1; then
+    echo "ERROR: Second review should create task, got: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Each review should have a distinct record
+  local r1_state r1_task r2_state r2_task
+  r1_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:conc-review-1' AND action='REVIEW';" 2>/dev/null)"
+  r1_task="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-review-1' AND action='REVIEW';" 2>/dev/null)"
+  r2_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:conc-review-2' AND action='REVIEW';" 2>/dev/null)"
+  r2_task="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:conc-review-2' AND action='REVIEW';" 2>/dev/null)"
+
+  if [ "$r1_state" != "task_created" ] || [ -z "$r1_task" ]; then
+    echo "ERROR: First review should be task_created with taskId, got state='$r1_state' task='$r1_task'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ "$r2_state" != "task_created" ] || [ -z "$r2_task" ]; then
+    echo "ERROR: Second review should be task_created with taskId, got state='$r2_state' task='$r2_task'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# Test: APPROVE does not create task even after REQUEST_CHANGES
+test_approve_after_request_changes_no_duplicate_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/approve-after-rc-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('approve-chain', 'test-org/test-repo', 800, 'https://github.com/test-org/test-repo/pull/800', 800, 'OPEN', '$now', '$now');"
+
+  # REQUEST_CHANGES first
+  local out1
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 800 \
+    --review-id "chain-review-1" --review-state REQUEST_CHANGES \
+    --body "Fix this" --author reviewer --created "$now" 2>/dev/null)" || return 1
+
+  # APPROVE second
+  local out2
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 800 \
+    --review-id "chain-review-2" --review-state APPROVE \
+    --body "Looks good now" --author reviewer --created "$now" 2>/dev/null)" || return 1
+
+  # APPROVE should return createdTask=false
+  if ! echo "$out2" | jq -e '.createdTask == false' >/dev/null 2>&1; then
+    echo "ERROR: APPROVE should not create task, got: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Should have exactly one REVIEW_FIX task (from REQUEST_CHANGES)
+  local fix_count
+  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=800 AND action='REVIEW_FIX';" 2>/dev/null)"
+  if [ "$fix_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task, found $fix_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# Test: retry after crash before task creation produces exactly one task
+test_retry_after_crash_before_creation_exact_one_task() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/retry-crash-before-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('retry-crash', 'test-org/test-repo', 900, 'https://github.com/test-org/test-repo/pull/900', 900, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-900', 'test-org/test-repo', 900, 'https://github.com/test-org/test-repo/issues/900', 'user', 'Original task', 'completed', '$now', 'retry-crash', 900, 'IMPLEMENT');"
+  # Simulate crash: review in pending state with no taskId
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('review:retry-crash-1', 'test-org/test-repo', 900, 'https://github.com/test-org/test-repo/pull/900', 'reviewer', 'Fix crash', 'REVIEW', 'pending', '$now', 'retry-crash', 900);"
+
+  # First retry
+  local out1
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 900 \
+    --review-id "retry-crash-1" --review-state REQUEST_CHANGES \
+    --body "Fix crash" --author reviewer --created "$now" 2>/dev/null)" || return 1
+
+  # Verify task was created
+  if ! echo "$out1" | jq -e '.createdTask == true' >/dev/null 2>&1; then
+    echo "ERROR: Expected createdTask=true on first retry, got: $out1"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Second retry (should reuse existing task, not create new one)
+  local out2
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 900 \
+    --review-id "retry-crash-1" --review-state REQUEST_CHANGES \
+    --body "Fix crash" --author reviewer --created "$now" 2>/dev/null)" || return 1
+
+  if ! echo "$out2" | jq -e '.createdTask == true and .reused == true' >/dev/null 2>&1; then
+    echo "ERROR: Expected reused=true on second retry, got: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Exactly one REVIEW task record
+  local review_count
+  review_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:retry-crash-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW record, found $review_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Exactly one REVIEW_FIX task
+  local fix_count
+  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=900 AND action='REVIEW_FIX';" 2>/dev/null)"
+  if [ "$fix_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task, found $fix_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+run_test "crash-resilience: crash before task creation creates one task" test_crash_before_task_creation_creates_one_task
+run_test "crash-resilience: concurrent reviews create separate tasks" test_concurrent_reviews_create_separate_tasks
+run_test "crash-resilience: approve after request changes no duplicate" test_approve_after_request_changes_no_duplicate_task
+run_test "crash-resilience: retry after crash produces exactly one task" test_retry_after_crash_before_creation_exact_one_task
+
 # ===================== Results =====================
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
