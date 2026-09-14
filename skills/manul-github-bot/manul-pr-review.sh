@@ -121,7 +121,7 @@ init_schema() {
 }
 
 # Get the PR's associated conversation
-# Returns conversationId or empty string
+# Returns conversationId or exits on SQLite failure
 get_pr_conversation() {
   local repo="$1"
   local pr_number="$2"
@@ -133,7 +133,10 @@ get_pr_conversation() {
 
   # Check if PR number exists in processed_comments
   local conv_id
-  conv_id="$(sqlite3 "$DB" "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' AND action != 'REVIEW' ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
+  if ! conv_id="$(sqlite3 "$DB" "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' AND action != 'REVIEW' ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null)"; then
+    echo "ERROR: SQLite query failed in get_pr_conversation (processed_comments)" >&2
+    return 1
+  fi
 
   if [ -n "$conv_id" ]; then
     echo "$conv_id"
@@ -141,7 +144,10 @@ get_pr_conversation() {
   fi
 
   # Check conversations table for PR association
-  conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$(echo "$pr_number" | jq -R . | jq -c .) AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
+  if ! conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$(echo "$pr_number" | jq -R . | jq -c .) AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null)"; then
+    echo "ERROR: SQLite query failed in get_pr_conversation (conversations)" >&2
+    return 1
+  fi
 
   echo "$conv_id"
 }
@@ -158,7 +164,10 @@ get_pr_pending_task() {
 
   # Find the latest running/completed task for this PR (exclude REVIEW actions only)
   local task_id
-  task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null || echo "")"
+  if ! task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null)"; then
+    echo "ERROR: SQLite query failed in get_pr_pending_task" >&2
+    return 1
+  fi
 
   echo "$task_id"
 }
@@ -266,7 +275,10 @@ cmd_handle() {
   if [ -n "$DB" ] && [ -f "$DB" ]; then
     # Atomically check status and extract any existing taskId
     local status_row
-    status_row="$(sqlite3 "$DB" "BEGIN IMMEDIATE; SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1; COMMIT;" 2>/dev/null || echo "")"
+    if ! status_row="$(sqlite3 "$DB" "BEGIN IMMEDIATE; SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1; COMMIT;" 2>/dev/null)"; then
+      echo "ERROR: SQLite query failed to check review status for $review_id" >&2
+      return 1
+    fi
 
     if [ -n "$status_row" ]; then
       review_status="$(echo "$status_row" | cut -d'|' -f1)"
@@ -436,14 +448,8 @@ cmd_handle() {
       ;;
 
     failed)
-      # Previous attempt failed - clear and retry
+      # Previous attempt failed - retry without deleting (task may already exist)
       echo "dispatch: review $review_id previously failed, retrying" >&2
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" 2>/dev/null || {
-          echo "ERROR: failed to clear failed review $review_id" >&2
-          return 1
-        }
-      fi
       review_status=""
       existing_task_id=""
       ;;
@@ -453,14 +459,8 @@ cmd_handle() {
       ;;
 
     *)
-      # Unknown state - clear and retry
-      echo "dispatch: review $review_id has unknown status '$review_status', clearing and retrying" >&2
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" || {
-          echo "ERROR: failed to clear unknown-state review $review_id" >&2
-          return 1
-        }
-      fi
+      # Unknown state - retry without deleting (task may already exist)
+      echo "dispatch: review $review_id has unknown status '$review_status', retrying" >&2
       review_status=""
       existing_task_id=""
       ;;
@@ -481,9 +481,12 @@ cmd_handle() {
     if [ "${inserted:-0}" -eq 0 ]; then
       # Race condition: another process inserted first, read its state
       echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
-      local race_status race_task
-      race_status="$(sqlite3 "$DB" "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 2>/dev/null || echo "")"
-      if [ -n "$race_status" ]; then
+       local race_status race_task
+       if ! race_status="$(sqlite3 "$DB" "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 2>/dev/null)"; then
+         echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
+         return 1
+       fi
+       if [ -n "$race_status" ]; then
         local rs rt
         rs="$(echo "$race_status" | cut -d'|' -f1)"
         rt="$(echo "$race_status" | cut -d'|' -f2)"
@@ -568,7 +571,10 @@ cmd_handle() {
   else
     # manul-conversation.sh not found - cannot create task
     if [ -n "$DB" ] && [ -f "$DB" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null || true
+      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null; then
+        echo "ERROR: failed to mark review $review_id as failed (conversation_script_missing)" >&2
+        return 1
+      fi
     fi
     local fail_result
     fail_result=$(jq -n \
@@ -608,7 +614,10 @@ cmd_handle() {
   if [ "$submit_success" = false ]; then
     # Submit returned no taskId - mark as failed
     if [ -n "$DB" ] && [ -f "$DB" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null || true
+      if ! sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null; then
+        echo "ERROR: failed to mark review $review_id as failed (no_taskId)" >&2
+        return 1
+      fi
     fi
     local fail_result
     fail_result=$(jq -n \
@@ -633,6 +642,14 @@ cmd_handle() {
   fi
 
   # ========================================================================
+  # Phase 6.5: Test crash injection point (kill after submit, before taskId record)
+  # ========================================================================
+  if [ "${MANUL_TEST_CRASH_AFTER_SUBMIT:-}" = "1" ]; then
+    echo "CRASHED_AFTER_SUBMIT" > "${TEST_DIR:-/tmp}/.crash_marker"
+    kill -9 "$BASHPID"
+  fi
+
+  # ========================================================================
   # Phase 7: Record taskId atomically - transition pending -> task_created
   # ========================================================================
   if [ -n "$DB" ] && [ -f "$DB" ]; then
@@ -647,7 +664,10 @@ cmd_handle() {
     if [ "${rows_updated:-0}" -eq 0 ]; then
       # Another process already claimed this review - look up their taskId
       echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
-      new_task_id="$(sqlite3 "$DB" "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 2>/dev/null || echo "")"
+      if ! new_task_id="$(sqlite3 "$DB" "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 2>/dev/null)"; then
+        echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
+        return 1
+      fi
       if [ -z "$new_task_id" ]; then
         # Both processes failed - mark as failed
         sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" || {

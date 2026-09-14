@@ -304,6 +304,7 @@ test_task_association_with_pr() {
     --prompt "Fix the bug" \
     --action REVIEW_FIX \
     --pr-number 42 \
+    --review-id "test-review-42" \
     --json 2>/dev/null)" || rc=$?
   
   if [ "${rc:-0}" -eq 0 ]; then
@@ -414,6 +415,7 @@ test_review_fix_continues_pr() {
     --prompt "Address review comments" \
     --action REVIEW_FIX \
     --pr-number 50 \
+    --review-id "test-review-50" \
     --json 2>/dev/null)" || rc2=$?
   
   if [ "${rc2:-0}" -eq 0 ]; then
