@@ -136,9 +136,10 @@ workspace_repo_matches() {
     # Check if this is a known workspace path pattern
     if [[ "$resolved_path" == */workspace/* ]]; then
       local slug="${resolved_path##*/workspace/}"
-      # Decode slug: replace '-' with '/' to get owner/repo
-      local decoded_owner_repo="${slug//-//}"
-      [ "$decoded_owner_repo" = "$task_repo" ] && return 0
+      # Compute expected slug from task_repo (replaces '/' with '-')
+      local expected_slug
+      expected_slug="$(printf '%s' "$task_repo" | sed 's/\//-/g')"
+      [ "$slug" = "$expected_slug" ] && return 0
     fi
 
     # Fallback: compare path components for arbitrary local paths

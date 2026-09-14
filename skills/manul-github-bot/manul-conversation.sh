@@ -126,13 +126,22 @@ init_schema() {
   
   # Add columns if missing (for migrations from older schemas)
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|action|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null || true
+    if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null; then
+      echo "ERROR: failed to add action column" >&2
+      return 1
+    fi
   fi
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prNumber|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null || true
+    if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null; then
+      echo "ERROR: failed to add prNumber column" >&2
+      return 1
+    fi
   fi
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prUrl|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null || true
+    if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null; then
+      echo "ERROR: failed to add prUrl column" >&2
+      return 1
+    fi
   fi
 }
 
@@ -279,9 +288,12 @@ cmd_submit() {
   # Generate task ID
   local task_id
   if [ "$action" = "REVIEW_FIX" ] && [ -n "$PR_NUMBER" ]; then
+    if [ -z "$REVIEW_ID" ]; then
+      error_exit "REVIEW_FIX action requires --review-id for deterministic task identity" 3
+    fi
     # Deterministic ID for crash-safe idempotency: same review always gets same task
-    local review_key="${REVIEW_ID:-${PR_NUMBER}}"
-    task_id="review-fix-${CONVERSATION_ID}-${review_key}"
+    # Invariant: same repo + same PR + same review ID => same task
+    task_id="review-fix-${CONVERSATION_ID}-${REVIEW_ID}"
   else
     task_id="task-${CONVERSATION_ID}-$(date +%s)-$$"
   fi

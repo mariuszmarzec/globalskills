@@ -82,9 +82,9 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=11
+  local expected_tests=18
   local actual_tests
-  actual_tests=$(grep -c "^test_\w*() {" "$0" 2>/dev/null || echo 0)
+  actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
   if [ "$actual_tests" -ne "$expected_tests" ]; then
     echo "  FAIL: Test discovery mismatch: expected $expected_tests, found $actual_tests"
@@ -367,6 +367,57 @@ test_concurrent_lease() {
   workspace_release "$winner"
 }
 run_and_test "Test 11: Concurrent lease atomicity" test_concurrent_lease
+
+# Test 12: workspace_repo_matches handles HTTPS URLs with .git
+test_workspace_repo_matches_https_with_git() {
+  workspace_repo_matches "test-org/test-repo" "https://github.com/test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 12: workspace_repo_matches HTTPS with .git" test_workspace_repo_matches_https_with_git
+
+# Test 13: workspace_repo_matches handles HTTPS URLs without .git
+test_workspace_repo_matches_https_without_git() {
+  workspace_repo_matches "test-org/test-repo" "https://github.com/test-org/test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 13: workspace_repo_matches HTTPS without .git" test_workspace_repo_matches_https_without_git
+
+# Test 14: workspace_repo_matches handles SSH URLs
+test_workspace_repo_matches_ssh() {
+  workspace_repo_matches "test-org/test-repo" "git@github.com:test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 14: workspace_repo_matches SSH URL" test_workspace_repo_matches_ssh
+
+# Test 15: workspace_repo_matches handles local filesystem paths
+test_workspace_repo_matches_local() {
+  workspace_repo_matches "test-org/test-repo" "/home/user/workspace/test-org-test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 15: workspace_repo_matches local path" test_workspace_repo_matches_local
+
+# Test 16: workspace_repo_matches rejects non-matching repos
+test_workspace_repo_matches_nonmatching() {
+  workspace_repo_matches "test-org/test-repo" "other-org/other-repo"
+  [ $? -ne 0 ] || return 1
+  workspace_repo_matches "test-org/test-repo" "https://github.com/other-org/other-repo"
+  [ $? -ne 0 ] || return 1
+}
+run_and_test "Test 16: workspace_repo_matches rejects non-matching" test_workspace_repo_matches_nonmatching
+
+# Test 17: workspace_repo_matches handles github.com/ prefix
+test_workspace_repo_matches_github_prefix() {
+  workspace_repo_matches "test-org/test-repo" "github.com/test-org/test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 17: workspace_repo_matches github.com prefix" test_workspace_repo_matches_github_prefix
+
+# Test 18: workspace_repo_matches handles ssh:// git protocol
+test_workspace_repo_matches_ssh_protocol() {
+  workspace_repo_matches "test-org/test-repo" "ssh://git@github.com/test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_repo_matches_ssh_protocol
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"

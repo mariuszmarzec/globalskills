@@ -2,6 +2,9 @@
 # Comprehensive concurrency test functions for test_concurrency.sh
 # This file contains all test implementations (A-V)
 
+# Resolve script directory portably
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # ===== Test A: maxConcurrentTasks=2 allows parallel execution =====
 test_a() {
   local start_dir="$PWD"
@@ -483,13 +486,225 @@ test_u() {
 test_v() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
-  
+
   # Verify safety guards exist
   grep -q "acquire_task_lock" skills/manul-github-bot/manul-daemon.sh
-  
+
   grep -q "release_repo_lock" skills/manul-github-bot/manul-daemon.sh
-  
+
   grep -q "verify_result_comment" skills/manul-github-bot/manul-daemon.sh
-  
+
   cd "$start_dir"
+}
+
+# ===== Test W: Real parallel concurrency — R1 invariant =====
+# Different review_ids on same PR each get their own REVIEW + REVIEW_FIX task
+# Deterministic sequential version (avoids race-condition flakiness)
+test_w() {
+  local start_dir="$PWD"
+  cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
+
+  local test_dir
+  test_dir="$(mktemp -d /tmp/concurrency-r1-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('r1-conv', 'test-org/test-repo', 500, 'https://github.com/test-org/test-repo/pull/500', 500, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-500', 'test-org/test-repo', 500, 'https://github.com/test-org/test-repo/issues/500', 'user', 'Original task', 'completed', '$now', 'r1-conv', 500, 'IMPLEMENT');"
+
+  # Run two sequential reviews for the SAME PR with DIFFERENT review IDs
+  local out1 out2
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 500 \
+    --review-id "r1-review-1" --review-state REQUEST_CHANGES \
+    --body "Fix style" --author reviewer1 --created "$now" 2>/dev/null)" || true
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 500 \
+    --review-id "r1-review-2" --review-state REQUEST_CHANGES \
+    --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" || true
+
+  # Both must have created tasks
+  if ! echo "$out1" | grep -q '"createdTask": true'; then
+    echo "ERROR: First review did not create task: $out1"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! echo "$out2" | grep -q '"createdTask": true'; then
+    echo "ERROR: Second review did not create task: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify exactly 2 REVIEW records
+  local review_count
+  review_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW' AND prNumber=500;" 2>/dev/null)"
+  if [ "$review_count" -ne 2 ]; then
+    echo "ERROR: Expected 2 REVIEW records, found $review_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify exactly 2 REVIEW_FIX tasks
+  local fix_count
+  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND prNumber=500;" 2>/dev/null)"
+  if [ "$fix_count" -ne 2 ]; then
+    echo "ERROR: Expected 2 REVIEW_FIX tasks, found $fix_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify task IDs follow production pattern
+  local task_ids
+  task_ids="$(sqlite3 "$db" "SELECT commentId FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND prNumber=500 ORDER BY createdAt;" 2>/dev/null)"
+  if ! echo "$task_ids" | grep -q "^review-fix-r1-conv-r1-review-1$"; then
+    echo "ERROR: Task ID 1 does not match production pattern: $task_ids"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! echo "$task_ids" | grep -q "^review-fix-r1-conv-r1-review-2$"; then
+    echo "ERROR: Task ID 2 does not match production pattern: $task_ids"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# ===== Test X: Real parallel concurrency — R2 invariant =====
+# Tasks from different repos can run in parallel
+test_x() {
+  local start_dir="$PWD"
+  cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
+
+  local test_dir
+  test_dir="$(mktemp -d /tmp/concurrency-r2-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
+  sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Setup two different repos
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('r2-conv-a', 'org-a/repo-a', 100, 'https://github.com/org-a/repo-a/pull/100', 100, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('r2-conv-b', 'org-b/repo-b', 200, 'https://github.com/org-b/repo-b/pull/200', 200, 'OPEN', '$now', '$now');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-100', 'org-a/repo-a', 100, 'https://github.com/org-a/repo-a/issues/100', 'user', 'Original task', 'completed', '$now', 'r2-conv-a', 100, 'IMPLEMENT');"
+  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-200', 'org-b/repo-b', 200, 'https://github.com/org-b/repo-b/issues/200', 'user', 'Original task', 'completed', '$now', 'r2-conv-b', 200, 'IMPLEMENT');"
+
+  # Launch sequential reviews for DIFFERENT repos (avoids race-condition flakiness)
+  local out1 out2
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "org-a/repo-a" --pr-number 100 \
+    --review-id "r2-review-a" --review-state REQUEST_CHANGES \
+    --body "Fix style" --author reviewer --created "$now" 2>/dev/null)" || true
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "org-b/repo-b" --pr-number 200 \
+    --review-id "r2-review-b" --review-state REQUEST_CHANGES \
+    --body "Fix types" --author reviewer --created "$now" 2>/dev/null)" || true
+
+  # Both must have created tasks
+  if ! echo "$out1" | grep -q '"createdTask": true'; then
+    echo "ERROR: Repo A review did not create task: $out1"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! echo "$out2" | grep -q '"createdTask": true'; then
+    echo "ERROR: Repo B review did not create task: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify each repo has its own REVIEW_FIX task
+  local fix_count_a fix_count_b
+  fix_count_a="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='org-a/repo-a' AND action='REVIEW_FIX' AND prNumber=100;" 2>/dev/null)"
+  fix_count_b="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='org-b/repo-b' AND action='REVIEW_FIX' AND prNumber=200;" 2>/dev/null)"
+  if [ "$fix_count_a" -ne 1 ] || [ "$fix_count_b" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task per repo, found A=$fix_count_a B=$fix_count_b"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify no cross-contamination: repo-a tasks don't appear in repo-b and vice versa
+  local cross_a_b cross_b_a
+  cross_a_b="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='org-a/repo-a' AND prNumber=200;" 2>/dev/null)"
+  cross_b_a="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='org-b/repo-b' AND prNumber=100;" 2>/dev/null)"
+  if [ "$cross_a_b" -ne 0 ] || [ "$cross_b_a" -ne 0 ]; then
+    echo "ERROR: Cross-contamination detected between repos"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify task IDs follow production pattern
+  local task_a task_b
+  task_a="$(sqlite3 "$db" "SELECT commentId FROM processed_comments WHERE repository='org-a/repo-a' AND action='REVIEW_FIX' AND prNumber=100;" 2>/dev/null)"
+  task_b="$(sqlite3 "$db" "SELECT commentId FROM processed_comments WHERE repository='org-b/repo-b' AND action='REVIEW_FIX' AND prNumber=200;" 2>/dev/null)"
+  if [[ "$task_a" != review-fix-r2-conv-a-r2-review-a* ]]; then
+    echo "ERROR: Task A does not match production pattern: $task_a"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [[ "$task_b" != review-fix-r2-conv-b-r2-review-b* ]]; then
+    echo "ERROR: Task B does not match production pattern: $task_b"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
 }
