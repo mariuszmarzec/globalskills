@@ -107,7 +107,10 @@ init_schema() {
     resultSummary TEXT,
     resultJson TEXT,
     baseId TEXT
-  );" 2>/dev/null || true
+  );" || {
+    echo "ERROR: failed to initialize processed_comments schema" >&2
+    return 1
+  }
 
   # Migrate: add taskId column if missing (for review-task association)
   local has_task_id

@@ -128,16 +128,19 @@ init_schema() {
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|action|'; then
     if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null; then
       echo "ERROR: failed to add action column" >&2
+      return 1
     fi
   fi
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prNumber|'; then
     if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null; then
       echo "ERROR: failed to add prNumber column" >&2
+      return 1
     fi
   fi
   if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prUrl|'; then
     if ! sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null; then
       echo "ERROR: failed to add prUrl column" >&2
+      return 1
     fi
   fi
 }
