@@ -113,6 +113,41 @@ workspace_mark_broken() {
   rm -rf "$WORKSPACES_DIR/$ws_id"
 }
 
+workspace_repo_matches() {
+  local task_repo="$1"
+  local actual_repo="$2"
+
+  # Normalize GitHub HTTPS/SSH URLs to owner/repo.
+  local normalized_actual="${actual_repo#https://github.com/}"
+  normalized_actual="${normalized_actual#http://github.com/}"
+  normalized_actual="${normalized_actual#git@github.com:}"
+  normalized_actual="${normalized_actual#ssh://git@github.com/}"
+  normalized_actual="${normalized_actual#github.com/}"
+  normalized_actual="${normalized_actual%.git}"
+  normalized_actual="${normalized_actual%/}"
+  [ "$normalized_actual" = "$task_repo" ] && return 0
+
+  # `git clone --local` can leave a local filesystem path as origin.
+  # Compare its final owner/repo path components without requiring a specific root.
+  if [[ "$actual_repo" == /* ]]; then
+    local owner repo_name
+    owner="$(basename "$(dirname "$actual_repo")")"
+    repo_name="$(basename "$actual_repo")"
+    repo_name="${repo_name%.git}"
+    [ "${owner}/${repo_name}" = "$task_repo" ] && return 0
+
+    local resolved_origin
+    if resolved_origin="$(realpath -e "$actual_repo" 2>/dev/null)"; then
+      owner="$(basename "$(dirname "$resolved_origin")")"
+      repo_name="$(basename "$resolved_origin")"
+      repo_name="${repo_name%.git}"
+      [ "${owner}/${repo_name}" = "$task_repo" ] && return 0
+    fi
+  fi
+
+  return 1
+}
+
 workspace_get_path() {
   local task_id="$1"
   local safe_task_id
@@ -126,12 +161,11 @@ workspace_get_path() {
 
   # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
   if [ -n "$path" ] && [ -d "$path/.git" ]; then
-    local task_repo actual_repo expected_repo
+    local task_repo actual_repo
     task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
     if [ -n "$task_repo" ]; then
       actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
-      expected_repo="https://github.com/${task_repo}"
-      if [ "$actual_repo" != "$expected_repo" ]; then
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
         rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
       fi
     fi
@@ -153,4 +187,4 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_mark_broken workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
