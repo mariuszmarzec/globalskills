@@ -111,20 +111,10 @@ init_schema() {
 
   # Migrate: add taskId column if missing (for review-task association)
   local has_task_id
-  has_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -c '|taskId|' || echo "0")"
+  has_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" | grep -c '|taskId|')"
   if [ "$has_task_id" -eq 0 ]; then
-    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>/dev/null || {
+    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" || {
       echo "ERROR: failed to add taskId column to processed_comments" >&2
-      return 1
-    }
-  fi
-
-  # Migrate: add reviewTaskId column if missing (alternative naming for REVIEW records)
-  local has_review_task_id
-  has_review_task_id="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -c '|reviewTaskId|' || echo "0")"
-  if [ "$has_review_task_id" -eq 0 ]; then
-    sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN reviewTaskId TEXT; COMMIT;" 2>/dev/null || {
-      echo "ERROR: failed to add reviewTaskId column to processed_comments" >&2
       return 1
     }
   fi
@@ -412,9 +402,12 @@ cmd_handle() {
       if [ -n "$existing_task_id" ]; then
         # Should not happen (task_created should have taskId), but handle gracefully
         echo "dispatch: review $review_id has pending status with taskId $existing_task_id, updating to task_created" >&2
-        if [ -n "$DB" ] && [ -f "$DB" ]; then
-          sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" 2>/dev/null || true
-        fi
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" || {
+          echo "ERROR: failed to update review $review_id status to task_created" >&2
+          return 1
+        }
+      fi
         local result
         result=$(jq -n \
           --arg reviewId "$review_id" \
@@ -463,7 +456,10 @@ cmd_handle() {
       # Unknown state - clear and retry
       echo "dispatch: review $review_id has unknown status '$review_status', clearing and retrying" >&2
       if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" 2>/dev/null || true
+        sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW';" || {
+          echo "ERROR: failed to clear unknown-state review $review_id" >&2
+          return 1
+        }
       fi
       review_status=""
       existing_task_id=""
@@ -543,7 +539,10 @@ cmd_handle() {
     submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
       # Submit failed - update review to failed state
       if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null || true
+        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" || {
+          echo "ERROR: failed to mark review $review_id as failed (submit_failed)" >&2
+          return 1
+        }
       fi
       local fail_result
       fail_result=$(jq -n \
@@ -651,7 +650,10 @@ cmd_handle() {
       new_task_id="$(sqlite3 "$DB" "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 2>/dev/null || echo "")"
       if [ -z "$new_task_id" ]; then
         # Both processes failed - mark as failed
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 2>/dev/null || true
+        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" || {
+          echo "ERROR: failed to mark review $review_id as failed (concurrent_claim_failed)" >&2
+          return 1
+        }
         local fail_result
         fail_result=$(jq -n \
           --arg reviewId "$REVIEW_ID" \

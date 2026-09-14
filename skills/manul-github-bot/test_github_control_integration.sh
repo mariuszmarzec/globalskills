@@ -2188,7 +2188,10 @@ CFGEOF
   return 0
 }
 
-# Test 5: crash during task submission → retry creates exactly one task
+# Test 5: REAL crash during task creation → retry recovers correctly
+# Uses a mock manul-conversation.sh that kills itself after inserting the task
+# but before returning, simulating a real process death between task INSERT
+# and review status UPDATE.
 test_crash_during_task_creation() {
   local test_dir
   test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
@@ -2218,9 +2221,70 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  # Copy real scripts (except manul-conversation.sh which we replace with mock)
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
-  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  # Create MOCK manul-conversation.sh that crashes after task INSERT
+  cat > "$manul_dir/manul-conversation.sh" <<'MOCKEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DB="${MANUL_DB:-$MANUL_DIR/manul.db}"
+CONVERSATION_ID=""
+PROMPT=""
+ACTION="IMPLEMENT"
+PR_NUMBER=""
+REVIEW_ID=""
+PARENT_TASK_ID=""
+JSON_OUTPUT=false
+
+sql_escape() { echo "${1//\'/\'\'}"; }
+
+init_schema() {
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);" 2>/dev/null || true
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);" 2>/dev/null || true
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conversation-id) CONVERSATION_ID="$2"; shift 2 ;;
+    --prompt) PROMPT="$2"; shift 2 ;;
+    --action) ACTION="$2"; shift 2 ;;
+    --pr-number) PR_NUMBER="$2"; shift 2 ;;
+    --review-id) REVIEW_ID="$2"; shift 2 ;;
+    --parent-task-id) PARENT_TASK_ID="$2"; shift 2 ;;
+    --json) JSON_OUTPUT=true; shift ;;
+    submit) ;;
+    *) shift ;;
+  esac
+done
+
+init_schema
+
+if [ "$ACTION" = "REVIEW_FIX" ] && [ -n "$CONVERSATION_ID" ]; then
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  task_id="review-fix-${CONVERSATION_ID}-${PR_NUMBER}"
+
+  # Check if task already exists (from previous crashed attempt)
+  existing="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE commentId='${task_id}' LIMIT 1;" 2>/dev/null || echo "")"
+
+  if [ -z "$existing" ]; then
+    # FIRST CALL: Insert task then CRASH (simulate process death before returning)
+    sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, context, status, createdAt, conversationId, action, prNumber) VALUES('${task_id}', 'test-org/test-repo', ${PR_NUMBER}, 'https://github.com/test-org/test-repo/issues/${PR_NUMBER}', 'orchestrator', 'manul', '$(sql_escape "$PROMPT")', 'action=REVIEW_FIX;conversationId=${CONVERSATION_ID};prNumber=${PR_NUMBER}', 'queued', '${now}', '${CONVERSATION_ID}', 'REVIEW_FIX', ${PR_NUMBER});"
+
+    # Write crash marker to prove we got here
+    echo "CRASHED_AFTER_INSERT" > "${TEST_DIR:-/tmp}/.crash_marker"
+
+    # ACTUAL CRASH: terminate this process immediately
+    kill -9 "$BASHPID"
+  else
+    # RETRY: task already exists, return it normally
+    echo "{\"taskId\": \"${task_id}\", \"conversationId\": \"${CONVERSATION_ID}\", \"status\": \"queued\", \"action\": \"REVIEW_FIX\"}"
+  fi
+fi
+MOCKEOF
+  chmod +x "$manul_dir/manul-conversation.sh"
 
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -2228,27 +2292,81 @@ CFGEOF
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1000', 'test-org/test-repo', 1000, 'https://github.com/test-org/test-repo/issues/1000', 'user', 'Original task', 'completed', '$now', 'crash-during-conv', 1000, 'IMPLEMENT');"
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('review:crash-during-1', 'test-org/test-repo', 1000, 'https://github.com/test-org/test-repo/pull/1000', 'reviewer', 'Fix crash during', 'REVIEW', 'pending', '$now', 'crash-during-conv', 1000);"
 
+  # =====================================================================
+  # FIRST RUN: mock will insert task then CRASH (kill -9) before returning
+  # =====================================================================
   local output
-  output="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+  output="$(TEST_DIR="$test_dir" MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 1000 \
     --review-id "crash-during-1" --review-state REQUEST_CHANGES \
     --body "Fix crash during" --author reviewer --created "$now" 2>/dev/null)" || true
 
-  # Verify exactly one REVIEW_FIX task created
-  local fix_count
-  fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1000 AND action='REVIEW_FIX';" 2>/dev/null)"
-  if [ "$fix_count" -ne 1 ]; then
-    echo "ERROR: Expected 1 REVIEW_FIX task after crash during creation, found $fix_count"
+  # =====================================================================
+  # VERIFY: crash marker exists (proves process actually died)
+  # =====================================================================
+  if [ ! -f "$test_dir/.crash_marker" ]; then
+    echo "ERROR: crash marker not found — mock did not crash as expected"
     rm -rf "$test_dir"
     return 1
   fi
 
-  # Verify the review is in task_created state with taskId
-  local review_state review_task_id
-  review_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
-  review_task_id="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
-  if [ "$review_state" != "task_created" ] || [ -z "$review_task_id" ]; then
-    echo "ERROR: Expected task_created with taskId, got state='$review_state' task='$review_task_id'"
+  # =====================================================================
+  # VERIFY after crash: exactly 1 REVIEW_FIX task, review marked failed (crash propagated)
+  # =====================================================================
+  local fix_count_before
+  fix_count_before="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1000 AND action='REVIEW_FIX';" 2>/dev/null)"
+  if [ "$fix_count_before" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task after crash, found $fix_count_before"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local review_state_before
+  review_state_before="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
+  local review_task_before
+  review_task_before="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_state_before" != "failed" ] || [ -n "$review_task_before" ]; then
+    echo "ERROR: After crash, review should be 'failed' with no taskId, got state='$review_state_before' task='$review_task_before'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # =====================================================================
+  # SECOND RUN (retry): should recover — link review to existing task
+  # =====================================================================
+  output="$(TEST_DIR="$test_dir" MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 1000 \
+    --review-id "crash-during-1" --review-state REQUEST_CHANGES \
+    --body "Fix crash during" --author reviewer --created "$now" 2>/dev/null)" || true
+
+  # =====================================================================
+  # VERIFY: still exactly 1 REVIEW_FIX task (no duplicate on retry)
+  # =====================================================================
+  local fix_count_after
+  fix_count_after="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1000 AND action='REVIEW_FIX';" 2>/dev/null)"
+  if [ "$fix_count_after" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW_FIX task after retry, found $fix_count_after (duplicate created!)"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # =====================================================================
+  # VERIFY: review state recovered to task_created with correct taskId
+  # =====================================================================
+  local review_state_after review_task_id_after
+  review_state_after="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
+  review_task_id_after="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_state_after" != "task_created" ] || [ -z "$review_task_id_after" ]; then
+    echo "ERROR: Expected task_created with taskId after retry, got state='$review_state_after' task='$review_task_id_after'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify the taskId matches the REVIEW_FIX task commentId
+  local task_comment_id
+  task_comment_id="$(sqlite3 "$db" "SELECT commentId FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1000 AND action='REVIEW_FIX' LIMIT 1;" 2>/dev/null)"
+  if [ "$review_task_id_after" != "$task_comment_id" ]; then
+    echo "ERROR: Review taskId '$review_task_id_after' does not match REVIEW_FIX task '$task_comment_id'"
     rm -rf "$test_dir"
     return 1
   fi
