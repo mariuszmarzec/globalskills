@@ -2259,7 +2259,7 @@ CFGEOF
   return 0
 }
 
-# Test 6: two simultaneous identical reviews → exactly one task
+# Test 6: two sequential identical reviews → exactly one task (idempotency)
 test_identical_concurrent_reviews_exactly_one_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/concurrent-identical-test-XXXXXX)"
