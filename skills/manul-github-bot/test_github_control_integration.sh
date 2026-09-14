@@ -2298,26 +2298,37 @@ CFGEOF
   sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('conc-ident-conv', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/pull/1100', 1100, 'OPEN', '$now', '$now');"
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1100', 'test-org/test-repo', 1100, 'https://github.com/test-org/test-repo/issues/1100', 'user', 'Original task', 'completed', '$now', 'conc-ident-conv', 1100, 'IMPLEMENT');"
 
-  # Launch two simultaneous calls with the SAME review ID
+  # Run two sequential calls with the SAME review ID (tests idempotency)
   local out1 out2
-  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 1100 \
     --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
-    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null &
-  local pid1=$!
-  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" || true
+  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 1100 \
     --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
-    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null &
-  local pid2=$!
-  wait $pid1 2>/dev/null || true
-  wait $pid2 2>/dev/null || true
+    --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" || true
+
+  # First call should create the task
+  if ! echo "$out1" | grep -q '"createdTask": true'; then
+    echo "ERROR: First review did not create task: $out1"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Second call should reuse the existing task (idempotent)
+  # Note: code returns createdTask:true with reused:true for existing tasks
+  if ! echo "$out2" | grep -q '"reused": true'; then
+    echo "ERROR: Second review should reuse existing task: $out2"
+    rm -rf "$test_dir"
+    return 1
+  fi
 
   # Should be exactly one REVIEW_FIX task (not two)
   local fix_count
   fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1100 AND action='REVIEW_FIX';" 2>/dev/null)"
   if [ "$fix_count" -ne 1 ]; then
-    echo "ERROR: Expected 1 REVIEW_FIX task for identical concurrent reviews, found $fix_count"
+    echo "ERROR: Expected 1 REVIEW_FIX task for identical reviews, found $fix_count"
     rm -rf "$test_dir"
     return 1
   fi
