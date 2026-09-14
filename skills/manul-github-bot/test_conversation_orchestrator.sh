@@ -367,10 +367,7 @@ test_production_path_safety() {
 test_github_manul_regression() {
   TEST_NAME="existing GitHub /manul regression"
   # Verify existing poll.sh still works
-  local poll_script="$TEST_DIR/../poll.sh"
-  if [ ! -f "$poll_script" ]; then
-    poll_script="/home/marzec/.globalskills/skills/manul-github-bot/poll.sh"
-  fi
+  local poll_script="${POLL_SCRIPT:-$SCRIPT_DIR/poll.sh}"
 
   if [ -f "$poll_script" ]; then
     # Check syntax

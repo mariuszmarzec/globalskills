@@ -69,11 +69,23 @@ sqlite3_retry() {
   local max_retries="${2:-3}"
   local retry=0
   local result=""
+  local err_msg=""
   while [ $retry -lt $max_retries ]; do
-    result="$(sqlite3 "$DB" "$sql" 2>/dev/null)" && echo "$result" && return 0
-    retry=$((retry + 1))
-    sleep 0.01
+    result="$(sqlite3 "$DB" "$sql" 2>&1)" && echo "$result" && return 0
+    err_msg="$(echo "$result" | tail -1)"
+    # Only retry on transient SQLite_BUSY errors
+    if echo "$err_msg" | grep -qE "database is locked|database table is locked|locked:.*retry"; then
+      retry=$((retry + 1))
+      # Exponential backoff: 20ms, 40ms, 80ms, 160ms, 320ms, 640ms
+      local sleep_ms=$((20 * (1 << (retry - 1))))
+      sleep "0.0${sleep_ms}"
+    else
+      # Permanent error - fail immediately
+      echo "ERROR: SQLite permanent error: $err_msg" >&2
+      return 1
+    fi
   done
+  echo "ERROR: SQLite retry exhausted after $max_retries attempts: $err_msg" >&2
   return 1
 }
 
@@ -95,40 +107,90 @@ init_schema() {
   mkdir -p "$(dirname "$DB")"
 
   # Create processed_comments table if not exists (mimics manul-conversation.sh schema)
-  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
-    commentId TEXT PRIMARY KEY,
-    repository TEXT NOT NULL,
-    issueNumber INTEGER NOT NULL,
-    commentUrl TEXT NOT NULL,
-    author TEXT,
-    agent TEXT,
-    prompt TEXT NOT NULL,
-    context TEXT,
-    status TEXT NOT NULL DEFAULT 'queued',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    createdAt TEXT,
-    processedAt TEXT,
-    heartbeatAt TEXT,
-    leaseExpiresAt TEXT,
-    workerPid INTEGER,
-    nextAttemptAt TEXT,
-    conversationId TEXT,
-    parentTaskId TEXT,
-    workspaceId TEXT,
-    action TEXT DEFAULT 'IMPLEMENT',
-    prNumber INTEGER,
-    prUrl TEXT,
-    resultSummary TEXT,
-    resultJson TEXT,
-    baseId TEXT
-  );" || {
-    echo "ERROR: failed to initialize processed_comments schema" >&2
-    return 1
-  }
+  # Uses retry loop to handle concurrent access
+  local max_retries=10
+  local retry=0
+  local success=false
+  while [ "$success" = false ] && [ $retry -lt $max_retries ]; do
+    local err
+    err="$(sqlite3 "$DB" "
+      PRAGMA busy_timeout=5000;
+      BEGIN IMMEDIATE;
+      CREATE TABLE IF NOT EXISTS processed_comments (
+        commentId TEXT PRIMARY KEY,
+        repository TEXT NOT NULL,
+        issueNumber INTEGER NOT NULL,
+        commentUrl TEXT NOT NULL,
+        author TEXT,
+        agent TEXT,
+        prompt TEXT NOT NULL,
+        context TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        createdAt TEXT,
+        processedAt TEXT,
+        heartbeatAt TEXT,
+        leaseExpiresAt TEXT,
+        workerPid INTEGER,
+        nextAttemptAt TEXT,
+        conversationId TEXT,
+        parentTaskId TEXT,
+        workspaceId TEXT,
+        action TEXT DEFAULT 'IMPLEMENT',
+        prNumber INTEGER,
+        prUrl TEXT,
+        resultSummary TEXT,
+        resultJson TEXT,
+        baseId TEXT
+      );
+      COMMIT;
+    " 2>&1)" && success=true || {
+      retry=$((retry + 1))
+      if [ $retry -ge $max_retries ]; then
+        echo "ERROR: init_schema failed after $max_retries retries: $err" >&2
+        return 1
+      fi
+      if echo "$err" | grep -qE "database is locked|database table is locked"; then
+        sleep "0.0$((retry * 2))"
+      else
+        echo "ERROR: init_schema failed: $err" >&2
+        return 1
+      fi
+    }
+  done
 
   # Migrate: add taskId column if missing (for review-task association)
-  # Use atomic schema migration to avoid race conditions
-  sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>/dev/null || true
+  # Safe/idempotent migration: check first, then ALTER with retry
+  local col_check
+  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+  if ! echo "$col_check" | grep -q '|taskId|'; then
+    # Column doesn't exist - attempt to add it with retry on lock
+    local migrate_ok=false
+    local migrate_retry=0
+    while [ "$migrate_ok" = false ] && [ $migrate_retry -lt 5 ]; do
+      local migrate_err
+      migrate_err="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>&1)" && migrate_ok=true || {
+        migrate_retry=$((migrate_retry + 1))
+        if [ $migrate_retry -ge 5 ]; then
+          echo "ERROR: Failed to migrate processed_comments table after $migrate_retry attempts: $migrate_err" >&2
+          return 1
+        fi
+        if echo "$migrate_err" | grep -qE "database is locked|database table is locked"; then
+          sleep "0.0$((migrate_retry * 2))"
+        elif echo "$migrate_err" | grep -q "duplicate column name"; then
+          # Another process added it concurrently - re-check and continue
+          col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+          if echo "$col_check" | grep -q '|taskId|'; then
+            return 0
+          fi
+        else
+          echo "ERROR: Migration failed for processed_comments.taskId: $migrate_err" >&2
+          return 1
+        fi
+      }
+    done
+  fi
+  # If column already exists, another process added it - silently continue
 }
 
 # Get the PR's associated conversation
@@ -144,7 +206,7 @@ get_pr_conversation() {
 
   # Check if PR number exists in processed_comments
   local conv_id
-  if ! conv_id="$(sqlite3 "$DB" "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' AND action != 'REVIEW' ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null)"; then
+  if ! conv_id="$(sqlite3_retry "SELECT DISTINCT conversationId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status != 'failed' AND action != 'REVIEW' ORDER BY createdAt DESC LIMIT 1;" 3)"; then
     echo "ERROR: SQLite query failed in get_pr_conversation (processed_comments)" >&2
     return 1
   fi
@@ -155,7 +217,7 @@ get_pr_conversation() {
   fi
 
   # Check conversations table for PR association
-  if ! conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$(echo "$pr_number" | jq -R . | jq -c .) AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null)"; then
+  if ! conv_id="$(sqlite3_retry "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$(echo "$pr_number" | jq -R . | jq -c .) AND status != 'COMPLETED' LIMIT 1;" 3)"; then
     echo "ERROR: SQLite query failed in get_pr_conversation (conversations)" >&2
     return 1
   fi
@@ -175,7 +237,7 @@ get_pr_pending_task() {
 
   # Find the latest running/completed task for this PR (exclude REVIEW actions only)
   local task_id
-  if ! task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 2>/dev/null)"; then
+  if ! task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND prNumber=$pr_number AND status IN ('running', 'completed') AND action NOT IN ('REVIEW') ORDER BY createdAt DESC LIMIT 1;" 3)"; then
     echo "ERROR: SQLite query failed in get_pr_pending_task" >&2
     return 1
   fi
@@ -284,9 +346,9 @@ cmd_handle() {
   local existing_task_id=""
 
   if [ -n "$DB" ] && [ -f "$DB" ]; then
-    # Atomically check status and extract any existing taskId
+    # Read-only SELECT - no BEGIN IMMEDIATE needed
     local status_row
-    if ! status_row="$(sqlite3 "$DB" "BEGIN IMMEDIATE; SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1; COMMIT;" 2>/dev/null)"; then
+    if ! status_row="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
       echo "ERROR: SQLite query failed to check review status for $review_id" >&2
       return 1
     fi
@@ -303,7 +365,7 @@ cmd_handle() {
   if [ "$should_create_task" = false ]; then
     # For APPROVE/DISMISS/COMMENT: record as completed (no task creation)
     if [ -n "$DB" ] && [ -f "$DB" ]; then
-      sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$(sql_escape "$review_comment_id")', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'completed', '$now', '$(sql_escape "${conv_id:-}")', $PR_NUMBER);" 2>/dev/null || {
+      sqlite3_retry "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$(sql_escape "$review_comment_id")', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'completed', '$now', '$(sql_escape "${conv_id:-}")', $PR_NUMBER);" 3 || {
         echo "ERROR: failed to record review $review_id" >&2
         return 1
       }
@@ -493,39 +555,50 @@ cmd_handle() {
       # Race condition: another process inserted first, read its state
       echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
        local race_status race_task
-       if ! race_status="$(sqlite3 "$DB" "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 2>/dev/null)"; then
-         echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
-         return 1
-       fi
-       if [ -n "$race_status" ]; then
-        local rs rt
-        rs="$(echo "$race_status" | cut -d'|' -f1)"
-        rt="$(echo "$race_status" | cut -d'|' -f2)"
-        if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
-          local result
-          result=$(jq -n \
-            --arg reviewId "$review_id" \
-            --arg action "$action" \
-            --arg conversationId "$conv_id" \
-            --arg newTaskId "$rt" \
-            --arg parentTaskId "${task_id:-}" \
-            --argjson prNumber "$PR_NUMBER" \
-            '{
-              reviewId: $reviewId,
-              action: $action,
-              conversationId: $conversationId,
-              newTaskId: $newTaskId,
-              parentTaskId: $parentTaskId,
-              prNumber: $prNumber,
-              createdTask: true,
-              reused: true,
-              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }')
-          echo "$result" | jq .
-          return 0
-        fi
-        # Race resulted in pending or other state - fall through
-      fi
+       local race_retry=0
+       local race_max_retries=5
+       while [ $race_retry -lt $race_max_retries ]; do
+         if ! race_status="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
+           echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
+           return 1
+         fi
+         if [ -n "$race_status" ]; then
+          local rs rt
+          rs="$(echo "$race_status" | cut -d'|' -f1)"
+          rt="$(echo "$race_status" | cut -d'|' -f2)"
+          if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
+            local result
+            result=$(jq -n \
+              --arg reviewId "$review_id" \
+              --arg action "$action" \
+              --arg conversationId "$conv_id" \
+              --arg newTaskId "$rt" \
+              --arg parentTaskId "${task_id:-}" \
+              --argjson prNumber "$PR_NUMBER" \
+              '{
+                reviewId: $reviewId,
+                action: $action,
+                conversationId: $conversationId,
+                newTaskId: $newTaskId,
+                parentTaskId: $parentTaskId,
+                prNumber: $prNumber,
+                createdTask: true,
+                reused: true,
+                timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+              }')
+            echo "$result" | jq .
+            return 0
+          fi
+          # Race resulted in pending or other state - wait and retry
+          if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
+            race_retry=$((race_retry + 1))
+            sleep "0.0$((race_retry * 2))"
+            continue
+          fi
+         fi
+         # Fall through to create our own task
+         break
+       done
     fi
   fi
 
@@ -551,30 +624,54 @@ cmd_handle() {
   local submit_output=""
   if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
     submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
-      # Submit failed - update review to failed state (with retry for SQLite lock)
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+      # Submit failed - check if concurrent process already created the task
+      local submit_fail_retry=0
+      local submit_fail_max_retries=3
+      local recovered_task_id=""
+      while [ $submit_fail_retry -lt $submit_fail_max_retries ]; do
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          recovered_task_id="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' AND status='task_created' LIMIT 1;" 3)" || true
+        fi
+        if [ -n "$recovered_task_id" ]; then
+          echo "dispatch: review $review_id: submit failed but concurrent process created task $recovered_task_id, recovering" >&2
+          submit_output=$(jq -n \
+            --arg taskId "$recovered_task_id" \
+            '{taskId: $taskId}')
+          break
+        fi
+        # Wait and retry
+        if [ $submit_fail_retry -lt $((submit_fail_max_retries - 1)) ]; then
+          submit_fail_retry=$((submit_fail_retry + 1))
+          sleep "0.0$((submit_fail_retry * 2))"
+          continue
+        fi
+      done
+      if [ -z "$submit_output" ] || [ -z "$(echo "$submit_output" | jq -r '.taskId // empty')" ]; then
+        # No task found - update review to failed state (with retry for SQLite lock)
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+        fi
+        local fail_result
+        fail_result=$(jq -n \
+          --arg reviewId "$REVIEW_ID" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: null,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            createdTask: false,
+            error: "submit_failed",
+            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          }')
+        echo "$fail_result" | jq .
+        return 1
       fi
-      local fail_result
-      fail_result=$(jq -n \
-        --arg reviewId "$REVIEW_ID" \
-        --arg action "$action" \
-        --arg conversationId "$conv_id" \
-        --arg parentTaskId "${task_id:-}" \
-        --argjson prNumber "$PR_NUMBER" \
-        '{
-          reviewId: $reviewId,
-          action: $action,
-          conversationId: $conversationId,
-          newTaskId: null,
-          parentTaskId: $parentTaskId,
-          prNumber: $prNumber,
-          createdTask: false,
-          error: "submit_failed",
-          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-        }')
-      echo "$fail_result" | jq .
-      return 1
     }
   else
     # manul-conversation.sh not found - cannot create task
@@ -622,7 +719,7 @@ cmd_handle() {
     if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
       # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
       # Check if a concurrent process already created it
-      recovered_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 2>/dev/null || echo "")"
+      recovered_task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
     fi
 
     if [ -n "$recovered_task_id" ]; then
@@ -682,11 +779,26 @@ cmd_handle() {
       # Another process already claimed this review - look up their taskId
       echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
       local lookup_result
-      lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
-        echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
-        return 1
-      }
-      new_task_id="$lookup_result"
+      local lookup_retry=0
+      local lookup_max_retries=5
+      while [ $lookup_retry -lt $lookup_max_retries ]; do
+        lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
+          echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
+          return 1
+        }
+        if [ -n "$lookup_result" ]; then
+          new_task_id="$lookup_result"
+          break
+        fi
+        # TaskId not set yet - wait and retry
+        if [ $lookup_retry -lt $((lookup_max_retries - 1)) ]; then
+          lookup_retry=$((lookup_retry + 1))
+          sleep "0.0$((lookup_retry * 2))"
+          continue
+        fi
+        # Max retries reached - check if REVIEW_FIX task exists
+        break
+      done
       if [ -z "$new_task_id" ]; then
         # Check if task was created by concurrent process before marking as failed
         local existing_task

@@ -18,6 +18,11 @@ PROMPT_FILE="$1"
 STDOUT_FILE="$2"
 STDERR_FILE="$3"
 
+# Local logging function
+log() {
+  echo "$@" >&2
+}
+
 # Flag to track if we're receiving a termination signal
 TERMINATING=0
 
