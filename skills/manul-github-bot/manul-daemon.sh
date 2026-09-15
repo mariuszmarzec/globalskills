@@ -830,9 +830,9 @@ evaluate_task_completion() {
       repo_state_issues+="unstaged_changes "
     fi
 
-    # Check for untracked files
+    # Check for untracked files (ignoring build artifacts like __pycache__)
     local untracked
-    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null)"
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
     if [ -n "$untracked" ]; then
       repo_state_clean="false"
       repo_state_issues+="untracked_files "
@@ -1290,6 +1290,10 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       }
+      # Fix origin remote: git clone --local sets origin to the local path,
+      # but the agent needs to push to GitHub. Update origin to point to GitHub.
+      git -C "$workspace_path" remote set-url origin "https://github.com/${REPO}" 2>>"$LOG"
+      log "dispatch: updated workspace origin to https://github.com/${REPO}"
     fi
 
     # Use the workspace as the working directory for the agent

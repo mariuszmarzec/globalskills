@@ -581,7 +581,15 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     mv "$tmp_skip" "$skip_log"
   fi
 
-  # 1) Issue comments (PR conversation comments are issue comments too)
+    # Build JSON array of open PR numbers for routing decision in issue comment path.
+    # PR conversation comments appear as issue comments in GitHub's API, so we need
+    # to route them to REVIEW_FIX instead of IMPLEMENT.
+    open_prs_json="[]"
+    if [ ${#OPEN_PRS[@]} -gt 0 ]; then
+      open_prs_json="$(printf '%s\n' "${!OPEN_PRS[@]}" | jq -R 'tonumber' | jq -s '.')"
+    fi
+
+    # 1) Issue comments (PR conversation comments are issue comments too)
     while IFS= read -r obj; do
       [ -n "$obj" ] || continue
       id="$(jq -r '.id' <<<"$obj")"
@@ -616,7 +624,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         fi
         log "queued $id on $repo#$issue (agent=${agent:-default})"
       fi
-    done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
       .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
@@ -631,14 +639,18 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
          elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
          else {action: null, prompt: $rest}
          end) as $actx
-      | (if $actx.action != null then $actx.action else "IMPLEMENT" end) as $action
+      | (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber) as $issue_num
+      | (if $actx.action != null then $actx.action
+         elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
+         else "IMPLEMENT"
+         end) as $action
       | {
         id: ("issue:" + (.id|tostring)),
         repo: $repo,
         author: .user.login,
         created: .created_at,
         url: .html_url,
-        issueNumber: (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber),
+        issueNumber: $issue_num,
         agent: $agent,
         action: $action,
         prompt: $actx.prompt,

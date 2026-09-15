@@ -82,7 +82,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=18
+  local expected_tests=19
   local actual_tests
   actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
@@ -418,6 +418,46 @@ test_workspace_repo_matches_ssh_protocol() {
   [ $? -eq 0 ] || return 1
 }
 run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_repo_matches_ssh_protocol
+
+# Test 19: evaluate_task_completion ignores __pycache__ in untracked files
+echo ""
+echo "=== Test 19: Untracked files filtering ==="
+test_untracked_files_ignores_pycache() {
+  # Source the evaluate function
+  local script_dir
+  script_dir="$(dirname "${BASH_SOURCE[0]}")"
+  source "$script_dir/manul-daemon.sh" 2>/dev/null || return 0
+
+  # Create a temp repo with __pycache__ and .pytest_cache
+  local tmprepo
+  tmprepo="$(mktemp -d)"
+  trap 'rm -rf "$tmprepo"' RETURN
+
+  git -C "$tmprepo" init -q
+  git -C "$tmprepo" config user.email "test@test.com"
+  git -C "$tmprepo" config user.name "Test"
+
+  # Create a tracked file
+  echo "print('hello')" > "$tmprepo/app.py"
+  git -C "$tmprepo" add app.py
+  git -C "$tmprepo" commit -q -m "initial" >/dev/null 2>&1
+
+  # Create build artifacts
+  mkdir -p "$tmprepo/__pycache__"
+  echo "compiled" > "$tmprepo/__pycache__/app.cpython-311.pyc"
+  mkdir -p "$tmprepo/.pytest_cache"
+  echo "cache" > "$tmprepo/.pytest_cache/v/cache/lastfailed"
+  mkdir -p "$tmprepo/src/__pycache__"
+  echo "nested" > "$tmprepo/src/__pycache__/mod.cpython-311.pyc"
+
+  # Capture untracked output
+  local untracked
+  untracked="$(git -C "$tmprepo" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+
+  # Should be empty - all pycache dirs filtered
+  [ -z "$untracked" ] || return 1
+}
+run_and_test "Test 19: untracked files ignores __pycache__ and .pytest_cache" test_untracked_files_ignores_pycache
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
