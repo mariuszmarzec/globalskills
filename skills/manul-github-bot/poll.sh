@@ -156,6 +156,96 @@ generate_conversation_id() {
   fi
 }
 
+
+persist_conversation_message() {
+  # Persist a GitHub comment as conversation context (idempotent via UNIQUE constraint)
+  # Args: conv_id repo issue author body url created_at
+  local conv_id="$1" repo="$2" issue="$3" author="$4" body="$5" url="$6" created="$7"
+  [ -n "$conv_id" ] || return 0
+  local esc_body esc_url
+  esc_body="$(printf '%s' "$body" | sed "s/'/''/g")"
+  esc_url="$(printf '%s' "$url" | sed "s/'/''/g")"
+  local escaped_url escaped_repo escaped_author
+  escaped_url="$(sql_escape "$url")"
+  escaped_repo="$(sql_escape "$repo")"
+  escaped_author="$(sql_escape "$author")"
+  sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_messages(conversationId, commentId, repo, issueNumber, author, body, commentUrl, createdAt, messageType)
+    VALUES('$conv_id', '$escaped_url', '$escaped_repo', $issue, '$escaped_author', '$esc_body', '$esc_url', '$created', 'comment');" 2>>"$LOG" || true
+}
+
+persist_conversation_messages_for_repo() {
+  # After processing trigger comments, also persist ALL non-trigger comments
+  # on the same issues/PRs as conversation history. This ensures the daemon
+  # has full thread context even for messages that didn't contain /manul.
+  local repo="$1"
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Get all issue/PR numbers that had trigger comments this poll
+  local affected_ids
+  affected_ids="$(sqlite3 "$DB" "SELECT DISTINCT issueNumber FROM processed_comments WHERE repository='$repo' AND createdAt >= '$now' AND status IN ('queued','running');" 2>>"$LOG")" || true
+
+  [ -z "$affected_ids" ] && return 0
+
+  for issue_num in $affected_ids; do
+    [ -n "$issue_num" ] || continue
+    # Determine if this is a PR or issue
+    local is_pr=0
+    [ -n "${OPEN_PRS[$issue_num]:-}" ] && is_pr=1
+    [ -n "${MERGED_PRS[$issue_num]:-}" ] && is_pr=1
+    [ -n "${CLOSED_PRS[$issue_num]:-}" ] && is_pr=1
+
+    local comments_json
+    if [ "$is_pr" -eq 1 ]; then
+      comments_json="$(gh api --paginate "repos/$repo/issues/$issue_num/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+    else
+      comments_json="$(gh api --paginate "repos/$repo/issues/$issue_num/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+    fi
+
+    # Get existing message comment URLs for this conversation to avoid re-persisting
+    local conv_id
+    conv_id="$(generate_conversation_id "$repo" "$issue_num" "")"
+    local existing_urls
+    existing_urls="$(sqlite3 "$DB" "SELECT commentUrl FROM conversation_messages WHERE conversationId='$conv_id' AND repo='$repo' AND issueNumber=$issue_num;" 2>>"$LOG" || echo "")"
+
+    while IFS= read -r comment; do
+      [ -n "$comment" ] || continue
+      local c_id c_author c_body c_url c_created
+      c_id="$(jq -r '.id' <<<"$comment")"
+      c_author="$(jq -r '.user.login // .login // "unknown"' <<<"$comment")"
+      c_body="$(jq -r '.body // ""' <<<"$comment")"
+      c_url="$(jq -r '.html_url // ""' <<<"$comment")"
+      c_created="$(jq -r '.created_at // ""' <<<"$comment")"
+      [ -n "$c_url" ] || continue
+      # Skip if already persisted
+      echo "$existing_urls" | grep -qF "$c_url" && continue
+      persist_conversation_message "$conv_id" "$repo" "$issue_num" "$c_author" "$c_body" "$c_url" "$c_created"
+      existing_urls="$(printf '%s
+%s' "$existing_urls" "$c_url")"
+    done < <(echo "$comments_json" | jq -c '.[]' 2>/dev/null || true)
+
+    # Also persist PR review comments for PRs
+    if [ "$is_pr" -eq 1 ]; then
+      local review_comments
+      review_comments="$(gh api --paginate "repos/$repo/pulls/$issue_num/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+      while IFS= read -r comment; do
+        [ -n "$comment" ] || continue
+        local c_id c_author c_body c_url c_created
+        c_id="$(jq -r '.id' <<<"$comment")"
+        c_author="$(jq -r '.user.login // .login // "unknown"' <<<"$comment")"
+        c_body="$(jq -r '.body // ""' <<<"$comment")"
+        c_url="$(jq -r '.html_url // ""' <<<"$comment")"
+        c_created="$(jq -r '.created_at // ""' <<<"$comment")"
+        [ -n "$c_url" ] || continue
+        echo "$existing_urls" | grep -qF "$c_url" && continue
+        persist_conversation_message "$conv_id" "$repo" "$issue_num" "$c_author" "$c_body" "$c_url" "$c_created"
+        existing_urls="$(printf '%s
+%s' "$existing_urls" "$c_url")"
+      done < <(echo "$review_comments" | jq -c '.[]' 2>/dev/null || true)
+    fi
+  done
+}
+
 # Close conversations whose active PR has been merged and have no remaining tasks.
 # Idempotent: only touches conversations with status != 'COMPLETED'.
 close_merged_pr_conversations() {
