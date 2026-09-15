@@ -82,9 +82,9 @@ run_test() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=22
+  local expected_tests=24
   local actual_tests
-  actual_tests=$(grep -c "^test_[a-z]()" skills/manul-github-bot/test_concurrency_impl.sh 2>/dev/null || echo 0)
+  actual_tests=$(grep -c "^test_[a-z]" skills/manul-github-bot/test_concurrency_impl.sh 2>/dev/null || echo 0)
 
   if [ "$actual_tests" -ne "$expected_tests" ]; then
     echo "  FAIL: Test discovery mismatch: expected $expected_tests, found $actual_tests"
@@ -223,6 +223,16 @@ run_and_test "Test U: Backward compatibility" test_u
 echo ""
 echo "=== Test V: Production safety guards ==="
 run_and_test "Test V: Production safety guards" test_v
+
+# Test W: Real parallel concurrency — R1 invariant
+echo ""
+echo "=== Test W: Parallel concurrency R1 (same repo, same PR) ==="
+run_and_test "Test W: Parallel concurrency R1" test_w
+
+# Test X: Real parallel concurrency — R2 invariant
+echo ""
+echo "=== Test X: Parallel concurrency R2 (different repos) ==="
+run_and_test "Test X: Parallel concurrency R2" test_x
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"

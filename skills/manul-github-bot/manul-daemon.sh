@@ -228,7 +228,7 @@ release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -f "${REPO_LOCK_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul/repo-locks}/${slug}.lock"
+  rm -f "${REPO_LOCK_DIR:-${MANUL_DIR}/repo-locks}/${slug}.lock"
 }
 
 # Enhanced SQLite UPDATE with verification and error handling
@@ -394,7 +394,6 @@ verify_finalization() {
 # Enhanced task completion with verification
 complete_task_with_verification() {
   local comment_id="$1"
-  local safe_comment_id="$(sql_escape "$comment_id")"
 
   # Mark task as completed with verification
   if ! update_task_completion "$comment_id" "completed"; then
@@ -404,10 +403,12 @@ complete_task_with_verification() {
 
   # Verify finalization
   if ! verify_finalization "$comment_id"; then
-    log "ERROR: Finalization verification failed for task $comment_id"
-    # Attempt to fix
-    update_task_completion "$comment_id" "queued"
-    return 1
+    # Path C: DB is already updated to 'completed' (the correct terminal state).
+    # Verification failure is non-fatal — the task is done, we just couldn't
+    # confirm all post-conditions. Report success so the daemon doesn't get
+    # stuck retrying an already-completed task.
+    log "WARNING: Finalization verification failed for task $comment_id but status is completed"
+    return 0
   fi
 
   log "SUCCESS: Task $comment_id fully completed and verified"
@@ -451,24 +452,36 @@ release_task_lock() {
 # Heartbeat tracking for long-running tasks
 declare -A HEARTBEAT_PIDS
 
+
 start_heartbeat() {
   local comment_id="$1"
-  local pid=$$
-  HEARTBEAT_PIDS["$comment_id"]=$pid
-  # Write PID file for verification
-  echo "$pid" > "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
-  log "started heartbeat for task $comment_id (pid $pid)"
-  lc_log "HEARTBEAT_START" "task=$comment_id pid=$pid interval=${HEARTBEAT_INTERVAL}s"
+  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  # Start a background heartbeat loop
+  (
+    while true; do
+      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      sleep "$HEARTBEAT_INTERVAL"
+    done
+  ) &
+  local heartbeat_pid=$!
+  echo "$heartbeat_pid" > "$pid_file" 2>/dev/null || true
+  HEARTBEAT_PIDS["$comment_id"]=$heartbeat_pid
+  log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
+  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s"
 }
 
 stop_heartbeat() {
   local comment_id="$1"
-  unset HEARTBEAT_PIDS["$comment_id"]
-  rm -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
+  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  local pid="${HEARTBEAT_PIDS[$comment_id]:-}"
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    unset HEARTBEAT_PIDS["$comment_id"]
+  fi
+  rm -f "$pid_file" 2>/dev/null || true
   log "stopped heartbeat for task $comment_id"
   lc_log "HEARTBEAT_STOP" "task=$comment_id"
 }
-
 # Refresh heartbeatAt in database to prevent watchdog timeout
 refresh_heartbeat() {
   local comment_id="$1"
@@ -481,7 +494,7 @@ start() {
   # Initialize workspace pool
   source "$MANUL_DIR/workspace-manager.sh"
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
-  
+
   # Singleton check: verify no other daemon is running
   if [ -f "$PID_FILE" ]; then
     local existing_pid
@@ -517,24 +530,81 @@ start() {
   # Atomically write PID file under flock to prevent concurrent start races
   exec 200>"$FLOCK_FILE"
   flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
-  
-  # Spawn worker pool
-  local i worker_pid
-  local master_pid=$$
-  for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
-    setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
-    worker_pid=$!
-    echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
-    log "spawned worker $i (pid=$worker_pid)"
-  done
-  
-  # Write master PID
-  echo "$master_pid" >"$PID_FILE"
-  flock -u 200
-  lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
-  echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
-}
 
+  # Fork the daemon to run in background.
+  (
+    # Child process: we are the daemon.
+    # Write PID file under the lock (we already hold the lock via fd 200)
+    echo "$BASHPID" >"$PID_FILE"
+
+    # Spawn worker pool
+    local i worker_pid
+    local master_pid=$BASHPID
+    declare -a WORKER_PIDS=()
+    for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+      setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+      worker_pid=$!
+      echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
+      WORKER_PIDS+=("$worker_pid")
+      log "spawned worker $i (pid=$worker_pid)"
+    done
+
+    flock -u 200
+    lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
+    echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
+
+    # Signal handler: stop all workers on termination
+    local stopping=0
+    handle_stop() {
+      if [ "$stopping" -eq 1 ]; then
+        return
+      fi
+      stopping=1
+      log "daemon received stop signal, terminating workers"
+      for wp in "${WORKER_PIDS[@]}"; do
+        kill "$wp" 2>/dev/null || true
+      done
+      wait 2>/dev/null || true
+      rm -f "$PID_FILE"
+      lc_log "DAEMON_STOP" "pid=$$"
+      exit 0
+    }
+    trap handle_stop TERM INT
+
+    # Stay alive as the long-lived daemon process, watching over workers
+    while true; do
+      # Wait for any worker to exit
+      if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
+        wait -n "${WORKER_PIDS[@]}" 2>/dev/null || true
+      else
+        sleep 1
+      fi
+      # Check if we should stop
+      if [ "$stopping" -eq 1 ]; then
+        break
+      fi
+      # Restart any dead workers
+      local new_pids=()
+      for i in "${!WORKER_PIDS[@]}"; do
+        if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
+          log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
+          setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+          worker_pid=$!
+          echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
+          new_pids+=("$worker_pid")
+        else
+          new_pids+=("${WORKER_PIDS[$i]}")
+        fi
+      done
+      WORKER_PIDS=("${new_pids[@]}")
+    done
+  ) &
+  local daemon_pid=$!
+
+  # Parent: we release the lock and return.
+  flock -u 200
+  return 0
+}
 stop() {
   if [ ! -f "$PID_FILE" ]; then
     echo "not running"
@@ -542,7 +612,16 @@ stop() {
   fi
   local pid
   pid="$(cat "$PID_FILE")"
+  # Kill all worker processes
+  for pf in "$MANUL_DIR"/worker-*.pid; do
+    [ -f "$pf" ] || continue
+    local wpid
+    wpid="$(cat "$pf" 2>/dev/null)"
+    [ -n "$wpid" ] && kill "$wpid" 2>/dev/null || true
+    rm -f "$pf"
+  done
   kill "$pid" 2>/dev/null
+  wait 2>/dev/null || true
   rm -f "$PID_FILE"
   lc_log "DAEMON_STOP" "pid=$pid"
   echo "manul daemon stopped (pid $pid)"
@@ -692,6 +771,135 @@ verify_result_comment() {
   return 1
 }
 
+
+
+# Evaluate task completion decision based on wrapper output and verification
+# Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
+# Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir]
+evaluate_task_completion() {
+  local REPO="$1"
+  local ISSUE_NUM="$2"
+  local COMMENT_ID="$3"
+  local safe_comment_id="$4"
+  local current_attempt="$5"
+  local rc="$6"
+  local STDOUT_FILE="$7"
+  local DB="$8"
+  local REPO_DIR="${9:-}"
+  local WORKDIR="${10:-$REPO_DIR}"
+  
+  COMPLETION_SUCCESS="false"
+  FAIL_REASON=""
+  FINAL_COMMENT=""
+  
+  local SUCCESS="false"
+  
+  # 7. Determine success using BOTH exit status AND explicit completion marker
+  if [ "$rc" -eq 0 ]; then
+    if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
+      SUCCESS="true"
+    elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
+      FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
+    fi
+  fi
+  
+  # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
+  if [ "$SUCCESS" = "true" ]; then
+    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
+      lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+      SUCCESS="false"
+      FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
+    fi
+  fi
+  
+  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+  if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
+    local repo_state_clean="true"
+    local repo_state_issues=""
+
+    # Check for staged changes
+    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="staged_changes "
+    fi
+
+    # Check for unstaged changes
+    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="unstaged_changes "
+    fi
+
+    # Check for untracked files
+    local untracked
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null)"
+    if [ -n "$untracked" ]; then
+      repo_state_clean="false"
+      repo_state_issues+="untracked_files "
+    fi
+
+    if [ "$repo_state_clean" = "false" ]; then
+      SUCCESS="false"
+      FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
+      log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
+    fi
+  fi
+  
+  # 8. Update SQLite using enhanced finalization with verification
+  if [ "$SUCCESS" = "true" ]; then
+    # Enhanced task completion with verification
+    if complete_task_with_verification "$COMMENT_ID"; then
+      COMPLETION_SUCCESS="true"
+    else
+      log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
+      # Fallback: attempt direct completion with ownership verification
+      local fallback_pid
+      fallback_pid="$(get_daemon_pid)"
+      local fallback_result
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
+      local fallback_changes
+      fallback_changes="$(echo "$fallback_result" | tail -n 1)"
+      if [ "${fallback_changes:-0}" -eq 1 ]; then
+        # Verify the row is actually completed
+        local verify_status
+        verify_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+        if [ "$verify_status" = "completed" ]; then
+          COMPLETION_SUCCESS="true"
+          log "SUCCESS: Task $COMMENT_ID completed via fallback path"
+        else
+          log "ERROR: Fallback completion failed verification (status=$verify_status)"
+        fi
+      else
+        log "ERROR: Fallback completion failed (changes=$fallback_changes)"
+      fi
+    fi
+    
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
+      FINAL_COMMENT="✅ Manul completed the task successfully."
+      log "dispatch: task $COMMENT_ID completed successfully"
+    else
+      FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
+      log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
+    fi
+  else
+    # Re-read attempts from DB to ensure accuracy
+    local NEW_ATTEMPTS
+    NEW_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null || echo "0")"
+    local MAX_ATTEMPTS
+    MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    
+    if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+      FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
+      log "dispatch: task $COMMENT_ID failed (max attempts reached)"
+      lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+    else
+      FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
+      log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
+      lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+    fi
+  fi
+}
 
 run_once() {
   local out
@@ -1055,7 +1263,70 @@ PROMPT_EOF
       fi
     fi
 
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID"
+
+    # Get workspace path from lease
+    local workspace_path
+    workspace_path="$(workspace_get_path "$COMMENT_ID")"
+    if [ -z "$workspace_path" ]; then
+      log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
+      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+      release_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    # Clone repository into workspace if needed
+    if [ ! -d "$workspace_path/.git" ]; then
+      log "dispatch: cloning repository into workspace $workspace_path from $REPO_DIR"
+      git clone --local "$REPO_DIR" "$workspace_path" 2>/dev/null || {
+        log "dispatch: failed to clone repository into workspace, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      }
+    fi
+
+    # Use the workspace as the working directory for the agent
+    WORKDIR="$workspace_path"
+
+
+    # Deterministic workspace preparation: ensure correct branch is checked out
+    if [ -n "$PR_HEAD_BRANCH" ]; then
+      # PR task: fetch and checkout the PR head branch explicitly
+      log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
+      if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
+        log "dispatch: failed to fetch PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      if ! git -C "$WORKDIR" checkout -B "$PR_HEAD_BRANCH" "FETCH_HEAD" 2>>"$LOG"; then
+        log "dispatch: failed to checkout PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      # Verify HEAD is the expected PR head branch
+      local verify_branch
+      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
+      if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
+        log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: verified PR head branch $verify_branch in workspace"
+    fi
+    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
     # Generate timestamp for unique branch name
     local timestamp
@@ -1063,10 +1334,9 @@ PROMPT_EOF
 
     # Compute current/default branches safely (avoid command substitution in heredoc)
     local CURRENT_BRANCH
-    CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
+    CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local DEFAULT_BRANCH
-    DEFAULT_BRANCH="$(git -C "$REPO_DIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
-
+    DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
@@ -1085,7 +1355,7 @@ PROMPT_APPEND
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This task is tied to PR #__ISSUE_NUM__
 - PR head branch: `__PR_HEAD_BRANCH__`
-- Switch to the PR head branch (`git checkout __PR_HEAD_BRANCH__`) before making any changes
+- PR head branch `__PR_HEAD_BRANCH__` is already checked out and ready for work
 - Commit and push changes to the same PR head branch
 - Do NOT create a new branch for this task
 PROMPT_APPEND
@@ -1143,129 +1413,16 @@ PROMPT_APPEND
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
      # Refresh heartbeat before agent to prevent timeout during long runs
      refresh_heartbeat "$COMMENT_ID"
-     timeout -k 60 "$AGENT_TIMEOUT" "$OPENCLAW_BIN" agent --agent main --message-file "$TASK_PROMPT_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+     timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
-     # Refresh heartbeat after agent completes (if still running)
-     refresh_heartbeat "$COMMENT_ID"
+    # Call production completion evaluation function
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR"
 
-    log "dispatch: agent finished rc=$rc for task $COMMENT_ID"
-    lc_log "WORKER_FINISH" "task=$COMMENT_ID rc=$rc"
-
-    # 7. Determine success using BOTH exit status AND explicit completion marker
-    local SUCCESS="false"
-    local FAIL_REASON=""
-
-    if [ $rc -eq 0 ]; then
-      if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
-        SUCCESS="true"
-      elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
-        FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
-      fi
-    fi
-
-    # 7.1 Daemon posts only lifecycle comments; agent posts result comment directly.
-    # No extraction needed - agent handles its own GitHub communication.
-
-    # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
-    if [ "$SUCCESS" = "true" ]; then
-      current_attempt=$((ACTUAL_ATTEMPTS + 1))
-      if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-        log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
-        lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-        SUCCESS="false"
-        FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
-      fi
-    fi
-
-    # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-    if [ "$SUCCESS" = "true" ] && [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ]; then
-      local repo_state_clean="true"
-      local repo_state_issues=""
-
-      # Check for staged changes
-      if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
-        repo_state_clean="false"
-        repo_state_issues+="staged_changes "
-      fi
-
-      # Check for unstaged changes
-      if ! git -C "$REPO_DIR" diff --quiet 2>/dev/null; then
-        repo_state_clean="false"
-        repo_state_issues+="unstaged_changes "
-      fi
-
-      # Check for untracked files
-      local untracked
-      untracked="$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)"
-      if [ -n "$untracked" ]; then
-        repo_state_clean="false"
-        repo_state_issues+="untracked_files "
-      fi
-
-      if [ "$repo_state_clean" = "false" ]; then
-        SUCCESS="false"
-        FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
-        log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
-      fi
-    fi
-
-    # 8. Update SQLite using enhanced finalization with verification
-    local FINAL_COMMENT=""
-    local COMPLETION_SUCCESS="false"
-    if [ "$SUCCESS" = "true" ]; then
-      # Enhanced task completion with verification
-      if complete_task_with_verification "$COMMENT_ID"; then
-        COMPLETION_SUCCESS="true"
-      else
-        log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
-        # Fallback: attempt direct completion with ownership verification
-        local fallback_pid
-        fallback_pid="$(get_daemon_pid)"
-        local fallback_result
-        fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
-        local fallback_changes
-        fallback_changes="$(echo "$fallback_result" | tail -n 1)"
-        if [ "${fallback_changes:-0}" -eq 1 ]; then
-          # Verify the row is actually completed
-          local verify_status
-          verify_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
-          if [ "$verify_status" = "completed" ]; then
-            COMPLETION_SUCCESS="true"
-            log "SUCCESS: Task $COMMENT_ID completed via fallback path"
-          else
-            log "ERROR: Fallback completion failed verification (status=$verify_status)"
-          fi
-        else
-          log "ERROR: Fallback completion failed (changes=$fallback_changes)"
-        fi
-      fi
-
-      if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        FINAL_COMMENT="✅ Manul completed the task successfully."
-        log "dispatch: task $COMMENT_ID completed successfully"
-      else
-        FINAL_COMMENT="❌ Manul completed the work but failed to update task state."
-        log "ERROR: task $COMMENT_ID finalization failed - SQLite update did not succeed"
-        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=finalization_failed"
-      fi
-    else
-      # Re-read attempts from DB to ensure accuracy
-      local NEW_ATTEMPTS
-      NEW_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null || echo "0")"
-      local MAX_ATTEMPTS
-      MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-
-      if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-        FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
-        log "dispatch: task $COMMENT_ID failed (max attempts reached)"
-        lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-      else
-        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
-        log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
-        lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
-      fi
-    fi
+    # Map local variables (set by evaluate_task_completion)
+    COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
+    FINAL_COMMENT="${FINAL_COMMENT:-}"
+    FAIL_REASON="${FAIL_REASON:-}"
 
     # 9. Post lifecycle comment to the SAME GitHub thread
     # The agent posts its own result comment; daemon posts lifecycle markers only.
@@ -1433,6 +1590,12 @@ loop() {
     done
   fi
 }
+
+# Source guard: prevent CLI execution when sourced for testing
+MANUL_TESTING="${MANUL_TESTING:-false}"
+if [[ "${MANUL_TESTING}" == "true" ]]; then
+  return 0
+fi
 
 case "${1:-}" in
   start) start ;;

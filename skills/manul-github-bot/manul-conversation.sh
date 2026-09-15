@@ -6,7 +6,7 @@
 #
 # Usage:
 #   manul-conversation create    --repo REPO --title TITLE --prompt PROMPT [--json]
-#   manul-conversation submit    --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--json]
+#   manul-conversation submit    --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--review-id ID] [--json]
 #   manul-conversation status    --conversation-id ID [--json]
 #   manul-conversation result    --task-id ID [--json]
 #   manul-conversation close     --conversation-id ID [--json]
@@ -41,6 +41,7 @@ AGENT=""
 PARENT_TASK_ID=""
 PR_NUMBER=""
 ACTION_TYPE=""
+REVIEW_ID=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -54,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --parent-task-id) PARENT_TASK_ID="$2"; shift 2 ;;
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
     --action) ACTION_TYPE="$2"; shift 2 ;;
+    --review-id) REVIEW_ID="$2"; shift 2 ;;
     create|status|submit|result|close) ACTION="$1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
@@ -77,59 +79,77 @@ error_exit() {
 }
 
 # Ensure schema is initialized
+# Uses atomic transaction to prevent race conditions when multiple
+# processes call init_schema() concurrently
 init_schema() {
   mkdir -p "$(dirname "$DB")"
-  
-  # Create processed_comments table if not exists (mimics poll.sh schema)
-  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
-    commentId TEXT PRIMARY KEY,
-    repository TEXT NOT NULL,
-    issueNumber INTEGER NOT NULL,
-    commentUrl TEXT NOT NULL,
-    author TEXT,
-    agent TEXT,
-    prompt TEXT NOT NULL,
-    context TEXT,
-    status TEXT NOT NULL DEFAULT 'queued',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    createdAt TEXT,
-    processedAt TEXT,
-    heartbeatAt TEXT,
-    leaseExpiresAt TEXT,
-    workerPid INTEGER,
-    nextAttemptAt TEXT,
-    conversationId TEXT,
-    parentTaskId TEXT,
-    workspaceId TEXT,
-    action TEXT DEFAULT 'IMPLEMENT',
-    prNumber INTEGER,
-    prUrl TEXT
-  );"
-  
-  # Create conversations table if not exists
-  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversations (
-    conversationId TEXT PRIMARY KEY,
-    repository TEXT NOT NULL,
-    issueNumber INTEGER NOT NULL,
-    issueUrl TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'OPEN',
-    activeTaskId TEXT,
-    activePrNumber TEXT,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL
-  );"
-  
-  # Create meta table if not exists
-  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);"
-  
+
+  local max_retries=10
+  local retry=0
+  local success=false
+
+  while [ "$success" = false ] && [ $retry -lt $max_retries ]; do
+    local err
+    err="$(sqlite3 "$DB" "
+      BEGIN IMMEDIATE;
+      CREATE TABLE IF NOT EXISTS processed_comments (
+        commentId TEXT PRIMARY KEY,
+        repository TEXT NOT NULL,
+        issueNumber INTEGER NOT NULL,
+        commentUrl TEXT NOT NULL,
+        author TEXT,
+        agent TEXT,
+        prompt TEXT NOT NULL,
+        context TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        createdAt TEXT,
+        processedAt TEXT,
+        heartbeatAt TEXT,
+        leaseExpiresAt TEXT,
+        workerPid INTEGER,
+        nextAttemptAt TEXT,
+        conversationId TEXT,
+        parentTaskId TEXT,
+        workspaceId TEXT,
+        action TEXT DEFAULT 'IMPLEMENT',
+        prNumber INTEGER,
+        prUrl TEXT
+      );
+      CREATE TABLE IF NOT EXISTS conversations (
+        conversationId TEXT PRIMARY KEY,
+        repository TEXT NOT NULL,
+        issueNumber INTEGER NOT NULL,
+        issueUrl TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        activeTaskId TEXT,
+        activePrNumber TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+      COMMIT;
+    " 2>&1)" && success=true || {
+      retry=$((retry + 1))
+      if [ $retry -ge $max_retries ]; then
+        echo "ERROR: init_schema failed after $max_retries retries: $err" >&2
+        return 1
+      fi
+      sleep "0.0$((retry * 2))"
+    }
+  done
+
   # Add columns if missing (for migrations from older schemas)
-  if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|action|'; then
+  # Each ALTER is idempotent and wrapped in its own transaction
+  local col_check col_add
+  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+  if ! echo "$col_check" | grep -q '|action|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null || true
   fi
-  if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prNumber|'; then
+  if ! echo "$col_check" | grep -q '|prNumber|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null || true
   fi
-  if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|prUrl|'; then
+  if ! echo "$col_check" | grep -q '|prUrl|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null || true
   fi
 }
@@ -169,27 +189,29 @@ ${PROMPT}
 EOF
 )"
   
-  local issue_url
-  issue_url=""
-  local issue_number=""
   
+  local issue_url
+  local issue_number
+
   if command -v gh >/dev/null 2>&1; then
-    issue_url="$(gh issue create \
+    local gh_response
+    gh_response="$(gh issue create \
       --repo "$REPO" \
       --title "$TITLE" \
       --body "$issue_body" \
       --json url,number \
-      2>/dev/null || echo "")"
-    
-    if [ -n "$issue_url" ]; then
-      issue_number="$(echo "$issue_url" | jq -r '.number // empty')"
-      issue_url="$(echo "$issue_url" | jq -r '.url // empty')"
+      2>/dev/null)" || {
+      error_exit "GitHub issue creation failed" 1
+    }
+
+    issue_number="$(printf '%s' "$gh_response" | jq -r '.number // empty' 2>/dev/null)"
+    issue_url="$(printf '%s' "$gh_response" | jq -r '.url // empty' 2>/dev/null)"
+
+    if [ -z "$issue_number" ] || ! [[ "$issue_number" =~ ^[0-9]+$ ]] || [ "$issue_number" -le 0 ] || [ -z "$issue_url" ]; then
+      error_exit "GitHub issue creation returned invalid response" 1
     fi
-  fi
-  
-  if [ -z "$issue_url" ]; then
-    issue_url="https://github.com/${REPO}/issues/0"
-    issue_number="0"
+  else
+    error_exit "GitHub CLI (gh) is required to create the conversation issue" 1
   fi
   
   # Insert conversation record
@@ -274,7 +296,16 @@ cmd_submit() {
   
   # Generate task ID
   local task_id
-  task_id="task-${CONVERSATION_ID}-$(date +%s)-$$"
+  if [ "$action" = "REVIEW_FIX" ] && [ -n "$PR_NUMBER" ]; then
+    if [ -z "$REVIEW_ID" ]; then
+      error_exit "REVIEW_FIX action requires --review-id for deterministic task identity" 3
+    fi
+    # Deterministic ID for crash-safe idempotency: same review always gets same task
+    # Invariant: same repo + same PR + same review ID => same task
+    task_id="review-fix-${CONVERSATION_ID}-${REVIEW_ID}"
+  else
+    task_id="task-${CONVERSATION_ID}-$(date +%s)-$$"
+  fi
   
   # Build context for task
   local context="action=${action};conversationId=${CONVERSATION_ID}"
@@ -289,27 +320,48 @@ cmd_submit() {
   local escaped_prompt escaped_context
   escaped_prompt="$(sql_escape "$PROMPT")"
   escaped_context="$(sql_escape "$context")"
-  
-  # Insert task
-  sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, context, status, createdAt, heartbeatAt, leaseExpiresAt, conversationId, parentTaskId, action, prNumber)
-    VALUES('$task_id', '$(sql_escape "$conv_repo")', $conv_issue_num, 'https://github.com/${conv_repo}/issues/${conv_issue_num}', 'orchestrator', '${AGENT:-coder}', '$escaped_prompt', '$escaped_context', 'queued', '$now', '$now', '$lease_expires', '$CONVERSATION_ID', '$(sql_escape "${PARENT_TASK_ID:-}")', '$action', ${PR_NUMBER:-NULL});"
-  
-  # Update conversation state based on action
-  case "$action" in
-    REVIEW_FIX)
-      sqlite3 "$DB" "UPDATE conversations SET status='FIXING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';"
-      ;;
-    IMPLEMENT)
-      sqlite3 "$DB" "UPDATE conversations SET status='WORKING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';"
-      ;;
-    VERIFY|INVESTIGATE)
-      sqlite3 "$DB" "UPDATE conversations SET activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';"
-      ;;
-    FINALIZE)
-      sqlite3 "$DB" "UPDATE conversations SET status='WORKING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';"
-      ;;
-  esac
-  
+
+  # Atomic submit: INSERT + UPDATE in single transaction with retry
+  local max_retries=10
+  local retry=0
+  local submit_success=false
+  local submit_err=""
+
+  while [ "$submit_success" = false ] && [ $retry -lt $max_retries ]; do
+    submit_err="$(sqlite3 "$DB" "
+      BEGIN IMMEDIATE;
+      INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, agent, prompt, context, status, createdAt, heartbeatAt, leaseExpiresAt, conversationId, parentTaskId, action, prNumber)
+        VALUES('$task_id', '$(sql_escape "$conv_repo")', $conv_issue_num, 'https://github.com/${conv_repo}/issues/${conv_issue_num}', 'orchestrator', '${AGENT:-coder}', '$escaped_prompt', '$escaped_context', 'queued', '$now', '$now', '$lease_expires', '$CONVERSATION_ID', '$(sql_escape "${PARENT_TASK_ID:-}")', '$action', ${PR_NUMBER:-NULL});
+      $(case "$action" in
+         REVIEW_FIX) echo "UPDATE conversations SET status='FIXING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';";;
+         IMPLEMENT) echo "UPDATE conversations SET status='WORKING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';";;
+         VERIFY|INVESTIGATE) echo "UPDATE conversations SET activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';";;
+         FINALIZE) echo "UPDATE conversations SET status='WORKING', activeTaskId='$task_id', updatedAt='$now' WHERE conversationId='$CONVERSATION_ID';";;
+       esac)
+      COMMIT;
+    " 2>&1)" && submit_success=true || {
+      retry=$((retry + 1))
+      if [ $retry -ge $max_retries ]; then
+        echo "ERROR: submit failed after $max_retries retries: $submit_err" >&2
+        return 1
+      fi
+      # Check if error is transient (database locked) or permanent
+      if echo "$submit_err" | grep -q "database is locked"; then
+        sleep "0.0$((retry * 2))"
+      else
+        echo "ERROR: submit failed: $submit_err" >&2
+        return 1
+      fi
+    }
+  done
+
+  # Verify task was created (or already existed)
+  local canonical_task
+  canonical_task="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE commentId='$task_id' LIMIT 1;" 2>/dev/null)" || true
+  if [ -z "$canonical_task" ]; then
+    error_exit "Task not found after submit: $task_id" 1
+  fi
+
   local result
   result="{\"taskId\": \"$task_id\", \"conversationId\": \"$CONVERSATION_ID\", \"status\": \"queued\", \"action\": \"$action\", \"repo\": \"$conv_repo\", \"issue\": $conv_issue_num}"
   

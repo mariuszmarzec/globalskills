@@ -19,6 +19,37 @@ mkdir -p "$MANUL_DIR" "$ORCHESTRATOR_DIR" "$RESULTS_DIR"
 ln -s "$SCRIPT_DIR/manul-conversation.sh" "$ORCHESTRATOR_DIR/manul-conversation.sh"
 ln -s "$SCRIPT_DIR/manul-wait.sh" "$ORCHESTRATOR_DIR/manul-wait.sh" 2>/dev/null || true
 
+# Create mock gh for tests (no real GitHub required)
+MOCK_GH_DIR="$TEST_DIR/mock-gh"
+mkdir -p "$MOCK_GH_DIR"
+cat > "$MOCK_GH_DIR/gh" <<'MOCK_EOF'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        echo '{"url": "https://github.com/test/test/issues/1", "number": 1}'
+        exit 0
+        ;;
+      view) exit 0 ;;
+      comment) exit 0 ;;
+    esac
+    ;;
+  pr)
+    case "$2" in
+      view) exit 0 ;;
+      checkout) exit 0 ;;
+    esac
+    ;;
+  api) exit 0 ;;
+  repo) exit 0 ;;
+  auth) exit 0 ;;
+esac
+exit 0
+MOCK_EOF
+chmod +x "$MOCK_GH_DIR/gh"
+export PATH="$MOCK_GH_DIR:$PATH"
+
 ORCHESTRATOR="$SCRIPT_DIR/manul-orchestrator.sh"
 REVIEWER="$SCRIPT_DIR/orchestrator-reviewer.sh"
 

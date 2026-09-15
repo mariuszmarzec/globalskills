@@ -275,7 +275,7 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS submission_claims (
     baseId TEXT PRIMARY KEY,
     commentId TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
-    createdAt TEXT DEFAULT datetime('now')
+    createdAt TEXT DEFAULT (datetime('now'))
 );" 2>>"$LOG"
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
 

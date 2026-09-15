@@ -29,6 +29,9 @@ CONFIGEOF
 # Source only workspace manager (not full poll.sh to avoid dependencies)
 source "$(dirname "${BASH_SOURCE[0]}")/workspace-manager.sh"
 
+# Create processed_comments table for cross-repo tests
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, processedAt TEXT, status TEXT, workspaceId TEXT);" 2>/dev/null || true
+
 # Copy generate_conversation_id from poll.sh
 generate_conversation_id() {
   local repo="$1"
@@ -79,9 +82,9 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=8
+  local expected_tests=18
   local actual_tests
-  actual_tests=$(grep -c "^test_\w*() {" "$0" 2>/dev/null || echo 0)
+  actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
   if [ "$actual_tests" -ne "$expected_tests" ]; then
     echo "  FAIL: Test discovery mismatch: expected $expected_tests, found $actual_tests"
@@ -273,6 +276,149 @@ test_stale_cleanup() {
 run_and_test "Test 8: Stale workspace cleanup" test_stale_cleanup
 
 echo ""
+
+# Test 9: Sequential same-conversation workspace reuse
+echo ""
+echo "=== Test 9: Sequential same-conversation workspace reuse ==="
+test_sequential_reuse() {
+  workspace_pool_init 2 reset
+
+  local ws1
+  ws1="$(workspace_lease "conv-A-task-1")"
+  [ -n "$ws1" ] || return 1
+
+  local status1
+  status1="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws1';")"
+  [ "$status1" = "BUSY" ] || return 1
+
+  workspace_release "$ws1"
+
+  local ws2
+  ws2="$(workspace_lease "conv-A-task-2")"
+  [ -n "$ws2" ] || return 1
+  [ "$ws2" = "$ws1" ] || return 1
+
+  status1="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws2';")"
+  [ "$status1" = "BUSY" ] || return 1
+
+  workspace_release "$ws2"
+}
+run_and_test "Test 9: Sequential same-conversation workspace reuse" test_sequential_reuse
+
+# Test 10: Cross-repository workspace isolation
+echo ""
+echo "=== Test 10: Cross-repository workspace isolation ==="
+test_cross_repo_isolation() {
+  workspace_pool_init 2 reset
+
+  # Two concurrent tasks for different repos get different workspaces
+  local ws1 ws2
+  ws1="$(workspace_lease "repo-a-task")"
+  [ -n "$ws1" ] || return 1
+  ws2="$(workspace_lease "repo-b-task")"
+  [ -n "$ws2" ] || return 1
+  [ "$ws1" != "$ws2" ] || return 1
+
+  workspace_release "$ws1"
+  workspace_release "$ws2"
+}
+run_and_test "Test 10: Cross-repository workspace isolation" test_cross_repo_isolation
+
+# Test 11: Concurrent lease atomicity — two simultaneous lease attempts on pool of 1
+echo ""
+echo "=== Test 11: Concurrent lease atomicity ==="
+test_concurrent_lease() {
+  workspace_pool_init 1 reset
+
+  # Use background processes to create true concurrency
+  local ws1 ws2
+  ( ws1="$(workspace_lease "concurrent-task-1")"; echo "$ws1" > /tmp/ws1.out ) &
+  local pid1=$!
+  ( ws2="$(workspace_lease "concurrent-task-2")"; echo "$ws2" > /tmp/ws2.out ) &
+  local pid2=$!
+
+  wait "$pid1" 2>/dev/null || true
+  wait "$pid2" 2>/dev/null || true
+
+  ws1="$(cat /tmp/ws1.out 2>/dev/null)"
+  ws2="$(cat /tmp/ws2.out 2>/dev/null)"
+  rm -f /tmp/ws1.out /tmp/ws2.out
+
+  # Exactly one should succeed
+  local got_one=false
+  if [ -n "$ws1" ] && [ -z "$ws2" ]; then
+    got_one=true
+  elif [ -z "$ws1" ] && [ -n "$ws2" ]; then
+    got_one=true
+  fi
+  [ "$got_one" = "true" ] || return 1
+
+  # The winner should have BUSY status
+  local winner="${ws1:-$ws2}"
+  local status
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$winner';")"
+  [ "$status" = "BUSY" ] || return 1
+
+  # Verify DB has exactly one owner for this workspace
+  local owner_count
+  owner_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$winner' AND status='BUSY';")"
+  [ "$owner_count" = "1" ] || return 1
+
+  workspace_release "$winner"
+}
+run_and_test "Test 11: Concurrent lease atomicity" test_concurrent_lease
+
+# Test 12: workspace_repo_matches handles HTTPS URLs with .git
+test_workspace_repo_matches_https_with_git() {
+  workspace_repo_matches "test-org/test-repo" "https://github.com/test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 12: workspace_repo_matches HTTPS with .git" test_workspace_repo_matches_https_with_git
+
+# Test 13: workspace_repo_matches handles HTTPS URLs without .git
+test_workspace_repo_matches_https_without_git() {
+  workspace_repo_matches "test-org/test-repo" "https://github.com/test-org/test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 13: workspace_repo_matches HTTPS without .git" test_workspace_repo_matches_https_without_git
+
+# Test 14: workspace_repo_matches handles SSH URLs
+test_workspace_repo_matches_ssh() {
+  workspace_repo_matches "test-org/test-repo" "git@github.com:test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 14: workspace_repo_matches SSH URL" test_workspace_repo_matches_ssh
+
+# Test 15: workspace_repo_matches handles local filesystem paths
+test_workspace_repo_matches_local() {
+  workspace_repo_matches "test-org/test-repo" "/home/user/workspace/test-org-test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 15: workspace_repo_matches local path" test_workspace_repo_matches_local
+
+# Test 16: workspace_repo_matches rejects non-matching repos
+test_workspace_repo_matches_nonmatching() {
+  workspace_repo_matches "test-org/test-repo" "other-org/other-repo"
+  [ $? -ne 0 ] || return 1
+  workspace_repo_matches "test-org/test-repo" "https://github.com/other-org/other-repo"
+  [ $? -ne 0 ] || return 1
+}
+run_and_test "Test 16: workspace_repo_matches rejects non-matching" test_workspace_repo_matches_nonmatching
+
+# Test 17: workspace_repo_matches handles github.com/ prefix
+test_workspace_repo_matches_github_prefix() {
+  workspace_repo_matches "test-org/test-repo" "github.com/test-org/test-repo"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 17: workspace_repo_matches github.com prefix" test_workspace_repo_matches_github_prefix
+
+# Test 18: workspace_repo_matches handles ssh:// git protocol
+test_workspace_repo_matches_ssh_protocol() {
+  workspace_repo_matches "test-org/test-repo" "ssh://git@github.com/test-org/test-repo.git"
+  [ $? -eq 0 ] || return 1
+}
+run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_repo_matches_ssh_protocol
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"

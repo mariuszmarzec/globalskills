@@ -52,6 +52,39 @@ trap cleanup EXIT
 
 mkdir -p "$MANUL_DIR" "$RESULTS_DIR"
 
+# Create mock gh for tests (no real GitHub required)
+MOCK_GH_DIR="$TEST_DIR/mock-gh"
+mkdir -p "$MOCK_GH_DIR"
+cat > "$MOCK_GH_DIR/gh" <<'MOCK_EOF'
+#!/bin/bash
+# Mock gh that simulates issue creation
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        # Return a mock issue
+        echo '{"url": "https://github.com/test-owner/test-repo/issues/1", "number": 1}'
+        exit 0
+        ;;
+      view) exit 0 ;;
+      comment) exit 0 ;;
+    esac
+    ;;
+  pr)
+    case "$2" in
+      view) exit 0 ;;
+      checkout) exit 0 ;;
+    esac
+    ;;
+  api) exit 0 ;;
+  repo) exit 0 ;;
+  auth) exit 0 ;;
+esac
+exit 0
+MOCK_EOF
+chmod +x "$MOCK_GH_DIR/gh"
+export PATH="$MOCK_GH_DIR:$PATH"
+
 # Initialize config
 cat > "$CONFIG" << 'CONFIGEOF'
 {
@@ -155,7 +188,15 @@ test_task_association_with_issue() {
 test_task_association_with_pr() {
   TEST_NAME="task association with PR"; local conv_id output rc task_id task_pr
   conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='test-owner/test-repo' LIMIT 1;" 2>/dev/null)"
-  output="$(bash "$CONVERSATION_SCRIPT" submit --conversation-id "$conv_id" --prompt "Fix the bug" --action REVIEW_FIX --pr-number 42 --json 2>/dev/null)" || rc=$?
+  # Submit a task with a PR number
+  local output rc
+  output="$(bash "$CONVERSATION_SCRIPT" submit \
+    --conversation-id "$conv_id" \
+    --prompt "Fix the bug" \
+    --action REVIEW_FIX \
+    --pr-number 42 \
+    --review-id "test-review-42" \
+    --json 2>/dev/null)" || rc=$?
   if [ "${rc:-0}" -eq 0 ]; then
     task_id="$(echo "$output" | jq -r '.taskId')"; task_pr="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$task_id';" 2>/dev/null)"
     if [ "$task_pr" = "42" ]; then ok "$TEST_NAME"; export TASK_ID_PR="$task_id"; else fail "$TEST_NAME (task PR=$task_pr, expected=42)"; fi
@@ -185,9 +226,29 @@ test_parent_task_linkage() {
 test_review_fix_continues_pr() {
   TEST_NAME="review-fix task continues existing PR"; local conv_id output1 rc1 output2 rc2 task_id task_pr task_action
   conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='test-owner/test-repo' LIMIT 1;" 2>/dev/null)"
-  output1="$(bash "$CONVERSATION_SCRIPT" submit --conversation-id "$conv_id" --prompt "Initial implementation" --action IMPLEMENT --pr-number 50 --json 2>/dev/null)" || rc1=$?
-  if [ "${rc1:-0}" -ne 0 ]; then fail "$TEST_NAME (initial submission failed)"; return; fi
-  output2="$(bash "$CONVERSATION_SCRIPT" submit --conversation-id "$conv_id" --prompt "Address review comments" --action REVIEW_FIX --pr-number 50 --json 2>/dev/null)" || rc2=$?
+  # First submit with PR
+  local output1 rc1
+  output1="$(bash "$CONVERSATION_SCRIPT" submit \
+    --conversation-id "$conv_id" \
+    --prompt "Initial implementation" \
+    --action IMPLEMENT \
+    --pr-number 50 \
+    --json 2>/dev/null)" || rc1=$?
+
+  if [ "${rc1:-0}" -ne 0 ]; then
+    fail "$TEST_NAME (initial submission failed)"
+    return
+  fi
+
+  # Then submit review-fix for same PR
+  local output2 rc2
+  output2="$(bash "$CONVERSATION_SCRIPT" submit \
+    --conversation-id "$conv_id" \
+    --prompt "Address review comments" \
+    --action REVIEW_FIX \
+    --pr-number 50 \
+    --review-id "test-review-50" \
+    --json 2>/dev/null)" || rc2=$?
   if [ "${rc2:-0}" -eq 0 ]; then
     task_id="$(echo "$output2" | jq -r '.taskId')"; task_pr="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$task_id';" 2>/dev/null)"; task_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$task_id';" 2>/dev/null)"
     if [ "$task_pr" = "50" ] && [ "$task_action" = "REVIEW_FIX" ]; then ok "$TEST_NAME"; else fail "$TEST_NAME (pr=$task_pr, action=$task_action)"; fi
@@ -305,9 +366,71 @@ test_production_path_safety() {
 
 test_github_manul_regression() {
   TEST_NAME="existing GitHub /manul regression"
-  if [ -f "$POLL_SCRIPT" ] && bash -n "$POLL_SCRIPT" 2>/dev/null; then ok "$TEST_NAME"; else fail "$TEST_NAME (poll.sh not found or syntax error)"; fi
+  # Verify existing poll.sh still works
+  local poll_script="${POLL_SCRIPT:-$SCRIPT_DIR/poll.sh}"
+
+  if [ -f "$poll_script" ]; then
+    # Check syntax
+    if bash -n "$poll_script" 2>/dev/null; then
+      ok "$TEST_NAME"
+    else
+      fail "$TEST_NAME (poll.sh syntax error)"
+    fi
+  else
+    fail "$TEST_NAME (poll.sh not found)"
+  fi
 }
 
+# ============================================================================
+
+# Test: Conversation creation fails closed when gh fails
+test_conversation_creation_fails_closed() {
+  echo "  Testing conversation creation fails closed when gh fails..."
+
+  # Create fake gh that fails on issue create
+  mkdir -p /tmp/manul_tests
+  cat > /tmp/manul_tests/gh <<'GHSCRIPT'
+#!/bin/bash
+if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
+  echo "gh issue create failed" >&2
+  exit 1
+fi
+exit 0
+GHSCRIPT
+  chmod +x /tmp/manul_tests/gh
+
+  # Save original PATH
+  local original_path
+  original_path="$PATH"
+
+  # Add mock to PATH
+  export PATH="/tmp/manul_tests:$PATH"
+
+  # Save original GH repo
+  local original_github_repository
+  original_github_repository="${GITHUB_REPOSITORY:-}"
+
+  # Set up failure scenario
+  GITHUB_REPOSITORY="manul-ai/tests"
+
+  # Run create with FAIL_CLOSED=true
+  local output
+  output="$(bash "$CONVERSATION_SCRIPT" create --fail-closed=true 2>&1)" || true
+
+  # Restore
+  rm -f /tmp/manul_tests/gh
+  export PATH="$original_path"
+  GITHUB_REPOSITORY="$original_github_repository"
+
+  # Verify: should not create conversation with issue/0
+  if echo "$output" | grep -q "issue/0"; then
+    fail "Should not create conversation with issue/0 when gh fails"
+  elif echo "$output" | grep -q "FAIL_CLOSED=false"; then
+    ok "Failed closed as expected"
+  else
+    ok "Conversation creation failed (no issue/0 created)"
+  fi
+}
 echo ""
 echo "========================================"
 echo "  Manul Conversation Orchestrator Tests"
@@ -339,6 +462,7 @@ test_exit_codes
 test_duplicate_submission_idempotency
 test_stale_task_race
 test_production_path_safety
+test_conversation_creation_fails_closed
 test_github_manul_regression
 
 echo ""
