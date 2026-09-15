@@ -441,13 +441,14 @@ cmd_handle() {
           parentTaskId: $parentTaskId,
           prNumber: $prNumber,
           reviewPrompt: $reviewPrompt,
-          createdTask: false,
-          duplicate: true,
-          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-        }')
-      echo "$result" | jq .
-      return 0
-      ;;
+           createdTask: false,
+           duplicate: true,
+           skipped: true,
+           timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+         }')
+       echo "$result" | jq .
+       return 0
+       ;;
 
     task_created)
       # Task was created in a previous run - reuse it (crash recovery)
@@ -470,14 +471,15 @@ cmd_handle() {
             parentTaskId: $parentTaskId,
             prNumber: $prNumber,
             reviewPrompt: $reviewPrompt,
-            createdTask: true,
-            reused: true,
-            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-          }')
-        echo "$result" | jq .
-        return 0
-      else
-        # Corrupted state: task_created but no taskId - treat as pending
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       else
+         # Corrupted state: task_created but no taskId - treat as pending
         echo "dispatch: review $review_id has task_created without taskId, recovering" >&2
         review_status=""
         existing_task_id=""
@@ -512,14 +514,15 @@ cmd_handle() {
             parentTaskId: $parentTaskId,
             prNumber: $prNumber,
             reviewPrompt: $reviewPrompt,
-            createdTask: true,
-            reused: true,
-            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-          }')
-        echo "$result" | jq .
-        return 0
-      fi
-      # No taskId yet - proceed to create task (fall through)
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       fi
+       # No taskId yet - proceed to create task (fall through)
       ;;
 
     failed)
@@ -584,14 +587,15 @@ cmd_handle() {
                 newTaskId: $newTaskId,
                 parentTaskId: $parentTaskId,
                 prNumber: $prNumber,
-                createdTask: true,
-                reused: true,
-                timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-              }')
-            echo "$result" | jq .
-            return 0
-          fi
-          # Race resulted in pending or other state - wait and retry
+                 createdTask: true,
+                 reused: true,
+                 skipped: true,
+                 timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+               }')
+             echo "$result" | jq .
+             return 0
+           fi
+           # Race resulted in pending or other state - wait and retry
           if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
             race_retry=$((race_retry + 1))
             sleep "0.0$((race_retry * 2))"
