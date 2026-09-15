@@ -758,6 +758,82 @@ test_end_to_end_mock_flow() {
 }
 
 # ============================================================
+# Production Fix Regression Tests
+# ============================================================
+
+# Test 24: PR conversation comment routes to REVIEW_FIX not IMPLEMENT
+test_pr_conversation_routes_to_review_fix() {
+  init_db
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Create open PRs array (simulating poll.sh OPEN_PRS)
+  export OPEN_PRS=("42")
+
+  # Simulate PR conversation comment (issue comment on PR)
+  local pr_comment_body="/manul REVIEW_FIX Add error handling"
+  local pr_comment_json
+  pr_comment_json="$(printf '{"id":999,"body":"%s","user":{"login":"user"},"created_at":"%s","html_url":"https://github.com/test/repo/pull/42#issuecomment-999","issue_url":"https://api.github.com/repos/test/repo/issues/42"}' "$pr_comment_body" "$now")"
+
+  # Parse with same jq filter as poll.sh (input must be array for .[] to work)
+  local parsed
+  parsed="$(echo "[$pr_comment_json]" | jq -c --arg repo "test/repo" --arg trig "/manul" --arg sig "manul-task:" --arg base "$now" --argjson allowed '["user"]' --argjson agents '{}' --argjson open_prs '[42]' '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | sub("^[/]?manul[[:space:]]*"; ""; "g")) as $prompt_line
+    | ($prompt_line | capture("^(?<action>IMPLEMENT|REVIEW_FIX)[[:space:]]+(?<prompt>.*)") // {action: "IMPLEMENT", prompt: $prompt_line}) as $actx
+    | (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber) as $issue_num
+    | (if $actx.action != null then $actx.action
+       elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
+       else "IMPLEMENT"
+       end) as $action
+    | {id: ("issue:" + (.id|tostring)), repo: $repo, author: .user.login, created: .created_at, url: .html_url, issueNumber: $issue_num, agent: ($agents | if has("user") then .user else "" end), action: $action, prompt: $actx.prompt}
+  ')" || return 1
+
+  local action
+  action="$(echo "$parsed" | jq -r '.action')"
+  [ "$action" = "REVIEW_FIX" ] || return 1
+}
+
+# Test 25: Issue comment routes to IMPLEMENT not REVIEW_FIX
+test_issue_comment_routes_to_implement() {
+  init_db
+
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Create open PRs array (PR 42 is open, but issue 100 is not a PR)
+  export OPEN_PRS=("42")
+
+  # Simulate regular issue comment
+  local issue_comment_body="/manul Implement feature X"
+  local issue_comment_json
+  issue_comment_json="$(printf '{"id":100,"body":"%s","user":{"login":"user"},"created_at":"%s","html_url":"https://github.com/test/repo/issues/100","issue_url":"https://api.github.com/repos/test/repo/issues/100"}' "$issue_comment_body" "$now")"
+
+  # Parse with same jq filter as poll.sh (input must be array for .[] to work)
+  local parsed
+  parsed="$(echo "[$issue_comment_json]" | jq -c --arg repo "test/repo" --arg trig "/manul" --arg sig "manul-task:" --arg base "$now" --argjson allowed '["user"]' --argjson agents '{}' --argjson open_prs '[42]' '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | sub("^[/]?manul[[:space:]]*"; ""; "g")) as $prompt_line
+    | ($prompt_line | capture("^(?<action>IMPLEMENT|REVIEW_FIX)[[:space:]]+(?<prompt>.*)") // {action: "IMPLEMENT", prompt: $prompt_line}) as $actx
+    | (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber) as $issue_num
+    | (if $actx.action != null then $actx.action
+       elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
+       else "IMPLEMENT"
+       end) as $action
+    | {id: ("issue:" + (.id|tostring)), repo: $repo, author: .user.login, created: .created_at, url: .html_url, issueNumber: $issue_num, agent: ($agents | if has("user") then .user else "" end), action: $action, prompt: $actx.prompt}
+  ')" || return 1
+
+  local action
+  action="$(echo "$parsed" | jq -r '.action')"
+  [ "$action" = "IMPLEMENT" ] || return 1
+}
+
+# ============================================================
 # Run Tests
 # ============================================================
 
@@ -795,6 +871,10 @@ run_test "Test 20: Production path safety" test_production_path_safety
 run_test "Test 21: get_pr_pending_task excludes REVIEW not queued" test_get_pr_pending_task_excludes_review_not_queued
 run_test "Test 22: post_comment failure propagates correctly" test_post_comment_failure_propagates
 run_test "Test 23: parentTaskId resolves to execution task" test_parent_task_id_resolves_to_execution
+
+# Production fix regression tests
+run_test "Test 24: PR conversation comment routes to REVIEW_FIX not IMPLEMENT" test_pr_conversation_routes_to_review_fix
+run_test "Test 25: Issue comment routes to IMPLEMENT not REVIEW_FIX" test_issue_comment_routes_to_implement
 
 # End-to-end test
 echo ""

@@ -419,49 +419,64 @@ CFGEOF
   local call_log="$test_dir/call_log.txt"
   > "$call_log"
 
-   cat > "$mock_gh_dir/gh" <<MOCK_EOF
+   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
-log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+set -u
+CALL_LOG="${CALL_LOG:-/dev/null}"
+log() { echo "$(date -Is): $*" >> "$CALL_LOG"; }
 
 # Handle gh pr list with various flags
-if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+if [[ "${1:-}" == "pr" && "${2:-}" == "list" ]]; then
   log "gh pr list --repo test-org/test-repo"
   # Return full PR objects for --state open queries, just the number for --json number queries
-  if [[ "\$*" == *"--state open"* ]]; then
+  if [[ "$*" == *"--state open"* ]]; then
     echo '[{"number":200,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/200"}]'
-  elif [[ "\$*" == *"--json number"* && "\$*" == *"--jq"* ]]; then
+  elif [[ "$*" == *"--state merged"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--state closed"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--json number"* && "$*" == *"--jq"* ]]; then
     echo '200'
   else
     echo '[{"number":200}]'
   fi
   exit 0
 fi
-if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+  log "gh pr view ${3:-} --repo test-org/test-repo"
+  echo '{"number":200,"url":"https://github.com/test-org/test-repo/pull/200","title":"Test PR"}'
+  exit 0
+fi
+if [[ "${1:-}" == "issue" && "${2:-}" == "list" ]]; then
   log "gh issue list --repo test-org/test-repo"
   echo '[]'
   exit 0
 fi
-if [[ "\$1" == "api" ]]; then
-  log "gh api \$*"
-  if [[ "\$*" == *"/reviews"* ]]; then
-    echo '[{"id":"review-1","state":"CHANGES_REQUESTED","body":"Fix formatting","user":{"login":"reviewer"},"submitted_at":"2024-01-01T00:00:00Z"}]'
+if [[ "${1:-}" == "api" ]]; then
+  log "gh api ${@}"
+  # Strip --paginate flag for matching
+  args="${@/--paginate/}"
+  if [[ "$args" == *"/pulls/comments"* ]]; then
+    echo '[{"id":"review-comment-1","user":{"login":"test-user"},"body":"/manul Fix formatting","html_url":"https://github.com/test-org/test-repo/pull/200#discussion_r1","created_at":"2024-01-01T00:00:00Z"}]'
     exit 0
   fi
   echo '[]'
   exit 0
 fi
-log "UNHANDLED: \$*"
+log "UNHANDLED: $*"
 echo '{}'
 exit 0
 MOCK_EOF
   chmod +x "$mock_gh_dir/gh"
 
   # Run poll.sh twice to simulate multiple cycles
+  export CALL_LOG="$call_log"
   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
   local first_exit=$?
 
   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
   local second_exit=$?
+  unset CALL_LOG
 
   # Verify both polls executed
   if [ $first_exit -ne 0 ]; then
@@ -514,6 +529,323 @@ MOCK_EOF
   if ! grep -q "gh api" "$call_log" || ! grep -q "reviews" "$call_log"; then
     echo "ERROR: Expected gh api reviews call not found in call log"
     cat "$call_log"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# ===================== Auto-Detection Tests =====================
+
+# Test: PR review comment without explicit action auto-detects as REVIEW_FIX
+test_pr_review_comment_auto_detects_review_fix() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/poll-auto-detect-pr-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  local call_log="$test_dir/call_log.txt"
+  > "$call_log"
+
+  cat > "$mock_gh_dir/gh" <<MOCK_EOF
+#!/bin/bash
+log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+  log "gh pr list --repo test-org/test-repo"
+  if [[ "\$*" == *"--state merged"* ]]; then
+    echo '[]'
+  elif [[ "\$*" == *"--state closed"* ]]; then
+    echo '[]'
+  elif [[ "\$*" == *"--json number"* && "\$*" == *"--jq"* ]]; then
+    echo '300'
+  elif [[ "\$*" == *"--state open"* ]]; then
+    echo '[{"number":300,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/300"}]'
+  else
+    echo '[{"number":300}]'
+  fi
+  exit 0
+fi
+if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+  log "gh issue list --repo test-org/test-repo"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "api" ]]; then
+  log "gh api \$*"
+  if [[ "\$*" == *"/pulls/comments"* ]]; then
+    # Return a PR review comment with /manul but NO explicit action
+    echo '[{"id":"auto-pr-review-1","body":"/manul Please add better error handling","user":{"login":"test-user"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/pull/300#discussion_r123456","path":"src/main.py","line":42,"in_reply_to_id":null,"diff_hunk":"@@ -40,5 +40,5 @@\\n- old code\\n+ new code"}]'
+    exit 0
+  fi
+  if [[ "\$*" == *"/reviews"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  if [[ "\$*" == *"/issues/comments"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  if [[ "\$*" == *"/issues?state=open"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+log "UNHANDLED: \$*"
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  # Verify the PR review comment was queued with REVIEW_FIX action
+  local review_fix_count
+  review_fix_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND issueNumber=300;" 2>/dev/null)"
+  if [ "$review_fix_count" -lt 1 ]; then
+    echo "ERROR: Expected at least 1 REVIEW_FIX task from PR review comment auto-detection, found $review_fix_count"
+    cat "$call_log"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify no other actions were created for this comment
+  local other_action_count
+  other_action_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action != 'REVIEW_FIX' AND issueNumber=300;" 2>/dev/null)"
+  if [ "$other_action_count" -gt 0 ]; then
+    echo "ERROR: Found unexpected actions for PR review comment"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# Test: Issue comment without explicit action auto-detects as IMPLEMENT
+test_issue_comment_auto_detects_implement() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/poll-auto-detect-issue-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  local call_log="$test_dir/call_log.txt"
+  > "$call_log"
+
+  cat > "$mock_gh_dir/gh" <<MOCK_EOF
+#!/bin/bash
+log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+  log "gh pr list --repo test-org/test-repo"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+  log "gh issue list --repo test-org/test-repo"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "api" ]]; then
+  log "gh api \$*"
+  if [[ "\$*" == *"/issues/comments"* ]] && [[ "\$*" == *"?per_page=100"* ]]; then
+    # Return an issue comment with /manul but NO explicit action
+    echo '[{"id":"auto-issue-comment-1","body":"/manul Implement feature Y","user":{"login":"author"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-456","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]'
+    exit 0
+  fi
+  if [[ "\$*" == *"/issues?state=open"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+log "UNHANDLED: \$*"
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  # Verify the issue comment was queued with IMPLEMENT action
+  local implement_count
+  implement_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='IMPLEMENT' AND issueNumber=100;" 2>/dev/null)"
+  if [ "$implement_count" -lt 1 ]; then
+    echo "ERROR: Expected at least 1 IMPLEMENT task from issue comment auto-detection, found $implement_count"
+    cat "$call_log"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify no REVIEW_FIX was created for this issue comment
+  local review_fix_count
+  review_fix_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND issueNumber=100;" 2>/dev/null)"
+  if [ "$review_fix_count" -gt 0 ]; then
+    echo "ERROR: Found unexpected REVIEW_FIX action for issue comment"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# Test: Issue body without explicit action auto-detects as IMPLEMENT
+test_issue_body_auto_detects_implement() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/poll-auto-detect-body-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  local call_log="$test_dir/call_log.txt"
+  > "$call_log"
+
+  cat > "$mock_gh_dir/gh" <<MOCK_EOF
+#!/bin/bash
+log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+  log "gh pr list --repo test-org/test-repo"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+  log "gh issue list --repo test-org/test-repo"
+  echo '[]'
+  exit 0
+fi
+if [[ "\$1" == "api" ]]; then
+  log "gh api \$*"
+  if [[ "\$*" == *"/issues?state=open"* ]]; then
+    # Return an issue with /manul in the body but NO explicit action
+    echo '[{"number":200,"body":"/manul Add new dashboard widget","user":{"login":"author"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/200","pull_request":null}]'
+    exit 0
+  fi
+  if [[ "\$*" == *"/issues/comments"* ]]; then
+    echo '[]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+log "UNHANDLED: \$*"
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+  # Verify the issue body was queued with IMPLEMENT action
+  local implement_count
+  implement_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='IMPLEMENT' AND issueNumber=200;" 2>/dev/null)"
+  if [ "$implement_count" -lt 1 ]; then
+    echo "ERROR: Expected at least 1 IMPLEMENT task from issue body auto-detection, found $implement_count"
+    cat "$call_log"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify no REVIEW_FIX was created for this issue body
+  local review_fix_count
+  review_fix_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND issueNumber=200;" 2>/dev/null)"
+  if [ "$review_fix_count" -gt 0 ]; then
+    echo "ERROR: Found unexpected REVIEW_FIX action for issue body"
     rm -rf "$test_dir"
     return 1
   fi
@@ -1847,6 +2179,9 @@ run_test "daemon: does not close with running task" test_daemon_does_not_close_w
 run_test "daemon: SELECT failure keeps conversation OPEN" test_daemon_select_failure_keeps_conversation_open
 run_test "merge: GitHub query failure keeps conversation OPEN" test_poll_merge_query_failure_keeps_conversations_open
 run_test "merge: retry after transient failure closes correctly" test_retry_after_transient_failure_closes_correctly
+run_test "auto-detect: PR review comment without action → REVIEW_FIX" test_pr_review_comment_auto_detects_review_fix
+run_test "auto-detect: Issue comment without action → IMPLEMENT" test_issue_comment_auto_detects_implement
+run_test "auto-detect: Issue body without action → IMPLEMENT" test_issue_body_auto_detects_implement
 
 # ===================== Crash-Resilience Regression Tests =====================
 
