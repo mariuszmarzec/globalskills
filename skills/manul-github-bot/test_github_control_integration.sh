@@ -419,49 +419,64 @@ CFGEOF
   local call_log="$test_dir/call_log.txt"
   > "$call_log"
 
-   cat > "$mock_gh_dir/gh" <<MOCK_EOF
+   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
-log() { echo "\$(date -Is): \$*" >> "$test_dir/call_log.txt"; }
+set -u
+CALL_LOG="${CALL_LOG:-/dev/null}"
+log() { echo "$(date -Is): $*" >> "$CALL_LOG"; }
 
 # Handle gh pr list with various flags
-if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+if [[ "${1:-}" == "pr" && "${2:-}" == "list" ]]; then
   log "gh pr list --repo test-org/test-repo"
   # Return full PR objects for --state open queries, just the number for --json number queries
-  if [[ "\$*" == *"--state open"* ]]; then
+  if [[ "$*" == *"--state open"* ]]; then
     echo '[{"number":200,"headRefName":"feature/test","baseRefName":"main","title":"Test PR","url":"https://github.com/test-org/test-repo/pull/200"}]'
-  elif [[ "\$*" == *"--json number"* && "\$*" == *"--jq"* ]]; then
+  elif [[ "$*" == *"--state merged"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--state closed"* ]]; then
+    echo '[]'
+  elif [[ "$*" == *"--json number"* && "$*" == *"--jq"* ]]; then
     echo '200'
   else
     echo '[{"number":200}]'
   fi
   exit 0
 fi
-if [[ "\$1" == "issue" && "\$2" == "list" ]]; then
+if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+  log "gh pr view ${3:-} --repo test-org/test-repo"
+  echo '{"number":200,"url":"https://github.com/test-org/test-repo/pull/200","title":"Test PR"}'
+  exit 0
+fi
+if [[ "${1:-}" == "issue" && "${2:-}" == "list" ]]; then
   log "gh issue list --repo test-org/test-repo"
   echo '[]'
   exit 0
 fi
-if [[ "\$1" == "api" ]]; then
-  log "gh api \$*"
-  if [[ "\$*" == *"/reviews"* ]]; then
-    echo '[{"id":"review-1","state":"CHANGES_REQUESTED","body":"Fix formatting","user":{"login":"reviewer"},"submitted_at":"2024-01-01T00:00:00Z"}]'
+if [[ "${1:-}" == "api" ]]; then
+  log "gh api ${@}"
+  # Strip --paginate flag for matching
+  args="${@/--paginate/}"
+  if [[ "$args" == *"/pulls/comments"* ]]; then
+    echo '[{"id":"review-comment-1","user":{"login":"test-user"},"body":"/manul Fix formatting","html_url":"https://github.com/test-org/test-repo/pull/200#discussion_r1","created_at":"2024-01-01T00:00:00Z"}]'
     exit 0
   fi
   echo '[]'
   exit 0
 fi
-log "UNHANDLED: \$*"
+log "UNHANDLED: $*"
 echo '{}'
 exit 0
 MOCK_EOF
   chmod +x "$mock_gh_dir/gh"
 
   # Run poll.sh twice to simulate multiple cycles
+  export CALL_LOG="$call_log"
   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
   local first_exit=$?
 
   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
   local second_exit=$?
+  unset CALL_LOG
 
   # Verify both polls executed
   if [ $first_exit -ne 0 ]; then
@@ -592,7 +607,7 @@ if [[ "\$1" == "api" ]]; then
   log "gh api \$*"
   if [[ "\$*" == *"/pulls/comments"* ]]; then
     # Return a PR review comment with /manul but NO explicit action
-    echo '[{"id":"auto-pr-review-1","body":"/manul Please add better error handling","user":{"login":"reviewer"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/pull/300#discussion_r123456","path":"src/main.py","line":42,"in_reply_to_id":null,"diff_hunk":"@@ -40,5 +40,5 @@\\n- old code\\n+ new code"}]'
+    echo '[{"id":"auto-pr-review-1","body":"/manul Please add better error handling","user":{"login":"test-user"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/pull/300#discussion_r123456","path":"src/main.py","line":42,"in_reply_to_id":null,"diff_hunk":"@@ -40,5 +40,5 @@\\n- old code\\n+ new code"}]'
     exit 0
   fi
   if [[ "\$*" == *"/reviews"* ]]; then
