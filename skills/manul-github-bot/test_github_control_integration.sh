@@ -2192,18 +2192,18 @@ CFGEOF
 
 # Test 5: crash during task submission → retry creates exactly one task
 test_crash_during_task_creation() {
-local test_dir
-   test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
-   local manul_dir="$test_dir/manul"
-   local db="$manul_dir/manul.db"
-   mkdir -p "$manul_dir"
+  local test_dir
+  test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  local db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir"
 
-   cat > "$manul_dir/config.json" <<'CFGEOF'
+  cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-   sqlite3 "$db" "PRAGMA journal_mode=WAL;"
-   sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+  sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2024-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
@@ -2229,8 +2229,31 @@ CFGEOF
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('crash-during-conv', 'test-org/test-repo', 1000, 'https://github.com/test-org/test-repo/pull/1000', 1000, 'OPEN', '$now', '$now');"
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('initial-1000', 'test-org/test-repo', 1000, 'https://github.com/test-org/test-repo/issues/1000', 'user', 'Original task', 'completed', '$now', 'crash-during-conv', 1000, 'IMPLEMENT');"
-  sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('review:crash-during-1', 'test-org/test-repo', 1000, 'https://github.com/test-org/test-repo/pull/1000', 'reviewer', 'Fix crash during', 'REVIEW', 'pending', '$now', 'crash-during-conv', 1000);"
 
+  # Start the actual process with crash injection (NOT pre-populating pending)
+  MANUL_TEST_CRASH_AFTER_SUBMIT=1 TEST_DIR="$test_dir" MANUL_DIR="$manul_dir" \
+    bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --repo "test-org/test-repo" --pr-number 1000 \
+    --review-id "crash-during-1" --review-state REQUEST_CHANGES \
+    --body "Fix crash during" --author reviewer --created "$now" \
+    > /dev/null 2>&1
+  local crash_exit=$?
+
+  # Verify process was killed (non-zero exit)
+  if [ $crash_exit -eq 0 ]; then
+    echo "ERROR: Expected non-zero exit code after crash, got 0"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify crash marker was written
+  if [ ! -f "$test_dir/.crash_marker" ]; then
+    echo "ERROR: Crash marker not found at $test_dir/.crash_marker"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Recovery: run again without crash injection
   local output
   output="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 1000 \
@@ -2241,17 +2264,36 @@ CFGEOF
   local fix_count
   fix_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=1000 AND action='REVIEW_FIX';" 2>/dev/null)"
   if [ "$fix_count" -ne 1 ]; then
-    echo "ERROR: Expected 1 REVIEW_FIX task after crash during creation, found $fix_count"
+    echo "ERROR: Expected 1 REVIEW_FIX task after crash recovery, found $fix_count"
     rm -rf "$test_dir"
     return 1
   fi
 
-  # Verify the review is in task_created state with taskId
+  # Verify deterministic task ID
+  local expected_task_id="review-fix-crash-during-conv-crash-during-1"
+  local actual_task_id
+  actual_task_id="$(sqlite3 "$db" "SELECT commentId FROM processed_comments WHERE repository='test-org/test-repo' AND action='REVIEW_FIX' AND prNumber=1000 LIMIT 1;" 2>/dev/null)"
+  if [ "$actual_task_id" != "$expected_task_id" ]; then
+    echo "ERROR: Expected task ID '$expected_task_id', got '$actual_task_id'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify review is task_created with taskId
   local review_state review_task_id
   review_state="$(sqlite3 "$db" "SELECT status FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
   review_task_id="$(sqlite3 "$db" "SELECT taskId FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
-  if [ "$review_state" != "task_created" ] || [ -z "$review_task_id" ]; then
-    echo "ERROR: Expected task_created with taskId, got state='$review_state' task='$review_task_id'"
+  if [ "$review_state" != "task_created" ] || [ "$review_task_id" != "$expected_task_id" ]; then
+    echo "ERROR: Expected task_created with taskId='$expected_task_id', got state='$review_state' task='$review_task_id'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify no duplicate task
+  local review_count
+  review_count="$(sqlite3 "$db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:crash-during-1' AND action='REVIEW';" 2>/dev/null)"
+  if [ "$review_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 REVIEW record, found $review_count"
     rm -rf "$test_dir"
     return 1
   fi

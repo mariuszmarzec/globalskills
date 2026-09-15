@@ -499,7 +499,7 @@ test_v() {
 
 # ===== Test W: Real parallel concurrency — R1 invariant =====
 # Different review_ids on same PR each get their own REVIEW + REVIEW_FIX task
-# Deterministic sequential version (avoids race-condition flakiness)
+# Two truly concurrent handle processes on the same DB
 test_w() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
@@ -541,16 +541,45 @@ CFGEOF
   sqlite3 "$db" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('r1-conv', 'test-org/test-repo', 500, 'https://github.com/test-org/test-repo/pull/500', 500, 'OPEN', '$now', '$now');"
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-500', 'test-org/test-repo', 500, 'https://github.com/test-org/test-repo/issues/500', 'user', 'Original task', 'completed', '$now', 'r1-conv', 500, 'IMPLEMENT');"
 
-  # Run two sequential reviews for the SAME PR with DIFFERENT review IDs
-  local out1 out2
-  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+  # Launch two CONCURRENT background processes for the SAME PR with DIFFERENT review IDs
+  local out1_file="$test_dir/out1.txt"
+  local out2_file="$test_dir/out2.txt"
+
+  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 500 \
     --review-id "r1-review-1" --review-state REQUEST_CHANGES \
-    --body "Fix style" --author reviewer1 --created "$now" 2>/dev/null)" || true
-  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --body "Fix style" --author reviewer1 --created "$now" \
+    > "$out1_file" 2>/dev/null &
+  local pid1=$!
+
+  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "test-org/test-repo" --pr-number 500 \
     --review-id "r1-review-2" --review-state REQUEST_CHANGES \
-    --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" || true
+    --body "Fix types" --author reviewer2 --created "$now" \
+    > "$out2_file" 2>/dev/null &
+  local pid2=$!
+
+  # Wait for both processes and capture exit codes
+  local w1_exit w2_exit
+  wait $pid1 2>/dev/null
+  w1_exit=$?
+  wait $pid2 2>/dev/null
+  w2_exit=$?
+
+  if [ $w1_exit -ne 0 ]; then
+    echo "ERROR: First concurrent review process exited with code $w1_exit"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ $w2_exit -ne 0 ]; then
+    echo "ERROR: Second concurrent review process exited with code $w2_exit"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local out1 out2
+  out1="$(cat "$out1_file")"
+  out2="$(cat "$out2_file")"
 
   # Both must have created tasks
   if ! echo "$out1" | grep -q '"createdTask": true'; then
@@ -602,6 +631,7 @@ CFGEOF
 
 # ===== Test X: Real parallel concurrency — R2 invariant =====
 # Tasks from different repos can run in parallel
+# Two truly concurrent handle processes on the same DB
 test_x() {
   local start_dir="$PWD"
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." || cd /home/marzec/globalskills
@@ -647,16 +677,45 @@ CFGEOF
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-100', 'org-a/repo-a', 100, 'https://github.com/org-a/repo-a/issues/100', 'user', 'Original task', 'completed', '$now', 'r2-conv-a', 100, 'IMPLEMENT');"
   sqlite3 "$db" "INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, conversationId, prNumber, action) VALUES('task-200', 'org-b/repo-b', 200, 'https://github.com/org-b/repo-b/issues/200', 'user', 'Original task', 'completed', '$now', 'r2-conv-b', 200, 'IMPLEMENT');"
 
-  # Launch sequential reviews for DIFFERENT repos (avoids race-condition flakiness)
-  local out1 out2
-  out1="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+  # Launch two CONCURRENT background processes for DIFFERENT repos
+  local out1_file="$test_dir/out1.txt"
+  local out2_file="$test_dir/out2.txt"
+
+  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "org-a/repo-a" --pr-number 100 \
     --review-id "r2-review-a" --review-state REQUEST_CHANGES \
-    --body "Fix style" --author reviewer --created "$now" 2>/dev/null)" || true
-  out2="$(MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
+    --body "Fix style" --author reviewer --created "$now" \
+    > "$out1_file" 2>/dev/null &
+  local pid1=$!
+
+  MANUL_DIR="$manul_dir" bash "$manul_dir/manul-pr-review.sh" --json handle \
     --repo "org-b/repo-b" --pr-number 200 \
     --review-id "r2-review-b" --review-state REQUEST_CHANGES \
-    --body "Fix types" --author reviewer --created "$now" 2>/dev/null)" || true
+    --body "Fix types" --author reviewer --created "$now" \
+    > "$out2_file" 2>/dev/null &
+  local pid2=$!
+
+  # Wait for both processes and capture exit codes
+  local w1_exit w2_exit
+  wait $pid1 2>/dev/null
+  w1_exit=$?
+  wait $pid2 2>/dev/null
+  w2_exit=$?
+
+  if [ $w1_exit -ne 0 ]; then
+    echo "ERROR: Repo A concurrent process exited with code $w1_exit"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ $w2_exit -ne 0 ]; then
+    echo "ERROR: Repo B concurrent process exited with code $w2_exit"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local out1 out2
+  out1="$(cat "$out1_file")"
+  out2="$(cat "$out2_file")"
 
   # Both must have created tasks
   if ! echo "$out1" | grep -q '"createdTask": true'; then

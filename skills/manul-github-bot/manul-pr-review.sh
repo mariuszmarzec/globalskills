@@ -78,7 +78,9 @@ sqlite3_retry() {
       retry=$((retry + 1))
       # Exponential backoff: 20ms, 40ms, 80ms, 160ms, 320ms, 640ms
       local sleep_ms=$((20 * (1 << (retry - 1))))
-      sleep "0.0${sleep_ms}"
+      local sleep_sec=$((sleep_ms / 1000))
+      local sleep_frac=$((sleep_ms % 1000))
+      sleep "$(printf '%d.%03d' $sleep_sec $sleep_frac)"
     else
       # Permanent error - fail immediately
       echo "ERROR: SQLite permanent error: $err_msg" >&2
