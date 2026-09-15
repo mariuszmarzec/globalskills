@@ -596,6 +596,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       created="$(jq -r '.created' <<<"$obj")"
       prompt="$(jq -r '.prompt' <<<"$obj")"
       agent="$(jq -r '.agent // ""' <<<"$obj")"
+      action="$(jq -r '.action // ""' <<<"$obj")"
       [ -n "$prompt" ] || continue
       fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
       [ -n "$fullBody" ] || fullBody="$prompt"
@@ -604,7 +605,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         ctx="$(build_issue_context "$repo" "$issue")"
@@ -623,7 +624,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
-      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+      | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+         elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+         elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+         elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+         else {action: null, prompt: $rest}
+         end) as $actx
+      | (if $actx.action != null then $actx.action else "IMPLEMENT" end) as $action
       | {
         id: ("issue:" + (.id|tostring)),
         repo: $repo,
@@ -632,7 +640,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         url: .html_url,
         issueNumber: (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber),
         agent: $agent,
-        prompt: $prompt,
+        action: $action,
+        prompt: $actx.prompt,
         fullBody: (.body | sub($trig; ""))
       }' 2>>"$LOG" || true)
 
@@ -647,15 +656,16 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       created="$(jq -r '.created' <<<"$obj")"
       prompt="$(jq -r '.prompt' <<<"$obj")"
       agent="$(jq -r '.agent // ""' <<<"$obj")"
+      action="$(jq -r '.action // ""' <<<"$obj")"
       [ -n "$prompt" ] || continue
       esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
-        log "queued $id on $repo#$issue (issue body, agent=${agent:-default})"
+        log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
       fi
     done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
       .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
@@ -665,7 +675,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
-      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+      | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+         elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+         elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+         elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+         else {action: null, prompt: $rest}
+         end) as $actx
+      | (if $actx.action != null then $actx.action else "IMPLEMENT" end) as $action
       | {
         id: ("issuebody:" + (.id|tostring)),
         repo: $repo,
@@ -674,7 +691,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         url: .html_url,
         issueNumber: .number,
         agent: $agent,
-        prompt: $prompt
+        action: $action,
+        prompt: $actx.prompt
       }' 2>>"$LOG" || true)
 
     # 2) PR review comments
@@ -698,6 +716,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       created="$(jq -r '.created' <<<"$obj")"
       prompt="$(jq -r '.prompt' <<<"$obj")"
       agent="$(jq -r '.agent // ""' <<<"$obj")"
+      action="$(jq -r '.action // ""' <<<"$obj")"
       [ -n "$prompt" ] || continue
       fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
       [ -n "$fullBody" ] || fullBody="$prompt"
@@ -711,7 +730,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       is_res="$(jq -r '.isResolved // false' <<<"$obj")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
+       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action','queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "$url")'); SELECT changes();" 2>>"$LOG")"
        if [ "${ins:-0}" -gt 0 ]; then
          NEW=$((NEW + 1))
          ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
@@ -741,7 +760,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
-      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
+      | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+      | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+         elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+         elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+         elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+         else {action: null, prompt: $rest}
+         end) as $actx
+      | (if $actx.action != null then $actx.action else "REVIEW_FIX" end) as $action
       | {
         id: ("review:" + (.id|tostring)),
         repo: $repo,
@@ -750,7 +776,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         url: .html_url,
         issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
         agent: $agent,
-        prompt: $prompt,
+        action: $action,
+        prompt: $actx.prompt,
         fullBody: (.body | sub($trig; "")),
         path: (.path // ""),
         line: ((.line // .original_line // "") | tostring),

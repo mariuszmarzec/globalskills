@@ -1036,12 +1036,14 @@ run_once() {
 
     # 3. Read task details after claiming — query each field separately
     # to avoid pipe-delimited parsing issues with prompt containing |
-    local COMMENT_URL AUTHOR AGENT TASK_PROMPT TASK_CONTEXT
+    local COMMENT_URL AUTHOR AGENT TASK_PROMPT TASK_CONTEXT TASK_ACTION
     COMMENT_URL="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     AUTHOR="$(sqlite3 "$DB" "SELECT author FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     AGENT="$(sqlite3 "$DB" "SELECT agent FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_PROMPT="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
 
     log "dispatch: claimed task $COMMENT_ID ($REPO#$ISSUE_NUM), attempts now $((ACTUAL_ATTEMPTS + 1))"
     lc_log "CLAIMED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$((ACTUAL_ATTEMPTS + 1))"
@@ -1129,6 +1131,7 @@ You are the Manul implementation agent. Complete ONE task and then emit exactly 
 - Comment ID: __COMMENT_ID__
 - Comment URL: __COMMENT_URL__
 - Task Type: __TASK_TYPE__
+- Task Action: __TASK_ACTION__
 
 ## User Request
 PROMPT_EOF
@@ -1388,6 +1391,7 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__COMMENT_ID__/$COMMENT_ID}"
     prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
     prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
+    prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
     prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
