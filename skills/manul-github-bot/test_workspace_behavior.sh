@@ -27,7 +27,8 @@ cat > "$CONFIG" << 'CONFIGEOF'
 CONFIGEOF
 
 # Source only workspace manager (not full poll.sh to avoid dependencies)
-source "$(dirname "${BASH_SOURCE[0]}")/workspace-manager.sh"
+_script_dir="$(cd "$(dirname "$0")" && pwd)"
+source "$_script_dir/workspace-manager.sh"
 
 # Create processed_comments table for cross-repo tests
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, processedAt TEXT, status TEXT, workspaceId TEXT);" 2>/dev/null || true
@@ -36,15 +37,25 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRI
 generate_conversation_id() {
   local repo="$1"
   local issue="$2"
-  local comment_url="${3:-}"
-  
-  if [ -n "$comment_url" ]; then
-    local url_hash
-    url_hash="$(printf '%s' "$comment_url" | md5sum | cut -d' ' -f1 | cut -c1-8)"
-    printf 'conv-%s-%s-%s' "$repo" "$issue" "$url_hash"
-  else
-    printf 'conv-%s-%s' "$repo" "$issue"
-  fi
+  local kind="${3:-issue}"
+  local thread_id="${4:-}"
+
+  case "$kind" in
+    review-thread)
+      [ -n "$thread_id" ] || {
+        echo "ERROR: review-thread conversation requires thread_id" >&2
+        return 1
+      }
+      printf 'conv-%s-review-%s' "$repo" "$thread_id"
+      ;;
+    issue|pr-top-level)
+      printf 'conv-%s-issue-%s' "$repo" "$issue"
+      ;;
+    *)
+      echo "ERROR: unknown conversation kind: $kind" >&2
+      return 1
+      ;;
+  esac
 }
 
 PASSED=0
@@ -186,21 +197,21 @@ echo ""
 echo "=== Test 5: Different conversations on same issue ==="
 test_different_conversations() {
   workspace_pool_init 4
-  
+
   local conv1 conv2
-  conv1="$(generate_conversation_id "test/repo" "1" "https://github.com/test/repo/issues/1#discussion_r1")"
-  conv2="$(generate_conversation_id "test/repo" "1" "https://github.com/test/repo/issues/1#discussion_r2")"
-  
+  conv1="$(generate_conversation_id "test/repo" "1" "review-thread" "r1")"
+  conv2="$(generate_conversation_id "test/repo" "1" "review-thread" "r2")"
+
   [ "$conv1" != "$conv2" ] || return 1
-  
+
   local ws1 ws2
   ws1="$(workspace_lease "conv1-task")"
   ws2="$(workspace_lease "conv2-task")"
-  
+
   [ -n "$ws1" ] || return 1
   [ -n "$ws2" ] || return 1
   [ "$ws1" != "$ws2" ] || return 1
-  
+
   workspace_release "$ws1"
   workspace_release "$ws2"
 }
@@ -425,7 +436,7 @@ echo "=== Test 19: Untracked files filtering ==="
 test_untracked_files_ignores_pycache() {
   # Source the evaluate function
   local script_dir
-  script_dir="$(dirname "${BASH_SOURCE[0]}")"
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
   source "$script_dir/manul-daemon.sh" 2>/dev/null || return 0
 
   # Create a temp repo with __pycache__ and .pytest_cache
