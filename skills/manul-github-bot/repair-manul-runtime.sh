@@ -37,7 +37,6 @@ echo "=== Manul Runtime Repair ==="
 printf 'Runtime:    %s\n' "$RUNTIME_DIR"
 printf 'Canonical:  %s\n\n' "$CANONICAL_DIR"
 
-# Step 1: Create runtime directory.
 if [ ! -d "$RUNTIME_DIR" ]; then
     echo "[1/5] Creating runtime directory: $RUNTIME_DIR"
     mkdir -p "$RUNTIME_DIR"
@@ -45,14 +44,12 @@ else
     echo "[1/5] Runtime directory exists: $RUNTIME_DIR"
 fi
 
-# Step 2: Deploy all runtime symlinks from the canonical source.
 echo "[2/5] Deploying symlinks..."
 "$CANONICAL_DIR/install-manul-symlinks.sh" --runtime-dir "$RUNTIME_DIR"
 
-# Step 3: Restore config if missing. Existing config is never overwritten.
 if [ ! -f "$RUNTIME_DIR/config.json" ]; then
     echo
-    echo "[3/5] Config not found, restoring template..."
+echo "[3/5] Config not found, restoring template..."
     if [ -f "$CANONICAL_DIR/config.json.example" ]; then
         cp "$CANONICAL_DIR/config.json.example" "$RUNTIME_DIR/config.json"
         echo "  Copied config.json.example -> config.json"
@@ -62,28 +59,57 @@ if [ ! -f "$RUNTIME_DIR/config.json" ]; then
     fi
 else
     echo
-    echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
+echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
 fi
 
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
 
-# Step 4: Restore an existing DB. Never fabricate an incomplete schema.
 DB_FILE="$RUNTIME_DIR/manul.db"
+restore_db() {
+    local source="$1"
+    local staged="${DB_FILE}.restore.$$"
+
+    rm -f "$staged"
+    if ! cp "$source" "$staged"; then
+        rm -f "$staged"
+        fail "Failed to copy DB backup: $source"
+    fi
+
+    # Verify the SQLite file before replacing the runtime DB. This catches
+    # truncated/corrupt backups without leaving a bad manul.db behind.
+    local integrity
+    integrity="$(sqlite3 "$staged" 'PRAGMA integrity_check;' 2>&1)" || {
+        rm -f "$staged"
+        printf '%s\n' "$integrity" >&2
+        fail "SQLite integrity check failed for backup: $source"
+    }
+    if [ "$integrity" != "ok" ]; then
+        rm -f "$staged"
+        printf 'SQLite integrity check returned: %s\n' "$integrity" >&2
+        fail "SQLite backup is not healthy: $source"
+    fi
+
+    if ! mv -f "$staged" "$DB_FILE"; then
+        rm -f "$staged"
+        fail "Failed to install restored DB: $DB_FILE"
+    fi
+}
+
 if [ -f "$DB_FILE" ]; then
     echo
-    echo "[4/5] DB exists: $DB_FILE"
+echo "[4/5] DB exists: $DB_FILE"
 else
     echo
-    echo "[4/5] DB not found, attempting restore..."
+echo "[4/5] DB not found, attempting restore..."
     RESTORED=false
 
     if [ -n "$SOURCE_DB" ]; then
         if [ ! -f "$SOURCE_DB" ]; then
             fail "MANUL_SOURCE_DB does not point to a file: $SOURCE_DB"
         fi
-        cp "$SOURCE_DB" "$DB_FILE"
+        restore_db "$SOURCE_DB"
         RESTORED=true
         echo "  Restored DB from: $SOURCE_DB"
     else
@@ -103,7 +129,7 @@ else
         fi
 
         if [ -n "$LATEST_BAK" ]; then
-            cp "$LATEST_BAK" "$DB_FILE"
+            restore_db "$LATEST_BAK"
             RESTORED=true
             echo "  Restored DB from archive: $LATEST_BAK"
         fi
@@ -120,7 +146,6 @@ else
     fi
 fi
 
-# Step 5: Run the canonical DB initialization/migration routines.
 echo
 echo "[5/5] Validating DB schema..."
 
