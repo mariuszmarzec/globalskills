@@ -887,11 +887,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         NEW=$((NEW + 1))
         # Ensure conversation exists for this issue
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-        ctx="$(build_issue_context "$repo" "$issue")"
+        ctx="$(build_conversation_context "$conv_id")"
         if [ -n "$ctx" ]; then
           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
           sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-          log "context enriched for $id on $repo#$issue (parent issue)"
+          log "context enriched for $id on $repo#$issue (conversation history)"
         fi
         log "queued $id on $repo#$issue (agent=${agent:-default})"
       fi
@@ -1049,11 +1049,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         NEW=$((NEW + 1))
         # Ensure conversation exists for this PR
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-        ctx="$(build_review_context "$repo" "$pr_num" "$cpath" "$cline" "$chunk")"
+        ctx="$(build_conversation_context "$conv_id")"
         if [ -n "$ctx" ]; then
           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
           sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-          log "context enriched for $id on $repo#$pr_num (PR + linked issues)"
+          log "context enriched for $id on $repo#$pr_num (conversation history)"
         fi
         # GitHub control protocol integration: process review events
         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then

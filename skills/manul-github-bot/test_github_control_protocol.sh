@@ -833,6 +833,22 @@ test_issue_comment_routes_to_implement() {
   [ "$action" = "IMPLEMENT" ] || return 1
 }
 
+# Test 26: URL parsing regression — issue URL form
+test_url_parsing_issue_form() {
+  local url="https://github.com/test-org/test-repo/issues/100"
+  local issue_num
+  issue_num="$(jq -Rr 'capture("(?:issues|pull)/(?<n>[0-9]+)").n | tonumber' <<< "$url")"
+  [ "$issue_num" = "100" ] || { echo "Expected 100, got $issue_num"; return 1; }
+}
+
+# Test 27: URL parsing regression — pull URL form
+test_url_parsing_pull_form() {
+  local url="https://github.com/test-org/test-repo/pull/42"
+  local issue_num
+  issue_num="$(jq -Rr 'capture("(?:issues|pull)/(?<n>[0-9]+)").n | tonumber' <<< "$url")"
+  [ "$issue_num" = "42" ] || { echo "Expected 42, got $issue_num"; return 1; }
+}
+
 # ============================================================
 # Run Tests
 # ============================================================
@@ -875,6 +891,8 @@ run_test "Test 23: parentTaskId resolves to execution task" test_parent_task_id_
 # Production fix regression tests
 run_test "Test 24: PR conversation comment routes to REVIEW_FIX not IMPLEMENT" test_pr_conversation_routes_to_review_fix
 run_test "Test 25: Issue comment routes to IMPLEMENT not REVIEW_FIX" test_issue_comment_routes_to_implement
+run_test "Test 26: URL parsing regression — issue form" test_url_parsing_issue_form
+run_test "Test 27: URL parsing regression — pull form" test_url_parsing_pull_form
 
 # End-to-end test
 echo ""

@@ -2964,7 +2964,7 @@ CFGEOF
     echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-2","body":"Any updates?","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"trigger-comment-2","body":"/manul Check if tests pass","user":{"login":"test-user"},"created_at":"2026-09-16T00:15:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_3.json"
     echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-2","body":"Any updates?","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"trigger-comment-2","body":"/manul Check if tests pass","user":{"login":"test-user"},"created_at":"2026-09-16T00:15:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-3","body":"Still waiting...","user":{"login":"test-user"},"created_at":"2026-09-16T00:20:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-3","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_4.json"
 
-    cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+     cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
@@ -2977,29 +2977,23 @@ if [[ "$1" == "issue" && "$2" == "list" ]]; then
 fi
 if [[ "$1" == "api" ]]; then
     args="${@/--paginate/}"
+    # Read poll_number to select dataset deterministically per poll
+    poll_num="$(cat "${TEST_DIR}/poll_number" 2>/dev/null || echo "0")"
     if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
-        # Return comments based on call count file
-        call_count="$(cat "${TEST_DIR:-/tmp}/call_count.txt" 2>/dev/null || echo "0")"
-        call_count=$((call_count + 1))
-        echo "$call_count" > "${TEST_DIR:-/tmp}/call_count.txt"
-        case "$call_count" in
-            1) cat "${TEST_DIR:-/tmp}/comments_1.json";;
-            2) cat "${TEST_DIR:-/tmp}/comments_2.json";;
-            3) cat "${TEST_DIR:-/tmp}/comments_3.json";;
-            *) cat "${TEST_DIR:-/tmp}/comments_4.json";;
+        case "$poll_num" in
+            1) cat "${TEST_DIR}/comments_1.json";;
+            2) cat "${TEST_DIR}/comments_2.json";;
+            3) cat "${TEST_DIR}/comments_3.json";;
+            *) cat "${TEST_DIR}/comments_4.json";;
         esac
         exit 0
     fi
     if [[ "$args" == *"/issues/100/comments"* ]]; then
-        # Same logic for per-issue comments endpoint
-        call_count="$(cat "${TEST_DIR:-/tmp}/call_count.txt" 2>/dev/null || echo "0")"
-        call_count=$((call_count + 1))
-        echo "$call_count" > "${TEST_DIR:-/tmp}/call_count.txt"
-        case "$call_count" in
-            1) cat "${TEST_DIR:-/tmp}/comments_1.json";;
-            2) cat "${TEST_DIR:-/tmp}/comments_2.json";;
-            3) cat "${TEST_DIR:-/tmp}/comments_3.json";;
-            *) cat "${TEST_DIR:-/tmp}/comments_4.json";;
+        case "$poll_num" in
+            1) cat "${TEST_DIR}/comments_1.json";;
+            2) cat "${TEST_DIR}/comments_2.json";;
+            3) cat "${TEST_DIR}/comments_3.json";;
+            *) cat "${TEST_DIR}/comments_4.json";;
         esac
         exit 0
     fi
@@ -3015,8 +3009,9 @@ exit 0
 MOCK_EOF
    chmod +x "$mock_gh_dir/gh"
 
-    # Run 4 polls (do NOT reset call_count between polls - mock tracks cumulative state)
+    # Run 4 polls with deterministic poll_number per iteration
     for i in 1 2 3 4; do
+      echo "$i" > "$test_dir/poll_number"
       MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
     done
 
@@ -3082,8 +3077,8 @@ MOCK_EOF
 
    # === ASSERTION 4: Idempotency ===
    # Running a 5th poll should not create any new tasks or messages
-   > "$test_dir/call_count.txt"
-   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+    echo "5" > "$test_dir/poll_number"
+    MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
 
    local task_count_after_fifth
    task_count_after_fifth="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
