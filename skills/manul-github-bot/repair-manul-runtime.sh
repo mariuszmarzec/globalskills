@@ -33,7 +33,7 @@ if [ ! -x "$CANONICAL_DIR/install-manul-symlinks.sh" ]; then
     fail "Missing or non-executable install-manul-symlinks.sh in $CANONICAL_DIR"
 fi
 
-printf '%s\n' "=== Manul Runtime Repair ==="
+echo "=== Manul Runtime Repair ==="
 printf 'Runtime:    %s\n' "$RUNTIME_DIR"
 printf 'Canonical:  %s\n\n' "$CANONICAL_DIR"
 
@@ -46,9 +46,7 @@ else
 fi
 
 # Step 2: Deploy all runtime symlinks from the canonical source.
-echo
-"[2/5]" # keep progress marker stable for logs
-printf '%s\n' "[2/5] Deploying symlinks..."
+echo "[2/5] Deploying symlinks..."
 "$CANONICAL_DIR/install-manul-symlinks.sh" --runtime-dir "$RUNTIME_DIR"
 
 # Step 3: Restore config if missing. Existing config is never overwritten.
@@ -67,7 +65,6 @@ else
     echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
 fi
 
-# Validate config before touching/starting the daemon.
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
@@ -117,16 +114,13 @@ else
         echo "ERROR: No backup DB found."
         echo "To restore from a backup, run:"
         echo "  MANUL_SOURCE_DB=/path/to/backup/manul.db $0"
-        echo ""
+        echo
         echo "Recovery aborted. A valid manul.db is required; no new application schema will be fabricated."
         exit 1
     fi
 fi
 
 # Step 5: Run the canonical DB initialization/migration routines.
-# manul-conversation.sh already owns init_schema(). Invoke it through its public
-# CLI instead of duplicating or scraping its implementation. A deliberately
-# missing conversation is expected to return exit code 2 after init_schema runs.
 echo
 echo "[5/5] Validating DB schema..."
 
@@ -141,8 +135,6 @@ fi
 
 echo "  Canonical conversation schema validated."
 
-# workspace-manager.sh only defines functions, so sourcing it and calling the
-# canonical workspace_init() is side-effect-safe and avoids duplicating schema.
 WORKSPACE_OUTPUT=""
 WORKSPACE_EXIT=0
 WORKSPACE_OUTPUT="$(MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1" && workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" 2>&1)" || WORKSPACE_EXIT=$?
@@ -153,7 +145,6 @@ fi
 
 echo "  Canonical workspace schema validated."
 
-# Final smoke check for required tables.
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 for table in $REQUIRED_TABLES; do
     if ! sqlite3 "$DB_FILE" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
