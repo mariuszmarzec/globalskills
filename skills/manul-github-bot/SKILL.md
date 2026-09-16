@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for all Manul executable scripts. Runtime scripts are symlinked from this directory into `/mnt/f/ubuntu-workspace/.openclaw/manul/`.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for all Manul executable scripts. Runtime scripts are symlinked from this directory into `~/.openclaw/manul/`.
 ---
 
 # Manul GitHub Bot 🐈
@@ -53,7 +53,7 @@ Manul uses a **two-directory layout**:
 | Directory | Contents | Notes |
 |---|---|---|
 | `~/.globalskills/skills/manul-github-bot/` | **Canonical source** — all scripts, prompts, docs | Single source of truth for executable code |
-| `/mnt/f/ubuntu-workspace/.openclaw/manul/` | **Runtime** — scripts (via symlinks) + data | Scripts are symlinks; data is local copies |
+| `~/.openclaw/manul/` | **Runtime** — scripts (via symlinks) + data | Scripts are symlinks; data is local copies |
 
 **Why this split?** The runtime directory lives on `/mnt/f` (Windows WSL2 mount) because:
 - Repository worktrees and large Git operations are faster on the mounted filesystem
@@ -176,20 +176,20 @@ alerts
 
 Do NOT use legacy names `maxTaskRunningTime` or `taskHealthCheckInterval`; they are not read by the current runtime.
 
-## Files (canonical source lives here — symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/`)
+## Files (canonical source lives here — symlinked into `~/.openclaw/manul/`)
 
 | Path | Purpose |
 |---|---|
 | `~/.globalskills/skills/manul-github-bot/SKILL.md` | skill/rules source of truth |
-| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/poll.sh`) |
-| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/orchestrator.prompt.md`) |
+| `~/.globalskills/skills/manul-github-bot/poll.sh` | canonical poller script (symlinked into `~/.openclaw/manul/poll.sh`) |
+| `~/.globalskills/skills/manul-github-bot/orchestrator.prompt.md` | canonical orchestrator prompt (symlinked into `~/.openclaw/manul/orchestrator.prompt.md`) |
 | `~/.globalskills/skills/manul-github-bot/manul-comments-remove.sh` | comment cleanup script (symlinked, supports both PR and issue URLs) |
-| `~/.globalskills/skills/manul-github-bot/watchdog.sh` | automatic recovery/liveness script (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh`) |
-| `~/.globalskills/skills/manul-github-bot/task-recovery.sh` | manual recovery CLI (symlinked into `/mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh`) |
+| `~/.globalskills/skills/manul-github-bot/watchdog.sh` | automatic recovery/liveness script (symlinked into `~/.openclaw/manul/watchdog.sh`) |
+| `~/.globalskills/skills/manul-github-bot/task-recovery.sh` | manual recovery CLI (symlinked into `~/.openclaw/manul/task-recovery.sh`) |
 | **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **LEGACY/DEPRECATED — do not install or use in automatic operation** |
 | `~/.globalskills/skills/manul-github-bot/start-manul-automation.sh` | startup wrapper for daemon + watchdog cron (symlinked) |
 | `~/.globalskills/skills/manul-github-bot/manul-status.sh` | status reporting script (symlinked) |
-| `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `/mnt/f/ubuntu-workspace/.openclaw/manul/config.json` and customize) |
+| `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `~/.openclaw/manul/config.json` and customize) |
 
 ### watchdog.sh
 
@@ -310,7 +310,7 @@ This error occurs when the OpenClaw gateway cannot find the agent definition. Ma
 - Verify canonical files exist: `ls -la ~/.globalskills/skills/manul-github-bot/`
 - Check symlinks are valid:
   ```bash
-  ls -la /mnt/f/ubuntu-workspace/.openclaw/manul/*.sh
+  ls -la ~/.openclaw/manul/*.sh
   ```
 
 **Resolution:**
@@ -320,9 +320,9 @@ This error occurs when the OpenClaw gateway cannot find the agent definition. Ma
    ```
 2. **Verify symlinks** – Ensure runtime scripts are symlinked:
    ```bash
-   ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh
-   ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh
-   ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh
+   ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
+   ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
+   ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh ~/.openclaw/manul/start-manul-automation.sh
    ```
 3. **Test agent** – Verify the main agent works:
    ```bash
@@ -334,11 +334,11 @@ This error occurs when the OpenClaw gateway cannot find the agent definition. Ma
 Check daemon status and logs:
 ```bash
 # Check if daemon is running
-cat /mnt/f/ubuntu-workspace/.openclaw/manul/daemon.pid
-ps -p $(cat /mnt/f/ubuntu-workspace/.openclaw/manul/daemon.pid)
+cat ~/.openclaw/manul/daemon.pid
+ps -p $(cat ~/.openclaw/manul/daemon.pid)
 
 # Check recent logs
-tail -50 /mnt/f/ubuntu-workspace/.openclaw/manul/daemon.log
+tail -50 ~/.openclaw/manul/daemon.log
 ```
 
 **Common Issue: Watchdog not starting daemon**
@@ -350,7 +350,7 @@ crontab -l | grep watchdog
 
 If missing, run:
 ```bash
-/mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh start
+~/.openclaw/manul/start-manul-automation.sh start
 ```
 
 ## Installation
@@ -363,26 +363,26 @@ Run the installer or use the skill directly. After installation:
    ~/.globalskills/skills/manul-github-bot/install-manul-symlinks.sh
    
    # Or manually:
-   mkdir -p /mnt/f/ubuntu-workspace/.openclaw/manul
+   mkdir -p ~/.openclaw/manul
    
    for script in manul-daemon.sh poll.sh watchdog.sh task-recovery.sh \
                  start-manul-automation.sh manul-status.sh \
                  manul-comments-remove.sh github-api-wrapper.sh; do
      ln -sf ~/.globalskills/skills/manul-github-bot/$script \
-            /mnt/f/ubuntu-workspace/.openclaw/manul/$script
+            ~/.openclaw/manul/$script
    done
    ```
 
 2. **Copy and customize the config:**
    ```bash
    cp ~/.globalskills/skills/manul-github-bot/config.json.example \
-      /mnt/f/ubuntu-workspace/.openclaw/manul/config.json
-   # then edit /mnt/f/ubuntu-workspace/.openclaw/manul/config.json with your repos, allowedUsers, etc.
+      ~/.openclaw/manul/config.json
+   # then edit ~/.openclaw/manul/config.json with your repos, allowedUsers, etc.
    ```
 
 3. **Start the automation:**
    ```bash
-   /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh start
+   ~/.openclaw/manul/start-manul-automation.sh start
    ```
 
 ```bash
@@ -390,21 +390,21 @@ alias manul-status='$OPENCLAW_MANUL_DIR/manul-status.sh'
 alias manul-comments-remove='$OPENCLAW_MANUL_DIR/manul-comments-remove.sh'
 ```
 
-**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `/mnt/f/ubuntu-workspace/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
+**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `~/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
 
 To verify the symlinks are intact:
 
 ```bash
-ls -la /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
+ls -la ~/.openclaw/manul/watchdog.sh ~/.openclaw/manul/task-recovery.sh ~/.openclaw/manul/start-manul-automation.sh ~/.openclaw/manul/manul-status.sh
 ```
 
 If a symlink is ever broken (e.g. after manually editing the installed copy), recreate it:
 
 ```bash
-ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh /mnt/f/ubuntu-workspace/.openclaw/manul/watchdog.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh /mnt/f/ubuntu-workspace/.openclaw/manul/task-recovery.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh /mnt/f/ubuntu-workspace/.openclaw/manul/start-manul-automation.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh /mnt/f/ubuntu-workspace/.openclaw/manul/manul-status.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh ~/.openclaw/manul/start-manul-automation.sh
+ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh ~/.openclaw/manul/manul-status.sh
 ```
 
 ### Manual Recovery
@@ -431,3 +431,23 @@ $MANUL_DIR/task-recovery.sh --health-check
 Base directory for this skill: /home/marzec/.globalskills/skills/manul-github-bot
 Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.
 Note: file list is sampled.
+
+## One-Command Recovery
+
+If the runtime directory is lost or broken:
+
+```bash
+# Automated repair (creates dir, symlinks, config, fresh DB)
+~/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh
+
+# Or with custom paths
+MANUL_RUNTIME_DIR=~/.openclaw/manul \
+MANUL_SOURCE_DB=/path/to/backup/manul.db \
+~/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh
+```
+
+The repair script:
+1. Creates `~/.openclaw/manul/` if missing
+2. Deploys symlinks via `install-manul-symlinks.sh`
+3. Copies `config.json.example` → `config.json` if missing (edit before use)
+4. Restores or creates `manul.db` (fresh schema if no backup)

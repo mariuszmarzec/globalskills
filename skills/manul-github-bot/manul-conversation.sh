@@ -24,7 +24,7 @@ FEEDBACK="${MANUL_DIR}/feedback.sh"
 
 # Ensure DB path is on native ext4
 if [[ "$DB" == /mnt/f/* ]]; then
-  DB="/home/marzec/.openclaw/manul/manul.db"
+  DB="${MANUL_DIR}/manul.db"
 fi
 
 # JSON output flag

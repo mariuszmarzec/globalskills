@@ -8,7 +8,7 @@
 #   install-manul-symlinks.sh [--runtime-dir <path>] [--canonical-dir <path>] [--dry-run]
 #
 # Options:
-#   --runtime-dir    Runtime scripts directory (default: /mnt/f/ubuntu-workspace/.openclaw/manul)
+#   --runtime-dir    Runtime scripts directory (default: ~/.openclaw/manul)
 #   --canonical-dir  Canonical skill source directory (default: ~/.globalskills/skills/manul-github-bot)
 #   --dry-run        Show what would be done without making changes
 #
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # Defaults
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 DRY_RUN=false
 

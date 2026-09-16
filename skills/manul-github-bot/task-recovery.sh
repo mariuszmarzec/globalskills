@@ -12,7 +12,7 @@
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="/home/marzec/.openclaw/manul/manul.db"
+DB="${MANUL_DIR}/manul.db"
 LOG="${MANUL_DIR}/task-recovery.log"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
