@@ -1048,8 +1048,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         # building context, so the task's own prompt is included in history.
         # Use rawId/rawBody (no prefix, full body) to match what
         # persist_conversation_messages_for_repo will store later.
-        local raw_id raw_body
-        raw_id="$(jq -r '.rawId // $id' <<<"$obj")"
+
+        raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
         raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
         persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true

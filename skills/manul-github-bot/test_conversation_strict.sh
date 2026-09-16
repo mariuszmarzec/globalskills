@@ -126,14 +126,19 @@ EOF
 set -u
 args="${@/--paginate/}"
 if [[ "${1:-}" == "pr" && "${2:-}" == "list" ]]; then
-  if [[ "$*" == *"--state open"* ]]; then echo '[{"number":50,"headRefName":"feature","baseRefName":"main","title":"Test","url":"https://github.com/test-org/test-repo/pull/50"}]'
-  elif [[ "$*" == *"--json number"* ]]; then echo '50'
-  else echo '[]'; fi
+  if [[ "$*" == *"--state merged"* ]]; then echo '[]'; exit 0
+  elif [[ "$*" == *"--state closed"* ]]; then echo '[]'; exit 0
+  elif [[ "$*" == *"--state open"* ]]; then echo '[{"number":50,"headRefName":"feature","baseRefName":"main","title":"Test","url":"https://github.com/test-org/test-repo/pull/50"}]'; exit 0
+  elif [[ "$*" == *"--json number"* ]]; then printf '50\n'; exit 0
+  else echo '[{"number":50,"headRefName":"feature","baseRefName":"main","title":"Test","url":"https://github.com/test-org/test-repo/pull/50"}]'; fi
   exit 0
 fi
 if [[ "${1:-}" == "issue" && "${2:-}" == "list" ]]; then echo '[]'; exit 0; fi
 if [[ "${1:-}" == "api" ]]; then
-  if [[ "$args" == *"/pulls/comments"* ]]; then cat "$TEST_DIR/reviews.json"; exit 0; fi
+  if [[ "$args" == */pulls/*comments* ]]; then
+    if [ -f "$TEST_DIR/reviews.json" ]; then cat "$TEST_DIR/reviews.json"; else echo '[]'; fi
+    exit 0
+  fi
   echo '[]'; exit 0
 fi
 echo '{}'

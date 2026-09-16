@@ -248,12 +248,22 @@ EOF
 #!/bin/bash
 set -u
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
-   if [[ "$*" == *"--jq"* ]]; then
-     echo "50"
-   else
-     echo '[{"number":50,"headRefName":"feature/auth","baseRefName":"main","title":"Auth refactor","url":"https://github.com/test-org/test-repo/pull/50","state":"open"}]'
-   fi
-   exit 0
+  if [[ "$*" == *"--state merged"* ]]; then
+    echo '[]'
+    exit 0
+  elif [[ "$*" == *"--state closed"* ]]; then
+    echo '[]'
+    exit 0
+  elif [[ "$*" == *"--state open"* ]]; then
+    echo '[{"number":50,"headRefName":"feature/auth","baseRefName":"main","title":"Auth refactor","url":"https://github.com/test-org/test-repo/pull/50","state":"open"}]'
+    exit 0
+  elif [[ "$*" == *"--json number"* ]]; then
+    printf '50\n'
+    exit 0
+  else
+    echo '[{"number":50,"headRefName":"feature/auth","baseRefName":"main","title":"Auth refactor","url":"https://github.com/test-org/test-repo/pull/50","state":"open"}]'
+  fi
+  exit 0
 fi
 if [[ "$1" == "issue" && "$2" == "list" ]]; then
    echo '[]'
