@@ -319,7 +319,7 @@ persist_conversation_messages_for_repo() {
 
   # Get all issue/PR numbers that had trigger comments this poll
   local affected_ids
-  affected_ids="$(sqlite3 "$DB" "SELECT DISTINCT issueNumber FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND createdAt >= '$now' AND status IN ('queued','running');" 2>>"$LOG")" || true
+  affected_ids="$(sqlite3 "$DB" "SELECT DISTINCT issueNumber FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND status IN ('queued','running');" 2>>"$LOG")" || true
 
   [ -z "$affected_ids" ] && return 0
 
@@ -870,7 +870,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "pr-top-level")'); SELECT changes();" 2>>"$LOG")"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         ctx="$(build_issue_context "$repo" "$issue")"
@@ -931,7 +931,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "pr-top-level")'); SELECT changes();" 2>>"$LOG")"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
@@ -998,8 +998,21 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       pr_state="$(jq -r '.state // ""' <<<"$obj")"
       is_res="$(jq -r '.isResolved // false' <<<"$obj")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      # Determine conversation ID based on thread root
+      reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
+      conv_id=""
+      if [ -n "$reply_to" ]; then
+        # Inline reply - need to find thread root by fetching all PR review comments
+        thread_comments="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+        root_id="$(get_review_thread_root_id "$thread_comments" "$id")"
+        [ -n "$root_id" ] && conv_id="$(generate_conversation_id "$repo" "$issue" "review-thread" "$root_id")"
+      fi
+      # Default to review-thread conversation for inline review comments
+      if [ -z "$conv_id" ]; then
+        conv_id="$(generate_conversation_id "$repo" "$issue" "review-thread" "$id")"
+      fi
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(generate_conversation_id "$repo" "$issue" "pr-top-level")'); SELECT changes();" 2>>"$LOG")"
+       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
        if [ "${ins:-0}" -gt 0 ]; then
          NEW=$((NEW + 1))
          # Ensure conversation exists for this PR
@@ -1054,6 +1067,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         path: (.path // ""),
         line: ((.line // .original_line // "") | tostring),
         diffHunk: (.diff_hunk // ""),
+        in_reply_to_id: (.in_reply_to_id // null),
         isResolved: (.in_reply_to_id // null | . != null)
       }' 2>>"$LOG" || true)
 
