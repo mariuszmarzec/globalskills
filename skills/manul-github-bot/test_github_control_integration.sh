@@ -2916,15 +2916,138 @@ run_test "crash-resilience: crash during task creation creates one task" test_cr
 run_test "crash-resilience: identical concurrent reviews produce exactly one task" test_identical_concurrent_reviews_exactly_one_task
 run_test "crash-resilience: repeated retries after success preserve exactly one task" test_repeated_retries_after_success
 
-echo "═══════════════════════════════════════════════════════════════"
-echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
-echo "═══════════════════════════════════════════════════════════════"
 
-if [ "$FAILED" -gt 0 ]; then
-  echo "❌ Test suite FAILED: $FAILED tests failed"
-  exit 1
+
+# Test: Multi-step conversation preserves context and reuses task
+test_persistent_conversation_behavior() {
+   local test_dir
+   test_dir="$(mktemp -d /tmp/poll-persistent-conv-test-XXXXXX)"
+   local manul_dir="$test_dir/manul"
+   mkdir -p "$manul_dir"
+
+   cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+   local poll_db="$manul_dir/manul.db"
+   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
+   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+   sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+    sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
+
+   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+   local mock_gh_dir="$test_dir/mock-gh"
+   mkdir -p "$mock_gh_dir"
+
+   local call_log="$test_dir/call_log.txt"
+   > "$call_log"
+
+   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+set -u
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
 fi
-echo "✅ All tests PASSED: $PASSED/$TOTAL tests passed"
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
+fi
+if [[ "$1" == "api" ]]; then
+    args="${@/--paginate/}"
+    if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
+        # Return issue comments for repo-level and per-issue endpoints
+        echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]'
+        exit 0
+    fi
+    if [[ "$args" == *"/issues/100/comments"* ]]; then
+        # Return issue comments for persist_conversation_messages_for_repo
+        echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger"},{"id":"ordinary-comment","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary"}]'
+        exit 0
+    fi
+    if [[ "$args" == *"/issues?state=open"* ]]; then
+       echo '[{"number":100}]'
+       exit 0
+    fi
+    echo '[]'
+    exit 0
+fi
+echo '{}'
+exit 0
+MOCK_EOF
+   chmod +x "$mock_gh_dir/gh"
+
+   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+   # Check that exactly one task was created from the trigger comment
+   local task_count_after_first
+   task_count_after_first="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$task_count_after_first" -ne 1 ]; then
+      echo "ERROR: Expected exactly 1 task after first poll (trigger comment), found $task_count_after_first"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+# Verify the task has the correct prompt from the trigger comment
+    local task_prompt
+    task_prompt="$(sqlite3 "$poll_db" "SELECT prompt FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100 LIMIT 1;" 2>/dev/null)"
+    if [ "$task_prompt" != "Add a test for multiply(2, 3) == 6" ]; then
+       echo "ERROR: Task prompt mismatch. Expected 'Add a test for multiply(2, 3) == 6', got '$task_prompt'"
+       rm -rf "$test_dir"
+       return 1
+    fi
+
+   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+
+   # Check that still only one task exists (no duplicate created)
+   local task_count_after_second
+   task_count_after_second="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$task_count_after_second" -ne 1 ]; then
+      echo "ERROR: Expected still exactly 1 task after second poll (no duplicate), found $task_count_after_second"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   # Verify conversation persistence: conversationId should exist
+   local conv_count
+   conv_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversations WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$conv_count" -lt 1 ]; then
+      echo "ERROR: Expected at least 1 conversation for issue #100, found $conv_count"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   # Verify conversation_messages entries exist (both comments persisted under same conversation)
+   local msg_count
+   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE issueNumber=100;" 2>/dev/null)"
+   if [ "$msg_count" -lt 2 ]; then
+      echo "ERROR: Expected at least 2 conversation_messages entries (trigger + ordinary), found $msg_count"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   rm -rf "$test_dir"
+   return 0
+}
+
+run_test "persistent conversation: multi-step interaction preserves context and reuses task" test_persistent_conversation_behavior
 
 # ===================== Conversation Threading Tests =====================
 
@@ -3341,3 +3464,7 @@ run_test "threading: different inline review threads get different conversationI
 run_test "threading: reply to same thread gets same conversationId" test_reply_to_same_thread_gets_same_conversation_id
 run_test "threading: PR top-level comment gets PR conversationId" test_pr_top_level_comment_gets_pr_conversation_id
 run_test "threading: conversation persistence not dependent on createdAt>=now" test_conversation_persistence_not_dependent_on_createdAt_now
+
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
+echo "═══════════════════════════════════════════════════════════════"

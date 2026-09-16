@@ -221,15 +221,17 @@ persist_conversation_message() {
   [ -n "$conv_id" ] || return 0
   [ -n "$comment_id" ] || return 0
 
-  local esc_repo esc_author esc_body esc_url esc_type
+  local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"
   esc_author="$(sql_escape "$author")"
   esc_body="$(sql_escape "$body")"
   esc_url="$(sql_escape "$url")"
   esc_type="$(sql_escape "$message_type")"
+  message_id="$(uuidgen)"
 
   sqlite3 "$DB" "
     INSERT OR IGNORE INTO conversation_messages(
+      messageId,
       conversationId,
       commentId,
       repo,
@@ -241,6 +243,7 @@ persist_conversation_message() {
       messageType
     )
     VALUES(
+      '$message_id',
       '$(sql_escape "$conv_id")',
       '$(sql_escape "$comment_id")',
       '$esc_repo',
@@ -535,6 +538,9 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS submission_claims (
     createdAt TEXT DEFAULT (datetime('now'))
 );" 2>>"$LOG"
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);" 2>>"$LOG"
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);" 2>>"$LOG"
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);" 2>>"$LOG"
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);" 2>>"$LOG"
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
 if [ -z "$BASELINE" ]; then
@@ -915,7 +921,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         agent: $agent,
         action: $action,
         prompt: $actx.prompt,
-        fullBody: (.body | sub($trig; ""))
+        fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; ""))
       }' 2>>"$LOG" || true)
 
     # 1b) Issue bodies (new OPEN issues carrying the trigger in the description) — state=open skips closed issues
@@ -1048,8 +1054,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         # GitHub control protocol integration: process review events
         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
           review_id="${id#review:}"
-          conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
-          # Link this review to the PR's conversation
+          # Link this review to the PR's conversation using the thread-aware
+          # conv_id computed above; do NOT overwrite it with pr-top-level.
           if [ -n "$conv_id" ]; then
             sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
           fi
@@ -1082,7 +1088,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         agent: $agent,
         action: $action,
         prompt: $actx.prompt,
-        fullBody: (.body | sub($trig; "")),
+        fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; "")),
         path: (.path // ""),
         line: ((.line // .original_line // "") | tostring),
         diffHunk: (.diff_hunk // ""),
@@ -1149,6 +1155,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
       done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
     fi
+
+    # Persist non-trigger comments as conversation history for all issues/PRs
+    # that had trigger comments this poll. This ensures the daemon has full
+    # thread context even for messages that didn't contain /manul.
+    persist_conversation_messages_for_repo "$repo"
 
     # 3) Drain pending skip comments from a previous failed run (GitHub as
     # primary frontend: comments are queued to skip-comments.log when feedback.sh
