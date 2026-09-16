@@ -55,10 +55,11 @@ Manul uses a **two-directory layout**:
 | `~/.globalskills/skills/manul-github-bot/` | **Canonical source** — all scripts, prompts, docs | Single source of truth for executable code |
 | `~/.openclaw/manul/` | **Runtime** — scripts (via symlinks) + data | Scripts are symlinks; data is local copies |
 
-**Why this split?** The runtime directory lives on `/mnt/f` (Windows WSL2 mount) because:
-- Repository worktrees and large Git operations are faster on the mounted filesystem
-- The workspace (`workspace/`) contains cloned repositories that need to persist across reboots
-- Logs and database remain accessible to both WSL2 and native Linux paths
+**Why this split?** The runtime directory lives on native ext4 (`~/.openclaw/manul/`) for performance and reliability:
+- SQLite database (`manul.db`) requires native filesystem I/O for correct concurrent access
+- Repository worktrees and large Git operations run faster on ext4 than on 9p mounts
+- The workspace (`workspace/`) contains cloned repositories that persist across reboots
+- Logs, locks, and DB remain accessible from any WSL2 or native Linux path
 
 **Scripts are symlinked, not copied:** Changes to canonical scripts are immediately reflected at runtime.
 
@@ -437,7 +438,7 @@ Note: file list is sampled.
 If the runtime directory is lost or broken:
 
 ```bash
-# Automated repair (creates dir, symlinks, config, fresh DB)
+# Automated repair (creates dir, symlinks, config; aborts if no DB backup)
 ~/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh
 
 # Or with custom paths
@@ -450,4 +451,5 @@ The repair script:
 1. Creates `~/.openclaw/manul/` if missing
 2. Deploys symlinks via `install-manul-symlinks.sh`
 3. Copies `config.json.example` → `config.json` if missing (edit before use)
-4. Restores or creates `manul.db` (fresh schema if no backup)
+4. Restores `manul.db` from `--source-db` or archive backup if available
+5. Aborts with exit 1 if no backup DB is found — a valid `manul.db` is required to start the daemon
