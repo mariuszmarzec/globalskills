@@ -304,7 +304,10 @@ fetch_issue_ctx() {
       printf '%s' "${CTX_ISSUE_CACHE[$key]}"
       return
     fi
-    j="$(gh issue view "$n" --repo "$repo" --json number,title,body 2>/dev/null | jq -c '{number,title,body}' 2>/dev/null || true)"
+    if ! j="$(gh issue view "$n" --repo "$repo" --json number,title,body 2>>"$LOG" | jq -c '{number,title,body}' 2>>"$LOG")"; then
+      log "ERROR: failed to fetch issue context for $repo#$n via gh issue view"
+      j=""
+    fi
     CTX_ISSUE_CACHE[$key]="$j"
     printf '%s' "$j"
 }
@@ -315,7 +318,10 @@ build_review_context() {
     if [ -n "${CTX_PR_CACHE[$key]:-}" ]; then
       pr_json="${CTX_PR_CACHE[$key]}"
     else
-      pr_json="$(gh pr view "$pr" --repo "$repo" --json number,title,state,body 2>/dev/null | jq -c . 2>/dev/null || true)"
+      if ! pr_json="$(gh pr view "$pr" --repo "$repo" --json number,title,state,body 2>>"$LOG" | jq -c . 2>>"$LOG")"; then
+        log "ERROR: failed to fetch PR view for $repo#$pr"
+        pr_json='{"number":0,"title":"","state":"","body":""}'
+      fi
       [ -n "$pr_json" ] || pr_json='{"number":0,"title":"","state":"","body":""}'
       CTX_PR_CACHE[$key]="$pr_json"
     fi
