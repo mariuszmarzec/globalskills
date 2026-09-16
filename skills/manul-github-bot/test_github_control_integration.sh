@@ -2918,7 +2918,8 @@ run_test "crash-resilience: repeated retries after success preserve exactly one 
 
 
 
-# Test: Multi-step conversation preserves context and reuses task
+# Test: 4-poll persistent conversation scenario
+# Proves: task count, conversation reuse, message order, and idempotency
 test_persistent_conversation_behavior() {
    local test_dir
    test_dir="$(mktemp -d /tmp/poll-persistent-conv-test-XXXXXX)"
@@ -2947,7 +2948,7 @@ CFGEOF
    sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
    sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
    sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
-    sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
+   sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
    cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
    cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
@@ -2956,10 +2957,14 @@ CFGEOF
    local mock_gh_dir="$test_dir/mock-gh"
    mkdir -p "$mock_gh_dir"
 
-   local call_log="$test_dir/call_log.txt"
-   > "$call_log"
+    # Track which comments were added in each poll
+    # Store comment data in separate files for the mock to read
+    echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_1.json"
+    echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-2","body":"Any updates?","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_2.json"
+    echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-2","body":"Any updates?","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"trigger-comment-2","body":"/manul Check if tests pass","user":{"login":"test-user"},"created_at":"2026-09-16T00:15:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_3.json"
+    echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-1","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-1","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-2","body":"Any updates?","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"trigger-comment-2","body":"/manul Check if tests pass","user":{"login":"test-user"},"created_at":"2026-09-16T00:15:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment-3","body":"Still waiting...","user":{"login":"test-user"},"created_at":"2026-09-16T00:20:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary-3","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]' > "$test_dir/comments_4.json"
 
-   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+    cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
@@ -2973,13 +2978,29 @@ fi
 if [[ "$1" == "api" ]]; then
     args="${@/--paginate/}"
     if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
-        # Return issue comments for repo-level and per-issue endpoints
-        echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"},{"id":"ordinary-comment","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/100"}]'
+        # Return comments based on call count file
+        call_count="$(cat "${TEST_DIR:-/tmp}/call_count.txt" 2>/dev/null || echo "0")"
+        call_count=$((call_count + 1))
+        echo "$call_count" > "${TEST_DIR:-/tmp}/call_count.txt"
+        case "$call_count" in
+            1) cat "${TEST_DIR:-/tmp}/comments_1.json";;
+            2) cat "${TEST_DIR:-/tmp}/comments_2.json";;
+            3) cat "${TEST_DIR:-/tmp}/comments_3.json";;
+            *) cat "${TEST_DIR:-/tmp}/comments_4.json";;
+        esac
         exit 0
     fi
     if [[ "$args" == *"/issues/100/comments"* ]]; then
-        # Return issue comments for persist_conversation_messages_for_repo
-        echo '[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-trigger"},{"id":"ordinary-comment","body":"Just checking on progress","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/100#issuecomment-ordinary"}]'
+        # Same logic for per-issue comments endpoint
+        call_count="$(cat "${TEST_DIR:-/tmp}/call_count.txt" 2>/dev/null || echo "0")"
+        call_count=$((call_count + 1))
+        echo "$call_count" > "${TEST_DIR:-/tmp}/call_count.txt"
+        case "$call_count" in
+            1) cat "${TEST_DIR:-/tmp}/comments_1.json";;
+            2) cat "${TEST_DIR:-/tmp}/comments_2.json";;
+            3) cat "${TEST_DIR:-/tmp}/comments_3.json";;
+            *) cat "${TEST_DIR:-/tmp}/comments_4.json";;
+        esac
         exit 0
     fi
     if [[ "$args" == *"/issues?state=open"* ]]; then
@@ -2994,51 +3015,88 @@ exit 0
 MOCK_EOF
    chmod +x "$mock_gh_dir/gh"
 
-   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+    # Run 4 polls (do NOT reset call_count between polls - mock tracks cumulative state)
+    for i in 1 2 3 4; do
+      MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
+    done
 
-   # Check that exactly one task was created from the trigger comment
-   local task_count_after_first
-   task_count_after_first="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
-   if [ "$task_count_after_first" -ne 1 ]; then
-      echo "ERROR: Expected exactly 1 task after first poll (trigger comment), found $task_count_after_first"
+   # === ASSERTION 1: Task count ===
+   # We should have exactly 2 tasks (one from each trigger comment)
+   local task_count
+   task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$task_count" -ne 2 ]; then
+      echo "ERROR: Expected exactly 2 tasks after 4 polls (2 trigger comments), found $task_count"
       rm -rf "$test_dir"
       return 1
    fi
 
-# Verify the task has the correct prompt from the trigger comment
-    local task_prompt
-    task_prompt="$(sqlite3 "$poll_db" "SELECT prompt FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100 LIMIT 1;" 2>/dev/null)"
-    if [ "$task_prompt" != "Add a test for multiply(2, 3) == 6" ]; then
-       echo "ERROR: Task prompt mismatch. Expected 'Add a test for multiply(2, 3) == 6', got '$task_prompt'"
+   # === ASSERTION 2: Conversation reuse ===
+   # All tasks and messages should be under the same conversation for issue #100
+   local conv_count
+   conv_count="$(sqlite3 "$poll_db" "SELECT COUNT(DISTINCT conversationId) FROM conversations WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$conv_count" -ne 1 ]; then
+      echo "ERROR: Expected exactly 1 conversation for issue #100, found $conv_count"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   local conv_id
+   conv_id="$(sqlite3 "$poll_db" "SELECT conversationId FROM conversations WHERE repository='test-org/test-repo' AND issueNumber=100 LIMIT 1;" 2>/dev/null)"
+   if [ -z "$conv_id" ]; then
+      echo "ERROR: No conversation found for issue #100"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+    # Both tasks should reference the same conversation
+    local tasks_with_conv
+    tasks_with_conv="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100 AND conversationId='$conv_id';" 2>/dev/null)"
+    if [ "$tasks_with_conv" -ne 2 ]; then
+       echo "ERROR: Expected 2 tasks under conversation $conv_id, found $tasks_with_conv"
        rm -rf "$test_dir"
        return 1
     fi
 
+   # === ASSERTION 3: Message order ===
+   # We should have 5 conversation messages (3 ordinary + 2 trigger comments)
+   local msg_count
+   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$msg_count" -ne 5 ]; then
+      echo "ERROR: Expected exactly 5 conversation_messages (3 ordinary + 2 trigger), found $msg_count"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   # Verify message order matches creation time
+   local message_order
+   message_order="$(sqlite3 "$poll_db" "SELECT commentId FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=100 ORDER BY createdAt ASC;" 2>/dev/null)"
+   local expected_order=$'trigger-comment\nordinary-comment-1\nordinary-comment-2\ntrigger-comment-2\nordinary-comment-3'
+   if [ "$message_order" != "$expected_order" ]; then
+      echo "ERROR: Message order mismatch. Expected:"
+      echo "$expected_order"
+      echo "Got:"
+      echo "$message_order"
+      rm -rf "$test_dir"
+      return 1
+   fi
+
+   # === ASSERTION 4: Idempotency ===
+   # Running a 5th poll should not create any new tasks or messages
+   > "$test_dir/call_count.txt"
    MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
 
-   # Check that still only one task exists (no duplicate created)
-   local task_count_after_second
-   task_count_after_second="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
-   if [ "$task_count_after_second" -ne 1 ]; then
-      echo "ERROR: Expected still exactly 1 task after second poll (no duplicate), found $task_count_after_second"
+   local task_count_after_fifth
+   task_count_after_fifth="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$task_count_after_fifth" -ne 2 ]; then
+      echo "ERROR: Expected still 2 tasks after 5th poll (idempotent), found $task_count_after_fifth"
       rm -rf "$test_dir"
       return 1
    fi
 
-   # Verify conversation persistence: conversationId should exist
-   local conv_count
-   conv_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversations WHERE repository='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
-   if [ "$conv_count" -lt 1 ]; then
-      echo "ERROR: Expected at least 1 conversation for issue #100, found $conv_count"
-      rm -rf "$test_dir"
-      return 1
-   fi
-
-   # Verify conversation_messages entries exist (both comments persisted under same conversation)
-   local msg_count
-   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE issueNumber=100;" 2>/dev/null)"
-   if [ "$msg_count" -lt 2 ]; then
-      echo "ERROR: Expected at least 2 conversation_messages entries (trigger + ordinary), found $msg_count"
+   local msg_count_after_fifth
+   msg_count_after_fifth="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=100;" 2>/dev/null)"
+   if [ "$msg_count_after_fifth" -ne 5 ]; then
+      echo "ERROR: Expected still 5 messages after 5th poll (idempotent), found $msg_count_after_fifth"
       rm -rf "$test_dir"
       return 1
    fi
