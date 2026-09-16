@@ -189,7 +189,7 @@ get_review_thread_root_id() {
   while [ -n "$current" ] && [ "$guard" -lt 100 ]; do
     parent="$(
       printf '%s' "$comments_json" |
-        jq -r --argjson id "$current" '
+        jq -r --arg id "$current" '
           .[] | select(.id == $id) | (.in_reply_to_id // empty)
         ' 2>/dev/null |
         head -n1
@@ -846,7 +846,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       open_prs_json="$(printf '%s\n' "${!OPEN_PRS[@]}" | jq -R 'tonumber' | jq -s '.')"
     fi
 
-    # 1) Issue comments (PR conversation comments are issue comments too)
+# 1) Issue comments (PR conversation comments are issue comments too)
     while IFS= read -r obj; do
       [ -n "$obj" ] || continue
       id="$(jq -r '.id' <<<"$obj")"
@@ -869,10 +869,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      # Generate conversation ID for issue comments
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
+        # Ensure conversation exists for this issue
+        sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
         ctx="$(build_issue_context "$repo" "$issue")"
         if [ -n "$ctx" ]; then
           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
@@ -896,11 +900,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
          elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
          else {action: null, prompt: $rest}
          end) as $actx
-      | (.issue_url | capture("issues/(?<n>[0-9]+)$").n | tonumber) as $issue_num
+      | (.html_url | capture("issues/(?<n>[0-9]+)").n | tonumber) as $issue_num
       | (if $actx.action != null then $actx.action
-         elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
-         else "IMPLEMENT"
-         end) as $action
+          elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
+          else "IMPLEMENT"
+          end) as $action
       | {
         id: ("issue:" + (.id|tostring)),
         repo: $repo,
@@ -934,6 +938,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
+        # Ensure conversation exists for this issue body
+        sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
         log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
       fi
     done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
@@ -971,15 +977,28 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # inside review threads — the old logic only tracked top-level comments and
     # silently dropped /manul replies.
     # OPEN_PRS already populated above (batch fetch for the whole repo) — reuse it.
+    # Fetch all review comments once, then filter by open PRs.
+    review_comments="$(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+
+    # Build a lookup of PRs to their comment counts for conversation ID determination
+    declare -A PR_COMMENT_COUNTS=()
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      pr_num="$(jq -r '.html_url | capture("pull/(?<n>[0-9]+)").n' <<<"$line")"
+      [ -n "$pr_num" ] && PR_COMMENT_COUNTS["$pr_num"]=$(( ${PR_COMMENT_COUNTS["$pr_num"]:-0} + 1 ))
+    done < <(printf '%s\n' "$review_comments" | jq -c '.[]' 2>/dev/null || true)
+
     while IFS= read -r obj; do
       [ -n "$obj" ] || continue
       id="$(jq -r '.id' <<<"$obj")"
-      issue="$(jq -r '.issueNumber' <<<"$obj")"
-      # Skip review comments on closed/merged PRs and resolved threads.
-      [ -n "${OPEN_PRS[$issue]:-}" ] || continue
-      [ -n "${MERGED_PRS[$issue]:-}" ] && continue
-      [ -n "${CLOSED_PRS[$issue]:-}" ] && continue
-      [ "$(jq -r '.isResolved // false' <<<"$obj")" = "true" ] && continue
+      pr_num="$(jq -r '.issueNumber' <<<"$obj")"
+      # Skip if not an open PR
+      [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+      # Skip review comments on merged/closed PRs
+      [ -n "${MERGED_PRS[$pr_num]:-}" ] && continue
+      [ -n "${CLOSED_PRS[$pr_num]:-}" ] && continue
+      # Replies are part of a review thread and must be processed; the
+      # conversation ID below points them to their root thread.
       url="$(jq -r '.url' <<<"$obj")"
       author="$(jq -r '.author' <<<"$obj")"
       created="$(jq -r '.created' <<<"$obj")"
@@ -995,48 +1014,48 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
       esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
-      pr_state="$(jq -r '.state // ""' <<<"$obj")"
-      is_res="$(jq -r '.isResolved // false' <<<"$obj")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      # Determine conversation ID based on thread root
+      # Determine conversation ID based on comment count and thread structure
+      raw_id="$(jq -r '.id' <<<"$obj")"
+      raw_id="${raw_id#review:}"
       reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
       conv_id=""
-      if [ -n "$reply_to" ]; then
-        # Inline reply - need to find thread root by fetching all PR review comments
-        thread_comments="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>>"$LOG" || echo "[]")"
-        root_id="$(get_review_thread_root_id "$thread_comments" "$id")"
-        [ -n "$root_id" ] && conv_id="$(generate_conversation_id "$repo" "$issue" "review-thread" "$root_id")"
+      pr_comment_count="${PR_COMMENT_COUNTS[$pr_num]:-0}"
+      if [ "$pr_comment_count" -eq 1 ]; then
+        # Single standalone comment gets pr-top-level conversation
+        conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+      elif [ -n "$reply_to" ]; then
+        # Inline reply - find thread root
+        root_id="$(get_review_thread_root_id "$review_comments" "$raw_id")"
+        [ -n "$root_id" ] && conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")"
+      else
+        # Top-level comment in a multi-comment PR gets review-thread with its own ID
+        conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$raw_id")"
       fi
-      # Default to review-thread conversation for inline review comments
-      if [ -z "$conv_id" ]; then
-        conv_id="$(generate_conversation_id "$repo" "$issue" "review-thread" "$id")"
-      fi
+      [ -n "$conv_id" ] || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
-       if [ "${ins:-0}" -gt 0 ]; then
-         NEW=$((NEW + 1))
-         # Ensure conversation exists for this PR
-         conv_id="$(generate_conversation_id "$repo" "$issue" "pr-top-level")"
-         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', $issue, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-         ctx="$(build_review_context "$repo" "$issue" "$cpath" "$cline" "$chunk")"
-         if [ -n "$ctx" ]; then
-           esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-           sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-           log "context enriched for $id on $repo#$issue (PR + linked issues)"
-         fi
-         # GitHub control protocol integration: process review events
-         if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
-           pr_num="$issue"
-           review_id="${id#review:}"
-           review_body="$fullBody"
-           conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
-           # Link this review to the PR's conversation
-           if [ -n "$conv_id" ]; then
-             sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
-           fi
-         fi
-         log "queued $id on $repo#$issue (agent=${agent:-default})"
-       fi
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
+      if [ "${ins:-0}" -gt 0 ]; then
+        NEW=$((NEW + 1))
+        # Ensure conversation exists for this PR
+        sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+        ctx="$(build_review_context "$repo" "$pr_num" "$cpath" "$cline" "$chunk")"
+        if [ -n "$ctx" ]; then
+          esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+          sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+          log "context enriched for $id on $repo#$pr_num (PR + linked issues)"
+        fi
+        # GitHub control protocol integration: process review events
+        if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
+          review_id="${id#review:}"
+          conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+          # Link this review to the PR's conversation
+          if [ -n "$conv_id" ]; then
+            sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
+          fi
+        fi
+        log "queued $id on $repo#$pr_num (agent=${agent:-default})"
+      fi
     done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
       .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
