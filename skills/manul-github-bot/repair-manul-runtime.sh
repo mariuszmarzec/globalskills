@@ -8,10 +8,11 @@
 # 1. Creating the runtime directory
 # 2. Deploying symlinks to canonical scripts
 # 3. Restoring config.json from template if missing
-# 4. Restoring or initializing manul.db (requires backup source)
+# 4. Restoring manul.db from an existing backup
+# 5. Validating/upgrading the DB using the canonical Manul init routines
 #
-# If no backup DB is available, the script exits with an error rather
-# than creating an incomplete schema that would cause runtime failures.
+# The repair script never invents a new application schema. A missing DB must
+# be restored from an explicit backup or a previously-created runtime archive.
 
 set -euo pipefail
 
@@ -19,12 +20,24 @@ RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 
-echo "=== Manul Runtime Repair ==="
-echo "Runtime:    $RUNTIME_DIR"
-echo "Canonical:  $CANONICAL_DIR"
-echo ""
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
 
-# Step 1: Create runtime directory
+if [ ! -d "$CANONICAL_DIR" ]; then
+    fail "Canonical Manul directory does not exist: $CANONICAL_DIR"
+fi
+
+if [ ! -x "$CANONICAL_DIR/install-manul-symlinks.sh" ]; then
+    fail "Missing or non-executable install-manul-symlinks.sh in $CANONICAL_DIR"
+fi
+
+printf '%s\n' "=== Manul Runtime Repair ==="
+printf 'Runtime:    %s\n' "$RUNTIME_DIR"
+printf 'Canonical:  %s\n\n' "$CANONICAL_DIR"
+
+# Step 1: Create runtime directory.
 if [ ! -d "$RUNTIME_DIR" ]; then
     echo "[1/5] Creating runtime directory: $RUNTIME_DIR"
     mkdir -p "$RUNTIME_DIR"
@@ -32,45 +45,66 @@ else
     echo "[1/5] Runtime directory exists: $RUNTIME_DIR"
 fi
 
-# Step 2: Deploy symlinks
-echo ""
-echo "[2/5] Deploying symlinks..."
+# Step 2: Deploy all runtime symlinks from the canonical source.
+echo
+"[2/5]" # keep progress marker stable for logs
+printf '%s\n' "[2/5] Deploying symlinks..."
 "$CANONICAL_DIR/install-manul-symlinks.sh" --runtime-dir "$RUNTIME_DIR"
 
-# Step 3: Restore config if missing
+# Step 3: Restore config if missing. Existing config is never overwritten.
 if [ ! -f "$RUNTIME_DIR/config.json" ]; then
-    echo ""
-    echo "[3/5] Config not found, checking for template..."
+    echo
+    echo "[3/5] Config not found, restoring template..."
     if [ -f "$CANONICAL_DIR/config.json.example" ]; then
         cp "$CANONICAL_DIR/config.json.example" "$RUNTIME_DIR/config.json"
         echo "  Copied config.json.example -> config.json"
         echo "  WARNING: Edit $RUNTIME_DIR/config.json before starting daemon"
     else
-        echo "  WARNING: No config.json.example found in canonical dir"
+        fail "No config.json and no config.json.example found in $CANONICAL_DIR"
     fi
 else
-    echo ""
+    echo
     echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
 fi
 
-# Step 4: Restore DB from backup if possible
+# Validate config before touching/starting the daemon.
+if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
+    fail "Invalid JSON in $RUNTIME_DIR/config.json"
+fi
+
+# Step 4: Restore an existing DB. Never fabricate an incomplete schema.
 DB_FILE="$RUNTIME_DIR/manul.db"
 if [ -f "$DB_FILE" ]; then
-    echo ""
+    echo
     echo "[4/5] DB exists: $DB_FILE"
 else
-    echo ""
+    echo
     echo "[4/5] DB not found, attempting restore..."
     RESTORED=false
 
-    # Prefer explicit --source-db
-    if [ -n "$SOURCE_DB" ] && [ -f "$SOURCE_DB" ]; then
+    if [ -n "$SOURCE_DB" ]; then
+        if [ ! -f "$SOURCE_DB" ]; then
+            fail "MANUL_SOURCE_DB does not point to a file: $SOURCE_DB"
+        fi
         cp "$SOURCE_DB" "$DB_FILE"
         RESTORED=true
         echo "  Restored DB from: $SOURCE_DB"
-    # Fallback: check archive directories
-    elif [ -d "$RUNTIME_DIR-archive-"*".db" ] 2>/dev/null; then
-        LATEST_BAK=$(ls -t "$RUNTIME_DIR-archive-"*.db 2>/dev/null | head -1)
+    else
+        # Look for the newest archived runtime sibling, e.g.
+        # ~/.openclaw/manul-archive-20260916-123456/manul.db
+        ARCHIVE_ROOT="$(dirname "$RUNTIME_DIR")"
+        ARCHIVE_PREFIX="$(basename "$RUNTIME_DIR")-archive-"
+        LATEST_BAK=""
+        if [ -d "$ARCHIVE_ROOT" ]; then
+            while IFS= read -r -d '' archive_dir; do
+                candidate="$archive_dir/manul.db"
+                if [ -f "$candidate" ]; then
+                    LATEST_BAK="$candidate"
+                    break
+                fi
+            done < <(find "$ARCHIVE_ROOT" -maxdepth 1 -mindepth 1 -type d -name "${ARCHIVE_PREFIX}*" -printf '%T@ %p\0' 2>/dev/null | sort -z -nr | sed -z 's/^[^ ]* //')
+        fi
+
         if [ -n "$LATEST_BAK" ]; then
             cp "$LATEST_BAK" "$DB_FILE"
             RESTORED=true
@@ -79,68 +113,59 @@ else
     fi
 
     if [ "$RESTORED" = false ]; then
+        echo
+        echo "ERROR: No backup DB found."
+        echo "To restore from a backup, run:"
+        echo "  MANUL_SOURCE_DB=/path/to/backup/manul.db $0"
         echo ""
-        echo "  ERROR: No backup DB found."
-        echo "  To restore from a backup, run:"
-        echo "    MANUL_SOURCE_DB=/path/to/backup/manul.db $0"
-        echo ""
-        echo "  Alternatively, copy the DB from the legacy runtime:"
-        echo "    cp /mnt/f/ubuntu-workspace/.openclaw/manul/manul.db $DB_FILE"
-        echo ""
-        echo "  Recovery aborted. A valid manul.db is required for the daemon to start."
+        echo "Recovery aborted. A valid manul.db is required; no new application schema will be fabricated."
         exit 1
     fi
 fi
 
-# Step 5: Ensure DB schema is complete by sourcing canonical init functions
-echo ""
+# Step 5: Run the canonical DB initialization/migration routines.
+# manul-conversation.sh already owns init_schema(). Invoke it through its public
+# CLI instead of duplicating or scraping its implementation. A deliberately
+# missing conversation is expected to return exit code 2 after init_schema runs.
+echo
 echo "[5/5] Validating DB schema..."
-export MANUL_DIR="$RUNTIME_DIR"
-export DB="$DB_FILE"
 
-# Source init_schema from manul-conversation.sh (idempotent, CREATE IF NOT EXISTS)
-if [ -f "$CANONICAL_DIR/manul-conversation.sh" ]; then
-    # Extract and run only the init_schema function to avoid side effects
-    bash -c "
-        MANUL_DIR='$RUNTIME_DIR'
-        DB='$DB_FILE'
-        $(grep -A 80 '^init_schema()' '$CANONICAL_DIR/manul-conversation.sh' | head -60)
-    " 2>/dev/null || true
-    echo "  Schema validated via manul-conversation.sh init_schema"
+CONV_OUTPUT=""
+CONV_EXIT=0
+CONV_OUTPUT="$(MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" status --conversation-id "__runtime_repair_schema_check__" --json 2>&1)" || CONV_EXIT=$?
+
+if [ "$CONV_EXIT" -ne 0 ] && [ "$CONV_EXIT" -ne 2 ]; then
+    printf '%s\n' "$CONV_OUTPUT" >&2
+    fail "Canonical manul-conversation schema initialization failed (exit $CONV_EXIT)"
 fi
 
-# Source workspace_init from workspace-manager.sh
-if [ -f "$CANONICAL_DIR/workspace-manager.sh" ]; then
-    bash -c "
-        MANUL_DIR='$RUNTIME_DIR'
-        DB='$DB_FILE'
-        $(grep -A 10 '^workspace_init()' '$CANONICAL_DIR/workspace-manager.sh')
-    " 2>/dev/null || true
-    echo "  Workspace table validated via workspace-manager.sh workspace_init"
+echo "  Canonical conversation schema validated."
+
+# workspace-manager.sh only defines functions, so sourcing it and calling the
+# canonical workspace_init() is side-effect-safe and avoids duplicating schema.
+WORKSPACE_OUTPUT=""
+WORKSPACE_EXIT=0
+WORKSPACE_OUTPUT="$(MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1" && workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" 2>&1)" || WORKSPACE_EXIT=$?
+if [ "$WORKSPACE_EXIT" -ne 0 ]; then
+    printf '%s\n' "$WORKSPACE_OUTPUT" >&2
+    fail "Canonical workspace initialization failed (exit $WORKSPACE_EXIT)"
 fi
 
-# Verify required tables exist
-REQUIRED_TABLES="processed_comments meta workspaces"
-MISSING_TABLES=""
-for tbl in $REQUIRED_TABLES; do
-    if ! sqlite3 "$DB_FILE" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
-        MISSING_TABLES="$MISSING_TABLES $tbl"
+echo "  Canonical workspace schema validated."
+
+# Final smoke check for required tables.
+REQUIRED_TABLES="processed_comments conversations meta workspaces"
+for table in $REQUIRED_TABLES; do
+    if ! sqlite3 "$DB_FILE" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
+        fail "Required table '$table' is missing from $DB_FILE"
     fi
 done
 
-if [ -n "$MISSING_TABLES" ]; then
-    echo "  WARNING: Missing tables:$MISSING_TABLES"
-    echo "  The daemon may not function correctly without these tables."
-    echo "  Restore from a backup DB to fix."
-    exit 1
-fi
-
-echo "  All required tables present."
-
-echo ""
+echo "  Required tables present: $REQUIRED_TABLES"
+echo
 echo "=== Repair Complete ==="
 echo "Start daemon with:"
 echo "  setsid $RUNTIME_DIR/manul-daemon.sh start >/dev/null 2>&1 &"
-echo ""
+echo
 echo "Or use the automation wrapper:"
 echo "  $RUNTIME_DIR/start-manul-automation.sh start"
