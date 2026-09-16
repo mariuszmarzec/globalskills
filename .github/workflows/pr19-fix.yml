@@ -1,0 +1,202 @@
+name: PR19 targeted fix
+
+on:
+  push:
+    branches:
+      - feature/auto-detect-manul-action
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.sha == '64103b7f3cc1f32e65f271ec34c787ce2910fdf0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/auto-detect-manul-action
+          fetch-depth: 1
+      - name: Apply conversation fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('skills/manul-github-bot/poll.sh')
+          s = p.read_text()
+
+          old = '''  local esc_repo esc_author esc_body esc_url esc_type message_id
+  esc_repo="$(sql_escape "$repo")"
+  esc_author="$(sql_escape "$author")"
+  esc_body="$(sql_escape "$body")"
+  esc_url="$(sql_escape "$url")"
+  esc_type="$(sql_escape "$message_type")"
+  message_id="$(uuidgen)"
+'''
+          new = '''  local esc_repo esc_author esc_body esc_url esc_type message_id
+  esc_repo="$(sql_escape "$repo")"
+  esc_author="$(sql_escape "$author")"
+  esc_body="$(sql_escape "$body")"
+  esc_url="$(sql_escape "$url")"
+  esc_type="$(sql_escape "$message_type")"
+
+  # Idempotency is keyed by the GitHub comment id, not the generated message UUID.
+  local already_persisted
+  already_persisted="$(sqlite3 "$DB" "SELECT 1 FROM conversation_messages WHERE conversationId='$(sql_escape "$conv_id")' AND commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  [ "$already_persisted" = "1" ] && return 0
+
+  message_id="$(uuidgen)"
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'persist block match count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''      agent="$(jq -r '.agent // ""' <<<"$obj")"
+      action="$(jq -r '.action // ""' <<<"$obj")"
+      [ -n "$prompt" ] || continue
+      esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
+'''
+          new = '''      agent="$(jq -r '.agent // ""' <<<"$obj")"
+      action="$(jq -r '.action // ""' <<<"$obj")"
+      [ -n "$prompt" ] || continue
+      # Issue-body triggers are independent poll iterations; never reuse a
+      # conversation id left behind by a previous comment loop.
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+      esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'issue-body insertion match count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''      # Determine conversation ID based on comment count and thread structure
+      raw_id="$(jq -r '.id' <<<"$obj")"
+      raw_id="${raw_id#review:}"
+      reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
+      conv_id=""
+      pr_comment_count="${PR_COMMENT_COUNTS[$pr_num]:-0}"
+      if [ "$pr_comment_count" -eq 1 ]; then
+        # Single standalone comment gets pr-top-level conversation
+        conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+      elif [ -n "$reply_to" ]; then
+        # Inline reply - find thread root
+        root_id="$(get_review_thread_root_id "$review_comments" "$raw_id")"
+        [ -n "$root_id" ] && conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")"
+      else
+        # Top-level comment in a multi-comment PR gets review-thread with its own ID
+        conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$raw_id")"
+      fi
+      [ -n "$conv_id" ] || continue
+'''
+          new = '''      # Every inline review comment belongs to its review thread. A top-level
+      # inline comment is the root of that thread; replies resolve back to it.
+      # Do not use PR comment count to change conversation identity.
+      raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
+      reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
+      conv_id=""
+      if [ -n "$reply_to" ]; then
+        root_id="$(get_review_thread_root_id "$review_comments" "$raw_id")"
+      else
+        root_id="$raw_id"
+      fi
+      [ -n "$root_id" ] || continue
+      conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'review conversation block match count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''      # Group review comments by thread root
+      local seen_roots=""
+      while IFS= read -r comment; do
+'''
+          new = '''      while IFS= read -r comment; do
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'seen_roots header match count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''        # Skip if we've already processed this thread
+        echo "$seen_roots" | grep -qxF "$root_id" && continue
+        seen_roots="$(printf '%s\n%s' "$seen_roots" "$root_id")"
+
+        # Create or get conversation for this review thread
+'''
+          new = '''        # Create or get conversation for this review thread
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'seen_roots skip block match count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          # Add a focused hermetic regression covering the exact persistent
+          # conversation behavior requested by the PR.
+          t = Path('skills/manul-github-bot/test_conversation_regressions.sh')
+          t.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+test_helpers_and_persistence() {
+  local dir db
+  dir="$(mktemp -d /tmp/manul-conv-reg-XXXXXX)"
+  db="$dir/manul.db"
+  sqlite3 "$db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
+
+  source <(sed -n '/^get_review_thread_root_id()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+  source <(sed -n '/^persist_conversation_message()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+  source <(sed -n '/^build_conversation_context()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+  uuidgen() { echo "u-$RANDOM"; }
+  DB="$db" LOG="$dir/test.log"
+
+  local comments root reply_root second_root
+  comments='[{"id":101,"in_reply_to_id":null},{"id":102,"in_reply_to_id":101},{"id":103,"in_reply_to_id":102},{"id":201,"in_reply_to_id":null}]'
+  root="$(get_review_thread_root_id "$comments" 103)"
+  reply_root="$(get_review_thread_root_id "$comments" 102)"
+  second_root="$(get_review_thread_root_id "$comments" 201)"
+  [ "$root" = 101 ] || fail "reply 103 resolved to root $root"
+  [ "$reply_root" = 101 ] || fail "reply 102 resolved to root $reply_root"
+  [ "$second_root" = 201 ] || fail "second thread resolved to root $second_root"
+
+  # Exact contract: first task prompt, ordinary feedback, then follow-up trigger.
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 100 user 'Add a test for multiply(2, 3) == 6' 'https://example/100' '2026-01-01T00:00:01Z' issue-comment
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 102 user 'Now implement the change according to my previous feedback.' 'https://example/102' '2026-01-01T00:00:03Z' issue-comment
+
+  local count context
+  count="$(sqlite3 "$db" "SELECT COUNT(*) FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1';")"
+  [ "$count" -eq 3 ] || fail "expected 3 messages, got $count"
+  context="$(build_conversation_context 'conv-test-org/test-repo-issue-1')"
+  grep -Fq 'Also make sure the assertion uses float comparison.' <<<"$context" || fail 'ordinary feedback missing from follow-up context'
+
+  # Re-persisting a previously-seen GitHub comment must be idempotent.
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
+  count="$(sqlite3 "$db" "SELECT COUNT(*) FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1';")"
+  [ "$count" -eq 3 ] || fail "duplicate persistence created $count rows"
+  rm -rf "$dir"
+}
+
+bash -n "$SCRIPT_DIR/poll.sh"
+test_helpers_and_persistence
+echo 'PASS: conversation regressions (1/1)'
+''')
+          t.chmod(0o755)
+
+          b = Path('.github/workflows/build.yml')
+          bs = b.read_text()
+          marker = '    skills/manul-github-bot/test_conversation_orchestrator.sh\n'
+          addition = marker + '    skills/manul-github-bot/test_conversation_regressions.sh\n'
+          if bs.count(marker) != 1:
+              raise SystemExit(f'build.yml match count={bs.count(marker)}')
+          b.write_text(bs.replace(marker, addition, 1))
+          print('patch applied')
+      - name: Commit changes and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add skills/manul-github-bot/poll.sh skills/manul-github-bot/test_conversation_regressions.sh .github/workflows/build.yml
+          git rm .github/workflows/pr19-fix.yml
+          git commit -m 'Fix conversation thread persistence and regression coverage'
+          git push origin feature/auto-detect-manul-action
