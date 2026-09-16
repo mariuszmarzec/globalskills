@@ -885,7 +885,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
-        # Ensure conversation exists for this issue
+        # Persist the trigger comment to conversation_messages BEFORE building
+        # context, so the task's own prompt is included in history.
+        # Use rawId/rawBody (no prefix, full body) to match what
+        # persist_conversation_messages_for_repo will store later.
+        local raw_id raw_body
+        raw_id="$(jq -r '.rawId // $id' <<<"$obj")"
+        raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
+        persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
         ctx="$(build_conversation_context "$conv_id")"
         if [ -n "$ctx" ]; then
@@ -917,6 +924,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
           end) as $action
       | {
         id: ("issue:" + (.id|tostring)),
+        rawId: (.id|tostring),
+        rawBody: .body,
         repo: $repo,
         author: .user.login,
         created: .created_at,
@@ -1047,7 +1056,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
-        # Ensure conversation exists for this PR
+        # Persist the trigger review comment to conversation_messages BEFORE
+        # building context, so the task's own prompt is included in history.
+        # Use rawId/rawBody (no prefix, full body) to match what
+        # persist_conversation_messages_for_repo will store later.
+        local raw_id raw_body
+        raw_id="$(jq -r '.rawId // $id' <<<"$obj")"
+        raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
+        persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
         ctx="$(build_conversation_context "$conv_id")"
         if [ -n "$ctx" ]; then
@@ -1084,6 +1100,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       | (if $actx.action != null then $actx.action else "REVIEW_FIX" end) as $action
       | {
         id: ("review:" + (.id|tostring)),
+        rawId: (.id|tostring),
+        rawBody: .body,
         repo: $repo,
         author: .user.login,
         created: .created_at,
