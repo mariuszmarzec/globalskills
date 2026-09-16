@@ -36,7 +36,7 @@ CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
 LOCK="$MANUL_DIR/lock"
 FLOCK_FILE="$MANUL_DIR/daemon.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="/home/marzec/.openclaw/manul/manul.db"
+DB="${MANUL_DIR}/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-1800}"   # seconds for the agent turn
