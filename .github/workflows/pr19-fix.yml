@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch:
-    if: github.sha == '64103b7f3cc1f32e65f271ec34c787ce2910fdf0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,8 +128,6 @@ jobs:
 
           p.write_text(s)
 
-          # Add a focused hermetic regression covering the exact persistent
-          # conversation behavior requested by the PR.
           t = Path('skills/manul-github-bot/test_conversation_regressions.sh')
           t.write_text(r'''#!/usr/bin/env bash
 set -euo pipefail
@@ -158,7 +155,6 @@ test_helpers_and_persistence() {
   [ "$reply_root" = 101 ] || fail "reply 102 resolved to root $reply_root"
   [ "$second_root" = 201 ] || fail "second thread resolved to root $second_root"
 
-  # Exact contract: first task prompt, ordinary feedback, then follow-up trigger.
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 100 user 'Add a test for multiply(2, 3) == 6' 'https://example/100' '2026-01-01T00:00:01Z' issue-comment
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 102 user 'Now implement the change according to my previous feedback.' 'https://example/102' '2026-01-01T00:00:03Z' issue-comment
@@ -169,7 +165,6 @@ test_helpers_and_persistence() {
   context="$(build_conversation_context 'conv-test-org/test-repo-issue-1')"
   grep -Fq 'Also make sure the assertion uses float comparison.' <<<"$context" || fail 'ordinary feedback missing from follow-up context'
 
-  # Re-persisting a previously-seen GitHub comment must be idempotent.
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
   count="$(sqlite3 "$db" "SELECT COUNT(*) FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1';")"
   [ "$count" -eq 3 ] || fail "duplicate persistence created $count rows"
