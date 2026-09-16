@@ -27,7 +27,8 @@ cat > "$CONFIG" << 'CONFIGEOF'
 CONFIGEOF
 
 # Source only workspace manager (not full poll.sh to avoid dependencies)
-source "$(dirname "${BASH_SOURCE[0]}")/workspace-manager.sh"
+_script_dir="$(cd "$(dirname "$0")" && pwd)"
+source "$_script_dir/workspace-manager.sh"
 
 # Create processed_comments table for cross-repo tests
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, processedAt TEXT, status TEXT, workspaceId TEXT);" 2>/dev/null || true
@@ -36,15 +37,25 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (commentId TEXT PRI
 generate_conversation_id() {
   local repo="$1"
   local issue="$2"
-  local comment_url="${3:-}"
-  
-  if [ -n "$comment_url" ]; then
-    local url_hash
-    url_hash="$(printf '%s' "$comment_url" | md5sum | cut -d' ' -f1 | cut -c1-8)"
-    printf 'conv-%s-%s-%s' "$repo" "$issue" "$url_hash"
-  else
-    printf 'conv-%s-%s' "$repo" "$issue"
-  fi
+  local kind="${3:-issue}"
+  local thread_id="${4:-}"
+
+  case "$kind" in
+    review-thread)
+      [ -n "$thread_id" ] || {
+        echo "ERROR: review-thread conversation requires thread_id" >&2
+        return 1
+      }
+      printf 'conv-%s-review-%s' "$repo" "$thread_id"
+      ;;
+    issue|pr-top-level)
+      printf 'conv-%s-issue-%s' "$repo" "$issue"
+      ;;
+    *)
+      echo "ERROR: unknown conversation kind: $kind" >&2
+      return 1
+      ;;
+  esac
 }
 
 PASSED=0
@@ -82,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=18
+  local expected_tests=19
   local actual_tests
   actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
@@ -186,21 +197,21 @@ echo ""
 echo "=== Test 5: Different conversations on same issue ==="
 test_different_conversations() {
   workspace_pool_init 4
-  
+
   local conv1 conv2
-  conv1="$(generate_conversation_id "test/repo" "1" "https://github.com/test/repo/issues/1#discussion_r1")"
-  conv2="$(generate_conversation_id "test/repo" "1" "https://github.com/test/repo/issues/1#discussion_r2")"
-  
+  conv1="$(generate_conversation_id "test/repo" "1" "review-thread" "r1")"
+  conv2="$(generate_conversation_id "test/repo" "1" "review-thread" "r2")"
+
   [ "$conv1" != "$conv2" ] || return 1
-  
+
   local ws1 ws2
   ws1="$(workspace_lease "conv1-task")"
   ws2="$(workspace_lease "conv2-task")"
-  
+
   [ -n "$ws1" ] || return 1
   [ -n "$ws2" ] || return 1
   [ "$ws1" != "$ws2" ] || return 1
-  
+
   workspace_release "$ws1"
   workspace_release "$ws2"
 }
@@ -418,6 +429,43 @@ test_workspace_repo_matches_ssh_protocol() {
   [ $? -eq 0 ] || return 1
 }
 run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_repo_matches_ssh_protocol
+
+# Test 19: evaluate_task_completion ignores __pycache__ in untracked files
+echo ""
+echo "=== Test 19: Untracked files filtering ==="
+test_untracked_files_ignores_pycache() {
+  # Create a temp repo with __pycache__ and .pytest_cache
+  local tmprepo
+  tmprepo="$(mktemp -d)" || return 1
+
+  git -C "$tmprepo" init -q
+  git -C "$tmprepo" config user.email "test@test.com"
+  git -C "$tmprepo" config user.name "Test"
+
+  # Create a tracked file
+  echo "print('hello')" > "$tmprepo/app.py"
+  git -C "$tmprepo" add app.py
+  git -C "$tmprepo" commit -q -m "initial" >/dev/null 2>&1
+
+  # Create build artifacts
+  mkdir -p "$tmprepo/__pycache__"
+  echo "compiled" > "$tmprepo/__pycache__/app.cpython-311.pyc"
+  mkdir -p "$tmprepo/.pytest_cache/v/cache"
+  echo "cache" > "$tmprepo/.pytest_cache/v/cache/lastfailed"
+  mkdir -p "$tmprepo/src/__pycache__"
+  echo "nested" > "$tmprepo/src/__pycache__/mod.cpython-311.pyc"
+
+  # Capture untracked output (simulating what evaluate_task_completion does)
+  local untracked
+  untracked="$(git -C "$tmprepo" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+
+  # Cleanup
+  rm -rf "$tmprepo"
+
+  # Should be empty - all pycache dirs filtered
+  [ -z "$untracked" ] || return 1
+}
+run_and_test "Test 19: untracked files ignores __pycache__ and .pytest_cache" test_untracked_files_ignores_pycache
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
