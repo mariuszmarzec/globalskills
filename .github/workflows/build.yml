@@ -30,6 +30,7 @@ env:
     skills/manul-github-bot/test_prompt_generation.sh
     skills/manul-github-bot/test_conversation_orchestrator.sh
     skills/manul-github-bot/test_conversation_regressions.sh
+    skills/manul-github-bot/test_conversation_strict.sh
 
 jobs:
   verify:
