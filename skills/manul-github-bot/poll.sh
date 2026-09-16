@@ -190,7 +190,7 @@ get_review_thread_root_id() {
     parent="$(
       printf '%s' "$comments_json" |
         jq -r --arg id "$current" '
-          .[] | select(.id == $id) | (.in_reply_to_id // empty)
+          .[] | select((.id | tostring) == $id) | (.in_reply_to_id // empty)
         ' 2>/dev/null |
         head -n1
     )"
@@ -316,13 +316,17 @@ persist_conversation_messages_for_repo() {
   # After processing trigger comments, also persist ALL non-trigger comments
   # on the same issues/PRs as conversation history. This ensures the daemon
   # has full thread context even for messages that didn't contain /manul.
+  #
+  # Requirement: persist ALL conversation messages regardless of task status.
+  # Even completed/resolved tasks should have their conversation context preserved
+  # so the bot can reference full thread history.
   local repo="$1"
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  # Get all issue/PR numbers that had trigger comments this poll
+  # Get all issue/PR numbers that have ANY processed comments (not just queued/running)
   local affected_ids
-  affected_ids="$(sqlite3 "$DB" "SELECT DISTINCT issueNumber FROM processed_comments WHERE repository='$(sql_escape "$repo")' AND status IN ('queued','running');" 2>>"$LOG")" || true
+  affected_ids="$(sqlite3 "$DB" "SELECT DISTINCT issueNumber FROM processed_comments WHERE repository='$(sql_escape "$repo")';" 2>>"$LOG")" || true
 
   [ -z "$affected_ids" ] && return 0
 
@@ -810,11 +814,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
     # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
     declare -A OPEN_ISSUES=() CLOSED_ISSUES=() OPEN_PRS=() MERGED_PRS=() CLOSED_PRS=()
-    while read -r n; do [ -n "$n" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
-    while read -r n; do [ -n "$n" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG" || true)
-    while read -r n; do [ -n "$n" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
-    while read -r n; do [ -n "$n" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG" || true)
-    while read -r n; do [ -n "$n" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG" || true)
+    while read -r n; do [ -n "$n" ] && [ "$n" != "[]" ] && OPEN_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
+    while read -r n; do [ -n "$n" ] && [ "$n" != "[]" ] && CLOSED_ISSUES["$n"]=1; done < <(gh issue list --repo "$repo" --limit 100 --state closed --json number --jq '.[].number' 2>>"$LOG" || true)
+    while read -r n; do [ -n "$n" ] && [ "$n" != "[]" ] && OPEN_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --json number --jq '.[].number' 2>>"$LOG" || true)
+    while read -r n; do [ -n "$n" ] && [ "$n" != "[]" ] && MERGED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state merged --json number --jq '.[] | select(.merged_at != null) | .number' 2>>"$LOG" || true)
+    while read -r n; do [ -n "$n" ] && [ "$n" != "[]" ] && CLOSED_PRS["$n"]=1; done < <(gh pr list --repo "$repo" --limit 100 --state closed --json number --jq '.[] | select(.merged_at == null) | .number' 2>>"$LOG" || true)
 
     # Auto-close conversations for merged PRs that have no remaining active tasks.
     if [ ${#MERGED_PRS[@]} -gt 0 ]; then
@@ -906,7 +910,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
          elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
          else {action: null, prompt: $rest}
          end) as $actx
-      | (.html_url | capture("issues/(?<n>[0-9]+)").n | tonumber) as $issue_num
+      | (.html_url | capture("(?:issues|pull)/(?<n>[0-9]+)").n | tonumber) as $issue_num
       | (if $actx.action != null then $actx.action
           elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
           else "IMPLEMENT"
@@ -1121,19 +1125,21 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
           review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
           [ -n "$review_created" ] || review_created="$now"
 
-          # Only create REVIEW_FIX tasks for REQUEST_CHANGES
-          if [ "$review_state" = "CHANGES_REQUESTED" ]; then
-            log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
-            # Ensure a conversation exists for this PR; create one if missing
-            existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
-            if [ -z "$existing_conv" ]; then
-              local pr_url
-              pr_url="$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null)" || pr_url="https://github.com/$repo/pull/$pr_num"
-              [ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr_num"
-              new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
-              sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, 'https://github.com/$repo/pull/$pr_num', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
-              log "auto-created conversation $new_conv_id for $repo#$pr_num"
-            fi
+           # Only create REVIEW_FIX tasks for REQUEST_CHANGES
+           if [ "$review_state" = "CHANGES_REQUESTED" ]; then
+             log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
+             # Ensure a conversation exists for this PR; create one if missing
+             # IMPORTANT: Do NOT overwrite an existing review-thread conversation.
+             # Only create pr-top-level conversation if no conversation exists at all.
+             existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
+             if [ -z "$existing_conv" ]; then
+               local pr_url
+               pr_url="$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null)" || pr_url="https://github.com/$repo/pull/$pr_num"
+               [ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr_num"
+               new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+               sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, '$pr_url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
+               log "auto-created conversation $new_conv_id for $repo#$pr_num"
+             fi
             if "$MANUL_DIR/manul-pr-review.sh" handle \
               --repo "$repo" \
               --pr-number "$pr_num" \
