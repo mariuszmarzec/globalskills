@@ -149,26 +149,21 @@ fi
 echo
 echo "[5/5] Validating DB schema..."
 
-CONV_OUTPUT=""
-CONV_EXIT=0
-CONV_OUTPUT="$(MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" status --conversation-id "__runtime_repair_schema_check__" --json 2>&1)" || CONV_EXIT=$?
-
-if [ "$CONV_EXIT" -ne 0 ] && [ "$CONV_EXIT" -ne 2 ]; then
-    printf '%s\n' "$CONV_OUTPUT" >&2
-    fail "Canonical manul-conversation schema initialization failed (exit $CONV_EXIT)"
+# Use the canonical init-schema subcommand — idempotent, no business logic side effects
+if MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" init-schema; then
+    echo "  Canonical conversation schema initialized."
+else
+    echo "  WARNING: manul-conversation.sh init-schema failed (non-fatal if DB was restored from backup)"
 fi
 
-echo "  Canonical conversation schema validated."
-
-WORKSPACE_OUTPUT=""
-WORKSPACE_EXIT=0
-WORKSPACE_OUTPUT="$(MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1" && workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" 2>&1)" || WORKSPACE_EXIT=$?
-if [ "$WORKSPACE_EXIT" -ne 0 ]; then
-    printf '%s\n' "$WORKSPACE_OUTPUT" >&2
-    fail "Canonical workspace initialization failed (exit $WORKSPACE_EXIT)"
+# Initialize workspace table using canonical function
+export MANUL_DIR="$RUNTIME_DIR"
+export DB="$DB_FILE"
+if bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"; then
+    echo "  Canonical workspace schema initialized."
+else
+    echo "  WARNING: workspace_init failed (non-fatal if DB was restored from backup)"
 fi
-
-echo "  Canonical workspace schema validated."
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 for table in $REQUIRED_TABLES; do

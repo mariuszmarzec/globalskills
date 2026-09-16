@@ -452,4 +452,17 @@ The repair script:
 2. Deploys symlinks via `install-manul-symlinks.sh`
 3. Copies `config.json.example` → `config.json` if missing (edit before use)
 4. Restores `manul.db` from `--source-db` or archive backup if available
-5. Aborts with exit 1 if no backup DB is found — a valid `manul.db` is required to start the daemon
+5. Initializes schema idempotently via `manul-conversation.sh init-schema` and `workspace-manager.sh workspace_init` (no-ops if tables already exist)
+6. Aborts with exit 1 if no backup DB is found — a valid `manul.db` is required to start the daemon
+7. Never fabricates a new application schema from scratch
+
+### Schema initialization contract
+
+Both `manul-conversation.sh` and `workspace-manager.sh` expose a dedicated, no-op-init subcommand/function:
+
+| Command / function | Purpose |
+|---|---|
+| `manul-conversation.sh init-schema` | Runs all `CREATE TABLE IF NOT EXISTS` for the conversation/task tables |
+| `workspace-manager.sh workspace_init` | Runs `CREATE TABLE IF NOT EXISTS workspaces` |
+
+These are safe to call repeatedly — they do not modify existing data. Repair uses them only after a DB restore; if no restore occurs (backup unavailable), repair aborts before reaching this step.

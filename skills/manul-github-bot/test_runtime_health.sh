@@ -1,5 +1,16 @@
 #!/bin/bash
 # test_runtime_health.sh — Regression tests for Manul runtime health/recovery
+#
+# Tests that verify:
+# 1. Shell syntax of all runtime scripts
+# 2. No hardcoded /mnt/f or /home/marzec/.openclaw/manul paths in source
+# 3. install-manul-symlinks.sh contracts
+# 4. repair-manul-runtime.sh aborts safely without a DB backup
+# 5. repair-manul-runtime.sh restores from a canonical-init DB backup
+# 6. Restored symlinks are valid and point into canonical source
+# 7. Recovered DB contains the required tables and columns
+# 8. Second repair is idempotent (DB and config are not replaced)
+# 9. Archive fallback works with supported sibling archive layout
 
 set -uo pipefail
 
@@ -9,9 +20,7 @@ FAIL=0
 TMPROOT=""
 
 cleanup() {
-  if [ -n "$TMPROOT" ] && [ -d "$TMPROOT" ]; then
-    rm -rf "$TMPROOT"
-  fi
+  [ -n "$TMPROOT" ] && [ -d "$TMPROOT" ] && rm -rf "$TMPROOT"
 }
 trap cleanup EXIT
 
@@ -35,11 +44,32 @@ assert_cmd() {
   fi
 }
 
+# Create a canonical-scheme DB using the production init paths.
+# Returns path to the created DB via the global CANONICAL_BACKUP_DB.
+create_canonical_backup() {
+  local db_path="$1"
+  mkdir -p "$(dirname "$db_path")"
+  # Empty the DB first so init_schema can run cleanly
+  rm -f "$db_path"
+  touch "$db_path"
+  chmod 600 "$db_path"
+
+  # Run canonical init_schema via manul-conversation.sh init-schema
+  local conv_dir
+  conv_dir="$(dirname "$db_path")"
+  MANUL_DIR="$conv_dir" DB="$db_path" \
+    bash "$SCRIPT_DIR/manul-conversation.sh" init-schema
+
+  # Run canonical workspace_init by sourcing workspace-manager.sh
+  MANUL_DIR="$conv_dir" DB="$db_path" \
+    bash -c 'source "$1"; workspace_init' _ "$SCRIPT_DIR/workspace-manager.sh"
+}
+
 echo "=== Runtime Health Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 echo ""
 
-# Test 1: Shell syntax for the runtime/recovery scripts.
+# ── Test 1: Shell syntax ──────────────────────────────────────────────────────
 echo "Test 1: Shell syntax"
 for script in \
   repair-manul-runtime.sh \
@@ -54,9 +84,9 @@ for script in \
   assert_cmd "$script has valid shell syntax" bash -n "$SCRIPT_DIR/$script"
 done
 
-# Test 2: No old machine-specific runtime paths remain in executable scripts.
+# ── Test 2: No old machine-specific runtime paths ─────────────────────────────
 echo
- echo "Test 2: No hardcoded runtime paths"
+echo "Test 2: No hardcoded runtime paths"
 HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.openclaw/manul|/mnt/f/ubuntu-workspace/\.openclaw/manul)' \
   "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v 'test_runtime_health.sh' || true)"
 if [ -z "$HARDCODED_PATHS" ]; then
@@ -65,23 +95,25 @@ else
   fail "Old absolute runtime paths remain:\n$HARDCODED_PATHS"
 fi
 
-# Test 3: The installer exposes all runtime scripts and resolves its default path.
+# ── Test 3: Installer contract ────────────────────────────────────────────────
 echo
 echo "Test 3: Installer contract"
-if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.openclaw/manul}"' "$SCRIPT_DIR/install-manul-symlinks.sh" 2>/dev/null; then
+if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.openclaw/manul}"' \
+     "$SCRIPT_DIR/install-manul-symlinks.sh" 2>/dev/null; then
   ok "Installer default runtime is HOME/.openclaw/manul"
 else
   fail "Installer default runtime is not HOME/.openclaw/manul"
 fi
 
-SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" | grep -c '^ *"' || true)
+SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" | grep -c '^ *"' || true)
 if [ "$SCRIPT_COUNT" -ge 20 ]; then
   ok "Installer declares $SCRIPT_COUNT runtime entries"
 else
   fail "Installer declares only $SCRIPT_COUNT runtime entries (expected at least 20)"
 fi
 
-# Test 4: Isolated recovery without a backup must fail safely.
+# ── Test 4: Recovery without a backup fails safely ────────────────────────────
 echo
 echo "Test 4: Recovery without DB backup fails safely"
 TMPROOT=$(mktemp -d /tmp/manul-runtime-test-XXXXXX)
@@ -115,58 +147,22 @@ else
   fail "Failed recovery did not prepare expected runtime links/config"
 fi
 
-# Create a valid backup DB using the current canonical schema contract.
-BACKUP_DB="$TMPROOT/backup/manul.db"
-mkdir -p "$(dirname "$BACKUP_DB")"
-sqlite3 "$BACKUP_DB" <<'SQL'
-CREATE TABLE processed_comments (
-  commentId TEXT PRIMARY KEY,
-  repository TEXT NOT NULL,
-  issueNumber INTEGER NOT NULL,
-  commentUrl TEXT NOT NULL,
-  author TEXT,
-  agent TEXT,
-  prompt TEXT NOT NULL,
-  context TEXT,
-  status TEXT NOT NULL DEFAULT 'queued',
-  attempts INTEGER NOT NULL DEFAULT 0,
-  createdAt TEXT,
-  processedAt TEXT,
-  heartbeatAt TEXT,
-  leaseExpiresAt TEXT,
-  workerPid INTEGER,
-  nextAttemptAt TEXT,
-  conversationId TEXT,
-  parentTaskId TEXT,
-  workspaceId TEXT,
-  action TEXT DEFAULT 'IMPLEMENT',
-  prNumber INTEGER,
-  prUrl TEXT
-);
-CREATE TABLE conversations (
-  conversationId TEXT PRIMARY KEY,
-  repository TEXT NOT NULL,
-  issueNumber INTEGER NOT NULL,
-  issueUrl TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'OPEN',
-  activeTaskId TEXT,
-  activePrNumber TEXT,
-  createdAt TEXT NOT NULL,
-  updatedAt TEXT NOT NULL
-);
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE workspaces (
-  workspaceId TEXT PRIMARY KEY,
-  workspacePath TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'IDLE',
-  currentTaskId TEXT,
-  lastUsedAt TEXT
-);
-SQL
-
-# Test 5: Recovery from an explicit backup succeeds.
+# ── Test 5: Create canonical backup and recover from it ───────────────────────
 echo
-echo "Test 5: Recovery from explicit DB backup"
+echo "Test 5: Recovery from canonical-init DB backup"
+BACKUP_DB="$TMPROOT/backup/manul.db"
+create_canonical_backup "$BACKUP_DB"
+CANONICAL_BACKUP_DB="$BACKUP_DB"
+
+# Verify the backup itself has the right tables before using it
+for tbl in processed_comments conversations meta workspaces; do
+  if ! sqlite3 "$BACKUP_DB" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
+    fail "Canonical backup DB missing table '$tbl'"
+    exit 1
+  fi
+done
+ok "Canonical backup DB has all required tables"
+
 GOOD_RUNTIME="$TMPROOT/good-runtime"
 set +e
 GOOD_OUTPUT=$( \
@@ -191,19 +187,19 @@ else
   fail "Recovered config.json is missing or invalid"
 fi
 
-# Test 6: All installed links exist and point into canonical source.
+# ── Test 6: All installed links are valid symlinks into canonical source ──────
 echo
 echo "Test 6: Runtime symlinks"
 LINK_FAILURES=0
 LINK_COUNT=0
 for entry in "$GOOD_RUNTIME"/*.sh "$GOOD_RUNTIME"/*.md; do
   [ -e "$entry" ] || continue
-  [ -L "$entry" ] || { LINK_FAILURES=$((LINK_FAILURES + 1)); echo "  FAIL: not a symlink: $entry"; continue; }
+  [ -L "$entry" ] || { LINK_FAILURES=$((LINK_FAILURES + 1)); continue; }
   LINK_COUNT=$((LINK_COUNT + 1))
   target=$(readlink -f "$entry" 2>/dev/null || true)
   case "$target" in
     "$SCRIPT_DIR"/*) ;;
-    *) LINK_FAILURES=$((LINK_FAILURES + 1)); echo "  FAIL: wrong target: $entry -> $target" ;;
+    *) LINK_FAILURES=$((LINK_FAILURES + 1)) ;;
   esac
 done
 
@@ -213,22 +209,32 @@ else
   fail "Runtime symlink check failed: $LINK_COUNT links, $LINK_FAILURES failures"
 fi
 
-# Test 7: Schema contains the required tables after canonical initialization.
+# ── Test 7: Recovered DB schema matches canonical contract ───────────────────
 echo
 echo "Test 7: Recovered DB schema"
+# Check tables exist
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 SCHEMA_FAILURES=0
 for table in $REQUIRED_TABLES; do
   if ! sqlite3 "$GOOD_RUNTIME/manul.db" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
     SCHEMA_FAILURES=$((SCHEMA_FAILURES + 1))
-    fail "Required table '$table' exists"
+    fail "Required table '$table' missing from recovered DB"
   fi
 done
-if [ "$SCHEMA_FAILURES" -eq 0 ]; then
-  ok "All required tables exist"
-fi
+[ "$SCHEMA_FAILURES" -eq 0 ] && ok "All required tables present in recovered DB"
 
-# Test 8: A second repair is successful and does not replace the DB.
+# Check key columns on processed_comments (the richest table)
+KEY_COLUMNS="commentId repository issueNumber status attempts conversationId action prNumber"
+for col in $KEY_COLUMNS; do
+  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+       "PRAGMA table_info(processed_comments);" 2>/dev/null \
+       | grep -qw "$col"; then
+    fail "Required column '$col' missing from processed_comments"
+  fi
+done
+ok "Key columns present on processed_comments"
+
+# ── Test 8: Second repair with same backup is idempotent ──────────────────────
 echo
 echo "Test 8: Repair idempotency"
 DB_BEFORE=$(sha256sum "$GOOD_RUNTIME/manul.db" | awk '{print $1}')
@@ -264,7 +270,7 @@ else
   fail "Second repair changed existing config"
 fi
 
-# Test 9: Archive fallback works with the supported sibling archive layout.
+# ── Test 9: Archive fallback ─────────────────────────────────────────────────
 echo
 echo "Test 9: Archive DB fallback"
 ARCHIVE_RUNTIME="$TMPROOT/archive-runtime"
@@ -288,7 +294,7 @@ else
   echo "$ARCHIVE_OUTPUT"
 fi
 
-# Summary.
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

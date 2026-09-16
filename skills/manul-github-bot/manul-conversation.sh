@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
     --action) ACTION_TYPE="$2"; shift 2 ;;
     --review-id) REVIEW_ID="$2"; shift 2 ;;
-    create|status|submit|result|close) ACTION="$1"; shift ;;
+    create|status|submit|result|close|init-schema) ACTION="$1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
 done
@@ -577,10 +577,18 @@ case "${ACTION:-}" in
   status) cmd_status ;;
   result) cmd_result ;;
   close) cmd_close ;;
+  init-schema)
+    # Lightweight schema initializer — only runs CREATE IF NOT EXISTS, no business logic.
+    # Used by repair-manul-runtime.sh and tests to bring a fresh DB up to schema spec.
+    export MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+    export DB="${DB:-${MANUL_DIR}/manul.db}"
+    init_schema
+    ;;
   "")
     echo "Usage: manul-conversation <command> [options]" >&2
     echo "" >&2
     echo "Commands:" >&2
+    echo "  init-schema  Initialize or validate DB schema (idempotent, no business logic)" >&2
     echo "  create   --repo REPO --title TITLE --prompt PROMPT [--json]" >&2
     echo "  submit   --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--json]" >&2
     echo "  status   --conversation-id ID [--json]" >&2
