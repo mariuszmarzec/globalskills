@@ -3313,7 +3313,7 @@ MOCK_EOF
   return 0
 }
 
-# Test: PR top-level comment still gets PR top-level conversationId
+# Test: PR top-level comment gets review-thread conversationId
 test_pr_top_level_comment_gets_pr_conversation_id() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-top-level-test-XXXXXX)"
@@ -3388,7 +3388,7 @@ MOCK_EOF
   export CALL_LOG="$call_log"
   MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>/dev/null
 
-  # Check that top-level comment gets pr-top-level conversationId
+  # Check that top-level comment gets review-thread conversationId
   local conv_id
   conv_id="$(sqlite3 "$poll_db" "SELECT conversationId FROM processed_comments WHERE repository='test-org/test-repo' AND commentId='review:301';")"
 
@@ -3398,8 +3398,8 @@ MOCK_EOF
     return 1
   fi
 
-  if [[ ! "$conv_id" =~ ^conv-test-org/test-repo-issue-600$ ]]; then
-    echo "ERROR: Expected PR top-level conversationId 'conv-test-org/test-repo-issue-600', got: $conv_id"
+  if [[ ! "$conv_id" =~ ^conv-test-org/test-repo-review-301$ ]]; then
+    echo "ERROR: Expected PR review-thread conversationId 'conv-test-org/test-repo-review-301', got: $conv_id"
     rm -rf "$test_dir"
     return 1
   fi

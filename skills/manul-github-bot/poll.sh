@@ -221,6 +221,17 @@ persist_conversation_message() {
   [ -n "$conv_id" ] || return 0
   [ -n "$comment_id" ] || return 0
 
+  # Idempotency: skip if this (conversationId, commentId) pair already exists.
+  local already_persisted
+  already_persisted="$(sqlite3 "$DB" "
+    SELECT 1
+    FROM conversation_messages
+    WHERE conversationId='$(sql_escape "$conv_id")'
+      AND commentId='$(sql_escape "$comment_id")'
+    LIMIT 1;
+  " 2>/dev/null || true)"
+  [ "$already_persisted" = "1" ] && return 0
+
   local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"
   esc_author="$(sql_escape "$author")"
@@ -376,13 +387,11 @@ persist_conversation_messages_for_repo() {
 %s' "$existing_ids" "$c_id")"
     done < <(echo "$comments_json" | jq -c '.[]' 2>/dev/null || true)
 
-    # Also persist PR review comments for PRs (by thread root)
+    # Also persist PR review comments for PRs — every comment, not just roots.
     if [ "$is_pr" -eq 1 ]; then
       local review_comments
       review_comments="$(gh api --paginate "repos/$repo/pulls/$issue_num/comments?per_page=100" 2>>"$LOG" || echo "[]")"
-      
-      # Group review comments by thread root
-      local seen_roots=""
+
       while IFS= read -r comment; do
         [ -n "$comment" ] || continue
         local c_id c_author c_body c_url c_created root_id review_conv_id
@@ -394,31 +403,17 @@ persist_conversation_messages_for_repo() {
         [ -n "$c_id" ] || continue
         [ -n "$c_url" ] || continue
 
-        # Find the root of this review thread
-        root_id="$(get_review_thread_root_id "$review_comments" "$c_id")"
+        # Determine thread root for conversation identity
+        if [ "$(jq -r '.in_reply_to_id // empty' <<<"$comment")" = "" ]; then
+          root_id="$c_id"
+        else
+          root_id="$(get_review_thread_root_id "$review_comments" "$c_id")"
+        fi
         [ -n "$root_id" ] || continue
 
-        # Skip if we've already processed this thread
-        echo "$seen_roots" | grep -qxF "$root_id" && continue
-        seen_roots="$(printf '%s
-%s' "$seen_roots" "$root_id")"
+        review_conv_id="$(generate_conversation_id "$repo" "$issue_num" "review-thread" "$root_id")" || continue
 
-        # Create or get conversation for this review thread
-        review_conv="$(generate_conversation_id "$repo" "$issue_num" "review-thread" "$root_id")" || continue
-        ensure_conversation           "$review_conv" "$repo" "$issue_num"           "https://github.com/${repo}/pull/${issue_num}"
-
-        # Persist this comment if not already persisted
-        local already
-        already="$(sqlite3 "$DB" "
-          SELECT 1
-          FROM conversation_messages
-          WHERE conversationId='$(sql_escape "$review_conv")'
-            AND commentId='$(sql_escape "$c_id")'
-          LIMIT 1;
-        " 2>/dev/null)"
-        [ "$already" = "1" ] && continue
-
-        persist_conversation_message           "$review_conv" "$repo" "$issue_num" "$c_id" "$c_author"           "$c_body" "$c_url" "$c_created" "review-comment"
+        persist_conversation_message "$review_conv_id" "$repo" "$issue_num" "$c_id" "$c_author" "$c_body" "$c_url" "$c_created" "review-comment"
       done < <(echo "$review_comments" | jq -c '.[]' 2>/dev/null || true)
     fi
   done
@@ -953,6 +948,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
@@ -1034,24 +1030,16 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
       esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      # Determine conversation ID based on comment count and thread structure
-      raw_id="$(jq -r '.id' <<<"$obj")"
+      # Determine conversation ID based on thread structure only
+      raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
       raw_id="${raw_id#review:}"
       reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
-      conv_id=""
-      pr_comment_count="${PR_COMMENT_COUNTS[$pr_num]:-0}"
-      if [ "$pr_comment_count" -eq 1 ]; then
-        # Single standalone comment gets pr-top-level conversation
-        conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
-      elif [ -n "$reply_to" ]; then
-        # Inline reply - find thread root
+      if [ -n "$reply_to" ]; then
         root_id="$(get_review_thread_root_id "$review_comments" "$raw_id")"
-        [ -n "$root_id" ] && conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")"
       else
-        # Top-level comment in a multi-comment PR gets review-thread with its own ID
-        conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$raw_id")"
+        root_id="$raw_id"
       fi
-      [ -n "$conv_id" ] || continue
+      conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
       ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
