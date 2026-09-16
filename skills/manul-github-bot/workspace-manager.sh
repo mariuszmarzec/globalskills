@@ -60,8 +60,9 @@ workspace_lease() {
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
   local result
-  result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='IDLE' LIMIT 1); SELECT changes(); COMMIT;" 2>/dev/null)"
-  if [ "${result:-0}" -eq 0 ]; then
+  result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='IDLE' LIMIT 1); SELECT changes(); COMMIT;" 2>/dev/null)"
+  result="$(printf '%s\n' "$result" | tail -n1)"
+  if [ "${result:-0}" -eq 0 ] || [ -z "$result" ]; then
     return 1
   fi
   sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
@@ -100,8 +101,11 @@ workspace_reclaim() {
   local safe_ws_id
   safe_ws_id="$(sql_escape "$ws_id")"
   local result
-  result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
-  [ "${result:-0}" -eq 1 ] || return 1
+  result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
+  result="$(printf '%s\n' "$result" | tail -n1)"
+  if [ "${result:-0}" -ne 1 ] || [ -z "$result" ]; then
+    return 1
+  fi
   sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
 }
 
