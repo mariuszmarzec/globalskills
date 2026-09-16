@@ -434,15 +434,9 @@ run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_re
 echo ""
 echo "=== Test 19: Untracked files filtering ==="
 test_untracked_files_ignores_pycache() {
-  # Source the evaluate function
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  source "$script_dir/manul-daemon.sh" 2>/dev/null || return 0
-
   # Create a temp repo with __pycache__ and .pytest_cache
   local tmprepo
-  tmprepo="$(mktemp -d)"
-  trap 'rm -rf "$tmprepo"' RETURN
+  tmprepo="$(mktemp -d)" || return 1
 
   git -C "$tmprepo" init -q
   git -C "$tmprepo" config user.email "test@test.com"
@@ -456,14 +450,17 @@ test_untracked_files_ignores_pycache() {
   # Create build artifacts
   mkdir -p "$tmprepo/__pycache__"
   echo "compiled" > "$tmprepo/__pycache__/app.cpython-311.pyc"
-  mkdir -p "$tmprepo/.pytest_cache"
+  mkdir -p "$tmprepo/.pytest_cache/v/cache"
   echo "cache" > "$tmprepo/.pytest_cache/v/cache/lastfailed"
   mkdir -p "$tmprepo/src/__pycache__"
   echo "nested" > "$tmprepo/src/__pycache__/mod.cpython-311.pyc"
 
-  # Capture untracked output
+  # Capture untracked output (simulating what evaluate_task_completion does)
   local untracked
   untracked="$(git -C "$tmprepo" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+
+  # Cleanup
+  rm -rf "$tmprepo"
 
   # Should be empty - all pycache dirs filtered
   [ -z "$untracked" ] || return 1
