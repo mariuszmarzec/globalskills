@@ -1,23 +1,17 @@
 #!/bin/bash
-# test_runtime_health.sh — Regression tests for Manul runtime health
-#
-# Tests that verify:
-# 1. No hardcoded absolute paths in scripts (should use $MANUL_DIR)
-# 2. Runtime directory exists and is recoverable
-# 3. Symlinks are valid
-# 4. DB and config are accessible
-# 5. repair-manul-runtime.sh works in isolation (TMPDIR-based)
+# test_runtime_health.sh — Regression tests for Manul runtime health/recovery
 
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
-CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0
 FAIL=0
-TMPRUNTIME=""
+TMPROOT=""
 
 cleanup() {
-  [ -n "$TMPRUNTIME" ] && rm -rf "$TMPRUNTIME"
+  if [ -n "$TMPROOT" ] && [ -d "$TMPROOT" ]; then
+    rm -rf "$TMPROOT"
+  fi
 }
 trap cleanup EXIT
 
@@ -31,200 +25,270 @@ fail() {
   echo "  FAIL: $1"
 }
 
+assert_cmd() {
+  local description="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    ok "$description"
+  else
+    fail "$description"
+  fi
+}
+
 echo "=== Runtime Health Tests ==="
-echo "MANUL_DIR=$MANUL_DIR"
-echo "CANONICAL_DIR=$CANONICAL_DIR"
+echo "Canonical source: $SCRIPT_DIR"
 echo ""
 
-# ── Test 1: No hardcoded absolute paths in shell scripts ──────────────────────
-echo "Test 1: No hardcoded absolute paths in shell scripts"
-HARDCODED_PATHS=$(grep -rn '"/home/marzec/.openclaw/manul\|"/mnt/f/ubuntu-workspace/.openclaw/manul' \
-  "$CANONICAL_DIR"/*.sh 2>/dev/null | grep -v "test_runtime_health.sh" | grep -v "test_runtime_isolation.sh" || true)
+# Test 1: Shell syntax for the runtime/recovery scripts.
+echo "Test 1: Shell syntax"
+for script in \
+  repair-manul-runtime.sh \
+  install-manul-symlinks.sh \
+  manul-daemon.sh \
+  github-api-wrapper.sh \
+  manul-conversation.sh \
+  workspace-manager.sh \
+  watchdog.sh \
+  task-recovery.sh \
+  task-health-check.sh; do
+  assert_cmd "$script has valid shell syntax" bash -n "$SCRIPT_DIR/$script"
+done
+
+# Test 2: No old machine-specific runtime paths remain in executable scripts.
+echo
+ echo "Test 2: No hardcoded runtime paths"
+HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.openclaw/manul|/mnt/f/ubuntu-workspace/\.openclaw/manul)' \
+  "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v 'test_runtime_health.sh' || true)"
 if [ -z "$HARDCODED_PATHS" ]; then
-  ok "No hardcoded /home/marzec/.openclaw/manul paths found"
+  ok "No old absolute runtime paths found"
 else
-  fail "Found hardcoded paths:\n$HARDCODED_PATHS"
+  fail "Old absolute runtime paths remain:\n$HARDCODED_PATHS"
 fi
 
-# ── Test 2: Runtime directory accessibility ────────────────────────────────────
-echo ""
-echo "Test 2: Runtime directory accessibility"
-if [ -d "$MANUL_DIR" ]; then
-  ok "Runtime directory exists: $MANUL_DIR"
+# Test 3: The installer exposes all runtime scripts and resolves its default path.
+echo
+echo "Test 3: Installer contract"
+if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.openclaw/manul}"' "$SCRIPT_DIR/install-manul-symlinks.sh" 2>/dev/null; then
+  ok "Installer default runtime is HOME/.openclaw/manul"
 else
-  fail "Runtime directory missing: $MANUL_DIR"
+  fail "Installer default runtime is not HOME/.openclaw/manul"
 fi
 
-# ── Test 3: Symlink validity ──────────────────────────────────────────────────
-echo ""
-echo "Test 3: Symlink validity"
-SYMLINK_COUNT=0
-BROKEN_COUNT=0
-for f in "$MANUL_DIR"/*.sh; do
-  [ -f "$f" ] || continue
-  SYMLINK_COUNT=$((SYMLINK_COUNT + 1))
-  if [ -L "$f" ]; then
-    TARGET=$(readlink "$f")
-    if [ -f "$TARGET" ]; then
-      : # valid symlink
-    else
-      BROKEN_COUNT=$((BROKEN_COUNT + 1))
-      fail "Broken symlink: $f -> $TARGET"
-    fi
-  else
-    BROKEN_COUNT=$((BROKEN_COUNT + 1))
-    fail "Not a symlink: $f"
+SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" | grep -c '^ *"' || true)
+if [ "$SCRIPT_COUNT" -ge 20 ]; then
+  ok "Installer declares $SCRIPT_COUNT runtime entries"
+else
+  fail "Installer declares only $SCRIPT_COUNT runtime entries (expected at least 20)"
+fi
+
+# Test 4: Isolated recovery without a backup must fail safely.
+echo
+echo "Test 4: Recovery without DB backup fails safely"
+TMPROOT=$(mktemp -d /tmp/manul-runtime-test-XXXXXX)
+MISSING_DB_RUNTIME="$TMPROOT/missing-db-runtime"
+mkdir -p "$MISSING_DB_RUNTIME"
+
+set +e
+NO_BACKUP_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$MISSING_DB_RUNTIME" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+NO_BACKUP_EXIT=$?
+set -e
+
+if [ "$NO_BACKUP_EXIT" -eq 1 ] && echo "$NO_BACKUP_OUTPUT" | grep -q "No backup DB found"; then
+  ok "Recovery exits 1 when DB backup is unavailable"
+else
+  fail "Recovery did not fail safely without DB backup (exit=$NO_BACKUP_EXIT)"
+fi
+
+if [ ! -f "$MISSING_DB_RUNTIME/manul.db" ]; then
+  ok "No fabricated DB was created"
+else
+  fail "Recovery created a DB despite missing backup"
+fi
+
+if [ -L "$MISSING_DB_RUNTIME/manul-daemon.sh" ] && [ -f "$MISSING_DB_RUNTIME/config.json" ]; then
+  ok "Failed recovery still prepares runtime links/config"
+else
+  fail "Failed recovery did not prepare expected runtime links/config"
+fi
+
+# Create a valid backup DB using the current canonical schema contract.
+BACKUP_DB="$TMPROOT/backup/manul.db"
+mkdir -p "$(dirname "$BACKUP_DB")"
+sqlite3 "$BACKUP_DB" <<'SQL'
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  commentUrl TEXT NOT NULL,
+  author TEXT,
+  agent TEXT,
+  prompt TEXT NOT NULL,
+  context TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT,
+  processedAt TEXT,
+  heartbeatAt TEXT,
+  leaseExpiresAt TEXT,
+  workerPid INTEGER,
+  nextAttemptAt TEXT,
+  conversationId TEXT,
+  parentTaskId TEXT,
+  workspaceId TEXT,
+  action TEXT DEFAULT 'IMPLEMENT',
+  prNumber INTEGER,
+  prUrl TEXT
+);
+CREATE TABLE conversations (
+  conversationId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  issueUrl TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  activeTaskId TEXT,
+  activePrNumber TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE workspaces (
+  workspaceId TEXT PRIMARY KEY,
+  workspacePath TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'IDLE',
+  currentTaskId TEXT,
+  lastUsedAt TEXT
+);
+SQL
+
+# Test 5: Recovery from an explicit backup succeeds.
+echo
+echo "Test 5: Recovery from explicit DB backup"
+GOOD_RUNTIME="$TMPROOT/good-runtime"
+set +e
+GOOD_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
+  MANUL_SOURCE_DB="$BACKUP_DB" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+GOOD_EXIT=$?
+set -e
+
+if [ "$GOOD_EXIT" -eq 0 ] && echo "$GOOD_OUTPUT" | grep -q "Repair Complete"; then
+  ok "Recovery from backup completes successfully"
+else
+  fail "Recovery from backup failed (exit=$GOOD_EXIT)"
+  echo "$GOOD_OUTPUT"
+fi
+
+if [ -f "$GOOD_RUNTIME/config.json" ] && jq empty "$GOOD_RUNTIME/config.json" >/dev/null 2>&1; then
+  ok "Recovered config.json is valid JSON"
+else
+  fail "Recovered config.json is missing or invalid"
+fi
+
+# Test 6: All installed links exist and point into canonical source.
+echo
+echo "Test 6: Runtime symlinks"
+LINK_FAILURES=0
+LINK_COUNT=0
+for entry in "$GOOD_RUNTIME"/*.sh "$GOOD_RUNTIME"/*.md; do
+  [ -e "$entry" ] || continue
+  [ -L "$entry" ] || { LINK_FAILURES=$((LINK_FAILURES + 1)); echo "  FAIL: not a symlink: $entry"; continue; }
+  LINK_COUNT=$((LINK_COUNT + 1))
+  target=$(readlink -f "$entry" 2>/dev/null || true)
+  case "$target" in
+    "$SCRIPT_DIR"/*) ;;
+    *) LINK_FAILURES=$((LINK_FAILURES + 1)); echo "  FAIL: wrong target: $entry -> $target" ;;
+  esac
+done
+
+if [ "$LINK_FAILURES" -eq 0 ] && [ "$LINK_COUNT" -ge 20 ]; then
+  ok "$LINK_COUNT runtime symlinks valid and point to canonical source"
+else
+  fail "Runtime symlink check failed: $LINK_COUNT links, $LINK_FAILURES failures"
+fi
+
+# Test 7: Schema contains the required tables after canonical initialization.
+echo
+echo "Test 7: Recovered DB schema"
+REQUIRED_TABLES="processed_comments conversations meta workspaces"
+SCHEMA_FAILURES=0
+for table in $REQUIRED_TABLES; do
+  if ! sqlite3 "$GOOD_RUNTIME/manul.db" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
+    SCHEMA_FAILURES=$((SCHEMA_FAILURES + 1))
+    fail "Required table '$table' exists"
   fi
 done
-if [ "$BROKEN_COUNT" -eq 0 ] && [ "$SYMLINK_COUNT" -gt 0 ]; then
-  ok "$SYMLINK_COUNT symlinks valid, 0 broken"
-elif [ "$SYMLINK_COUNT" -eq 0 ]; then
-  fail "No .sh symlinks found in runtime directory"
+if [ "$SCHEMA_FAILURES" -eq 0 ]; then
+  ok "All required tables exist"
+fi
+
+# Test 8: A second repair is successful and does not replace the DB.
+echo
+echo "Test 8: Repair idempotency"
+DB_BEFORE=$(sha256sum "$GOOD_RUNTIME/manul.db" | awk '{print $1}')
+CONFIG_BEFORE=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
+
+set +e
+SECOND_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
+  MANUL_SOURCE_DB="$BACKUP_DB" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+SECOND_EXIT=$?
+set -e
+
+if [ "$SECOND_EXIT" -eq 0 ] && echo "$SECOND_OUTPUT" | grep -q "Repair Complete"; then
+  ok "Second repair completes successfully"
 else
-  fail "$BROKEN_COUNT broken symlinks out of $SYMLINK_COUNT"
+  fail "Second repair failed (exit=$SECOND_EXIT)"
+  echo "$SECOND_OUTPUT"
 fi
 
-# ── Test 4: DB accessible ─────────────────────────────────────────────────────
-echo ""
-echo "Test 4: Database accessibility"
-DB="${MANUL_DIR}/manul.db"
-if [ -f "$DB" ]; then
-  TABLES=$(sqlite3 "$DB" ".tables" 2>/dev/null || echo "")
-  if [ -n "$TABLES" ]; then
-    ok "DB accessible, tables: $TABLES"
-  else
-    fail "DB exists but tables query failed"
-  fi
+DB_AFTER=$(sha256sum "$GOOD_RUNTIME/manul.db" | awk '{print $1}')
+CONFIG_AFTER=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
+if [ "$DB_BEFORE" = "$DB_AFTER" ]; then
+  ok "Second repair preserved existing DB"
 else
-  fail "DB not found: $DB"
+  fail "Second repair changed existing DB"
 fi
-
-# ── Test 5: Config accessible ─────────────────────────────────────────────────
-echo ""
-echo "Test 5: Config accessibility"
-CONFIG="${MANUL_DIR}/config.json"
-if [ -f "$CONFIG" ]; then
-  REPOS=$(jq -r '.repositories | length' "$CONFIG" 2>/dev/null || echo "0")
-  ok "Config accessible, repositories: $REPOS"
+if [ "$CONFIG_BEFORE" = "$CONFIG_AFTER" ]; then
+  ok "Second repair preserved existing config"
 else
-  fail "Config not found: $CONFIG"
+  fail "Second repair changed existing config"
 fi
 
-# ── Test 6: Scripts use MANUL_DIR variable ────────────────────────────────────
-echo ""
-echo "Test 6: Scripts use MANUL_DIR variable (not hardcoded)"
-USING_MANUL_DIR=true
-for script in watchdog.sh task-recovery.sh github-api-wrapper.sh task-health-check.sh manul-conversation.sh; do
-  FILE="$CANONICAL_DIR/$script"
-  [ -f "$FILE" ] || continue
+# Test 9: Archive fallback works with the supported sibling archive layout.
+echo
+echo "Test 9: Archive DB fallback"
+ARCHIVE_RUNTIME="$TMPROOT/archive-runtime"
+ARCHIVE_DIR="$TMPROOT/archive-runtime-archive-20260917-000000"
+mkdir -p "$ARCHIVE_DIR"
+cp "$BACKUP_DB" "$ARCHIVE_DIR/manul.db"
 
-  if ! grep -q 'MANUL_DIR=' "$FILE" 2>/dev/null; then
-    fail "$script does not set MANUL_DIR"
-    USING_MANUL_DIR=false
-  fi
+set +e
+ARCHIVE_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$ARCHIVE_RUNTIME" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+ARCHIVE_EXIT=$?
+set -e
 
-  if grep -q 'DB="\${MANUL_DIR}/manul.db"\|MANUL_DB="\${MANUL_DIR}/manul.db"' "$FILE" 2>/dev/null; then
-    : # correct usage
-  elif grep -q 'DB="/home/marzec/.openclaw/manul/manul.db"\|DB="/mnt/f/ubuntu-workspace/.openclaw/manul/manul.db"' "$FILE" 2>/dev/null; then
-    fail "$script uses hardcoded DB path instead of \$MANUL_DIR"
-    USING_MANUL_DIR=false
-  fi
-done
-if $USING_MANUL_DIR; then
-  ok "All scripts use MANUL_DIR variable correctly"
-fi
-
-# ── Test 7: repair-manul-runtime.sh isolated integration test ─────────────────
-echo ""
-echo "Test 7: repair-manul-runtime.sh — isolated integration"
-
-TMPRUNTIME=$(mktemp -d /tmp/manul-repair-test-XXXXXX)
-export MANUL_RUNTIME_DIR="$TMPRUNTIME"
-export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
-
-# 7a: Run repair on empty runtime
-echo "  7a: Running repair on fresh runtime..."
-REPAIR_OUTPUT=$("$CANONICAL_DIR/repair-manul-runtime.sh" 2>&1) || REPAIR_EXIT=$? || true
-REPAIR_EXIT="${REPAIR_EXIT:-0}"
-# Repair exits 1 when no DB backup is available — this is correct, expected behavior
-if echo "$REPAIR_OUTPUT" | grep -q "Repair Complete"; then
-  ok "Repair script completed successfully"
-elif [ "$REPAIR_EXIT" -eq 1 ] && echo "$REPAIR_OUTPUT" | grep -q "No backup DB found\|Recovery aborted"; then
-  ok "Repair script correctly aborted (no DB backup available, exit 1)"
+if [ "$ARCHIVE_EXIT" -eq 0 ] && echo "$ARCHIVE_OUTPUT" | grep -q "Restored DB from archive"; then
+  ok "Recovery restores the newest sibling archive DB"
 else
-  fail "Repair script failed unexpectedly (exit=$REPAIR_EXIT)"
+  fail "Archive DB fallback failed (exit=$ARCHIVE_EXIT)"
+  echo "$ARCHIVE_OUTPUT"
 fi
 
-# 7b: Verify runtime directory was created
-if [ -d "$TMPRUNTIME" ]; then
-  ok "Runtime directory created: $TMPRUNTIME"
-else
-  fail "Runtime directory not created"
-fi
-
-# 7c: Verify symlinks
-SYMLINK_CHECK=$(ls "$TMPRUNTIME"/*.sh "$TMPRUNTIME"/*.md 2>/dev/null | wc -l)
-if [ "$SYMLINK_CHECK" -gt 15 ]; then
-  ok "$SYMLINK_CHECK symlinks created"
-else
-  fail "Expected >15 symlinks, got $SYMLINK_CHECK"
-fi
-
-# 7d: Verify config
-if [ -f "$TMPRUNTIME/config.json" ]; then
-  REPO_COUNT=$(jq -r '.repositories | length' "$TMPRUNTIME/config.json" 2>/dev/null || echo 0)
-  if [ "$REPO_COUNT" -gt 0 ]; then
-    ok "config.json created with $REPO_COUNT repositories"
-  else
-    fail "config.json exists but has no repositories"
-  fi
-else
-  fail "config.json not created"
-fi
-
-# 7e: Verify DB — should fail without backup source (expected behavior)
-# The repair script should abort when no backup DB is available
-if echo "$REPAIR_OUTPUT" | grep -q "ERROR.*No backup DB found\|Recovery aborted"; then
-  ok "Repair correctly aborted without DB backup (as expected)"
-else
-  # Check if DB was created anyway
-  if [ -f "$TMPRUNTIME/manul.db" ]; then
-    # DB exists — verify it has proper schema, not the broken one from old version
-    HAS_PROPER_SCHEMA=$(sqlite3 "$TMPRUNTIME/manul.db" "SELECT name FROM sqlite_master WHERE type='table' AND name='processed_comments';" 2>/dev/null)
-    if [ -n "$HAS_PROPER_SCHEMA" ]; then
-      ok "DB has proper processed_comments table"
-    else
-      fail "DB exists but lacks proper schema"
-    fi
-  else
-    ok "DB not created (correct — no backup available)"
-  fi
-fi
-
-# 7f: Verify required tables exist in the real runtime DB
-echo ""
-echo "  7f: Checking real runtime DB schema completeness..."
-REQUIRED_TABLES="processed_comments meta workspaces"
-ALL_PRESENT=true
-for tbl in $REQUIRED_TABLES; do
-  if ! sqlite3 "$MANUL_DIR/manul.db" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
-    fail "Required table '$tbl' missing from DB"
-    ALL_PRESENT=false
-  fi
-done
-$ALL_PRESENT && ok "All required tables present in runtime DB"
-
-# 7g: Idempotency — run repair again on existing runtime
-echo ""
-echo "  7g: Testing idempotency (second repair run)..."
-REPAIR_OUTPUT2=$("$CANONICAL_DIR/repair-manul-runtime.sh" 2>&1) || true
-if echo "$REPAIR_OUTPUT2" | grep -q "Repair Complete\|Runtime directory exists"; then
-  ok "Second repair run completed without errors"
-else
-  fail "Second repair run failed"
-fi
-
-# Summary
-echo ""
+# Summary.
+echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] && exit 0 || exit 1
+[ "$FAIL" -eq 0 ]
