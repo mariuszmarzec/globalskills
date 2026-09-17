@@ -201,6 +201,30 @@ test_submit() {
   else
     fail "Custom conversation ID preserved" "my-conv-id" "$(printf '%s' "$OUTPUT" | jq -r '.conversationId')"
   fi
+
+  # Test 7b: Deterministic conversation ID format when --conversation omitted
+  log "Deterministic conversation ID format (conv-<repo>-issue-<issue>)"
+  # Clear previous DB entries
+  sqlite3 "$DB" "DELETE FROM processed_comments;"
+  # Submit twice with same repo/issue but no --conversation flag
+  OUTPUT1=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
+    --repo owner/repo --issue 45 --prompt "Det conv test" --json 2>&1)
+  OUTPUT2=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
+    --repo owner/repo --issue 45 --prompt "Det conv test" --json 2>&1)
+  CONV1="$(printf '%s' "$OUTPUT1" | jq -r '.conversationId')"
+  CONV2="$(printf '%s' "$OUTPUT2" | jq -r '.conversationId')"
+  # Both should generate the same conv-owner/repo-issue-45 format
+  if [ "$CONV1" = "conv-owner/repo-issue-45" ] && [ "$CONV2" = "conv-owner/repo-issue-45" ]; then
+    pass "Deterministic conversation ID generated correctly (conv-owner/repo-issue-45)"
+  else
+    fail "Deterministic conversation ID generated correctly" "conv-owner/repo-issue-45 both" "$CONV1 / $CONV2"
+  fi
+  # Same conversation ID for same params
+  if [ "$CONV1" = "$CONV2" ]; then
+    pass "Same params yield same conversation ID"
+  else
+    fail "Same params yield same conversation ID" "$CONV1" "$CONV2"
+  fi
   
   # Test 8: Parent task ID
   log "Parent task ID"

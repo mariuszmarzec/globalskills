@@ -772,16 +772,17 @@ scan_failing_ci() {
         [ -n "$run_id" ] || run_id="check-$check_name-$(date +%s)"
         # Check if we already attempted this run
         if check_ci_fix_eligible "$repo" "$pr_num" "$run_id"; then
-          # Create synthetic task for CI fix
-          local prompt="CI build '$check_name' is failing on PR #$pr_num (branch: $pr_branch). Fix the failing build. PR: $(printf '%s' "$pr" | jq -r '.html_url')"
-          local comment_id="ci_fix:$repo:$pr_num:$run_id"
-          local created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          local esc_prompt
-          esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-          sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at','$now','$lease_expires','$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")');" 2>>"$LOG"
-          if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
+# Create synthetic task for CI fix
+           local prompt="CI build '$check_name' is failing on PR #$pr_num (branch: $pr_branch). Fix the failing build. PR: $(printf '%s' "$pr" | jq -r '.html_url')"
+           local comment_id="ci_fix:$repo:$pr_num:$run_id"
+           local created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+           local esc_prompt
+           esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
+           local base_id="$comment_id"
+           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+           lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+           sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at','$now','$lease_expires','$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id');" 2>>"$LOG"
+           if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
             NEW=$((NEW + 1))
             log "queued CI fix task for $repo#$pr_num run $run_id (check: $check_name)"
           fi
@@ -883,15 +884,16 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       # Generate conversation ID for issue comments
       conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
+      # baseId uses the raw comment ID for idempotency (prevents duplicate queued tasks)
+      base_id="$id"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         # Persist the trigger comment to conversation_messages BEFORE building
         # context, so the task's own prompt is included in history.
         # Use rawId/rawBody (no prefix, full body) to match what
         # persist_conversation_messages_for_repo will store later.
-        local raw_id raw_body
-        raw_id="$(jq -r '.rawId // $id' <<<"$obj")"
+        raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
         raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
         persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
         sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
@@ -904,7 +906,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         log "queued $id on $repo#$issue (agent=${agent:-default})"
       fi
     done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
-      .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
+      .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
@@ -956,7 +958,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
+      # baseId uses the raw issue body ID for idempotency (prevents duplicate queued tasks)
+      base_id="$id"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         # Ensure conversation exists for this issue body
@@ -964,7 +968,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
       fi
     done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-      .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
+      .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
@@ -1047,7 +1051,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       fi
       conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
       lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")'); SELECT changes();" 2>>"$LOG")"
+      # baseId uses the raw comment ID for idempotency (prevents duplicate queued tasks)
+      base_id="$id"
+      ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
       if [ "${ins:-0}" -gt 0 ]; then
         NEW=$((NEW + 1))
         # Persist the trigger review comment to conversation_messages BEFORE
@@ -1077,7 +1083,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         log "queued $id on $repo#$pr_num (agent=${agent:-default})"
       fi
     done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-      .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select(.user.login as $u | $allowed | index($u)) |
+      .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0

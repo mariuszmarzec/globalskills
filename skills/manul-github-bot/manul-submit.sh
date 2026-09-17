@@ -94,15 +94,11 @@ if [[ ! "$ISSUE" =~ ^[0-9]+$ ]]; then
 fi
 
 # Generate conversation ID if not provided
-if [ -z "$CONVERSATION" ]; then
-  if [ -n "$COMMENT_URL" ]; then
-    # Use comment URL for conversation grouping
-    CONVERSATION="$(printf '%s' "$COMMENT_URL" | md5sum | cut -d' ' -f1 | cut -c1-16)"
-  else
-    # Use repo+issue for conversation grouping
-    CONVERSATION="conv-$(printf '%s-%s' "$REPO" "$ISSUE" | md5sum | cut -d' ' -f1 | cut -c1-8)"
+  if [ -z "$CONVERSATION" ]; then
+    # Use deterministic conversation ID format: conv-<repo>-issue-<issue_number>
+    # This matches generate_conversation_id convention from poll.sh
+    CONVERSATION="conv-${REPO}-issue-${ISSUE}"
   fi
-fi
 
 # Ensure database exists
 if [ ! -f "$DB" ]; then

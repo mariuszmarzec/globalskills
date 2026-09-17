@@ -305,6 +305,210 @@ MOCK_EOF
     return 1
   fi
 
+    rm -rf "$test_dir"
+    return 0
+}
+
+# =============================================================================
+# Test 4: baseId deduplication — duplicate poll does not create duplicate queued tasks
+# =============================================================================
+test_baseid_dedup_no_duplicates() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/conv-regression-baseid-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE UNIQUE INDEX IF NOT EXISTS idx_base_status ON processed_comments(baseId, status);"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  cat > "$test_dir/comments_1.json" <<'EOF'
+[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
+EOF
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+set -u
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
+fi
+if [[ "$1" == "api" ]]; then
+    args="${@/--paginate/}"
+    if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
+        cat "${TEST_DIR}/comments_1.json"
+        exit 0
+    fi
+    if [[ "$args" == *"/issues/1/comments"* ]]; then
+        cat "${TEST_DIR}/comments_1.json"
+        exit 0
+    fi
+    if [[ "$args" == *"/issues?state=open"* ]]; then
+       echo '[{"number":1}]'
+       exit 0
+    fi
+    echo '[]'
+    exit 0
+fi
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  # Poll twice - same comment should not create duplicate tasks because baseId is set
+  MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || true
+  MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || true
+
+  local task_count
+  task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
+  if [ "$task_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 task (baseId dedup), found $task_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify baseId was populated on the inserted task
+  local base_id_val
+  base_id_val="$(sqlite3 "$poll_db" "SELECT baseId FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
+  if [ -z "$base_id_val" ]; then
+    echo "ERROR: baseId column is empty for inserted task"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  rm -rf "$test_dir"
+  return 0
+}
+
+# =============================================================================
+# Test 5: Bot comment filtering — comments from GitHub Bots (.user.type == "Bot") are ignored
+# =============================================================================
+test_bot_comment_filtering() {
+  local test_dir
+  test_dir="$(mktemp -d /tmp/conv-regression-bot-XXXXXX)"
+  local manul_dir="$test_dir/manul"
+  mkdir -p "$manul_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
+CFGEOF
+
+  local poll_db="$manul_dir/manul.db"
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN nextAttemptAt TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN conversationId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN parentTaskId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN workspaceId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN baseId TEXT;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;"
+  sqlite3 "$poll_db" "ALTER TABLE processed_comments ADD COLUMN action TEXT;"
+  sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
+  sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
+
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+
+  local mock_gh_dir="$test_dir/mock-gh"
+  mkdir -p "$mock_gh_dir"
+
+  # Two comments: one from a human (should be queued) and one from a bot (should be ignored)
+  cat > "$test_dir/comments_1.json" <<'EOF'
+[{"id":"human-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user","type":"User"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-human","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"bot-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"github-actions[bot]","type":"Bot"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-bot","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
+EOF
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+set -u
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
+fi
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+   echo '[]'
+   exit 0
+fi
+if [[ "$1" == "api" ]]; then
+    args="${@/--paginate/}"
+    if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
+        cat "${TEST_DIR}/comments_1.json"
+        exit 0
+    fi
+    if [[ "$args" == *"/issues/1/comments"* ]]; then
+        cat "${TEST_DIR}/comments_1.json"
+        exit 0
+    fi
+    if [[ "$args" == *"/issues?state=open"* ]]; then
+       echo '[{"number":1}]'
+       exit 0
+    fi
+    echo '[]'
+    exit 0
+fi
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || true
+
+  local task_count
+  task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
+  if [ "$task_count" -ne 1 ]; then
+    echo "ERROR: Expected 1 task (bot filtered), found $task_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  # Verify that the queued task is from the human comment (not bot)
+  local author_val
+  author_val="$(sqlite3 "$poll_db" "SELECT author FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
+  if [ "$author_val" != "test-user" ]; then
+    echo "ERROR: Expected author 'test-user', got '$author_val' (bot comment was not filtered)"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
   rm -rf "$test_dir"
   return 0
 }
@@ -315,6 +519,8 @@ MOCK_EOF
 run_test "helper functions and persistence logic" test_helpers_and_persistence
 run_test "issue conversation: trigger→ordinary→follow-up preserves context" test_issue_conversation_regression
 run_test "review thread: every comment persisted, identity based on root only" test_review_thread_regression
+run_test "baseId dedup prevents duplicate queued tasks" test_baseid_dedup_no_duplicates
+run_test "bot comments (.user.type == Bot) are filtered out" test_bot_comment_filtering
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
