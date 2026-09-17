@@ -15,7 +15,7 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # final result comment.
 set -uo pipefail
 # ERR trap: log any unhandled command failure with context
-trap 'echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null' ERR
+trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null; fi' ERR
 
 # Ensure standard PATH is available when running via setsid/nohup
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -40,7 +40,9 @@ DB="${MANUL_DIR}/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-1800}"   # seconds for the agent turn
-OPENCLAW_BIN="$(command -v openclaw)"
+POLL_TIMEOUT="${MANUL_POLL_TIMEOUT:-120}"      # seconds timeout for poll.sh
+GH_API_TIMEOUT="${MANUL_GH_API_TIMEOUT:-30}"   # seconds timeout for gh api calls
+OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
 
 # Read heartbeat configuration from config.json
 CFG_HEARTBEAT_INTERVAL="$(jq -r '.automation.heartbeatInterval // 60' "$CONFIG" 2>/dev/null)"
@@ -449,6 +451,73 @@ release_task_lock() {
   rmdir "$MANUL_DIR/.daemon-lock" 2>/dev/null || true
 }
 
+# Recover tasks stuck in 'running' state due to daemon crash, deadlock, or process death.
+# This handles cases where:
+# 1. Worker process died but task still marked 'running'
+# 2. Lease expired but task not finalized
+# 3. Deadlocked pipe in verify_result_comment or similar
+recover_stale_tasks() {
+  log "recover_stale_tasks: checking for stuck tasks"
+  lc_log "RECOVERY_START" ""
+
+  # Find running tasks with expired leases or NULL worker PIDs
+  # Note: We check for dead PIDs in bash after fetching, since SQLite can't execute OS commands
+  local stale_tasks
+  stale_tasks="$(sqlite3 "$DB" "
+    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts
+    FROM processed_comments
+    WHERE status='running'
+      AND (
+        leaseExpiresAt IS NULL
+        OR leaseExpiresAt < datetime('now')
+        OR workerPid IS NULL
+        OR workerPid = 0
+      )
+    LIMIT 100;" 2>/dev/null)"
+
+  if [ -z "$stale_tasks" ]; then
+    log "recover_stale_tasks: no stale tasks found"
+    return 0
+  fi
+
+  local recovered=0
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts; do
+    [ -n "$comment_id" ] || continue
+
+    # Verify worker PID is actually dead
+    local worker_alive=0
+    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
+      kill -0 "$worker_pid" 2>/dev/null && worker_alive=1
+    fi
+
+    if [ "$worker_alive" -eq 0 ]; then
+      log "recover_stale_tasks: marking stale task as failed: $comment_id (worker=$worker_pid, lease=$lease_expires)"
+      lc_log "TASK_RECOVERED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_worker"
+
+      # Determine if we should retry or mark as failed
+      local max_attempts
+      max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+      local safe_comment_id
+      safe_comment_id="$(sql_escape "$comment_id")"
+
+      if [ "${attempts:-0}" -ge "$max_attempts" ]; then
+        # Max attempts reached, mark as failed
+        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), resultSummary='Daemon recovery: worker died (pid=$worker_pid), max attempts reached' WHERE commentId='$safe_comment_id';" 2>/dev/null
+      else
+        # Retry the task
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, leaseExpiresAt=NULL, processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+        log "recover_stale_tasks: requeued task $comment_id for retry (attempt $((attempts + 1))/$max_attempts)"
+        lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempt=$((attempts + 1)) max=$max_attempts reason=stale_worker"
+      fi
+      recovered=$((recovered + 1))
+    fi
+  done <<<"$stale_tasks"
+
+  log "recover_stale_tasks: recovered $recovered stale task(s)"
+  lc_log "RECOVERY_COMPLETE" "recovered=$recovered"
+  return 0
+}
+
 # Heartbeat tracking for long-running tasks
 declare -A HEARTBEAT_PIDS
 
@@ -720,25 +789,38 @@ verify_result_comment() {
   local marker
   marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
 
+  # Use temp files to avoid pipe deadlock (gh api --paginate can block indefinitely)
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap "rm -rf '$tmpdir'" RETURN
+
+  local comments_file="$tmpdir/comments.json"
+  local bodies_file="$tmpdir/bodies.txt"
+  local result_count=0
+  local reply_count=0
+
   # Query all Manul comments; filter for author and marker
-  # Use jq to extract body directly from author-filtered results
-  local result_count
-  result_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+  # Use timeout to prevent hang if gh API is unresponsive
+  # Save to temp file first, then process to avoid pipe deadlock
+  gh api "repos/$repo/issues/$url_issue_num/comments" \
     --paginate \
     --jq '.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" | while IFS= read -r body; do
-      # Exclude lifecycle comments (daemon posts these with same author/signature)
-      # Reject lifecycle comments based on structural prefix (starts with emoji)
-      # A valid result may contain these emojis in its body, but lifecycle comments
-      # always start with them immediately (e.g., "✅ Manul completed...")
-      if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
-        continue
-      fi
-      # Require exact deterministic marker
-      if [[ "$body" == *"$marker"* ]]; then
-        echo "found"
-      fi
-    done | wc -l)
+    2>>"$LOG" | timeout "$GH_API_TIMEOUT" cat > "$bodies_file" || true
+
+  while IFS= read -r body; do
+    # Exclude lifecycle comments (daemon posts these with same author/signature)
+    # Reject lifecycle comments based on structural prefix (starts with emoji)
+    # A valid result may contain these emojis in its body, but lifecycle comments
+    # always start with them immediately (e.g., "✅ Manul completed...")
+    if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
+      continue
+    fi
+    # Require exact deterministic marker
+    if [[ "$body" == *"$marker"* ]]; then
+      result_count=$((result_count + 1))
+      break
+    fi
+  done < "$bodies_file"
 
   if [ "$result_count" -gt 0 ]; then
     log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
@@ -746,20 +828,24 @@ verify_result_comment() {
   fi
 
   # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
-  local reply_count
-  reply_count=$(gh api "repos/$repo/issues/$url_issue_num/comments" \
+  # Use temp file to avoid pipe deadlock
+  local reply_bodies_file="$tmpdir/reply_bodies.txt"
+  gh api "repos/$repo/issues/$url_issue_num/comments" \
     --paginate \
     --jq '.[] | select(.in_reply_to_id != null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" | while IFS= read -r body; do
-      # Reject lifecycle comments based on structural prefix (starts with emoji)
-      if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
-        continue
-      fi
-      # Require exact deterministic marker
-      if [[ "$body" == *"$marker"* ]]; then
-        echo "found"
-      fi
-    done | wc -l)
+    2>>"$LOG" | timeout "$GH_API_TIMEOUT" cat > "$reply_bodies_file" || true
+
+  while IFS= read -r body; do
+    # Reject lifecycle comments based on structural prefix (starts with emoji)
+    if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
+      continue
+    fi
+    # Require exact deterministic marker
+    if [[ "$body" == *"$marker"* ]]; then
+      reply_count=$((reply_count + 1))
+      break
+    fi
+  done < "$reply_bodies_file"
 
   if [ "$reply_count" -gt 0 ]; then
     log "verify_result_comment: found reply result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
@@ -902,8 +988,24 @@ evaluate_task_completion() {
 }
 
 run_once() {
-  local out
-  out="$("$POLL")"
+   local out
+  # Use timeout to prevent daemon deadlock if poll.sh hangs
+  # This can happen if gh API is unresponsive or network is blocked
+  local poll_timeout="${MANUL_POLL_TIMEOUT:-120}"
+  out="$(timeout "$poll_timeout" "$POLL" 2>&1)" || {
+    local rc=$?
+    if [ "$rc" -eq 124 ]; then
+      log "ERROR: poll.sh timed out after ${poll_timeout}s — killing any orphaned poll children"
+      lc_log "POLL_TIMEOUT" "timeout=${poll_timeout}s"
+      # Kill any orphaned poll.sh processes that may be stuck
+      pkill -f "bash.*$POLL" 2>/dev/null || true
+    else
+      log "ERROR: poll.sh failed with rc=$rc"
+      lc_log "POLL_ERROR" "rc=$rc"
+    fi
+    echo "MANUL_RESULT {\"fire\":false,\"error\":\"poll_failed\"}"
+    return 0
+  }
   echo "$out"
   # Record poll result for observability
   local poll_fire poll_new poll_pending
@@ -1413,6 +1515,9 @@ PROMPT_APPEND
     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
     set_activity "$COMMENT_ID" "working"
 
+    # 5. Invoke agent with timeout to prevent daemon deadlock
+    # Use timeout to kill the entire process tree if agent hangs
+    # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s
      # Change to repository directory and invoke agent
      local prev_dir
      prev_dir="$(pwd)"
@@ -1569,6 +1674,9 @@ loop() {
     log "FATAL: schema migration failed, cannot start loop"
     exit 1
   fi
+
+  # Recover any stale tasks from previous crashes/deadlocks
+  recover_stale_tasks
 
   # Source workspace manager
   source "$MANUL_DIR/workspace-manager.sh"
