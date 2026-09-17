@@ -114,7 +114,7 @@ AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
 PARSE='(.body | split("\n")) as $lines
 | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
 | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
-| (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+| (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
 | ($rest | split(" ")[0]) as $tok
 | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
 | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
@@ -910,7 +910,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
-      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
       | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
@@ -972,7 +972,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
-      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
       | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
@@ -1087,7 +1087,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       (.body | split("\n")) as $lines
       | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
       | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
-      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else $rest0 end) as $rest
+      | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
       | ($rest | split(" ")[0]) as $tok
       | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
       | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
