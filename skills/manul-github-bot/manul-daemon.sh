@@ -792,20 +792,29 @@ verify_result_comment() {
   # Use temp files to avoid pipe deadlock (gh api --paginate can block indefinitely)
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap "rm -rf '$tmpdir'" RETURN
 
-  local comments_file="$tmpdir/comments.json"
-  local bodies_file="$tmpdir/bodies.txt"
-  local result_count=0
+   local comments_file="$tmpdir/comments.json"
+   local bodies_file="$tmpdir/bodies.txt"
+   local reply_bodies_file="$tmpdir/reply_bodies.txt"
+   local result_count=0
   local reply_count=0
 
   # Query all Manul comments; filter for author and marker
-  # Use timeout to prevent hang if gh API is unresponsive
-  # Save to temp file first, then process to avoid pipe deadlock
-  gh api "repos/$repo/issues/$url_issue_num/comments" \
+  # Apply timeout directly to gh api to prevent hangs and avoid pipe deadlock
+  timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$url_issue_num/comments" \
     --paginate \
     --jq '.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" | timeout "$GH_API_TIMEOUT" cat > "$bodies_file" || true
+    2>>"$LOG" > "$bodies_file" || {
+      local api_rc=$?
+      if [ "$api_rc" -eq 124 ]; then
+        log "ERROR: verify_result_comment: gh api timed out after ${GH_API_TIMEOUT}s — fail-closed"
+        lc_log "API_TIMEOUT" "task=$comment_id repo=$repo issue=$url_issue_num timeout=${GH_API_TIMEOUT}s"
+      else
+        log "ERROR: verify_result_comment: gh api failed with exit code $api_rc — fail-closed"
+        lc_log "API_FAILURE" "task=$comment_id repo=$repo issue=$url_issue_num exit_code=$api_rc"
+      fi
+      return 1
+    }
 
   while IFS= read -r body; do
     # Exclude lifecycle comments (daemon posts these with same author/signature)
@@ -818,9 +827,14 @@ verify_result_comment() {
     # Require exact deterministic marker
     if [[ "$body" == *"$marker"* ]]; then
       result_count=$((result_count + 1))
-      break
     fi
   done < "$bodies_file"
+
+  if [ "$result_count" -gt 1 ]; then
+    log "ERROR: verify_result_comment: multiple result comments with same marker for task $comment_id attempt $attempt on $repo#$url_issue_num — reject duplicates"
+    lc_log "DUPLICATE_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt count=$result_count"
+    return 1
+  fi
 
   if [ "$result_count" -gt 0 ]; then
     log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
@@ -828,12 +842,21 @@ verify_result_comment() {
   fi
 
   # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
-  # Use temp file to avoid pipe deadlock
-  local reply_bodies_file="$tmpdir/reply_bodies.txt"
-  gh api "repos/$repo/issues/$url_issue_num/comments" \
+  # Apply timeout directly to gh api to prevent hangs
+  timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$url_issue_num/comments" \
     --paginate \
     --jq '.[] | select(.in_reply_to_id != null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" | timeout "$GH_API_TIMEOUT" cat > "$reply_bodies_file" || true
+    2>>"$LOG" > "$reply_bodies_file" || {
+      local api_rc=$?
+      if [ "$api_rc" -eq 124 ]; then
+        log "ERROR: verify_result_comment: gh api (reply) timed out after ${GH_API_TIMEOUT}s — fail-closed"
+        lc_log "API_TIMEOUT" "task=$comment_id repo=$repo issue=$url_issue_num reply_timeout=${GH_API_TIMEOUT}s"
+      else
+        log "ERROR: verify_result_comment: gh api (reply) failed with exit code $api_rc — fail-closed"
+        lc_log "API_FAILURE" "task=$comment_id repo=$repo issue=$url_issue_num reply_exit_code=$api_rc"
+      fi
+      return 1
+    }
 
   while IFS= read -r body; do
     # Reject lifecycle comments based on structural prefix (starts with emoji)
@@ -843,9 +866,14 @@ verify_result_comment() {
     # Require exact deterministic marker
     if [[ "$body" == *"$marker"* ]]; then
       reply_count=$((reply_count + 1))
-      break
     fi
   done < "$reply_bodies_file"
+
+  if [ "$reply_count" -gt 1 ]; then
+    log "ERROR: verify_result_comment: multiple reply comments with same marker for task $comment_id attempt $attempt on $repo#$url_issue_num — reject duplicates"
+    lc_log "DUPLICATE_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt reply_count=$reply_count"
+    return 1
+  fi
 
   if [ "$reply_count" -gt 0 ]; then
     log "verify_result_comment: found reply result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"

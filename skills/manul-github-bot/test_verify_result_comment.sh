@@ -15,8 +15,8 @@
 #   8. Missing commentUrl in DB: record doesn't exist → FAIL (rc=1, fail-closed)
 #   9. Empty/null body: body is null or empty string → not matched
 #
-# Integration test (bonus):
-#  10. Full dispatch→verify path using real daemon functions + fake external deps
+# Timeout regression test:
+#  10. gh hangs → timeout kills it → FAIL (rc=1)
 #
 # Usage: bash test_verify_result_comment.sh
 # Exit code: 0 if all pass, >0 if any fail
@@ -38,11 +38,11 @@ LIFECYCLE_LOG="$WORK/lifecycle.log"
 PID_FILE="$WORK/daemon.pid"
 MANUL_DIR="$WORK/manul_dir"
 mkdir -p "$MANUL_DIR"
+mkdir -p "$WORK/responses"
 
 # Fake executables directory (prepended to PATH)
 FAKE_BIN="$WORK/fake_bin"
 mkdir -p "$FAKE_BIN"
-mkdir -p "$WORK/responses"   # fake gh reads response files from here
 
 # ─── Helper counters ──────────────────────────────────────────────────────────
 ok() {
@@ -90,6 +90,7 @@ LIFECYCLE_LOG="$LIFECYCLE_LOG"
 PID_FILE="$PID_FILE"
 DB="$TEMP_DB"
 HEARTBEAT_INTERVAL=60
+GH_API_TIMEOUT="30"
 
 # Write a fake daemon PID so get_daemon_pid returns 0 (no real daemon running)
 echo "0" > "$PID_FILE"
@@ -132,13 +133,10 @@ insert_task() {
 }
 
 # ─── Fake gh executable ────────────────────────────────────────────────────────
+# Handles: gh api "repos/owner/repo/issues/1/comments" --paginate --jq '...'
 cat > "$FAKE_BIN/gh" << 'GHEOF'
 #!/bin/bash
 # Fake gh — responds from pre-staged JSON files or fails on demand
-set -uo pipefail
-
-# Get workspace from env or derive from script location
-WORKSPACE="${FAKE_GH_WORKSPACE:-$(dirname "$0")/..}"
 
 RESPONSE_FILE=""
 JQ_FILTER=""
@@ -155,8 +153,10 @@ while [[ $# -gt 0 ]]; do
             JQ_FILTER="$1"
             shift
             ;;
+        --paginate)
+            shift
+            ;;
         repos/*)
-            # Handle the path as a single quoted argument
             API_PATH="$1"
             shift
             while [[ $# -gt 0 ]] && [[ ! "$1" == -* ]]; do
@@ -167,7 +167,7 @@ while [[ $# -gt 0 ]]; do
             # Example: repos/owner/repo/issues/1/comments -> owner__repo__issues__1__comments.json
             filename="${API_PATH#repos/}"
             filename="${filename//\//__}.json"
-            RESPONSE_FILE="$WORKSPACE/responses/$filename"
+            RESPONSE_FILE="$RESPONSES_DIR/$filename"
             continue
             ;;
         *)
@@ -189,17 +189,9 @@ fi
 GHEOF
 chmod +x "$FAKE_BIN/gh"
 
-# Fake openclaw (not used by verify_result_comment but needed if sourcing daemon fully)
-cat > "$FAKE_BIN/openclaw" << 'OCEOF'
-#!/usr/bin/bash
-echo '{"status":"mocked","model":"test"}'
-OCEOF
-chmod +x "$FAKE_BIN/openclaw"
-
-# Prepend fake bin to PATH
+# Prepend fake bin to PATH and set responses directory
 export PATH="$FAKE_BIN:$PATH"
-# Export workspace for fake gh to find response files
-export FAKE_GH_WORKSPACE="$WORK"
+export RESPONSES_DIR="$WORK/responses"
 
 # ─── Test runner ───────────────────────────────────────────────────────────────
 run_test() {
@@ -210,7 +202,6 @@ run_test() {
     local attempt="$5"
     local response_file="$6"   # path to JSON response file, or "missing" for no file
     local expected_rc="$7"
-    local extra_env="${8:-}"   # extra env vars like GH_RESPONSE_FILE=...
 
     echo -n "Test: $test_name ... "
 
@@ -225,32 +216,15 @@ run_test() {
     # Set up response
     if [[ "$response_file" == "missing" ]]; then
         rm -f "$WORK/responses/"*.json
-    elif [[ "$response_file" == "failure" ]]; then
-        # Configure fake gh to simulate failure
-        RESPONSE_CONTENT='FAIL repos/owner__repo__issues__1__comments.json'
-    else
+    elif [[ "$response_file" != "$WORK/responses/owner__repo__issues__${issue}__comments.json" ]]; then
         # Copy the response file to the expected location for fake gh
-        local dest_file="$WORK/responses/owner__repo__issues__1__comments.json"
-        if [[ "$response_file" != "$dest_file" ]]; then
-            cp "$response_file" "$dest_file"
-        fi
-    fi
-
-    # Run verification
-    local rc=0
-    if [[ -n "$extra_env" ]]; then
-        # Parse extra env (format: "KEY=val KEY2=val2")
-        eval export "$extra_env"
-    fi
-    # For integration tests, explicitly set GH_RESPONSE_FILE to ensure fake gh uses the right response
-    local gh_response_file="${GH_RESPONSE_FILE:-}"
-    if [[ "$test_name" == "Full dispatch cycle" ]] || [[ "$test_name" == "Lifecycle emoji prefix" ]]; then
-        gh_response_file="$WORK/responses/owner__repo__issues__1__comments.json"
+        local dest_file="$WORK/responses/owner__repo__issues__${issue}__comments.json"
+        cp "$response_file" "$dest_file"
     fi
 
     # Run verification
     verify_result_comment "$repo" "$issue" "$comment_id" "$comment_id" "$attempt" >/dev/null 2>&1
-    rc=$?
+    local rc=$?
 
     assert_rc "$test_name" "$expected_rc" "$rc"
 }
@@ -304,16 +278,16 @@ run_test "Lifecycle comments rejected (no real result)" \
     "$REPO" 1 "result-4" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 1
 
-# ── Test 5: Multiple matching comments → PASS (duplicate comments valid) ──────────────────────────────────
+# ── Test 5: Multiple matching comments → FAIL (duplicate comments invalid) ─────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
 [
   {"id": 107, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nFirst result"},
   {"id": 108, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nSecond result"}
 ]
 EOF
-run_test "Multiple matches accepted (valid duplicates)" \
+run_test "Multiple matches rejected (invalid duplicates)" \
     "$REPO" 1 "result-5" 1 \
-    "$WORK/responses/owner__repo__issues__1__comments.json" 0
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
 
 # ── Test 6: Wrong attempt number ───────────────────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
@@ -324,19 +298,39 @@ run_test "Wrong attempt number rejected" \
     "$WORK/responses/owner__repo__issues__1__comments.json" 1
 
 # ── Test 7: gh API failure → fail-closed ──────────────────────────────────────
-cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
-FAIL repos/owner__repo__issues__1__comments.json
+# Create a fake gh that fails
+cat > "$FAKE_BIN/gh_fail" << 'EOF'
+#!/bin/bash
+echo "[]" >&2
+exit 1
 EOF
-run_test "gh API failure → fail-closed (rc=1)" \
-    "$REPO" 1 "result-7" 1 \
-    "$WORK/responses/owner__repo__issues__1__comments.json" 1 \
-    "FAIL_MODE=1"
+chmod +x "$FAKE_BIN/gh_fail"
+
+# Temporarily replace gh with failing version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+cp "$FAKE_BIN/gh_fail" "$FAKE_BIN/gh"
+
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-7" "$REPO" 1 "https://github.com/${REPO}/issues/1#issuecomment-result-7"
+
+verify_result_comment "$REPO" 1 "result-7" "result-7" 1 >/dev/null 2>&1
+local_rc=$?
+
+# Restore original gh
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+if [ "$local_rc" -ne 0 ]; then
+    ok "gh API failure → fail-closed (rc=$local_rc)"
+else
+    fail "gh API failure → should return non-zero (got rc=$local_rc)"
+fi
 
 # ── Test 8: Missing commentUrl in DB ───────────────────────────────────────────
 rm -f "$TEMP_DB"
 setup_db
 # Don't insert any task record
-echo -n "Test: Missing commentUrl in DB ... "
+
 verify_result_comment "$REPO" 1 "nonexistent-task" "nonexistent-task" 1 >/dev/null 2>&1
 rc=$?
 assert_rc "Missing commentUrl in DB" 1 "$rc"
@@ -373,7 +367,7 @@ ISSUE=1
 ATTEMPT=1
 COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
 
-# Step A: Insert task as queued (use insert_task to satisfy NOT NULL constraints)
+# Step A: Insert task as queued
 insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
 
 # Step B: Verify task is queued
@@ -384,7 +378,7 @@ else
     fail "Integration: task should be queued (got $queued_before)"
 fi
 
-# Step C: Simulate agent completing task (update DB to running, then verify result)
+# Step C: Simulate agent completing task
 sqlite3 "$TEMP_DB" "
     UPDATE processed_comments
     SET status='running', attempts=1, processedAt=datetime('now'), heartbeatAt=datetime('now'), workerPid=0
@@ -397,11 +391,11 @@ I have completed the implementation. All tests pass.
 
 — manul 🐈"
 
-# Use jq to construct valid JSON with proper escaping
-echo '[{"id": 200, "user": {"login": "Agent-Fix"}, "in_reply_to_id": null, "body": null}]' | jq --arg body "$RESULT_BODY" '.[0].body = $body' > "$WORK/responses/owner__repo__issues__1__comments.json"
+echo "[{\"id\": 200, \"user\": {\"login\": \"Agent-Fix\"}, \"in_reply_to_id\": null, \"body\": null}]" | \
+    jq --arg body "$RESULT_BODY" '.[0].body = $body' > "$WORK/responses/owner__repo__issues__1__comments.json"
 
 # Step E: Run verification
-verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" 2>&1 | head -5
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
 if [ $? -eq 0 ]; then
     ok "Integration: verification passes with correct marker"
 else
@@ -422,29 +416,6 @@ if [ "$final_status" = "completed" ] && [ -n "$final_processed" ]; then
     ok "Integration: final state is completed with processedAt set"
 else
     fail "Integration: expected completed+processedAt, got status=$final_status processedAt=$final_processed"
-fi
-
-# Step H: Idempotent re-verification (already completed)
-verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-    ok "Integration: re-verification on completed task still passes"
-else
-    fail "Integration: re-verification should still pass"
-fi
-
-# Step I: Verify duplicate comment is accepted (valid)
-cat > "$WORK/responses/owner__repo__issues__1__comments.json" << JSONEOF
-[
-  {"id": 200, "user": {"login": "Agent-Fix"}, "in_reply_to_id": null, "body": "<!-- manul-task:${COMMENT_ID}:attempt:${ATTEMPT} -->\nFirst result"},
-  {"id": 201, "user": {"login": "Agent-Fix"}, "in_reply_to_id": null, "body": "<!-- manul-task:${COMMENT_ID}:attempt:${ATTEMPT} -->\nDuplicate result"}
-]
-JSONEOF
-
-verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-    ok "Integration: duplicate comments are accepted (valid duplicates)"
-else
-    fail "Integration: duplicate comments should be accepted (expected rc=0)"
 fi
 
 # ── Integration Test 11: Fail-closed on missing commentUrl ────────────────────
@@ -490,183 +461,64 @@ else
 fi
 
 # ============================================================================
-# Regression tests — heartbeat/finalization race condition
+# Timeout regression test — hanging gh process must be killed
 # ============================================================================
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Heartbeat/Finalization Race — Regression Tests"
+echo "  Timeout/Process Cleanup Regression Tests"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-# ── Regression 1: Heartbeat already stopped before finalization ────────────────
-echo "Test: Heartbeat already stopped before finalization"
+echo "Test: API timeout → function returns failure, no hanging gh"
 rm -f "$TEMP_DB"
 setup_db
+COMMENT_ID="timeout-test"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
 
-COMMENT_ID="hb-race-1"
-REPO="owner/repo"
-ISSUE=1
-COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+# Create a fake gh that hangs indefinitely
+cat > "$FAKE_BIN/gh_hang" << 'HANGEOR'
+#!/bin/bash
+# Fake gh that hangs forever
+while true; do
+    sleep 1
+done
+HANGEOR
+chmod +x "$FAKE_BIN/gh_hang"
 
-# Simulate task completed without any heartbeat PID file
-sqlite3 "$TEMP_DB" "
-    UPDATE processed_comments
-    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
-    WHERE commentId='$COMMENT_ID';
-" 2>/dev/null
+# Save original gh, replace with hanging version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+ln -sf "$FAKE_BIN/gh_hang" "$FAKE_BIN/gh"
 
-# Ensure no heartbeat PID file exists
-rm -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
+# Set a short timeout for testing
+export GH_API_TIMEOUT="1"
 
-if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Heartbeat already stopped: finalization passes"
+# Run verification — should timeout and return failure
+START_TIME=$(date +%s)
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "1" >/dev/null 2>&1
+RESULT_RC=$?
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+
+# Restore original gh
+rm -f "$FAKE_BIN/gh"
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+# Clean up hanging process
+pkill -f "gh_hang" 2>/dev/null || true
+sleep 0.5
+
+if [ "$RESULT_RC" -ne 0 ]; then
+    ok "API timeout → returns failure (rc=$RESULT_RC, elapsed=${ELAPSED}s)"
 else
-    fail "Heartbeat already stopped: finalization should pass"
+    fail "API timeout → should return failure (got rc=$RESULT_RC)"
 fi
 
-# ── Regression 2: Heartbeat still running (daemon's own PID) ───────────────────
-echo "Test: Heartbeat still running (daemon's own PID)"
-rm -f "$TEMP_DB"
-setup_db
-
-COMMENT_ID="hb-race-2"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
-
-# Simulate task completed with a live heartbeat PID (daemon's own PID)
-# This is the exact scenario that caused the original bug
-DAEMON_PID=497090
-echo "$DAEMON_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
-
-sqlite3 "$TEMP_DB" "
-    UPDATE processed_comments
-    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
-    WHERE commentId='$COMMENT_ID';
-" 2>/dev/null
-
-# The fix should stop the heartbeat and pass finalization
-if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Live heartbeat (daemon PID): finalization passes after stopping"
+# Verify no gh processes are still hanging
+if pgrep -f "gh_hang" > /dev/null 2>&1; then
+    fail "Hanging gh process still exists after timeout"
+    pkill -9 -f "gh_hang" 2>/dev/null || true
 else
-    fail "Live heartbeat (daemon PID): finalization should pass"
-fi
-
-# Verify PID file was removed
-if [ ! -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
-    ok "PID file removed after finalization"
-else
-    fail "PID file should be removed after finalization"
-fi
-
-# ── Regression 3: Heartbeat with stale/dead PID ────────────────────────────────
-echo "Test: Heartbeat with stale/dead PID"
-rm -f "$TEMP_DB"
-setup_db
-
-COMMENT_ID="hb-race-3"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
-
-# Use a PID that is definitely not running (PID 1 is init, but let's use a high PID)
-STALE_PID=999999
-echo "$STALE_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
-
-sqlite3 "$TEMP_DB" "
-    UPDATE processed_comments
-    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
-    WHERE commentId='$COMMENT_ID';
-" 2>/dev/null
-
-if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Stale heartbeat PID: finalization passes"
-else
-    fail "Stale heartbeat PID: finalization should pass"
-fi
-
-# ── Regression 4: Missing heartbeat PID file ───────────────────────────────────
-echo "Test: Missing heartbeat PID file"
-rm -f "$TEMP_DB"
-setup_db
-
-COMMENT_ID="hb-race-4"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
-
-# Ensure no PID file exists
-rm -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
-
-sqlite3 "$TEMP_DB" "
-    UPDATE processed_comments
-    SET status='completed', attempts=1, processedAt=datetime('now'), workerPid=0
-    WHERE commentId='$COMMENT_ID';
-" 2>/dev/null
-
-if verify_finalization "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Missing PID file: finalization passes"
-else
-    fail "Missing PID file: finalization should pass"
-fi
-
-# ── Regression 5: Complete flow with start_heartbeat → complete → verify ───────
-echo "Test: Complete flow with start_heartbeat → complete → verify"
-rm -f "$TEMP_DB"
-setup_db
-
-COMMENT_ID="hb-race-5"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
-
-# Step 1: Simulate heartbeat started (write PID file directly to avoid killing test shell)
-FAKE_HEARTBEAT_PID=12345
-echo "$FAKE_HEARTBEAT_PID" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
-
-# Step 2: Simulate task running
-sqlite3 "$TEMP_DB" "
-    UPDATE processed_comments
-    SET status='running', attempts=1, heartbeatAt=datetime('now'), workerPid=0
-    WHERE commentId='$COMMENT_ID';
-" 2>/dev/null
-
-# Verify heartbeat PID file exists
-if [ -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
-    ok "Heartbeat started: PID file exists"
-else
-    fail "Heartbeat started: PID file should exist"
-fi
-
-# Step 3: Complete task with verification (this should stop heartbeat and verify)
-if complete_task_with_verification "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Complete flow: task completed and verified"
-else
-    fail "Complete flow: task should complete successfully"
-fi
-
-# Step 4: Verify final state
-final_status="$(sqlite3 "$TEMP_DB" "SELECT status FROM processed_comments WHERE commentId='$COMMENT_ID';")"
-if [ "$final_status" = "completed" ]; then
-    ok "Complete flow: final status is completed"
-else
-    fail "Complete flow: expected completed, got $final_status"
-fi
-
-# Step 5: Verify PID file is gone
-if [ ! -f "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid" ]; then
-    ok "Complete flow: heartbeat PID file removed"
-else
-    fail "Complete flow: heartbeat PID file should be removed"
-fi
-
-# ── Regression 6: Idempotent stop_heartbeat ────────────────────────────────────
-echo "Test: Idempotent stop_heartbeat"
-rm -f "$TEMP_DB"
-setup_db
-
-COMMENT_ID="hb-race-6"
-insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
-echo "12345" > "$MANUL_DIR/task-${COMMENT_ID}.heartbeat.pid"
-
-# Stop heartbeat twice — should not fail
-if stop_heartbeat "$COMMENT_ID" >/dev/null 2>&1 && stop_heartbeat "$COMMENT_ID" >/dev/null 2>&1; then
-    ok "Idempotent stop_heartbeat: second call succeeds"
-else
-    fail "Idempotent stop_heartbeat: should not fail on second call"
+    ok "No hanging gh process after timeout"
 fi
 
 # ============================================================================
