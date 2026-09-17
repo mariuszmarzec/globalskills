@@ -139,18 +139,36 @@ init_schema() {
     }
   done
 
-  # Add columns if missing (for migrations from older schemas)
-  # Each ALTER is idempotent and wrapped in its own transaction
-  local col_check col_add
-  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+  # Add missing columns (idempotent migration — handles concurrent initialization).
+  # Batches all ALTERs into one call; "duplicate column" errors are swallowed
+  # as a race-condition safety net. All other errors propagate.
+  local col_check
+  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>&1)" || {
+    echo "ERROR: Failed to read processed_comments schema" >&2
+    return 1
+  }
+
+  local alter_sql=""
   if ! echo "$col_check" | grep -q '|action|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT'; "
   fi
   if ! echo "$col_check" | grep -q '|prNumber|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER; "
   fi
   if ! echo "$col_check" | grep -q '|prUrl|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN prUrl TEXT; "
+  fi
+
+  if [ -n "$alter_sql" ]; then
+    local alter_err
+    alter_err="$(sqlite3 "$DB" "$alter_sql" 2>&1)" || {
+      if echo "$alter_err" | grep -qi 'duplicate column'; then
+        : # race condition: concurrent init already added the column
+      else
+        echo "ERROR: Schema migration failed: $alter_err" >&2
+        return 1
+      fi
+    }
   fi
 }
 

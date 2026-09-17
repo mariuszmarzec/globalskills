@@ -391,22 +391,13 @@ alias manul-status='$OPENCLAW_MANUL_DIR/manul-status.sh'
 alias manul-comments-remove='$OPENCLAW_MANUL_DIR/manul-comments-remove.sh'
 ```
 
-**Files are symlinked, not copied:** `poll.sh`, `manul-comments-remove.sh`, `orchestrator.prompt.md`, `watchdog.sh`, `task-recovery.sh`, `start-manul-automation.sh`, and `manul-status.sh` in `~/.openclaw/manul/` are symlinks pointing back to the canonical copies here. When the skill updates, the symlinked files refresh automatically — no copy step is needed.
-
-To verify the symlinks are intact:
+**Symlink verification:** Use the installer in dry‑run mode to check that all runtime scripts are correctly linked:
 
 ```bash
-ls -la ~/.openclaw/manul/watchdog.sh ~/.openclaw/manul/task-recovery.sh ~/.openclaw/manul/start-manul-automation.sh ~/.openclaw/manul/manul-status.sh
+~/.globalskills/skills/manul-github-bot/install-manul-symlinks.sh --dry-run
 ```
 
-If a symlink is ever broken (e.g. after manually editing the installed copy), recreate it:
-
-```bash
-ln -sf ~/.globalskills/skills/manul-github-bot/watchdog.sh ~/.openclaw/manul/watchdog.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/task-recovery.sh ~/.openclaw/manul/task-recovery.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/start-manul-automation.sh ~/.openclaw/manul/start-manul-automation.sh
-ln -sf ~/.globalskills/skills/manul-github-bot/manul-status.sh ~/.openclaw/manul/manul-status.sh
-```
+If any symlink is broken, re‑run the installer without `--dry-run` to recreate them.
 
 ### Manual Recovery
 
@@ -452,7 +443,7 @@ The repair script:
 2. Deploys symlinks via `install-manul-symlinks.sh`
 3. Copies `config.json.example` → `config.json` if missing (edit before use)
 4. Restores `manul.db` from `--source-db` or archive backup if available
-5. Initializes schema idempotently via `manul-conversation.sh init-schema` and `workspace-manager.sh workspace_init` (no-ops if tables already exist)
+5. Initializes schema idempotently via `manul-conversation.sh init-schema` and `workspace-manager.sh workspace_init` (no‑ops if tables already exist). If either step fails, the repair aborts with a non‑zero exit code.
 6. Aborts with exit 1 if no backup DB is found — a valid `manul.db` is required to start the daemon
 7. Never fabricates a new application schema from scratch
 

@@ -149,21 +149,13 @@ fi
 echo
 echo "[5/5] Validating DB schema..."
 
-# Use the canonical init-schema subcommand — idempotent, no business logic side effects
-if MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" init-schema; then
-    echo "  Canonical conversation schema initialized."
-else
-    echo "  WARNING: manul-conversation.sh init-schema failed (non-fatal if DB was restored from backup)"
-fi
+MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" init-schema || \
+    fail "Canonical conversation schema initialization failed"
 
-# Initialize workspace table using canonical function
 export MANUL_DIR="$RUNTIME_DIR"
 export DB="$DB_FILE"
-if bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"; then
-    echo "  Canonical workspace schema initialized."
-else
-    echo "  WARNING: workspace_init failed (non-fatal if DB was restored from backup)"
-fi
+bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" || \
+    fail "Canonical workspace initialization failed"
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 for table in $REQUIRED_TABLES; do

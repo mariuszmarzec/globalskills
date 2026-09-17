@@ -8,9 +8,11 @@
 # 4. repair-manul-runtime.sh aborts safely without a DB backup
 # 5. repair-manul-runtime.sh restores from a canonical-init DB backup
 # 6. Restored symlinks are valid and point into canonical source
-# 7. Recovered DB contains the required tables and columns
+# 7. Recovered DB contains the required tables and columns (strengthened)
 # 8. Second repair is idempotent (DB and config are not replaced)
 # 9. Archive fallback works with supported sibling archive layout
+# 10. init-schema failure is fatal — repair does not complete
+# 11. workspace_init failure is fatal — repair does not complete
 
 set -uo pipefail
 
@@ -212,7 +214,6 @@ fi
 # ── Test 7: Recovered DB schema matches canonical contract ───────────────────
 echo
 echo "Test 7: Recovered DB schema"
-# Check tables exist
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 SCHEMA_FAILURES=0
 for table in $REQUIRED_TABLES; do
@@ -223,8 +224,9 @@ for table in $REQUIRED_TABLES; do
 done
 [ "$SCHEMA_FAILURES" -eq 0 ] && ok "All required tables present in recovered DB"
 
-# Check key columns on processed_comments (the richest table)
-KEY_COLUMNS="commentId repository issueNumber status attempts conversationId action prNumber"
+# Validate key columns on the richest table (processed_comments).
+# Avoid duplicating the full schema SQL; only assert the columns the daemon reads.
+KEY_COLUMNS="commentId repository issueNumber commentUrl prompt status attempts conversationId action prNumber prUrl"
 for col in $KEY_COLUMNS; do
   if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
        "PRAGMA table_info(processed_comments);" 2>/dev/null \
@@ -233,6 +235,26 @@ for col in $KEY_COLUMNS; do
   fi
 done
 ok "Key columns present on processed_comments"
+
+# Validate key columns on conversations
+for col in conversationId repository issueNumber issueUrl status activeTaskId createdAt updatedAt; do
+  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+       "PRAGMA table_info(conversations);" 2>/dev/null \
+       | grep -qw "$col"; then
+    fail "Required column '$col' missing from conversations"
+  fi
+done
+ok "Key columns present on conversations"
+
+# Validate workspaces columns
+for col in workspaceId workspacePath status currentTaskId lastUsedAt; do
+  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+       "PRAGMA table_info(workspaces);" 2>/dev/null \
+       | grep -qw "$col"; then
+    fail "Required column '$col' missing from workspaces"
+  fi
+done
+ok "Key columns present on workspaces"
 
 # ── Test 8: Second repair with same backup is idempotent ──────────────────────
 echo
@@ -292,6 +314,176 @@ if [ "$ARCHIVE_EXIT" -eq 0 ] && echo "$ARCHIVE_OUTPUT" | grep -q "Restored DB fr
 else
   fail "Archive DB fallback failed (exit=$ARCHIVE_EXIT)"
   echo "$ARCHIVE_OUTPUT"
+fi
+
+# ── Test 10: init-schema failure is fatal to repair ──────────────────────────
+echo
+echo "Test 10: init-schema failure is fatal"
+READONLY_RUNTIME="$TMPROOT/readonly-runtime"
+mkdir -p "$READONLY_RUNTIME"
+
+# Build a DB that has all tables but is missing migration columns (action, prNumber, prUrl).
+# This simulates a pre-migration DB that needs ALTER TABLE to reach current schema.
+sqlite3 "$READONLY_RUNTIME/manul.db" <<'SQL'
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  commentUrl TEXT NOT NULL,
+  author TEXT,
+  agent TEXT,
+  prompt TEXT NOT NULL,
+  context TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT,
+  processedAt TEXT,
+  heartbeatAt TEXT,
+  leaseExpiresAt TEXT,
+  workerPid INTEGER,
+  nextAttemptAt TEXT,
+  conversationId TEXT,
+  parentTaskId TEXT,
+  workspaceId TEXT
+);
+CREATE TABLE conversations (
+  conversationId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  issueUrl TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  activeTaskId TEXT,
+  activePrNumber TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE workspaces (
+  workspaceId TEXT PRIMARY KEY,
+  workspacePath TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'IDLE',
+  currentTaskId TEXT,
+  lastUsedAt TEXT
+);
+SQL
+
+# Make DB read-only so ALTER TABLE migrations cannot apply.
+chmod 444 "$READONLY_RUNTIME/manul.db"
+
+# Copy config template so repair reaches step 5.
+cp "$SCRIPT_DIR/config.json.example" "$READONLY_RUNTIME/config.json" 2>/dev/null || true
+
+set +e
+READONLY_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$READONLY_RUNTIME" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+READONLY_EXIT=$?
+set -e
+
+if [ "$READONLY_EXIT" -ne 0 ]; then
+  ok "Repair exits non-zero when init-schema fails"
+else
+  fail "Repair should have exited non-zero when init-schema failed (exit=$READONLY_EXIT)"
+fi
+
+if echo "$READONLY_OUTPUT" | grep -q "Repair Complete"; then
+  fail "Output must NOT contain 'Repair Complete' on init-schema failure"
+else
+  ok "Output does not contain 'Repair Complete' on failure"
+fi
+
+if echo "$READONLY_OUTPUT" | grep -qiE "schema|initialization|migration|ERROR"; then
+  ok "Actual error message is visible in output"
+else
+  fail "Error message not visible in output"
+  echo "  Output was: $READONLY_OUTPUT"
+fi
+
+# Verify the existing DB was not corrupted or replaced.
+if [ -f "$READONLY_RUNTIME/manul.db" ]; then
+  if sqlite3 "$READONLY_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
+    ok "Existing DB preserved (not corrupted) after failed repair"
+  else
+    fail "Existing DB was corrupted during failed repair"
+  fi
+else
+  fail "Existing DB was removed during failed repair"
+fi
+
+# ── Test 11: workspace_init failure is fatal ────────────────────────────────
+echo
+echo "Test 11: workspace_init failure is fatal"
+WSFAIL_DIR="$TMPROOT/ws-fail-dir"
+mkdir -p "$WSFAIL_DIR"
+
+# Build a DB with conversation tables but WITHOUT the workspaces table.
+# Then make it read-only so workspace_init cannot CREATE the missing table.
+sqlite3 "$WSFAIL_DIR/manul.db" <<'SQL'
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  commentUrl TEXT NOT NULL,
+  author TEXT,
+  agent TEXT,
+  prompt TEXT NOT NULL,
+  context TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT,
+  processedAt TEXT,
+  heartbeatAt TEXT,
+  leaseExpiresAt TEXT,
+  workerPid INTEGER,
+  nextAttemptAt TEXT,
+  conversationId TEXT,
+  parentTaskId TEXT,
+  workspaceId TEXT,
+  action TEXT DEFAULT 'IMPLEMENT',
+  prNumber INTEGER,
+  prUrl TEXT
+);
+CREATE TABLE conversations (
+  conversationId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  issueUrl TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  activeTaskId TEXT,
+  activePrNumber TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+SQL
+chmod 444 "$WSFAIL_DIR/manul.db"
+
+# Call workspace_init directly with the read-only DB missing the workspaces table.
+WS_INIT_OUTPUT=""
+WS_INIT_EXIT=0
+WS_INIT_OUTPUT="$(MANUL_DIR="$WSFAIL_DIR" DB="$WSFAIL_DIR/manul.db" \
+  bash -c 'source "$1"; workspace_init' _ "$SCRIPT_DIR/workspace-manager.sh" 2>&1)" || WS_INIT_EXIT=$?
+
+if [ "$WS_INIT_EXIT" -ne 0 ]; then
+  ok "workspace_init exits non-zero when it cannot create missing table"
+else
+  fail "workspace_init should have failed (exit=$WS_INIT_EXIT)"
+fi
+
+if [ -n "$WS_INIT_OUTPUT" ] && echo "$WS_INIT_OUTPUT" | grep -qiE "error|permission|readonly|database"; then
+  ok "workspace_init surfaces the actual error"
+else
+  fail "workspace_init error output not visible"
+  echo "  Output was: $WS_INIT_OUTPUT"
+fi
+
+# Verify the existing DB is not corrupted.
+if sqlite3 "$WSFAIL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
+  ok "Existing DB preserved after failed workspace_init"
+else
+  fail "Existing DB was corrupted by failed workspace_init"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
