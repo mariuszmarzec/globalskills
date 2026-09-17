@@ -17,7 +17,7 @@
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
 CONFIG="${MANUL_DIR}/config.json"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="/home/marzec/.openclaw/manul/manul.db"
+DB="${MANUL_DIR}/manul.db"
 LOG="${MANUL_DIR}/github-api.log"
 
 # Load configuration defaults

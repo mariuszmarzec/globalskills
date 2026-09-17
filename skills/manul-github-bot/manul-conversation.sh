@@ -24,7 +24,7 @@ FEEDBACK="${MANUL_DIR}/feedback.sh"
 
 # Ensure DB path is on native ext4
 if [[ "$DB" == /mnt/f/* ]]; then
-  DB="/home/marzec/.openclaw/manul/manul.db"
+  DB="${MANUL_DIR}/manul.db"
 fi
 
 # JSON output flag
@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
     --action) ACTION_TYPE="$2"; shift 2 ;;
     --review-id) REVIEW_ID="$2"; shift 2 ;;
-    create|status|submit|result|close) ACTION="$1"; shift ;;
+    create|status|submit|result|close|init-schema) ACTION="$1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
 done
@@ -139,18 +139,36 @@ init_schema() {
     }
   done
 
-  # Add columns if missing (for migrations from older schemas)
-  # Each ALTER is idempotent and wrapped in its own transaction
-  local col_check col_add
-  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+  # Add missing columns (idempotent migration — handles concurrent initialization).
+  # Batches all ALTERs into one call; "duplicate column" errors are swallowed
+  # as a race-condition safety net. All other errors propagate.
+  local col_check
+  col_check="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>&1)" || {
+    echo "ERROR: Failed to read processed_comments schema" >&2
+    return 1
+  }
+
+  local alter_sql=""
   if ! echo "$col_check" | grep -q '|action|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT'; "
   fi
   if ! echo "$col_check" | grep -q '|prNumber|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER; "
   fi
   if ! echo "$col_check" | grep -q '|prUrl|'; then
-    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>/dev/null || true
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN prUrl TEXT; "
+  fi
+
+  if [ -n "$alter_sql" ]; then
+    local alter_err
+    alter_err="$(sqlite3 "$DB" "$alter_sql" 2>&1)" || {
+      if echo "$alter_err" | grep -qi 'duplicate column'; then
+        : # race condition: concurrent init already added the column
+      else
+        echo "ERROR: Schema migration failed: $alter_err" >&2
+        return 1
+      fi
+    }
   fi
 }
 
@@ -577,10 +595,18 @@ case "${ACTION:-}" in
   status) cmd_status ;;
   result) cmd_result ;;
   close) cmd_close ;;
+  init-schema)
+    # Lightweight schema initializer — only runs CREATE IF NOT EXISTS, no business logic.
+    # Used by repair-manul-runtime.sh and tests to bring a fresh DB up to schema spec.
+    export MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+    export DB="${DB:-${MANUL_DIR}/manul.db}"
+    init_schema
+    ;;
   "")
     echo "Usage: manul-conversation <command> [options]" >&2
     echo "" >&2
     echo "Commands:" >&2
+    echo "  init-schema  Initialize or validate DB schema (idempotent, no business logic)" >&2
     echo "  create   --repo REPO --title TITLE --prompt PROMPT [--json]" >&2
     echo "  submit   --conversation-id ID --prompt PROMPT [--action ACTION] [--parent-task-id ID] [--pr-number N] [--json]" >&2
     echo "  status   --conversation-id ID [--json]" >&2

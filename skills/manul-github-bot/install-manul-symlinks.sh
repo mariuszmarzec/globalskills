@@ -8,7 +8,7 @@
 #   install-manul-symlinks.sh [--runtime-dir <path>] [--canonical-dir <path>] [--dry-run]
 #
 # Options:
-#   --runtime-dir    Runtime scripts directory (default: /mnt/f/ubuntu-workspace/.openclaw/manul)
+#   --runtime-dir    Runtime scripts directory (default: ~/.openclaw/manul)
 #   --canonical-dir  Canonical skill source directory (default: ~/.globalskills/skills/manul-github-bot)
 #   --dry-run        Show what would be done without making changes
 #
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # Defaults
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-/mnt/f/ubuntu-workspace/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 DRY_RUN=false
 
@@ -57,13 +57,24 @@ fi
 SCRIPTS=(
     "feedback.sh"
     "github-api-wrapper.sh"
+    "manul-agent-wrapper.sh"
     "manul-comments-remove.sh"
+    "manul-conversation-linker.sh"
+    "manul-conversation.sh"
     "manul-daemon.sh"
+    "manul-github-events.sh"
+    "manul-pr-review.sh"
+    "manul-result-feedback.sh"
+    "manul-result.sh"
     "manul-status.sh"
+    "manul-submit.sh"
+    "manul-wait.sh"
+    "orchestrator.prompt.md"
     "poll.sh"
     "start-manul-automation.sh"
     "task-recovery.sh"
     "watchdog.sh"
+    "workspace-manager.sh"
 )
 
 echo "=== Manul Symlink Installer ==="
