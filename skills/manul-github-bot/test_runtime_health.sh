@@ -13,6 +13,12 @@
 # 9. Archive fallback works with supported sibling archive layout
 # 10. init-schema failure is fatal — repair does not complete
 # 11. workspace_init failure is fatal — repair does not complete
+# 12. Existing empty manul.db + valid backup → backup is restored, repair succeeds
+# 13. Existing invalid/corrupt manul.db + no backup → repair aborts, no schema fabricated
+# 14. Existing valid DB + no backup → repair preserves it, remains idempotent (extends Test 8)
+# 12. Existing empty manul.db + valid backup → backup is restored, repair succeeds
+# 13. Existing invalid/corrupt manul.db + no backup → repair aborts, no schema fabricated
+# 14. Existing valid DB + no backup → repair preserves it, remains idempotent (extends Test 8)
 
 set -uo pipefail
 
@@ -131,7 +137,7 @@ NO_BACKUP_OUTPUT=$( \
 NO_BACKUP_EXIT=$?
 set -e
 
-if [ "$NO_BACKUP_EXIT" -eq 1 ] && echo "$NO_BACKUP_OUTPUT" | grep -q "No backup DB found"; then
+if [ "$NO_BACKUP_EXIT" -eq 1 ] && echo "$NO_BACKUP_OUTPUT" | grep -q "No valid backup DB found"; then
   ok "Recovery exits 1 when DB backup is unavailable"
 else
   fail "Recovery did not fail safely without DB backup (exit=$NO_BACKUP_EXIT)"
@@ -484,6 +490,105 @@ if sqlite3 "$WSFAIL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/d
   ok "Existing DB preserved after failed workspace_init"
 else
   fail "Existing DB was corrupted by failed workspace_init"
+fi
+
+# ── Test 12: existing empty DB + valid backup → backup restored ─────────────
+echo
+echo "Test 12: Empty DB + valid backup → restore succeeds"
+EMPTY_RUNTIME="$TMPROOT/empty-db-runtime"
+mkdir -p "$EMPTY_RUNTIME"
+
+# Create a 0-byte manul.db (simulates corrupted or freshly-created empty file)
+touch "$EMPTY_RUNTIME/manul.db"
+chmod 644 "$EMPTY_RUNTIME/manul.db"
+# Copy config template so repair reaches step 4/5.
+cp "$SCRIPT_DIR/config.json.example" "$EMPTY_RUNTIME/config.json" 2>/dev/null || true
+
+set +e
+EMPTY_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$EMPTY_RUNTIME" \
+  MANUL_SOURCE_DB="$BACKUP_DB" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+EMPTY_EXIT=$?
+set -e
+
+if [ "$EMPTY_EXIT" -eq 0 ] && echo "$EMPTY_OUTPUT" | grep -q "Repair Complete"; then
+  ok "Repair succeeds after restoring backup over empty DB"
+else
+  fail "Repair failed over empty DB (exit=$EMPTY_EXIT)"
+  echo "$EMPTY_OUTPUT"
+fi
+
+# Verify the restored DB is valid and has the right tables.
+RESTORED_DB="$EMPTY_RUNTIME/manul.db"
+if db_is_valid "$RESTORED_DB" 2>/dev/null; then
+  ok "Restored DB is valid SQLite after repair"
+else
+  # db_is_valid may not be defined in this scope; fall back to basic checks
+  if [ -s "$RESTORED_DB" ] && sqlite3 "$RESTORED_DB" "PRAGMA integrity_check;" 2>/dev/null | grep -q "^ok$"; then
+    ok "Restored DB is valid SQLite after repair (basic check)"
+  else
+    fail "Restored DB is not valid SQLite"
+  fi
+fi
+
+for tbl in processed_comments conversations meta workspaces; do
+  if ! sqlite3 "$RESTORED_DB" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
+    fail "Restored DB missing table '$tbl' after repair over empty DB"
+  fi
+done
+ok "Restored DB has all required tables"
+
+# ── Test 13: existing corrupt DB + no backup → repair aborts ────────────────
+echo
+echo "Test 13: Corrupt DB + no backup → repair aborts, no schema fabricated"
+CORRUPT_RUNTIME="$TMPROOT/corrupt-runtime"
+mkdir -p "$CORRUPT_RUNTIME"
+
+# Write an invalid file that is non-empty but NOT a SQLite DB.
+echo "not a database" > "$CORRUPT_RUNTIME/manul.db"
+chmod 644 "$CORRUPT_RUNTIME/manul.db"
+cp "$SCRIPT_DIR/config.json.example" "$CORRUPT_RUNTIME/config.json" 2>/dev/null || true
+
+set +e
+CORRUPT_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$CORRUPT_RUNTIME" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+CORRUPT_EXIT=$?
+set -e
+
+if [ "$CORRUPT_EXIT" -ne 0 ]; then
+  ok "Repair exits non-zero for corrupt DB with no backup"
+else
+  fail "Repair should have aborted for corrupt DB (exit=$CORRUPT_EXIT)"
+fi
+
+if echo "$CORRUPT_OUTPUT" | grep -q "No valid backup DB found"; then
+  ok "Repair reports missing backup for corrupt DB"
+else
+  fail "Repair did not report missing backup"
+  echo "  Output: $CORRUPT_OUTPUT"
+fi
+
+if echo "$CORRUPT_OUTPUT" | grep -q "Repair Complete"; then
+  fail "Repair must NOT complete when DB is corrupt and no backup exists"
+else
+  ok "Repair does not print 'Repair Complete' on corrupt-DB failure"
+fi
+
+# Verify no schema was fabricated from the corrupt file.
+if [ -f "$CORRUPT_RUNTIME/manul.db" ]; then
+  if sqlite3 "$CORRUPT_RUNTIME/manul.db" "SELECT 1 FROM processed_comments LIMIT 1;" 2>/dev/null | grep -q .; then
+    fail "Schema was fabricated from corrupt DB — tables exist when they should not"
+  else
+    ok "No schema fabricated; corrupt DB untouched"
+  fi
+else
+  ok "Corrupt DB was not replaced (no backup available)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

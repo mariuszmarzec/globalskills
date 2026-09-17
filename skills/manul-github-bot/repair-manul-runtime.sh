@@ -11,14 +11,45 @@
 # 4. Restoring manul.db from an existing backup
 # 5. Validating/upgrading the DB using the canonical Manul init routines
 #
-# The repair script never invents a new application schema. A missing DB must
-# be restored from an explicit backup or a previously-created runtime archive.
+# The repair script never invents a new application schema. A missing or
+# invalid DB must be restored from an explicit backup or a previously-created
+# runtime archive.
+#
+# Options:
+#   --runtime-dir   Override MANUL_RUNTIME_DIR (default: ~/.openclaw/manul)
+#   --source-db     Override MANUL_SOURCE_DB (explicit backup path)
 
 set -euo pipefail
 
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+
+# Parse CLI flags (env vars take priority; flags override defaults only)
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
+        --source-db)   SOURCE_DB="$2";    shift 2 ;;
+        --help|-h)
+            echo "Usage: $0 [--runtime-dir <path>] [--source-db <path>]"
+            echo ""
+            echo "Options:"
+            echo "  --runtime-dir  Runtime directory (default: ~/.openclaw/manul)"
+            echo "  --source-db    Explicit backup DB path"
+            echo ""
+            echo "Environment overrides:"
+            echo "  MANUL_RUNTIME_DIR  Runtime directory"
+            echo "  MANUL_SOURCE_DB    Explicit backup DB path"
+            echo "  MANUL_CANONICAL_DIR  Canonical skill directory"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--runtime-dir <path>] [--source-db <path>]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 fail() {
     echo "ERROR: $*" >&2
@@ -49,7 +80,7 @@ echo "[2/5] Deploying symlinks..."
 
 if [ ! -f "$RUNTIME_DIR/config.json" ]; then
     echo
-echo "[3/5] Config not found, restoring template..."
+    echo "[3/5] Config not found, restoring template..."
     if [ -f "$CANONICAL_DIR/config.json.example" ]; then
         cp "$CANONICAL_DIR/config.json.example" "$RUNTIME_DIR/config.json"
         echo "  Copied config.json.example -> config.json"
@@ -59,7 +90,7 @@ echo "[3/5] Config not found, restoring template..."
     fi
 else
     echo
-echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
+    echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
 fi
 
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
@@ -67,6 +98,24 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 DB_FILE="$RUNTIME_DIR/manul.db"
+
+# ---------------------------------------------------------------------------
+# db_is_valid: return 0 if the file is a non-empty, integrity-passing SQLite DB
+# ---------------------------------------------------------------------------
+db_is_valid() {
+    local db="$1"
+    # Must be a regular file and non-empty
+    [ -f "$db" ] || return 1
+    [ -s "$db" ] || return 1
+    # SQLite header must be present ("SQLite format 3\000")
+    head -c 16 "$db" 2>/dev/null | grep -q "^SQLite format 3" || return 1
+    # Integrity check must pass
+    local integrity
+    integrity="$(sqlite3 "$db" 'PRAGMA integrity_check;' 2>&1)" || return 1
+    [ "$integrity" = "ok" ] || return 1
+    return 0
+}
+
 restore_db() {
     local source="$1"
     local staged="${DB_FILE}.restore.$$"
@@ -97,12 +146,15 @@ restore_db() {
     fi
 }
 
-if [ -f "$DB_FILE" ]; then
+# ---------------------------------------------------------------------------
+# Step 4: ensure a valid manul.db exists
+# ---------------------------------------------------------------------------
+if db_is_valid "$DB_FILE"; then
     echo
-echo "[4/5] DB exists: $DB_FILE"
+    echo "[4/5] DB valid: $DB_FILE"
 else
     echo
-echo "[4/5] DB not found, attempting restore..."
+    echo "[4/5] DB missing or invalid, attempting restore..."
     RESTORED=false
 
     if [ -n "$SOURCE_DB" ]; then
@@ -137,15 +189,18 @@ echo "[4/5] DB not found, attempting restore..."
 
     if [ "$RESTORED" = false ]; then
         echo
-        echo "ERROR: No backup DB found."
+        echo "ERROR: No valid backup DB found."
         echo "To restore from a backup, run:"
-        echo "  MANUL_SOURCE_DB=/path/to/backup/manul.db $0"
+        echo "  $0 --source-db /path/to/backup/manul.db"
         echo
         echo "Recovery aborted. A valid manul.db is required; no new application schema will be fabricated."
         exit 1
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# Step 5: validate/upgrade schema (idempotent — no-op if tables exist)
+# ---------------------------------------------------------------------------
 echo
 echo "[5/5] Validating DB schema..."
 
