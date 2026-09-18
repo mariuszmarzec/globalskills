@@ -307,6 +307,51 @@ ensure_conversation() {
   " 2>>"$LOG" || true
 }
 
+persist_conversation_root_message() {
+  # Persist the Issue/PR root as part of a top-level conversation so a trigger
+  # such as "/manul do this" still has the authoritative task description.
+  local conv_id="$1"
+  local repo="$2"
+  local issue="$3"
+  local is_pr="${4:-0}"
+
+  local root_json
+  root_json="$(gh api "repos/$repo/issues/$issue" 2>>"$LOG" || echo "{}")"
+  [ -n "$root_json" ] || root_json="{}"
+
+  local root_id="root:${repo}:${issue}"
+  local root_author root_body root_url root_created root_title message_type
+  root_author="$(jq -r '.user.login // "unknown"' <<<"$root_json")"
+  root_body="$(jq -r '.body // ""' <<<"$root_json")"
+  root_url="$(jq -r '.html_url // empty' <<<"$root_json")"
+  [ -n "$root_url" ] || root_url="https://github.com/$repo/issues/$issue"
+  root_created="$(jq -r '.created_at // ""' <<<"$root_json")"
+  root_title="$(jq -r '.title // ""' <<<"$root_json")"
+
+  # Even when the root body is empty, the title is useful authoritative context.
+  local formatted_body=""
+  if [ -n "$root_title" ] && [ -n "$root_body" ]; then
+    formatted_body="# $root_title
+
+$root_body"
+  elif [ -n "$root_title" ]; then
+    formatted_body="# $root_title"
+  else
+    formatted_body="$root_body"
+  fi
+  [ -n "$formatted_body" ] || return 0
+
+  if [ "$is_pr" -eq 1 ]; then
+    message_type="pr-description"
+  else
+    message_type="issue"
+  fi
+
+  persist_conversation_message \
+    "$conv_id" "$repo" "$issue" "$root_id" "$root_author" \
+    "$formatted_body" "$root_url" "$root_created" "$message_type"
+}
+
 build_conversation_context() {
   local conv_id="$1"
 
@@ -355,6 +400,10 @@ persist_conversation_messages_for_repo() {
 
     local conv_id
     conv_id="$(generate_conversation_id "$repo" "$issue_num" "issue")" || continue
+
+    # Persist the authoritative Issue/PR root before any task context is built.
+    # This is what lets "/manul do this" resolve to the actual Issue request.
+    persist_conversation_root_message "$conv_id" "$repo" "$issue_num" "$is_pr"
 
     local comments_json
     if [ "$is_pr" -eq 1 ]; then
@@ -880,6 +929,12 @@ process_repo_body() {
       raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
       persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+      # The trigger comment is only the invocation. Synchronize the full
+      # conversation first, then snapshot it into the task context.
+      persist_conversation_messages_for_repo "$repo"
+      # Synchronize every comment in this exact review thread before
+      # snapshotting context for the task.
+      persist_conversation_messages_for_repo "$repo"
       ctx="$(build_conversation_context "$conv_id")"
       if [ -n "$ctx" ]; then
         esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
@@ -945,6 +1000,15 @@ process_repo_body() {
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+      # Issue-body triggers have the full request in the root, but still need
+      # all follow-up comments already present in the thread.
+      persist_conversation_messages_for_repo "$repo"
+      ctx="$(build_conversation_context "$conv_id")"
+      if [ -n "$ctx" ]; then
+        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
+        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
+        log "context enriched for $id on $repo#$issue (issue root + conversation history)"
+      fi
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
     fi
   done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
