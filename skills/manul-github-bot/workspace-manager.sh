@@ -192,8 +192,54 @@ workspace_get_path() {
 
 workspace_cleanup_stale() {
   local stale_threshold="${1:-3600}"
-  sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');"
-  sqlite3 "$DB" "DELETE FROM workspaces WHERE status='BROKEN' OR (lastUsedAt < datetime('now', '-${stale_threshold} seconds') AND status='IDLE');"
+
+  # Reclaim stale BUSY workspaces, but never evict a workspace owned by a
+  # live task/worker. lastUsedAt is only a coarse fallback for old DB schemas.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY'
+        AND w.lastUsedAt < datetime('now', '-${stale_threshold} seconds');
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable; old idle workspaces are also removed so
+  # workspace_pool_init can recreate the requested pool size.
+  sqlite3 "$DB" "DELETE FROM workspaces WHERE status='BROKEN' OR (lastUsedAt < datetime('now', '-${stale_threshold} seconds') AND status='IDLE');" 2>/dev/null || true
 }
 
 workspace_available_count() {
