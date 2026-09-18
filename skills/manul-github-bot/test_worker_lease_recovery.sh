@@ -136,7 +136,7 @@ if verify_required_pr "$REPO" pr "$WORKTREE" master; then
 fi
 echo "PASS: missing PR rejected"
 
-FAKE_PR_EXISTS=1
+export FAKE_PR_EXISTS=1
 verify_required_pr "$REPO" pr "$WORKTREE" master
 echo "PASS: real PR accepted"
 
