@@ -1,0 +1,143 @@
+#!/usr/bin/bash
+# Focused regression tests for worker ownership, heartbeat/lease and recovery.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+MANUL_DIR="$TEST_DIR/manul"
+DB="$MANUL_DIR/manul.db"
+CONFIG="$MANUL_DIR/config.json"
+LOG="$MANUL_DIR/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+PID_FILE="$MANUL_DIR/daemon.pid"
+mkdir -p "$MANUL_DIR"
+
+cat >"$CONFIG" <<'JSON'
+{
+  "autoCreatePr": true,
+  "automation": {
+    "maxAttemptsBeforeFail": 3,
+    "lockTtl": 1800,
+    "heartbeatTimeout": 900,
+    "leaseTimeout": 900
+  },
+  "retryConfig": {
+    "delaySeconds": 1
+  }
+}
+JSON
+
+export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
+source "$SCRIPT_DIR/manul-daemon.sh"
+
+sqlite3 "$DB" "
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  repository TEXT NOT NULL,
+  issueNumber INTEGER NOT NULL,
+  commentUrl TEXT NOT NULL,
+  action TEXT,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  processedAt TEXT,
+  heartbeatAt TEXT,
+  leaseExpiresAt TEXT,
+  workerPid INTEGER,
+  nextAttemptAt TEXT,
+  resultSummary TEXT
+);
+"
+
+assert_eq() {
+  local expected="$1" actual="$2" label="$3"
+  if [ "$expected" != "$actual" ]; then
+    echo "FAIL: $label (expected=$expected actual=$actual)" >&2
+    exit 1
+  fi
+  echo "PASS: $label"
+}
+
+REPO="owner/repo"
+
+# 1) Completion succeeds only for the worker owning the lease.
+sqlite3 "$DB" "
+INSERT INTO processed_comments VALUES
+('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$$,NULL,NULL);
+INSERT INTO processed_comments VALUES
+('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,NULL,NULL);
+"
+update_task_completion owner completed
+assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='owner';")" "owner can complete"
+if update_task_completion other completed; then
+  echo "FAIL: non-owner completion unexpectedly succeeded" >&2
+  exit 1
+fi
+echo "PASS: non-owner completion rejected"
+
+# 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('hb','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$$,NULL,NULL);"
+HEARTBEAT_PIDS[hb]=$$
+LEASE_TIMEOUT=900
+refresh_heartbeat hb
+assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN heartbeatAt > datetime('now','-5 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='hb';")" "heartbeat timestamp refreshed"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN leaseExpiresAt > datetime('now') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='hb';")" "lease expiry extended"
+
+# 3) Dead worker + expired lease is requeued.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,NULL,NULL);"
+recover_stale_tasks
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
+
+# 4) Live worker + expired lease is NOT stolen.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$$,NULL,NULL);"
+recover_stale_tasks
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task preserved"
+
+# 5) Max attempts on dead worker becomes failed.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,NULL,NULL);"
+recover_stale_tasks
+assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
+
+# 6) PR verification rejects a missing PR and accepts a real PR.
+WORKTREE="$TEST_DIR/repo"
+mkdir -p "$WORKTREE"
+git -C "$WORKTREE" init -q
+git -C "$WORKTREE" config user.email test@example.com
+git -C "$WORKTREE" config user.name test
+printf 'test\n' >"$WORKTREE/README.md"
+git -C "$WORKTREE" add README.md
+git -C "$WORKTREE" commit -qm initial
+git -C "$WORKTREE" checkout -qb manul-task-test
+
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$$,NULL,NULL);"
+
+FAKE_BIN="$TEST_DIR/bin"
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/gh" <<'GH'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr list"* ]]; then
+  if [ "${FAKE_PR_EXISTS:-0}" = "1" ]; then
+    printf '[{"number":123,"url":"https://github.com/example/repo/pull/123","state":"OPEN"}]\n'
+  else
+    printf '[]\n'
+  fi
+  exit 0
+fi
+exit 1
+GH
+chmod +x "$FAKE_BIN/gh"
+export PATH="$FAKE_BIN:$PATH"
+GH_API_TIMEOUT=2
+
+if verify_required_pr "$REPO" pr "$WORKTREE" master; then
+  echo "FAIL: missing PR was accepted" >&2
+  exit 1
+fi
+echo "PASS: missing PR rejected"
+
+export FAKE_PR_EXISTS=1
+verify_required_pr "$REPO" pr "$WORKTREE" master
+echo "PASS: real PR accepted"
+
+echo "All focused worker lifecycle tests passed."

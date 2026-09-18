@@ -13,7 +13,6 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # post an in-progress comment, invoke the implementation agent with a per-task
 # prompt, validate the result via explicit markers, update SQLite, and post the
 # final result comment.
-set -uo pipefail
 # ERR trap: log any unhandled command failure with context
 trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null; fi' ERR
 
@@ -43,6 +42,7 @@ AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-1800}"   # seconds for the agent turn
 POLL_TIMEOUT="${MANUL_POLL_TIMEOUT:-120}"      # seconds timeout for poll.sh
 GH_API_TIMEOUT="${MANUL_GH_API_TIMEOUT:-30}"   # seconds timeout for gh api calls
 OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
+export OPENCLAW_BIN
 
 # Read heartbeat configuration from config.json
 CFG_HEARTBEAT_INTERVAL="$(jq -r '.automation.heartbeatInterval // 60' "$CONFIG" 2>/dev/null)"
@@ -61,6 +61,7 @@ if ! [[ "$MAX_CONCURRENT_TASKS" =~ ^[0-9]+$ ]] || [ "$MAX_CONCURRENT_TASKS" -lt 
 fi
 CFG_LOCK_TTL="$(jq -r '.automation.lockTtl // empty' "$CONFIG" 2>/dev/null)"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-${CFG_LOCK_TTL:-1800}}"
+REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-${LOCK_TTL:-1800}}"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
@@ -287,9 +288,9 @@ update_task_completion() {
 
   # For completed/failed tasks, verify worker ownership to prevent stealing
   if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
-    local current_daemon_pid
-    current_daemon_pid="$(get_daemon_pid)"
-    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_daemon_pid"
+    local current_worker_pid
+    current_worker_pid="$$"
+    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_worker_pid"
 
     # If no workerPid assigned yet, this is a transition from queued
     if [ "$current_status" = "queued" ]; then
@@ -500,12 +501,20 @@ recover_stale_tasks() {
       local safe_comment_id
       safe_comment_id="$(sql_escape "$comment_id")"
 
-      if [ "${attempts:-0}" -ge "$max_attempts" ]; then
-        # Max attempts reached, mark as failed
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), resultSummary='Daemon recovery: worker died (pid=$worker_pid), max attempts reached' WHERE commentId='$safe_comment_id';" 2>/dev/null
+      local ownership_clause
+      if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
+        ownership_clause="AND workerPid=$worker_pid"
       else
-        # Retry the task
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, leaseExpiresAt=NULL, processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+        ownership_clause="AND (workerPid IS NULL OR workerPid=0)"
+      fi
+
+      if [ "${attempts:-0}" -ge "$max_attempts" ]; then
+        # Mark as failed only while the stale worker still owns the row.
+        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), resultSummary='Daemon recovery: worker died (pid=$worker_pid), max attempts reached' WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
+      else
+        # Requeue only while the same stale worker still owns the row. This
+        # prevents recovery from resetting a task newly claimed by another worker.
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, leaseExpiresAt=NULL, processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
         log "recover_stale_tasks: requeued task $comment_id for retry (attempt $((attempts + 1))/$max_attempts)"
         lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempt=$((attempts + 1)) max=$max_attempts reason=stale_worker"
       fi
@@ -528,7 +537,7 @@ start_heartbeat() {
   # Start a background heartbeat loop
   (
     while true; do
-      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
       sleep "$HEARTBEAT_INTERVAL"
     done
   ) &
@@ -555,7 +564,7 @@ stop_heartbeat() {
 refresh_heartbeat() {
   local comment_id="$1"
   if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
-    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
   fi
 }
 
@@ -887,6 +896,59 @@ verify_result_comment() {
 
 
 
+# Verify that implementation tasks with autoCreatePr enabled have a real PR
+# against the repository default branch. A /pull/new/... URL alone is not enough.
+verify_required_pr() {
+  local repo="$1"
+  local comment_id="$2"
+  local workdir="$3"
+  local default_branch="$4"
+
+  local auto_create_pr action comment_url
+  auto_create_pr="$(jq -r '.autoCreatePr // false' "$CONFIG" 2>/dev/null || echo false)"
+  [ "$auto_create_pr" = "true" ] || return 0
+
+  local safe_comment_id
+  safe_comment_id="$(sql_escape "$comment_id")"
+  action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
+  [ "$action" = "IMPLEMENT" ] || return 0
+
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
+  # Tasks originating from an existing PR already have a delivery PR.
+  [[ "$comment_url" == *"/pull/"* ]] && return 0
+
+  local branch
+  branch="$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)"
+  if [ -z "$branch" ] || [ "$branch" = "$default_branch" ]; then
+    log "ERROR: verify_required_pr: invalid task branch for $comment_id (branch=$branch default=$default_branch)"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=invalid_task_branch branch=$branch default=$default_branch"
+    return 1
+  fi
+
+  local pr_json api_rc
+  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --base "$default_branch" --json number,url,state --limit 10 2>>"$LOG")"
+  api_rc=$?
+  if [ "$api_rc" -ne 0 ]; then
+    if [ "$api_rc" -eq 124 ]; then
+      log "ERROR: verify_required_pr: gh pr list timed out after ${GH_API_TIMEOUT}s"
+      lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_timeout timeout=${GH_API_TIMEOUT}s"
+    else
+      log "ERROR: verify_required_pr: gh pr list failed with exit code $api_rc"
+      lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_failure exit_code=$api_rc"
+    fi
+    return 1
+  fi
+
+  if ! printf '%s' "$pr_json" | jq -e 'length > 0' >/dev/null 2>&1; then
+    log "ERROR: verify_required_pr: no PR found for branch $branch against $default_branch"
+    lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
+    return 1
+  fi
+
+  log "verify_required_pr: found PR for task $comment_id branch=$branch base=$default_branch"
+  return 0
+}
+
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
 # Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir]
@@ -959,6 +1021,15 @@ evaluate_task_completion() {
     fi
   fi
   
+  # 7.6 Verify implementation tasks have an actual GitHub PR, not merely a /pull/new URL
+  if [ "$SUCCESS" = "true" ]; then
+    if ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$DEFAULT_BRANCH"; then
+      SUCCESS="false"
+      FAIL_REASON="Implementation task did not produce a real PR against the default branch"
+      log "dispatch: task $COMMENT_ID PR verification failed"
+    fi
+  fi
+
   # 8. Update SQLite using enhanced finalization with verification
   if [ "$SUCCESS" = "true" ]; then
     # Enhanced task completion with verification
@@ -967,10 +1038,10 @@ evaluate_task_completion() {
     else
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
       # Fallback: attempt direct completion with ownership verification
-      local fallback_pid
-      fallback_pid="$(get_daemon_pid)"
+      local fallback_worker_pid
+      fallback_worker_pid="$$"
       local fallback_result
-      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_worker_pid; SELECT changes();" 2>/dev/null)"
       local fallback_changes
       fallback_changes="$(echo "$fallback_result" | tail -n 1)"
       if [ "${fallback_changes:-0}" -eq 1 ]; then
@@ -1149,10 +1220,10 @@ run_once() {
 
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
-    local CURRENT_DAEMON_PID
-    CURRENT_DAEMON_PID="$(get_daemon_pid)"
+    local CURRENT_WORKER_PID
+    CURRENT_WORKER_PID="$$"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
@@ -1202,6 +1273,8 @@ run_once() {
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      stop_heartbeat "$COMMENT_ID"
+      release_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -1403,6 +1476,7 @@ PROMPT_EOF
     if [ -z "$workspace_path" ]; then
       log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+      stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
@@ -1415,6 +1489,7 @@ PROMPT_EOF
       git clone --local "$REPO_DIR" "$workspace_path" 2>/dev/null || {
         log "dispatch: failed to clone repository into workspace, releasing and failing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
         release_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
@@ -1437,6 +1512,7 @@ PROMPT_EOF
       if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
         log "dispatch: failed to fetch PR head branch, releasing and failing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
         release_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
@@ -1445,6 +1521,7 @@ PROMPT_EOF
       if ! git -C "$WORKDIR" checkout -B "$PR_HEAD_BRANCH" "FETCH_HEAD" 2>>"$LOG"; then
         log "dispatch: failed to checkout PR head branch, releasing and failing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
         release_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
@@ -1549,7 +1626,15 @@ PROMPT_APPEND
      # Change to repository directory and invoke agent
      local prev_dir
      prev_dir="$(pwd)"
-     cd "$WORKDIR" || { log "ERROR: cannot enter working directory $WORKDIR, failing task"; return 1; }
+     cd "$WORKDIR" || {
+       log "ERROR: cannot enter working directory $WORKDIR, failing task"
+       stop_heartbeat "$COMMENT_ID"
+       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+       release_repo_lock "$REPO"
+       release_task_lock
+       set_activity "none" "idle"
+       return 0
+     }
      # Ensure skill visibility for the OpenCode process
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
      # Refresh heartbeat before agent to prevent timeout during long runs

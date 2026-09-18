@@ -84,19 +84,26 @@ if [ -f "$DB" ]; then
             log "RECOVERY: $comment_id ($repo#$issue_num) stuck (heartbeat: $heartbeat_at, lease: $lease_at), attempts=$attempts, worker=$worker_pid"
 
             # Check if we've exceeded max attempts
+            local ownership_clause
+            if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ]; then
+                ownership_clause="AND workerPid=$worker_pid"
+            else
+                ownership_clause="AND (workerPid IS NULL OR workerPid=0)"
+            fi
+
             if [ "${attempts:-0}" -ge "$MAX_ATTEMPTS" ]; then
                 log "  → marking as FAILED (exceeded max attempts: $MAX_ATTEMPTS)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
                     SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
-                    WHERE commentId='$comment_id';
+                    WHERE commentId='$comment_id' AND status='running' $ownership_clause;
                 " 2>/dev/null
             else
                 log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
                     SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
-                    WHERE commentId='$comment_id';
+                    WHERE commentId='$comment_id' AND status='running' $ownership_clause;
                 " 2>/dev/null
             fi
         done <<< "$STUCK_TASKS"

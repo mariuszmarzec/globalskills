@@ -32,6 +32,9 @@ env:
     skills/manul-github-bot/test_conversation_regressions.sh
     skills/manul-github-bot/test_conversation_strict.sh
     skills/manul-github-bot/test_error_observability.sh
+    skills/manul-github-bot/test_verify_result_comment.sh
+    skills/manul-github-bot/test_poll_timeout.sh
+    skills/manul-github-bot/test_worker_lease_recovery.sh
 
 jobs:
   verify:
@@ -79,9 +82,11 @@ jobs:
             name="$(basename "$script" .sh)"
             log="test-results/${name}.log"
             echo "Running: $script"
-            if bash "$script" 2>&1 | tee "$log"; then
+            if timeout --signal=TERM --kill-after=10s 180s bash "$script" 2>&1 | tee "$log"; then
               passed=$((passed + 1))
             else
+              rc=${PIPESTATUS[0]}
+              echo "Suite failed or timed out (exit=$rc): $script"
               failed=$((failed + 1))
             fi
           done

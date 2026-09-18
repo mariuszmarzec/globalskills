@@ -11,6 +11,28 @@ TOTAL=0
 TEST_DB=""
 MANUL_DIR=""
 
+wait_pid_timeout() {
+  local pid="$1"
+  local timeout_seconds="${2:-60}"
+  local started="$SECONDS"
+  local result=0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ $((SECONDS - started)) -ge "$timeout_seconds" ]; then
+      echo "ERROR: child pid $pid exceeded ${timeout_seconds}s; terminating it"
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+  done
+
+  wait "$pid" 2>/dev/null || result=$?
+  return "$result"
+}
+
 run_test() {
   local name="$1"
   local func="$2"
@@ -2537,7 +2559,7 @@ test_crash_during_task_creation() {
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+  sqlite3 "$db" "PRAGMA journal_mode=WAL;" >/dev/null
   sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2571,8 +2593,10 @@ CFGEOF
     --repo "test-org/test-repo" --pr-number 1000 \
     --review-id "crash-during-1" --review-state REQUEST_CHANGES \
     --body "Fix crash during" --author reviewer --created "$now" \
-    > /dev/null 2>&1
-  local crash_exit=$?
+    > /dev/null 2>&1 &
+  local crash_pid=$!
+  local crash_exit=0
+  wait "$crash_pid" 2>/dev/null || crash_exit=$?
 
   # Verify process was killed (non-zero exit)
   if [ $crash_exit -eq 0 ]; then
@@ -2649,7 +2673,7 @@ local test_dir
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-   sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+   sqlite3 "$db" "PRAGMA journal_mode=WAL;" >/dev/null
    sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2689,8 +2713,16 @@ CFGEOF
     --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
     --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" &
   local pid2=$!
-   wait $pid1 2>/dev/null || true
-   wait $pid2 2>/dev/null || true
+   if ! wait_pid_timeout "$pid1" 60; then
+     echo "ERROR: identical concurrent review handler timed out/failed"
+     rm -rf "$test_dir"
+     return 1
+   fi
+   if ! wait_pid_timeout "$pid2" 60; then
+     echo "ERROR: identical concurrent review handler #2 timed out/failed"
+     rm -rf "$test_dir"
+     return 1
+   fi
 
    # Retry logic for transient SQLite locking failures
    local max_retries=10
@@ -2783,8 +2815,16 @@ CFGEOF
     --review-id "conc-distinct-2" --review-state REQUEST_CHANGES \
     --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" &
   local pid2=$!
-  wait $pid1 2>/dev/null || true
-  wait $pid2 2>/dev/null || true
+  if ! wait_pid_timeout "$pid1" 60; then
+    echo "ERROR: distinct concurrent review handler #1 timed out/failed"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! wait_pid_timeout "$pid2" 60; then
+    echo "ERROR: distinct concurrent review handler #2 timed out/failed"
+    rm -rf "$test_dir"
+    return 1
+  fi
 
   # Should be exactly two REVIEW_FIX tasks (one per review)
   local fix_count
