@@ -943,23 +943,100 @@ verify_result_comment() {
 
 
 
-# Verify that implementation tasks with autoCreatePr enabled have a real PR
-# against the repository default branch. A /pull/new/... URL alone is not enough.
+# Check whether a concrete GitHub PR exists for the given branch against base.
+# Returns 0 if a real PR exists, 1 otherwise.
+# A /pull/new/... or /compare/... URL returned by the agent is NOT a concrete PR.
+pr_check_existing() {
+  local repo="$1" branch="$2" default_branch="$3"
+  local pr_json api_rc
+  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --base "$default_branch" --json number,url,state --limit 10 2>>"$LOG")"
+  api_rc=$?
+  if [ "$api_rc" -ne 0 ]; then
+    if [ "$api_rc" -eq 124 ]; then
+      log "ERROR: pr_check_existing: gh pr list timed out after ${GH_API_TIMEOUT}s"
+      lc_log "PR_VERIFY_ERROR" "repo=$repo reason=api_timeout timeout=${GH_API_TIMEOUT}s"
+    else
+      log "ERROR: pr_check_existing: gh pr list failed with exit code $api_rc"
+      lc_log "PR_VERIFY_ERROR" "repo=$repo reason=api_failure exit_code=$api_rc"
+    fi
+    return 1
+  fi
+  if printf '%s' "$pr_json" | jq -e 'length > 0' >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# Auto-create a GitHub PR for the given branch against the default branch.
+# Used when autoCreatePr is enabled and the agent pushed its branch but did not
+# itself open a PR (e.g. it only returned a /compare/... URL).
+# Returns 0 on success, 1 on failure.
+pr_auto_create() {
+  local repo="$1" branch="$2" default_branch="$3" comment_id="$4" workdir="$5"
+  local title body pr_url api_rc remote
+
+  # Best-effort: ensure the branch is present on the remote before creating a PR.
+  remote="$(git -C "$workdir" remote 2>/dev/null | head -1 || echo "")"
+  if [ -n "$remote" ]; then
+    if ! git -C "$workdir" ls-remote --heads "$remote" "$branch" 2>/dev/null | grep -q "$branch"; then
+      log "pr_auto_create: pushing branch $branch to remote $remote before PR creation"
+      if ! git -C "$workdir" push "$remote" "$branch" 2>>"$LOG"; then
+        log "WARN: pr_auto_create: failed to push branch $branch to $remote (continuing to gh pr create)"
+      fi
+    fi
+  fi
+
+  # Derive a sensible PR title from the latest commit, falling back to the branch name.
+  title="$(git -C "$workdir" log -1 --pretty=%s 2>/dev/null || echo "$branch")"
+  title="${title:0:120}"
+  [ -n "$title" ] || title="$branch"
+
+  body="Automatically created by Manul for task $comment_id."
+
+  local pr_create_output
+  pr_create_output="$(timeout "$GH_API_TIMEOUT" gh pr create --repo "$repo" --base "$default_branch" --head "$branch" --title "$title" --body "$body" 2>>"$LOG")"
+  api_rc=$?
+  if [ "$api_rc" -ne 0 ]; then
+    if [ "$api_rc" -eq 124 ]; then
+      log "ERROR: pr_auto_create: gh pr create timed out after ${GH_API_TIMEOUT}s for branch $branch"
+      lc_log "PR_CREATE_ERROR" "task=$comment_id repo=$repo branch=$branch reason=timeout timeout=${GH_API_TIMEOUT}s"
+    else
+      log "ERROR: pr_auto_create: gh pr create failed with exit code $api_rc for branch $branch"
+      lc_log "PR_CREATE_ERROR" "task=$comment_id repo=$repo branch=$branch reason=exit_code exit_code=$api_rc"
+    fi
+    return 1
+  fi
+
+  pr_url="$(printf '%s' "$pr_create_output" | tr -d '[:space:]')"
+  log "pr_auto_create: created PR for branch $branch -> $pr_url"
+  lc_log "PR_CREATE_SUCCESS" "task=$comment_id repo=$repo branch=$branch base=$default_branch url=$pr_url"
+  return 0
+}
+
+# Verify that implementation tasks have a real PR against the repository
+# default branch. A /pull/new/... or /compare/... URL returned by the agent is
+# NOT a concrete PR — only a real PR (verified via the GitHub API) counts.
+#
+# autoCreatePr controls ONLY whether the daemon creates the PR itself when the
+# agent pushed its branch but did not open a PR (e.g. it returned a
+# /compare/... URL instead of a PR). It must NOT mask the requirement: when no
+# PR exists and autoCreatePr is false, the task still fails.
 verify_required_pr() {
   local repo="$1"
   local comment_id="$2"
   local workdir="$3"
   local default_branch="$4"
 
-  local auto_create_pr action comment_url
+  local auto_create_pr
   auto_create_pr="$(jq -r '.autoCreatePr // false' "$CONFIG" 2>/dev/null || echo false)"
-  [ "$auto_create_pr" = "true" ] || return 0
 
   local safe_comment_id
   safe_comment_id="$(sql_escape "$comment_id")"
+  local action
   action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   [ "$action" = "IMPLEMENT" ] || return 0
 
+  local comment_url
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   # Tasks originating from an existing PR already have a delivery PR.
   [[ "$comment_url" == *"/pull/"* ]] && return 0
@@ -972,28 +1049,29 @@ verify_required_pr() {
     return 1
   fi
 
-  local pr_json api_rc
-  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --base "$default_branch" --json number,url,state --limit 10 2>>"$LOG")"
-  api_rc=$?
-  if [ "$api_rc" -ne 0 ]; then
-    if [ "$api_rc" -eq 124 ]; then
-      log "ERROR: verify_required_pr: gh pr list timed out after ${GH_API_TIMEOUT}s"
-      lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_timeout timeout=${GH_API_TIMEOUT}s"
-    else
-      log "ERROR: verify_required_pr: gh pr list failed with exit code $api_rc"
-      lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_failure exit_code=$api_rc"
+  # A concrete PR must be verified via the GitHub API, never via a /compare URL.
+  if pr_check_existing "$repo" "$branch" "$default_branch"; then
+    log "verify_required_pr: found PR for task $comment_id branch=$branch base=$default_branch"
+    return 0
+  fi
+
+  # No PR found. With autoCreatePr enabled the daemon creates one so the task
+  # does not fail merely because the agent pushed its branch but did not open
+  # a PR itself (e.g. it returned a /compare/... URL instead of a PR). Without
+  # autoCreatePr the missing PR is a hard failure — the requirement is not
+  # masked by a config flag.
+  if [ "$auto_create_pr" = "true" ]; then
+    log "verify_required_pr: no PR for branch $branch; auto-creating PR (autoCreatePr=true)"
+    lc_log "PR_CREATE_ATTEMPT" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
+    if pr_auto_create "$repo" "$branch" "$default_branch" "$comment_id" "$workdir"; then
+      log "verify_required_pr: PR auto-created for task $comment_id branch=$branch base=$default_branch"
+      return 0
     fi
-    return 1
   fi
 
-  if ! printf '%s' "$pr_json" | jq -e 'length > 0' >/dev/null 2>&1; then
-    log "ERROR: verify_required_pr: no PR found for branch $branch against $default_branch"
-    lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
-    return 1
-  fi
-
-  log "verify_required_pr: found PR for task $comment_id branch=$branch base=$default_branch"
-  return 0
+  log "ERROR: verify_required_pr: no PR found for branch $branch against $default_branch"
+  lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
+  return 1
 }
 
 # Evaluate task completion decision based on wrapper output and verification

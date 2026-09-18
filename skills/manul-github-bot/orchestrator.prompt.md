@@ -20,6 +20,24 @@ For repository change tasks, include in your result comment:
 - The commit hash
 - The PR URL (if one was created)
 
+## Mandatory: Open an actual GitHub PR for every repository change task
+After you commit and push your task branch, you MUST open a real, concrete
+GitHub pull request. Do this explicitly with:
+
+```
+gh pr create --base <default-branch> --head <your-task-branch> --title "<title>" --body "<description>"
+```
+
+Verify the PR actually exists with `gh pr list --head <your-task-branch> --state all`
+before emitting `TASK_DONE`. The PR URL you report MUST be a concrete
+`https://github.com/<owner>/<repo>/pull/<number>` URL.
+
+NEVER return a `/compare/...`, `/pull/new/...`, or `/pull/compare/...` URL.
+Those are "create PR" links, not actual pull requests — the daemon does not
+accept them as proof a PR exists, and the task will be failed. If you cannot
+push the branch or open the PR yourself, say so explicitly in the result
+comment so the daemon can act on it.
+
 For informational tasks, provide the complete answer directly in the comment.
 
 **Required comment format:**
