@@ -720,6 +720,31 @@ sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+# Ensure the workspace pool is healthy for long-lived daemons.
+# The watchdog may remove stale idle workspaces while this daemon remains alive;
+# replenish the pool before every dispatch cycle instead of waiting for start().
+ensure_workspace_pool() {
+  local workspace_manager="$MANUL_DIR/workspace-manager.sh"
+  if [ ! -f "$workspace_manager" ]; then
+    log "ERROR: workspace manager not found: $workspace_manager"
+    return 1
+  fi
+
+  # Source here as well as in loop() so direct run-once invocations get the
+  # same workspace-pool lifecycle guarantees as the long-running daemon.
+  source "$workspace_manager"
+  workspace_cleanup_stale 3600
+  workspace_pool_init "$MAX_CONCURRENT_TASKS"
+
+  local total
+  total="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');" 2>/dev/null || echo 0)"
+  if [ "${total:-0}" -lt "$MAX_CONCURRENT_TASKS" ]; then
+    log "ERROR: workspace pool below requested capacity after reconciliation (have=${total:-0}, need=$MAX_CONCURRENT_TASKS)"
+    return 1
+  fi
+  return 0
+}
+
 # Ensure nextAttemptAt column exists in processed_comments
 # Idempotent: safe to call multiple times, works on fresh and existing DBs
 # Uses BEGIN IMMEDIATE to prevent race when multiple workers start concurrently
@@ -1123,6 +1148,13 @@ run_once() {
     lc_log "POLL" "fire=true new=$poll_new pending=$poll_pending"
   else
     lc_log "POLL" "fire=false new=$poll_new pending=$poll_pending"
+  fi
+
+  # Reconcile the workspace pool on every cycle. A long-lived daemon must not
+  # rely on start() because the watchdog may clean stale idle workspaces later.
+  if ! ensure_workspace_pool; then
+    log "dispatch: workspace pool reconciliation failed"
+    lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
   fi
 
   if [ "$poll_fire" != "true" ]; then

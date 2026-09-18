@@ -1171,6 +1171,22 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 0
   fi
 
+  # Release any repo locks owned by this poll even when the shell is terminated
+  # before the normal end-of-loop cleanup can run. The cleanup trap is
+  # installed only after poll.flock is acquired, so the per-repo worker
+  # subprocesses (which cannot acquire this lock) cannot release a parent's lock.
+  cleanup_repo_locks() {
+    local cleanup_repo
+    for cleanup_repo in "${REPOS[@]}"; do
+      [ -n "$cleanup_repo" ] || continue
+      release_repo_lock "$cleanup_repo"
+    done
+  }
+  trap 'cleanup_repo_locks' EXIT
+  trap 'cleanup_repo_locks; exit 143' TERM
+  trap 'cleanup_repo_locks; exit 130' INT
+  trap 'cleanup_repo_locks; exit 129' HUP
+
   # Run each repo in its own session/process group so a hung gh subprocess
   # cannot leak past the per-repository timeout. Return 124 on timeout.
   run_repo_with_timeout() {
@@ -1221,13 +1237,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     elif [ "$_result" -ne 0 ]; then
       log "WARN: repo $repo processing failed with exit code $_result"
     fi
-  done
 
-  if [ "${repo_cleanup_lock:-0}" -eq 1 ]; then
-    for repo in "${REPOS[@]}"; do
-      release_repo_lock "$repo"
-    done
-  fi
+    # Release immediately after each repo. This prevents a later global poll
+    # timeout from leaking the repo lock for a repository already processed.
+    release_repo_lock "$repo"
+  done
 
   PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
 

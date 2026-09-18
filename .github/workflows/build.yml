@@ -25,6 +25,7 @@ env:
   MANUL_CI_TESTS: |
     skills/manul-github-bot/test_manul_cli.sh
     skills/manul-github-bot/test_workspace_behavior.sh
+    skills/manul-github-bot/test_pool_recovery.sh
     skills/manul-github-bot/test_github_control_protocol.sh
     skills/manul-github-bot/test_github_control_integration.sh
     skills/manul-github-bot/test_prompt_generation.sh
