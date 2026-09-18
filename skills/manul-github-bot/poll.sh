@@ -1171,6 +1171,37 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 0
   fi
 
+  # Run each repo in its own session/process group so a hung gh subprocess
+  # cannot leak past the per-repository timeout. Return 124 on timeout.
+  run_repo_with_timeout() {
+    local repo="$1"
+    local script
+    local pid
+    local started
+    local result=0
+
+    script="$(readlink -f "${BASH_SOURCE[0]}")"
+    started="$SECONDS"
+
+    setsid bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ $((SECONDS - started)) -ge "$REPO_POLL_TIMEOUT" ]; then
+        log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, terminating process group"
+        kill -TERM -- "-$pid" 2>/dev/null || true
+        sleep 0.2
+        kill -KILL -- "-$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        return 124
+      fi
+      sleep 0.1
+    done
+
+    wait "$pid" 2>/dev/null || result=$?
+    return "$result"
+  }
+
   for repo in "${REPOS[@]}"; do
     [ -n "$repo" ] || continue
 
@@ -1183,7 +1214,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # its lock is released and the next repo is processed immediately — no
     # starvation.
     _result=0
-    timeout "$REPO_POLL_TIMEOUT" bash -c "source '$(readlink -f "${BASH_SOURCE[0]}")'; process_repo_body \"\$1\"" _ "$repo" || _result=$?
+    run_repo_with_timeout "$repo" || _result=$?
 
     if [ "$_result" -eq 124 ]; then
       log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, continuing to next repo"
