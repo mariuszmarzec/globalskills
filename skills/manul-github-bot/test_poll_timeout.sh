@@ -24,7 +24,8 @@ CONFIG="$MANUL_DIR/config.json"
 LOG="$MANUL_DIR/poll.log"
 POLL_FLOCK="$MANUL_DIR/poll.flock"
 
-mkdir -p "$MANUL_DIR"
+mkdir -p "$MANUL_DIR/repo-locks"
+: >"$LOG"
 
 # Fake gh: for repo "hang", sleep forever; for any other repo, fast return empty
 cat > "$TEST_DIR/gh" << 'FAKEGH'
@@ -90,7 +91,6 @@ echo "Test 1: Hanging repo is terminated after REPO_POLL_TIMEOUT"
 
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test1.txt" 2>&1 || true
 output1=$(cat "$TEST_DIR/test1.txt")
-rc1=$?
 
 has_timeout() { grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; }
 no_orphans() {
