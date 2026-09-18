@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+POLL_SCRIPT="$SCRIPT_DIR/poll.sh"
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -86,7 +88,7 @@ touch "$MANUL_DIR/skip-comments.log"
 # ===== Test 1: Hanging repo is terminated =====
 echo "Test 1: Hanging repo is terminated after REPO_POLL_TIMEOUT"
 
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "hang" > "$TEST_DIR/test1.txt" 2>&1 || true
+bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test1.txt" 2>&1 || true
 output1=$(cat "$TEST_DIR/test1.txt")
 rc1=$?
 
@@ -130,7 +132,7 @@ rm -f "$DB"
 rm -rf "$MANUL_DIR/repo-locks"
 mkdir -p "$MANUL_DIR/repo-locks"
 
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "hang" "fast" > "$TEST_DIR/test2.txt" 2>&1 || true
+bash "$POLL_SCRIPT" "hang" "fast" > "$TEST_DIR/test2.txt" 2>&1 || true
 
 if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
   echo "PASS 2: Hang repo timed out"
@@ -167,11 +169,11 @@ rm -f "$POLL_FLOCK"
 rm -rf "$MANUL_DIR/repo-locks"
 mkdir -p "$MANUL_DIR/repo-locks"
 
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "hang" > "$TEST_DIR/test3a.txt" 2>&1 &
+bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test3a.txt" 2>&1 &
 pid1=$!
 sleep 0.5
 
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "fast" > "$TEST_DIR/test3b.txt" 2>&1 &
+bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test3b.txt" 2>&1 &
 pid2=$!
 sleep 2
 
@@ -200,9 +202,9 @@ exit 1
 FAKEGH
 
 rm -f "$TEST_DIR/test4a.txt" "$TEST_DIR/test4b.txt"
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "hang" "other" > "$TEST_DIR/test4a.txt" 2>&1 || true
+bash "$POLL_SCRIPT" "hang" "other" > "$TEST_DIR/test4a.txt" 2>&1 || true
 sleep 0.3
-bash "/home/marzec/.globalskills/skills/manul-github-bot/poll.sh" "fast" > "$TEST_DIR/test4b.txt" 2>&1 || true
+bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test4b.txt" 2>&1 || true
 
 if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
   echo "PASS 4: Hang repo still timed out despite global failure"
@@ -253,7 +255,7 @@ FAKEGH
 echo ""
 echo "Test 5: Global POLL_TIMEOUT present for safety"
 
-poll_path="/home/marzec/.globalskills/skills/manul-github-bot/poll.sh"
+poll_path="$POLL_SCRIPT"
 if grep -q "REPO_POLL_TIMEOUT" "$poll_path" && \
    grep -q "bash -c \"source" "$poll_path"; then
   echo "PASS 5: poll.sh uses per-repo timeout with global safety net"
