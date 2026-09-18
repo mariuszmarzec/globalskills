@@ -23,6 +23,7 @@ DB="$MANUL_DIR/manul.db"
 CONFIG="$MANUL_DIR/config.json"
 LOG="$MANUL_DIR/poll.log"
 POLL_FLOCK="$MANUL_DIR/poll.flock"
+export MANUL_DIR
 
 mkdir -p "$MANUL_DIR/repo-locks"
 : >"$LOG"
