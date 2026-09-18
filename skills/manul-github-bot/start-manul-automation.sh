@@ -48,7 +48,7 @@ case "${1:-}" in
         # Start daemon. Install watchdog even when startup fails so the
         # independent recovery path remains available, but preserve the failure
         # status instead of claiming automation started successfully.
-        local daemon_rc=0
+        daemon_rc=0
         "$DAEMON" start || daemon_rc=$?
 
         # Install watchdog cron regardless of daemon startup result. The watchdog
