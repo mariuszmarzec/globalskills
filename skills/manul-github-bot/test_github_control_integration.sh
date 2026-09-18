@@ -2537,7 +2537,7 @@ test_crash_during_task_creation() {
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+  sqlite3 "$db" "PRAGMA journal_mode=WAL;" >/dev/null
   sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2571,8 +2571,10 @@ CFGEOF
     --repo "test-org/test-repo" --pr-number 1000 \
     --review-id "crash-during-1" --review-state REQUEST_CHANGES \
     --body "Fix crash during" --author reviewer --created "$now" \
-    > /dev/null 2>&1
-  local crash_exit=$?
+    > /dev/null 2>&1 &
+  local crash_pid=$!
+  local crash_exit=0
+  wait "$crash_pid" 2>/dev/null || crash_exit=$?
 
   # Verify process was killed (non-zero exit)
   if [ $crash_exit -eq 0 ]; then
@@ -2649,7 +2651,7 @@ local test_dir
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-   sqlite3 "$db" "PRAGMA journal_mode=WAL;"
+   sqlite3 "$db" "PRAGMA journal_mode=WAL;" >/dev/null
    sqlite3 "$db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
