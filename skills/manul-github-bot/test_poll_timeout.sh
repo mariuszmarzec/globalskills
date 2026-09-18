@@ -42,6 +42,10 @@ for ((i=0; i<${#args[@]}; i++)); do
         REPO="${args[$((i+1))]}"
       fi
       ;;
+    repos/*)
+      repo_path="${args[$i]#repos/}"
+      REPO="${repo_path%%/*}"
+      ;;
   esac
 done
 case "$REPO" in
@@ -228,9 +232,12 @@ cat > "$TEST_DIR/gh" << 'FAKEGH'
 REPO=""
 for arg in "$@"; do
   case "$arg" in
-    --repo=*|--repo\ *)
+    --repo=*)
       REPO="${arg#--repo=}"
-      REPO="${arg#--repo }"
+      ;;
+    repos/*)
+      repo_path="${arg#repos/}"
+      REPO="${repo_path%%/*}"
       ;;
   esac
 done
