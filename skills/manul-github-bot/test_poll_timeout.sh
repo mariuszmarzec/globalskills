@@ -261,14 +261,35 @@ FAKEGH
 
 # ===== Test 5: Global POLL_TIMEOUT safety net =====
 echo ""
-echo "Test 5: Global POLL_TIMEOUT present for safety"
+echo "Test 5: Global POLL_TIMEOUT remains a safe interrupt path"
 
 poll_path="$POLL_SCRIPT"
 if grep -q "REPO_POLL_TIMEOUT" "$poll_path" && \
    grep -q "bash -c \"source" "$poll_path"; then
   echo "PASS 5: poll.sh uses per-repo timeout with global safety net"
 else
-  echo "WARN 5: Timeout mechanism not clearly defined"
+  echo "FAIL 5: Timeout mechanism not clearly defined"
+  exit 1
+fi
+
+# Simulate the outer daemon timeout interrupting poll.sh before the repo-level
+# timeout can fire. The poll process must clean the lock it acquired before
+# receiving SIGTERM.
+rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/repo-locks/hang.lock"
+export MANUL_REPO_POLL_TIMEOUT=30
+if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test5.txt" 2>&1; then
+  echo "FAIL 5: Global timeout unexpectedly returned success"
+  cat "$TEST_DIR/test5.txt"
+  exit 1
+fi
+
+if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+  echo "PASS 5: Repo lock cleaned after global SIGTERM"
+else
+  echo "FAIL 5: Repo lock leaked after global SIGTERM"
+  ls -la "$MANUL_DIR/repo-locks/" || true
+  cat "$MANUL_DIR/poll.log" || true
+  exit 1
 fi
 
 echo ""
