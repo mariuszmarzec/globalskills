@@ -49,7 +49,15 @@ case "${1:-}" in
         # independent recovery path remains available, but preserve the failure
         # status instead of claiming automation started successfully.
         daemon_rc=0
-        "$DAEMON" start || daemon_rc=$?
+        # Start daemon detached so the long-lived master survives the wrapper exit.
+        # Without this, the master process ends when start() returns, leaving a stale
+        # PID file and causing watchdog to restart it in an endless loop.
+        setsid nohup "$DAEMON" start >>"$MANUL_DIR/daemon.log" 2>&1 &
+        sleep 2
+        if ! "$DAEMON" status >/dev/null 2>&1; then
+            log "Manul daemon did not stay running after startup; rc=$daemon_rc"
+            daemon_rc=1
+        fi
 
         # Install watchdog cron regardless of daemon startup result. The watchdog
         # is the recovery mechanism for exactly this class of failure.
