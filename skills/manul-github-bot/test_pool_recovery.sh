@@ -67,6 +67,9 @@ echo "PASS 2"
 
 echo "Test 3: empty pool is recreated by ensure_workspace_pool"
 sqlite3 "$DB" "DELETE FROM workspaces;"
+# The production daemon sources the runtime copy/symlink of workspace-manager.sh.
+# Reproduce that runtime layout inside the isolated test directory.
+cp "$SCRIPT_DIR/workspace-manager.sh" "$MANUL_DIR/workspace-manager.sh"
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 ensure_workspace_pool
 count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');")"
