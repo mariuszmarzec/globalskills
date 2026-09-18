@@ -115,13 +115,13 @@ CFGEOF
   mkdir -p "$mock_gh_dir"
 
   cat > "$test_dir/comments_1.json" <<'EOF'
-[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
+[{"id":"trigger-comment","body":"/manul do this","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
 EOF
   cat > "$test_dir/comments_2.json" <<'EOF'
-[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
+[{"id":"trigger-comment","body":"/manul do this","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
 EOF
   cat > "$test_dir/comments_3.json" <<'EOF'
-[{"id":"trigger-comment","body":"/manul Add a test for multiply(2, 3) == 6","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"trigger-comment-2","body":"/manul Now implement the change according to my previous feedback.","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
+[{"id":"trigger-comment","body":"/manul do this","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"trigger-comment-2","body":"/manul Now implement the change according to my previous feedback.","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
 EOF
 
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
@@ -138,6 +138,10 @@ fi
 if [[ "$1" == "api" ]]; then
     args="${@/--paginate/}"
     poll_num="$(cat "${TEST_DIR}/poll_number" 2>/dev/null || echo "0")"
+    if [[ "$args" == *"/issues/1" && "$args" != *"/issues/1/comments"* ]]; then
+        echo '{"number":1,"title":"Exclude ingredients","body":"/manul exclude:\n-erytrytol\n-mąka\n-mąka pełnoziarnista\n\nfrom shopping list by adding them to SKIP_INGREDIENTS","user":{"login":"test-user"},"created_at":"2026-09-15T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1"}'
+        exit 0
+    fi
     if [[ "$args" == *"/issues/comments"* && "$args" == *"?per_page=100"* ]]; then
         case "$poll_num" in
             1) cat "${TEST_DIR}/comments_1.json";;
@@ -185,8 +189,34 @@ MOCK_EOF
 
   local msg_count
   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
-  if [ "$msg_count" -ne 3 ]; then
-    echo "ERROR: Expected 3 conversation_messages, found $msg_count"
+  if [ "$msg_count" -ne 4 ]; then
+    echo "ERROR: Expected 4 conversation_messages (Issue root + 3 comments), found $msg_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local task_prompt task_context followup_context
+  task_prompt="$(sqlite3 "$poll_db" "SELECT prompt FROM processed_comments WHERE commentId='issue:trigger-comment';" 2>/dev/null)"
+  task_context="$(sqlite3 "$poll_db" "SELECT context FROM processed_comments WHERE commentId='issue:trigger-comment';" 2>/dev/null)"
+  followup_context="$(sqlite3 "$poll_db" "SELECT context FROM processed_comments WHERE commentId='issue:trigger-comment-2';" 2>/dev/null)"
+
+  if [ "$task_prompt" != "do this" ]; then
+    echo "ERROR: Trigger prompt should stay as the invocation ('do this'), got: '$task_prompt'"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [[ "$task_context" != *"Exclude ingredients"* ]] ||
+     [[ "$task_context" != *"erytrytol"* ]] ||
+     [[ "$task_context" != *"mąka pełnoziarnista"* ]] ||
+     [[ "$task_context" != *"Also make sure the assertion uses float comparison."* ]]; then
+    echo "ERROR: Trigger task context does not contain the full Issue + conversation thread"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [[ "$followup_context" != *"Exclude ingredients"* ]] ||
+     [[ "$followup_context" != *"Also make sure the assertion uses float comparison."* ]] ||
+     [[ "$followup_context" != *"do this"* ]]; then
+    echo "ERROR: Follow-up task context does not contain the full Issue conversation"
     rm -rf "$test_dir"
     return 1
   fi
