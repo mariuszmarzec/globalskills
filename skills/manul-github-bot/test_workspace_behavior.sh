@@ -93,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=19
+  local expected_tests=21
   local actual_tests
   actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
@@ -286,11 +286,60 @@ test_stale_cleanup() {
 }
 run_and_test "Test 8: Stale workspace cleanup" test_stale_cleanup
 
+# Test 9: A stale-looking workspace must not be reclaimed while its worker is alive
+echo ""
+echo "=== Test 9: Live worker protects stale workspace ==="
+test_live_worker_protects_workspace() {
+  workspace_pool_init 1 reset
+
+  local ws
+  ws="$(workspace_lease "live-task")"
+  [ -n "$ws" ] || return 1
+
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,heartbeatAt,leaseExpiresAt,workerPid) VALUES('live-task','running',datetime('now','-7200 seconds'),datetime('now','-7200 seconds'),$);"
+  sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
+
+  workspace_cleanup_stale 3600
+
+  local status
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws';")"
+  [ "$status" = "BUSY" ] || return 1
+  workspace_release "$ws"
+}
+run_and_test "Test 9: Live worker protects stale workspace" test_live_worker_protects_workspace
+
+# Test 10: Dead worker + stale task allows workspace reclamation
+echo ""
+echo "=== Test 10: Dead worker stale workspace reclamation ==="
+test_dead_worker_reclaims_workspace() {
+  workspace_pool_init 1 reset
+
+  local ws
+  ws="$(workspace_lease "dead-task")"
+  [ -n "$ws" ] || return 1
+
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+  sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,heartbeatAt,leaseExpiresAt,workerPid) VALUES('dead-task','running',datetime('now','-7200 seconds'),datetime('now','-7200 seconds'),99999999);"
+  sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
+
+  workspace_cleanup_stale 3600
+
+  local status
+  status="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws';" 2>/dev/null || true)"
+  [ -z "$status" ] || [ "$status" = "NOT_FOUND" ] || return 1
+}
+run_and_test "Test 10: Dead worker stale workspace reclamation" test_dead_worker_reclaims_workspace
+
 echo ""
 
 # Test 9: Sequential same-conversation workspace reuse
 echo ""
-echo "=== Test 9: Sequential same-conversation workspace reuse ==="
+echo "=== Test 11: Sequential same-conversation workspace reuse ==="
 test_sequential_reuse() {
   workspace_pool_init 2 reset
 
@@ -318,7 +367,7 @@ run_and_test "Test 9: Sequential same-conversation workspace reuse" test_sequent
 
 # Test 10: Cross-repository workspace isolation
 echo ""
-echo "=== Test 10: Cross-repository workspace isolation ==="
+echo "=== Test 12: Cross-repository workspace isolation ==="
 test_cross_repo_isolation() {
   workspace_pool_init 2 reset
 
@@ -337,7 +386,7 @@ run_and_test "Test 10: Cross-repository workspace isolation" test_cross_repo_iso
 
 # Test 11: Concurrent lease atomicity — two simultaneous lease attempts on pool of 1
 echo ""
-echo "=== Test 11: Concurrent lease atomicity ==="
+echo "=== Test 13: Concurrent lease atomicity ==="
 test_concurrent_lease() {
   workspace_pool_init 1 reset
 
@@ -432,7 +481,7 @@ run_and_test "Test 18: workspace_repo_matches ssh:// protocol" test_workspace_re
 
 # Test 19: evaluate_task_completion ignores __pycache__ in untracked files
 echo ""
-echo "=== Test 19: Untracked files filtering ==="
+echo "=== Test 21: Untracked files filtering ==="
 test_untracked_files_ignores_pycache() {
   # Create a temp repo with __pycache__ and .pytest_cache
   local tmprepo
