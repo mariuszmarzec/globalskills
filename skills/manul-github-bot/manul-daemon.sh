@@ -287,9 +287,9 @@ update_task_completion() {
 
   # For completed/failed tasks, verify worker ownership to prevent stealing
   if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
-    local current_daemon_pid
-    current_daemon_pid="$(get_daemon_pid)"
-    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_daemon_pid"
+    local current_worker_pid
+    current_worker_pid="$$"
+    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_worker_pid"
 
     # If no workerPid assigned yet, this is a transition from queued
     if [ "$current_status" = "queued" ]; then
@@ -528,7 +528,7 @@ start_heartbeat() {
   # Start a background heartbeat loop
   (
     while true; do
-      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
       sleep "$HEARTBEAT_INTERVAL"
     done
   ) &
@@ -555,7 +555,7 @@ stop_heartbeat() {
 refresh_heartbeat() {
   local comment_id="$1"
   if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
-    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
   fi
 }
 
@@ -967,10 +967,10 @@ evaluate_task_completion() {
     else
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
       # Fallback: attempt direct completion with ownership verification
-      local fallback_pid
-      fallback_pid="$(get_daemon_pid)"
+      local fallback_worker_pid
+      fallback_worker_pid="$$"
       local fallback_result
-      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_pid; SELECT changes();" 2>/dev/null)"
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_worker_pid; SELECT changes();" 2>/dev/null)"
       local fallback_changes
       fallback_changes="$(echo "$fallback_result" | tail -n 1)"
       if [ "${fallback_changes:-0}" -eq 1 ]; then
@@ -1149,10 +1149,10 @@ run_once() {
 
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
-    local CURRENT_DAEMON_PID
-    CURRENT_DAEMON_PID="$(get_daemon_pid)"
+    local CURRENT_WORKER_PID
+    CURRENT_WORKER_PID="$$"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_DAEMON_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
