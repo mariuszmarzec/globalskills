@@ -292,6 +292,51 @@ else
   exit 1
 fi
 
+# ===== Test 6: Outer timeout must not lose queued tasks =====
+# Regression: when the daemon's global POLL_TIMEOUT kills poll.sh mid-cycle,
+# poll.sh's signal trap must still emit a MANUL_RESULT line so the daemon can
+# dispatch tasks that were already queued. Previously every interrupted cycle
+# produced no output at all, so fire was never true and queued tasks starved.
+echo ""
+echo "Test 6: Partial result emitted on outer SIGTERM"
+
+rm -f "$DB" "$POLL_FLOCK"
+rm -rf "$MANUL_DIR/repo-locks"
+mkdir -p "$MANUL_DIR/repo-locks"
+
+# Pre-seed a queued task so poll.sh has something to report even if it is
+# killed before scanning any repo.
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments(commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, commentUrl TEXT, author TEXT, agent TEXT, prompt TEXT, status TEXT, createdAt TEXT, processedAt TEXT, attempts INTEGER DEFAULT 0, nextAttemptAt TEXT, heartbeatAt TEXT, leaseExpiresAt TEXT, conversationId TEXT, baseId TEXT);"
+sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,status,createdAt) VALUES('test:6','test-repo',1,'queued','2026-01-01T00:00:00Z');"
+
+export MANUL_REPO_POLL_TIMEOUT=30
+rm -f "$TEST_DIR/test6.txt"
+# Kill poll.sh with SIGTERM well before its per-repo timeout can fire.
+if timeout --signal=TERM --kill-after=3s 1s bash "$POLL_SCRIPT" "hang" >"$TEST_DIR/test6.txt" 2>&1; then
+  echo "FAIL 6: poll.sh unexpectedly returned success under global SIGTERM"
+  cat "$TEST_DIR/test6.txt"
+  exit 1
+fi
+
+if grep -q '"fire":true' "$TEST_DIR/test6.txt"; then
+  echo "PASS 6: Partial result with fire:true emitted on SIGTERM"
+else
+  echo "FAIL 6: No fire:true result emitted after SIGTERM"
+  echo "--- poll.sh output ---"
+  cat "$TEST_DIR/test6.txt"
+  echo "--- poll.log tail ---"
+  tail -5 "$MANUL_DIR/poll.log" 2>/dev/null || true
+  exit 1
+fi
+
+if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+  echo "PASS 6: Repo lock cleaned after SIGTERM"
+else
+  echo "FAIL 6: Repo lock leaked after SIGTERM"
+  ls -la "$MANUL_DIR/repo-locks/" || true
+  exit 1
+fi
+
 echo ""
 echo "All timeout tests assertions passed."
 

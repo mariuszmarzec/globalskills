@@ -1255,10 +1255,41 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       release_repo_lock "$cleanup_repo"
     done
   }
+  # emit_result is defined below, before the repo loop, so the signal traps can
+  # call it even when they fire mid-loop (bash resolves the name at call time).
+  trap 'cleanup_repo_locks; emit_result; exit 143' TERM
+  trap 'cleanup_repo_locks; emit_result; exit 130' INT
+  trap 'cleanup_repo_locks; emit_result; exit 129' HUP
   trap 'cleanup_repo_locks' EXIT
-  trap 'cleanup_repo_locks; exit 143' TERM
-  trap 'cleanup_repo_locks; exit 130' INT
-  trap 'cleanup_repo_locks; exit 129' HUP
+
+  emit_result() {
+    # Emit the MANUL_RESULT line. Called at the normal end of the loop AND
+    # from the signal traps above, so a poll.sh that is killed by an outer
+    # timeout (e.g. the daemon's global POLL_TIMEOUT) still reports the
+    # queued tasks it already discovered. Without this, every interrupted
+    # cycle reports fire:false and the daemon never dispatches.
+    # Idempotent: the EXIT trap also fires after a signal handler's exit, so
+    # guard against emitting the result twice.
+    if [ "${_EMITTED:-0}" = "1" ]; then
+      return 0
+    fi
+    _EMITTED=1
+    PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
+
+    LOCKED=0
+    if [ -f "$LOCK" ]; then
+      age=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
+      [ "$age" -lt "$LOCK_TTL_SECONDS" ] && LOCKED=1
+    fi
+
+    if { [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; } && [ "$LOCKED" -eq 0 ]; then
+      echo "MANUL_RESULT {\"fire\":true,\"new\":$NEW,\"pending\":$PENDING}"
+    elif [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
+      echo "MANUL_RESULT {\"fire\":false,\"new\":$NEW,\"pending\":$PENDING,\"locked\":true}"
+    else
+      echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":0}"
+    fi
+  }
 
   # Run each repo in its own session/process group so a hung gh subprocess
   # cannot leak past the per-repository timeout. Return 124 on timeout.
@@ -1316,20 +1347,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     release_repo_lock "$repo"
   done
 
-  PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
-
-  LOCKED=0
-  if [ -f "$LOCK" ]; then
-    age=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
-    [ "$age" -lt "$LOCK_TTL_SECONDS" ] && LOCKED=1
-  fi
-
-  if { [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; } && [ "$LOCKED" -eq 0 ]; then
-    echo "MANUL_RESULT {\"fire\":true,\"new\":$NEW,\"pending\":$PENDING}"
-  elif [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
-    echo "MANUL_RESULT {\"fire\":false,\"new\":$NEW,\"pending\":$PENDING,\"locked\":true}"
-  else
-    echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":0}"
-  fi
-
+  # Normal completion path.
+  emit_result
+  exit 0
 fi
+
