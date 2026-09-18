@@ -65,7 +65,26 @@ REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-${LOCK_TTL:-1800}}"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
-log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+# Source operator overrides from ~/.openclaw/manul/.env if present.
+  # This is what makes MANUL_POLL_TIMEOUT / MANUL_INTERVAL / etc. actually
+  # take effect — without it the daemon ignores the .env file entirely and
+  # falls back to hardcoded defaults (e.g. POLL_TIMEOUT=120s), which is too
+  # short to cover one slow repository per poll cycle.
+  if [ -f "$MANUL_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$MANUL_DIR/.env"
+    set +a
+  fi
+
+  # Per-repo timeout, mirrored from poll.sh's default so the daemon's
+  # scaled global poll timeout matches what poll.sh actually enforces.
+  REPO_POLL_TIMEOUT="${MANUL_REPO_POLL_TIMEOUT:-60}"
+  # Repository list, mirrored from poll.sh so run_once can size the global
+  # poll timeout dynamically instead of assuming a fixed 120s.
+  mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
+
+  log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 
 # Lifecycle event logger — structured, machine-parsable, human-readable
 lc_log() {
@@ -1115,25 +1134,35 @@ evaluate_task_completion() {
 }
 
 run_once() {
-   local out
   # Use timeout to prevent daemon deadlock if poll.sh hangs
-  # This can happen if gh API is unresponsive or network is blocked
-  local poll_timeout="${MANUL_POLL_TIMEOUT:-120}"
-  out="$(timeout "$poll_timeout" "$POLL" 2>&1)" || {
-    local rc=$?
-    if [ "$rc" -eq 124 ]; then
-      log "ERROR: poll.sh timed out after ${poll_timeout}s — killing any orphaned poll children"
+  # This can happen if gh API is unresponsive or network is blocked.
+  # The default scales with the number of configured repositories so one
+  # slow repo (per-repo timeout) cannot starve the whole cycle: each repo
+  # gets REPO_POLL_TIMEOUT + 10s buffer, with a 60s floor.
+  local poll_timeout="${MANUL_POLL_TIMEOUT:-$(( ${#REPOS[@]} * (REPO_POLL_TIMEOUT + 10) + 60 ))}"
+  # Capture poll.sh output to a file so a partial result emitted by poll.sh's
+  # signal trap (when the global timeout kills it mid-cycle) is NOT lost.
+  # Without this, every interrupted cycle reports fire:false and the daemon
+  # never dispatches the queued task.
+  local poll_out_file
+  poll_out_file="$(mktemp)"
+  local poll_rc=0
+  timeout "$poll_timeout" "$POLL" >"$poll_out_file" 2>&1 || poll_rc=$?
+  local out
+  out="$(cat "$poll_out_file" 2>/dev/null)"
+  rm -f "$poll_out_file"
+
+  if [ "$poll_rc" -ne 0 ]; then
+    if [ "$poll_rc" -eq 124 ]; then
+      log "WARN: poll.sh hit global timeout after ${poll_timeout}s; using any partial result it emitted before dying"
       lc_log "POLL_TIMEOUT" "timeout=${poll_timeout}s"
-      # Kill any orphaned poll.sh processes that may be stuck
       pkill -f "bash.*$POLL" 2>/dev/null || true
     else
-      log "ERROR: poll.sh failed with rc=$rc"
-      lc_log "POLL_ERROR" "rc=$rc"
+      log "ERROR: poll.sh failed with rc=$poll_rc"
+      lc_log "POLL_ERROR" "rc=$poll_rc"
     fi
-    echo "MANUL_RESULT {\"fire\":false,\"error\":\"poll_failed\"}"
-    return 0
-  }
-  echo "$out"
+  fi
+
   # Record poll result for observability
   local poll_fire poll_new poll_pending
   # Strip MANUL_RESULT prefix if present (poll.sh outputs "MANUL_RESULT {json}")
