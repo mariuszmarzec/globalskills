@@ -16,14 +16,22 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # ERR trap: log any unhandled command failure with context
 trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null; fi' ERR
 
-# Ensure standard PATH is available when running via setsid/nohup
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+# Ensure standard PATH is available when running via setsid/nohup.
+# ~/.local/bin is required: the OpenClaw CLI is installed there and the daemon
+# (often started by cron/watchdog) inherits a PATH that omits it, which made
+# `command -v openclaw` fail and every agent invocation die instantly.
+# The OpenClaw CLI itself is a wrapper that execs `npx`, so the nvm node bin
+# must also be reachable or the agent dies with "npx: not found".
+export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/*/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Ensure OpenClaw uses the native state directory (post-migration)
 export OPENCLAW_STATE_DIR="/home/marzec/.openclaw-native/state"
 export OPENCLAW_CONFIG_PATH="/home/marzec/.openclaw-native/openclaw.json"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+# Absolute path to this script (the daemon is invoked via a symlink, so $0 may
+# be relative). Workers are spawned with nohup/setsid and need a stable path.
+DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
 CONFIG="${MANUL_DIR}/config.json"
 POLL="$MANUL_DIR/poll.sh"
 PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
@@ -641,8 +649,10 @@ start() {
     local i worker_pid
     local master_pid=$BASHPID
     declare -a WORKER_PIDS=()
-    for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
-      setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+       # Use an absolute path so the worker survives even if the daemon's cwd
+       # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
+       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
@@ -686,9 +696,9 @@ start() {
       # Restart any dead workers
       local new_pids=()
       for i in "${!WORKER_PIDS[@]}"; do
-        if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
-          log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-          setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
+           log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
+           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
           worker_pid=$!
           echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
           new_pids+=("$worker_pid")
@@ -1643,12 +1653,11 @@ PROMPT_EOF
       log "dispatch: updated workspace origin to https://github.com/${REPO}"
     fi
 
-    # Use the workspace as the working directory for the agent
-    WORKDIR="$workspace_path"
+# Use the workspace as the working directory for the agent
+     WORKDIR="$workspace_path"
 
-
-    # Deterministic workspace preparation: ensure correct branch is checked out
-    if [ -n "$PR_HEAD_BRANCH" ]; then
+     # Deterministic workspace preparation: ensure correct branch is checked out
+     if [ -n "$PR_HEAD_BRANCH" ]; then
       # PR task: fetch and checkout the PR head branch explicitly
       log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
       if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
@@ -1680,9 +1689,29 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       fi
-      log "dispatch: verified PR head branch $verify_branch in workspace"
-    fi
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
+log "dispatch: verified PR head branch $verify_branch in workspace"
+     else
+       # Issue / standalone task: the workspace may have been left on a stale
+       # task branch from a previous run. Reset to the default branch so the
+       # agent starts from a clean, known state and cannot pick up leftover
+       # changes from an unrelated task. (Do NOT use clean -fdx: the workspace
+       # holds untracked helper dirs like .agents that must be preserved.)
+       local default_branch
+       default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "master")"
+       log "dispatch: resetting workspace $WORKDIR to default branch '$default_branch'"
+       if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
+         log "WARN: failed to fetch origin for workspace reset on $REPO"
+       fi
+       if ! git -C "$WORKDIR" checkout -f "origin/$default_branch" 2>>"$LOG"; then
+         log "WARN: failed to checkout origin/$default_branch in $WORKDIR"
+       fi
+       if ! git -C "$WORKDIR" checkout -B "$default_branch" 2>>"$LOG"; then
+         log "WARN: failed to create/reset local $default_branch in $WORKDIR"
+       fi
+       git -C "$WORKDIR" reset --hard "origin/$default_branch" --quiet 2>>"$LOG" || true
+       git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG" || true
+     fi
+     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
     # Generate timestamp for unique branch name
     local timestamp
