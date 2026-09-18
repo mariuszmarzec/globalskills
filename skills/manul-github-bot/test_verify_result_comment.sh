@@ -67,7 +67,8 @@ assert_rc() {
 }
 
 # ─── Source daemon functions ───────────────────────────────────────────────────
-DAEMON="/home/marzec/.globalskills/skills/manul-github-bot/manul-daemon.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DAEMON="$SCRIPT_DIR/manul-daemon.sh"
 
 # Extract only the functions we need (no globals, no daemon startup)
 eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
