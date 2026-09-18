@@ -372,6 +372,33 @@ build_conversation_context() {
   done
 }
 
+refresh_queued_task_contexts_for_repo() {
+  local repo="$1"
+  local conv_id context esc_ctx
+
+  while IFS= read -r conv_id; do
+    [ -n "$conv_id" ] || continue
+    context="$(build_conversation_context "$conv_id")"
+    [ -n "$context" ] || continue
+    esc_ctx="$(printf '%s' "$context" | sed "s/'/''/g")"
+
+    sqlite3 "$DB" "UPDATE processed_comments
+      SET context='$esc_ctx'
+      WHERE repository='$(sql_escape "$repo")'
+        AND conversationId='$(sql_escape "$conv_id")'
+        AND status='queued';" 2>>"$LOG"
+
+    log "context refreshed for queued tasks on $repo (conversation=$conv_id)"
+  done < <(
+    sqlite3 "$DB" "SELECT DISTINCT conversationId
+      FROM processed_comments
+      WHERE repository='$(sql_escape "$repo")'
+        AND conversationId IS NOT NULL
+        AND conversationId != ''
+        AND status='queued';" 2>>"$LOG" || true
+  )
+}
+
 persist_conversation_messages_for_repo() {
   # After processing trigger comments, also persist ALL non-trigger comments
   # on the same issues/PRs as conversation history. This ensures the daemon
@@ -929,18 +956,8 @@ process_repo_body() {
       raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
       persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-      # The trigger comment is only the invocation. Synchronize the full
-      # conversation first, then snapshot it into the task context.
-      persist_conversation_messages_for_repo "$repo"
-      # Synchronize every comment in this exact review thread before
-      # snapshotting context for the task.
-      persist_conversation_messages_for_repo "$repo"
-      ctx="$(build_conversation_context "$conv_id")"
-      if [ -n "$ctx" ]; then
-        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-        log "context enriched for $id on $repo#$issue (conversation history)"
-      fi
+      # Task context is materialized after the poll has ingested all
+      # available GitHub messages for this repository.
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
   done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
@@ -1000,15 +1017,8 @@ process_repo_body() {
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-      # Issue-body triggers have the full request in the root, but still need
-      # all follow-up comments already present in the thread.
-      persist_conversation_messages_for_repo "$repo"
-      ctx="$(build_conversation_context "$conv_id")"
-      if [ -n "$ctx" ]; then
-        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-        log "context enriched for $id on $repo#$issue (issue root + conversation history)"
-      fi
+      # Task context is materialized after the poll has ingested all
+      # available GitHub messages for this repository.
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
     fi
   done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
@@ -1090,12 +1100,8 @@ process_repo_body() {
       raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
       persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
-      ctx="$(build_conversation_context "$conv_id")"
-      if [ -n "$ctx" ]; then
-        esc_ctx="$(printf '%s' "$ctx" | sed "s/'/''/g")"
-        sqlite3 "$DB" "UPDATE processed_comments SET context='$esc_ctx' WHERE commentId='$id';" 2>>"$LOG"
-        log "context enriched for $id on $repo#$pr_num (conversation history)"
-      fi
+      # Review-thread context is materialized after the poll has ingested
+      # all available GitHub messages for this repository.
       if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
         review_id="${id#review:}"
         if [ -n "$conv_id" ]; then
@@ -1194,8 +1200,11 @@ process_repo_body() {
     done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
   fi
 
-  # Persist non-trigger comments as conversation history
+  # Persist all available conversation messages first, then materialize the
+  # complete conversation into every queued task. This also refreshes queued
+  # tasks when new comments arrive after their original trigger.
   persist_conversation_messages_for_repo "$repo"
+  refresh_queued_task_contexts_for_repo "$repo"
 
   # Retry any skipped comments from a previous poll run
   skip_log="$MANUL_DIR/skip-comments.log"
