@@ -45,10 +45,29 @@ case "${1:-}" in
         log "Starting manul automation..."
         # Ensure scripts are executable
         chmod +x "$DAEMON" "$WATCHDOG" 2>/dev/null || true
-        # Start daemon
-        "$DAEMON" start
-        # Install watchdog cron
+        # Start daemon. Install watchdog even when startup fails so the
+        # independent recovery path remains available, but preserve the failure
+        # status instead of claiming automation started successfully.
+        daemon_rc=0
+        # Start daemon detached so the long-lived master survives the wrapper exit.
+        # Without this, the master process ends when start() returns, leaving a stale
+        # PID file and causing watchdog to restart it in an endless loop.
+        setsid nohup "$DAEMON" start >>"$MANUL_DIR/daemon.log" 2>&1 &
+        sleep 2
+        if ! "$DAEMON" status >/dev/null 2>&1; then
+            log "Manul daemon did not stay running after startup; rc=$daemon_rc"
+            daemon_rc=1
+        fi
+
+        # Install watchdog cron regardless of daemon startup result. The watchdog
+        # is the recovery mechanism for exactly this class of failure.
         install_watchdog_cron
+
+        if [ "$daemon_rc" -ne 0 ]; then
+            log "Manul automation startup failed (daemon rc=$daemon_rc); watchdog installed for recovery"
+            return "$daemon_rc"
+        fi
+
         log "Manul automation started"
         ;;
     stop)

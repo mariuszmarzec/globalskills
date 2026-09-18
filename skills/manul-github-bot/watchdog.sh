@@ -38,11 +38,18 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
 # --- 1) daemon liveness ----------------------------------------------------
+# Reclaim stale workspaces before attempting daemon startup. Without this,
+# a dead worker can leave a BUSY workspace forever and make daemon start fail
+# with "insufficient workspaces for concurrency".
+if [ -f "$DB" ] && [ -f "$MANUL_DIR/workspace-manager.sh" ]; then
+    source "$MANUL_DIR/workspace-manager.sh"
+    workspace_cleanup_stale 3600
+fi
+
 if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
     log "daemon not running (no pid / pid not alive) → starting"
     rm -f "$PID_FILE"  # Clear stale PID file before starting
     "$MANUL_DIR/manul-daemon.sh" start >>"$LOG" 2>&1
-    exit 0
 fi
 
 # --- 2) stale lock recovery ------------------------------------------------
