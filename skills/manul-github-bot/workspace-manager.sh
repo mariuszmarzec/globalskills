@@ -87,7 +87,9 @@ workspace_release() {
       return 1
     fi
   fi
-  sqlite3 "$DB" "UPDATE workspaces SET status='IDLE', currentTaskId=NULL WHERE workspaceId='$safe_ws_id';"
+  # Refresh the idle timestamp on every release so a legitimately reused
+  # workspace is not mistaken for an abandoned idle workspace by stale cleanup.
+  sqlite3 "$DB" "UPDATE workspaces SET status='IDLE', currentTaskId=NULL, lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id';"
 }
 
 # Atomically reclaim a previously-used workspace for a task whose processed_comments row points to it.
