@@ -95,7 +95,7 @@ if [ -n "$pr_body" ]; then
 fi
 
 # Deduplicate
-linked_issues=($(printf '%s\n' "${linked_issues[@]}" | sort -u))
+linked_issues=($(printf '%s\\n' "${linked_issues[@]}" | sort -u))
 if [ ${#linked_issues[@]} -gt 0 ]; then
   echo "Linked issues from body: ${linked_issues[*]}"
 fi
@@ -117,22 +117,30 @@ api() {
 # --- collect IDs to delete ---
 echo "Scanning comments..."
 
-# Helper function to extract comment IDs containing the signature
+# Helper function to extract comment IDs containing the signature.
+# IMPORTANT: GitHub REST endpoints are paginated at 30 items by default.
+# --paginate --slurp is required here so issues with >30 comments are scanned fully.
 extract_ids() {
   local api_url="$1"
-  gh api "$api_url" 2>/dev/null | python3 -c "
+  gh api --paginate --slurp "$api_url" 2>/dev/null | python3 -c "
 import sys, json
 try:
     data = sys.stdin.read()
     if not data.strip():
         sys.exit(0)
-    comments = json.loads(data)
+
+    pages = json.loads(data)
+    comments = []
+    for page in pages:
+        if isinstance(page, list):
+            comments.extend(page)
+
     sig = '$SIG'
     for c in comments:
         body = c.get('body', '')
         if sig in body:
             print(c['id'])
-except Exception as e:
+except Exception:
     sys.exit(0)
 "
 }
@@ -156,7 +164,7 @@ for linked_issue in "${linked_issues[@]}"; do
 done
 
 # Deduplicate issue_ids
-issue_ids=($(printf '%s\n' "${issue_ids[@]}" | sort -u))
+issue_ids=($(printf '%s\\n' "${issue_ids[@]}" | sort -u))
 
 total=$(( ${#review_ids[@]} + ${#issue_ids[@]} ))
 if [ "$total" -eq 0 ]; then
@@ -190,8 +198,7 @@ done
 
 for id in "${issue_ids[@]}"; do
   [ -z "$id" ] && continue
-  # skip if this id was already removed as a review comment
-  if printf '%s\n' "${review_ids[@]}" | grep -qx "$id"; then
+  if printf '%s\\n' "${review_ids[@]}" | grep -qx "$id"; then
     continue
   fi
   echo -n "Deleting issue comment $id... "
@@ -213,7 +220,6 @@ echo "Deleted:  $deleted"
 echo "Failed:   $failed"
 echo "Total:    $total"
 
-# cleanup temp files
 rm -f /tmp/manul_del_*.txt 2>/dev/null || true
 
 exit $([ "$failed" -eq 0 ] && echo 0 || echo 1)
