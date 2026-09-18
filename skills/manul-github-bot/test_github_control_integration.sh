@@ -11,6 +11,28 @@ TOTAL=0
 TEST_DB=""
 MANUL_DIR=""
 
+wait_pid_timeout() {
+  local pid="$1"
+  local timeout_seconds="${2:-60}"
+  local started="$SECONDS"
+  local result=0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ $((SECONDS - started)) -ge "$timeout_seconds" ]; then
+      echo "ERROR: child pid $pid exceeded ${timeout_seconds}s; terminating it"
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+  done
+
+  wait "$pid" 2>/dev/null || result=$?
+  return "$result"
+}
+
 run_test() {
   local name="$1"
   local func="$2"
@@ -2691,8 +2713,16 @@ CFGEOF
     --review-id "conc-ident-1" --review-state REQUEST_CHANGES \
     --body "Fix identical" --author reviewer --created "$now" 2>/dev/null)" &
   local pid2=$!
-   wait $pid1 2>/dev/null || true
-   wait $pid2 2>/dev/null || true
+   if ! wait_pid_timeout "$pid1" 60; then
+     echo "ERROR: identical concurrent review handler timed out/failed"
+     rm -rf "$test_dir"
+     return 1
+   fi
+   if ! wait_pid_timeout "$pid2" 60; then
+     echo "ERROR: identical concurrent review handler #2 timed out/failed"
+     rm -rf "$test_dir"
+     return 1
+   fi
 
    # Retry logic for transient SQLite locking failures
    local max_retries=10
@@ -2785,8 +2815,16 @@ CFGEOF
     --review-id "conc-distinct-2" --review-state REQUEST_CHANGES \
     --body "Fix types" --author reviewer2 --created "$now" 2>/dev/null)" &
   local pid2=$!
-  wait $pid1 2>/dev/null || true
-  wait $pid2 2>/dev/null || true
+  if ! wait_pid_timeout "$pid1" 60; then
+    echo "ERROR: distinct concurrent review handler #1 timed out/failed"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if ! wait_pid_timeout "$pid2" 60; then
+    echo "ERROR: distinct concurrent review handler #2 timed out/failed"
+    rm -rf "$test_dir"
+    return 1
+  fi
 
   # Should be exactly two REVIEW_FIX tasks (one per review)
   local fix_count
