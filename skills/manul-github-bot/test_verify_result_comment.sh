@@ -381,7 +381,7 @@ fi
 # Step C: Simulate agent completing task
 sqlite3 "$TEMP_DB" "
     UPDATE processed_comments
-    SET status='running', attempts=1, processedAt=datetime('now'), heartbeatAt=datetime('now'), workerPid=0
+    SET status='running', attempts=1, processedAt=datetime('now'), heartbeatAt=datetime('now'), workerPid=$$
     WHERE commentId='$COMMENT_ID';
 " 2>/dev/null
 
