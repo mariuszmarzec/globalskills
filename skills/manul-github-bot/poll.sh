@@ -1198,12 +1198,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     done
   fi
 
-  if [ "${repo_cleanup_lock:-0}" -eq 1 ]; then
-    for repo in "${REPOS[@]}"; do
-      release_repo_lock "$repo"
-    done
-  fi
-
   PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
 
   LOCKED=0
