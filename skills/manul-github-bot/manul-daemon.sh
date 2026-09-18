@@ -569,8 +569,11 @@ refresh_heartbeat() {
 }
 
 start() {
-  # Initialize workspace pool
+  # Reclaim workspaces left BUSY by dead/stale workers before creating the pool.
+  # This must happen before workspace_pool_init: a stale BUSY row otherwise
+  # makes available_ws=0 and prevents the daemon from starting at all.
   source "$MANUL_DIR/workspace-manager.sh"
+  workspace_cleanup_stale 3600
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
 
   # Singleton check: verify no other daemon is running
