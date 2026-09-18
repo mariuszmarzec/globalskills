@@ -299,7 +299,7 @@ test_live_worker_protects_workspace() {
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
   sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
-  sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,heartbeatAt,leaseExpiresAt,workerPid) VALUES('live-task','running',datetime('now','-7200 seconds'),datetime('now','-7200 seconds'),$);"
+  sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,heartbeatAt,leaseExpiresAt,workerPid) VALUES('live-task','running',datetime('now','-7200 seconds'),datetime('now','-7200 seconds'),$$);"
   sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
 
   workspace_cleanup_stale 3600
