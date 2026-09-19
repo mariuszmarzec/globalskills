@@ -73,7 +73,15 @@ sqlite3 "$DB" "DELETE FROM workspaces;"
 # Reproduce that runtime layout inside the isolated test directory.
 cp "$SCRIPT_DIR/workspace-manager.sh" "$MANUL_DIR/workspace-manager.sh"
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
+set +e
 ensure_workspace_pool
+pool_rc=$?
+set -e
+if [ "$pool_rc" -ne 0 ]; then
+  echo "FAIL 3: ensure_workspace_pool returned rc=$pool_rc" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
 count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');")"
 [ "$count" -ge 1 ]
 echo "PASS 3"
