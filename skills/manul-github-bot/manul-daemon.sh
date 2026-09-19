@@ -14,7 +14,7 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # prompt, validate the result via explicit markers, update SQLite, and post the
 # final result comment.
 # ERR trap: log any unhandled command failure with context
-trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null; fi' ERR
+trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "${LIFECYCLE_LOG:-/dev/null}" 2>/dev/null; fi' ERR
 
 # Ensure standard PATH is available when running via setsid/nohup.
 # ~/.local/bin is required: the OpenClaw CLI is installed there and the daemon
