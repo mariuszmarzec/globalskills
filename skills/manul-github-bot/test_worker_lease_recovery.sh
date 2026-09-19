@@ -30,9 +30,13 @@ cat >"$CONFIG" <<'JSON'
 JSON
 
 export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
-# The daemon resolves OPENCLAW_BIN during source. This focused unit test does not
-# invoke OpenClaw, so provide a harmless executable to keep the test hermetic.
-export OPENCLAW_BIN="${OPENCLAW_BIN:-/bin/true}"
+# The daemon resolves OPENCLAW_BIN from PATH while sourcing. This focused unit
+# test never invokes OpenClaw, so provide a hermetic stub for that lookup.
+FAKE_BIN="$TEST_DIR/bin"
+mkdir -p "$FAKE_BIN"
+printf "#!/usr/bin/env bash\\nexit 0\\n" > "$FAKE_BIN/openclaw"
+chmod +x "$FAKE_BIN/openclaw"
+export PATH="$FAKE_BIN:$PATH"
 source "$SCRIPT_DIR/manul-daemon.sh"
 
 sqlite3 "$DB" "
