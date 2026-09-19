@@ -17,7 +17,9 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 MANUL_DIR="$TEST_DIR/manul"
 DB="$MANUL_DIR/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-export MANUL_DIR DB CONFIG
+LOG="$MANUL_DIR/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG MANUL_TESTING=true
 mkdir -p "$MANUL_DIR/workspaces" "$MANUL_DIR/tasks"
 
 cat >"$CONFIG" <<'CONFIGEOF'
@@ -70,8 +72,27 @@ sqlite3 "$DB" "DELETE FROM workspaces;"
 # The production daemon sources the runtime copy/symlink of workspace-manager.sh.
 # Reproduce that runtime layout inside the isolated test directory.
 cp "$SCRIPT_DIR/workspace-manager.sh" "$MANUL_DIR/workspace-manager.sh"
+set +e
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
+source_rc=$?
+set -e
+if [ "$source_rc" -ne 0 ]; then
+  echo "FAIL 3: sourcing daemon returned rc=$source_rc" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
+set +e
+enforce_rc=0
+env | grep -q "^MAX_CONCURRENT_TASKS=" || true
+enforce_rc=0
 ensure_workspace_pool
+pool_rc=$?
+set -e
+if [ "$pool_rc" -ne 0 ]; then
+  echo "FAIL 3: ensure_workspace_pool returned rc=$pool_rc" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
 count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');")"
 [ "$count" -ge 1 ]
 echo "PASS 3"

@@ -72,6 +72,7 @@ generate_prompt() {
     local timestamp="${13}"
     local CURRENT_BRANCH="${14}"
     local DEFAULT_BRANCH="${15}"
+    local TASK_BRANCH="${16:-}"
 
     # Top of prompt (static text + placeholders for single-line runtime values)
     cat > "$out_file" <<'PROMPT_EOF'
@@ -181,10 +182,12 @@ PROMPT_APPEND
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
 - Default branch: __DEFAULT_BRANCH__
-- Create a dedicated task branch from the default branch BEFORE making any changes
-- Branch name format: `manul-task-__COMMENT_ID__-__TIMESTAMP__`
+- Your task branch has ALREADY been created for you by Manul: `__TASK_BRANCH__`
+- You are ALREADY checked out on your task branch — do NOT run `git checkout -b`
+- Make all repository changes on this branch
 - Do NOT make any repository changes while on the default branch
-- After completing changes, commit and push to your task branch
+- After completing changes, commit and push to your task branch: `__TASK_BRANCH__`
+- Do NOT create a new branch — the branch name is fixed and already known to Manul
 PROMPT_APPEND
     fi
 
@@ -211,6 +214,7 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    prompt_content="${prompt_content//__TASK_BRANCH__/$TASK_BRANCH}"
     printf '%s' "$prompt_content" > "$out_file"
 }
 
@@ -436,6 +440,86 @@ if [ -f "$WORK/prompt.md" ] && [ -s "$WORK/prompt.md" ]; then
     ok "Prompt file is inspectable as actual file ($(wc -l < "$WORK/prompt.md") lines)"
 else
     fail "Prompt file is inspectable as actual file (file missing or empty)"
+fi
+
+# Test G: standalone task prompt substitutes __TASK_BRANCH__ and tells the agent
+# the branch is ALREADY checked out (branch lifecycle is owned by Manul).
+echo -n "Test: __TASK_BRANCH__ substituted for standalone task ... "
+rm -f "$WORK/prompt.md"
+generate_prompt \
+    "$WORK/prompt.md" \
+    "test-owner/test-repo" \
+    "42" \
+    "test-comment-branch" \
+    "https://github.com/test-owner/test-repo/issues/42#issuecomment-test-comment-branch" \
+    "issue" \
+    "Implement the feature." \
+    "Some context here." \
+    "1" \
+    "/tmp/repo" \
+    "/tmp/repo" \
+    "" \
+    "1234567890" \
+    "manul-task-test-comment-branch-1234567890" \
+    "master" \
+    "manul-task-test-comment-branch-1234567890"
+if assert_file_contains "task branch substituted" "$WORK/prompt.md" "manul-task-test-comment-branch-1234567890"; then
+    :
+else
+    :
+fi
+if assert_file_contains "agent told branch already checked out" "$WORK/prompt.md" "You are ALREADY checked out on your task branch"; then
+    :
+else
+    :
+fi
+if assert_file_contains "agent told not to create a new branch" "$WORK/prompt.md" "Do NOT create a new branch"; then
+    :
+else
+    :
+fi
+if assert_file_not_contains "unresolved __TASK_BRANCH__ placeholder" "$WORK/prompt.md" "__TASK_BRANCH__"; then
+    :
+else
+    :
+fi
+if assert_file_not_contains "unresolved __CURRENT_BRANCH__ placeholder" "$WORK/prompt.md" "__CURRENT_BRANCH__"; then
+    :
+else
+    :
+fi
+
+# Test H: PR-tied task prompt must NOT contain the standalone-task branch policy
+# (it must not instruct the agent to create a task branch for PR tasks).
+echo -n "Test: PR-tied prompt has no standalone branch policy ... "
+rm -f "$WORK/prompt.md"
+generate_prompt \
+    "$WORK/prompt.md" \
+    "test-owner/test-repo" \
+    "42" \
+    "test-comment-pr" \
+    "https://github.com/test-owner/test-repo/issues/42#issuecomment-test-comment-pr" \
+    "issue" \
+    "Review the PR." \
+    "Some context here." \
+    "1" \
+    "/tmp/repo" \
+    "/tmp/repo" \
+    "feature-branch" \
+    "1234567890" \
+    "feature-branch" \
+    "master" \
+    ""
+if assert_file_not_contains "PR-tied prompt must not say task branch already created" "$WORK/prompt.md" "Your task branch has ALREADY been created for you by Manul"; then
+    :
+else
+    :
+fi
+pr_head_line="PR head branch: \`feature-branch\`"
+if assert_file_contains "PR-tied prompt names the PR head branch" "$WORK/prompt.md" "$pr_head_line"; then
+    :
+else
+    :
 fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────

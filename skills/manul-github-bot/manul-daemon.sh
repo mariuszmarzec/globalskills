@@ -14,16 +14,27 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # prompt, validate the result via explicit markers, update SQLite, and post the
 # final result comment.
 # ERR trap: log any unhandled command failure with context
-trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "$LIFECYCLE_LOG" 2>/dev/null; fi' ERR
+trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "${LIFECYCLE_LOG:-/dev/null}" 2>/dev/null; fi' ERR
 
-# Ensure standard PATH is available when running via setsid/nohup
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+# Ensure standard PATH is available when running via setsid/nohup.
+# ~/.local/bin is required: the OpenClaw CLI is installed there and the daemon
+# (often started by cron/watchdog) inherits a PATH that omits it, which made
+# `command -v openclaw` fail and every agent invocation die instantly.
+# The OpenClaw CLI itself is a wrapper that execs `npx`, so the nvm node bin
+# must also be reachable or the agent dies with "npx: not found".
+# NOTE: the nvm glob must be expanded BEFORE assignment (unquoted), otherwise
+# the literal string "*.bin" ends up on PATH and `npx` is still not found.
+_NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
+export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Ensure OpenClaw uses the native state directory (post-migration)
 export OPENCLAW_STATE_DIR="/home/marzec/.openclaw-native/state"
 export OPENCLAW_CONFIG_PATH="/home/marzec/.openclaw-native/openclaw.json"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+# Absolute path to this script (the daemon is invoked via a symlink, so $0 may
+# be relative). Workers are spawned with nohup/setsid and need a stable path.
+DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
 CONFIG="${MANUL_DIR}/config.json"
 POLL="$MANUL_DIR/poll.sh"
 PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
@@ -641,8 +652,10 @@ start() {
     local i worker_pid
     local master_pid=$BASHPID
     declare -a WORKER_PIDS=()
-    for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
-      setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+       # Use an absolute path so the worker survives even if the daemon's cwd
+       # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
+       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
@@ -686,9 +699,9 @@ start() {
       # Restart any dead workers
       local new_pids=()
       for i in "${!WORKER_PIDS[@]}"; do
-        if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
-          log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-          setsid nohup "$0" loop --worker="$i" >>"$LOG" 2>&1 &
+if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
+           log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
+           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
           worker_pid=$!
           echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
           new_pids+=("$worker_pid")
@@ -751,9 +764,18 @@ ensure_workspace_pool() {
 
   # Source here as well as in loop() so direct run-once invocations get the
   # same workspace-pool lifecycle guarantees as the long-running daemon.
-  source "$workspace_manager"
-  workspace_cleanup_stale 3600
-  workspace_pool_init "$MAX_CONCURRENT_TASKS"
+  if ! source "$workspace_manager"; then
+    log "ERROR: failed to source workspace manager: $workspace_manager"
+    return 1
+  fi
+  if ! workspace_cleanup_stale 3600; then
+    log "ERROR: workspace stale cleanup failed"
+    return 1
+  fi
+  if ! workspace_pool_init "$MAX_CONCURRENT_TASKS"; then
+    log "ERROR: workspace pool initialization failed (size=$MAX_CONCURRENT_TASKS)"
+    return 1
+  fi
 
   local total
   total="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');" 2>/dev/null || echo 0)"
@@ -1643,12 +1665,11 @@ PROMPT_EOF
       log "dispatch: updated workspace origin to https://github.com/${REPO}"
     fi
 
-    # Use the workspace as the working directory for the agent
-    WORKDIR="$workspace_path"
+# Use the workspace as the working directory for the agent
+     WORKDIR="$workspace_path"
 
-
-    # Deterministic workspace preparation: ensure correct branch is checked out
-    if [ -n "$PR_HEAD_BRANCH" ]; then
+     # Deterministic workspace preparation: ensure correct branch is checked out
+     if [ -n "$PR_HEAD_BRANCH" ]; then
       # PR task: fetch and checkout the PR head branch explicitly
       log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
       if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
@@ -1680,9 +1701,29 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       fi
-      log "dispatch: verified PR head branch $verify_branch in workspace"
-    fi
-    log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
+log "dispatch: verified PR head branch $verify_branch in workspace"
+     else
+       # Issue / standalone task: the workspace may have been left on a stale
+       # task branch from a previous run. Reset to the default branch so the
+       # agent starts from a clean, known state and cannot pick up leftover
+       # changes from an unrelated task. (Do NOT use clean -fdx: the workspace
+       # holds untracked helper dirs like .agents that must be preserved.)
+       local default_branch
+       default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "master")"
+       log "dispatch: resetting workspace $WORKDIR to default branch '$default_branch'"
+       if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
+         log "WARN: failed to fetch origin for workspace reset on $REPO"
+       fi
+       if ! git -C "$WORKDIR" checkout -f "origin/$default_branch" 2>>"$LOG"; then
+         log "WARN: failed to checkout origin/$default_branch in $WORKDIR"
+       fi
+       if ! git -C "$WORKDIR" checkout -B "$default_branch" 2>>"$LOG"; then
+         log "WARN: failed to create/reset local $default_branch in $WORKDIR"
+       fi
+       git -C "$WORKDIR" reset --hard "origin/$default_branch" --quiet 2>>"$LOG" || true
+       git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG" || true
+     fi
+     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
     # Generate timestamp for unique branch name
     local timestamp
@@ -1693,6 +1734,41 @@ PROMPT_EOF
     CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local DEFAULT_BRANCH
     DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
+
+    # Branch lifecycle is owned by Manul, not the agent.
+    # For standalone (issue) tasks the daemon deterministically creates the
+    # dedicated task branch BEFORE invoking the agent, so the agent works on a
+    # branch whose name the daemon already knows. The agent must NOT create its
+    # own branch — verify_required_pr() checks the checked-out branch, and if the
+    # agent silently stayed on the default branch the task fails.
+    local TASK_BRANCH=""
+    if [ -z "$PR_HEAD_BRANCH" ]; then
+      TASK_BRANCH="manul-task-${COMMENT_ID}-${timestamp}"
+      log "dispatch: creating task branch $TASK_BRANCH from $DEFAULT_BRANCH for task $COMMENT_ID"
+      if ! git -C "$WORKDIR" checkout -B "$TASK_BRANCH" "origin/$DEFAULT_BRANCH" 2>>"$LOG"; then
+        log "ERROR: failed to create task branch $TASK_BRANCH for task $COMMENT_ID, failing task"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      git -C "$WORKDIR" reset --hard "origin/$DEFAULT_BRANCH" --quiet 2>>"$LOG" || true
+      local verify_branch
+      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
+      if [ "$verify_branch" != "$TASK_BRANCH" ]; then
+        log "ERROR: task branch verification failed (expected=$TASK_BRANCH got=$verify_branch), failing task $COMMENT_ID"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: task branch $TASK_BRANCH verified for task $COMMENT_ID"
+    fi
+
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
@@ -1716,15 +1792,17 @@ PROMPT_APPEND
 - Do NOT create a new branch for this task
 PROMPT_APPEND
     else
-      # Issue or non-PR task: create a dedicated task branch
+      # Standalone (issue) task: Manul has ALREADY created the task branch.
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
 - Default branch: __DEFAULT_BRANCH__
-- Create a dedicated task branch from the default branch BEFORE making any changes
-- Branch name format: `manul-task-__COMMENT_ID__-__TIMESTAMP__`
+- Your task branch has ALREADY been created for you by Manul: `__TASK_BRANCH__`
+- You are ALREADY checked out on your task branch — do NOT run `git checkout -b`
+- Make all repository changes on this branch
 - Do NOT make any repository changes while on the default branch
-- After completing changes, commit and push to your task branch
+- After completing changes, commit and push to your task branch: `__TASK_BRANCH__`
+- Do NOT create a new branch — the branch name is fixed and already known to Manul
 PROMPT_APPEND
     fi
 
@@ -1750,8 +1828,14 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
+    # Recompute CURRENT_BRANCH AFTER branch creation so the agent sees the real
+    # branch it is working on (not the pre-creation default branch).
+    if [ -z "$PR_HEAD_BRANCH" ]; then
+      CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "$TASK_BRANCH")"
+    fi
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    prompt_content="${prompt_content//__TASK_BRANCH__/$TASK_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory

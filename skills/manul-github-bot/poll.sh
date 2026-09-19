@@ -1248,7 +1248,20 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # before the normal end-of-loop cleanup can run. The cleanup trap is
   # installed only after poll.flock is acquired, so the per-repo worker
   # subprocesses (which cannot acquire this lock) cannot release a parent's lock.
+  ACTIVE_REPO_PID=""
+  ACTIVE_REPO_LAUNCHER_PID=""
+
   cleanup_repo_locks() {
+    # Kill an active repo worker when poll.sh is interrupted; otherwise the
+    # detached setsid session can survive and keep CI pipes open.
+    if [ -n "${ACTIVE_REPO_PID:-}" ]; then
+      kill -TERM -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+      kill -KILL -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+    fi
+    if [ -n "${ACTIVE_REPO_LAUNCHER_PID:-}" ]; then
+      kill -TERM "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+      kill -KILL "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+    fi
     local cleanup_repo
     for cleanup_repo in "${REPOS[@]}"; do
       [ -n "$cleanup_repo" ] || continue
@@ -1296,29 +1309,52 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   run_repo_with_timeout() {
     local repo="$1"
     local script
-    local pid
+    local launcher_pid
+    local pid=""
     local started
     local result=0
 
     script="$(readlink -f "${BASH_SOURCE[0]}")"
     started="$SECONDS"
 
-    setsid bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
-    pid=$!
+    # --fork + --wait gives us a stable launcher we can wait on while the
+    # actual worker is guaranteed to be a session/process-group leader.
+    # Plain "setsid ... &" is racy: setsid may fork when its caller is already
+    # a process-group leader and the $! PID can then belong to the short-lived
+    # parent rather than the real worker.
+    setsid --fork --wait bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
+    launcher_pid=$!
+
+    # Resolve the real session leader created by setsid --fork.
+    for _ in {1..50}; do
+      pid="$(ps -o pid= --ppid "$launcher_pid" 2>/dev/null | awk 'NR==1 {gsub(/[[:space:]]/, ""); print}')"
+      [ -n "$pid" ] && break
+      kill -0 "$launcher_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    pid="${pid:-$launcher_pid}"
+    ACTIVE_REPO_PID="$pid"
+    ACTIVE_REPO_LAUNCHER_PID="$launcher_pid"
 
     while kill -0 "$pid" 2>/dev/null; do
       if [ $((SECONDS - started)) -ge "$REPO_POLL_TIMEOUT" ]; then
         log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, terminating process group"
         kill -TERM -- "-$pid" 2>/dev/null || true
+        kill -TERM "$launcher_pid" 2>/dev/null || true
         sleep 0.2
         kill -KILL -- "-$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -KILL "$launcher_pid" 2>/dev/null || true
+        wait "$launcher_pid" 2>/dev/null || true
+        ACTIVE_REPO_PID=""
+        ACTIVE_REPO_LAUNCHER_PID=""
         return 124
       fi
       sleep 0.1
     done
 
-    wait "$pid" 2>/dev/null || result=$?
+    wait "$launcher_pid" 2>/dev/null || result=$?
+    ACTIVE_REPO_PID=""
+    ACTIVE_REPO_LAUNCHER_PID=""
     return "$result"
   }
 

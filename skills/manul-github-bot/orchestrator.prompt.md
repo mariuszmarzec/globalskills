@@ -65,7 +65,7 @@ run gh api repos/REPO/issues/ISSUE_NUM/comments -f body="YOUR_REPLY" -f in_reply
 
 ## Branch Policy
 - **PR review/conversation tasks**: Work on the PR's existing head branch. Do NOT create a new branch.
-- **Issue tasks**: Create a dedicated task branch from the default branch before making any changes.
+- **Issue tasks**: Manul has ALREADY created your dedicated task branch and you are ALREADY checked out on it. Do NOT run `git checkout -b` or create a new branch — the branch name is fixed and already known to Manul. Make all changes on the current branch, commit, and push it. If the task prompt tells you a branch name, that IS your branch.
 - **Informational tasks**: No branch operations needed.
 
 ## Completion Markers

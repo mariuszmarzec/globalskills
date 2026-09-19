@@ -16,7 +16,7 @@ mkdir -p "$MANUL_DIR"
 
 cat >"$CONFIG" <<'JSON'
 {
-  "autoCreatePr": true,
+  "autoCreatePr": false,
   "automation": {
     "maxAttemptsBeforeFail": 3,
     "lockTtl": 1800,
@@ -30,7 +30,27 @@ cat >"$CONFIG" <<'JSON'
 JSON
 
 export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
+# The daemon resolves OPENCLAW_BIN from PATH while sourcing. This focused unit
+# test never invokes OpenClaw, so provide a hermetic stub for that lookup.
+FAKE_BIN="$TEST_DIR/bin"
+mkdir -p "$FAKE_BIN"
+printf "#!/usr/bin/env bash\\nexit 0\\n" > "$FAKE_BIN/openclaw"
+chmod +x "$FAKE_BIN/openclaw"
+export PATH="$FAKE_BIN:$PATH"
+# Source under a controlled errexit boundary so a future daemon initialization
+# regression is reported in this test instead of terminating the shell silently.
+set +e
 source "$SCRIPT_DIR/manul-daemon.sh"
+SOURCE_RC=$?
+set -e
+if [ "$SOURCE_RC" -ne 0 ]; then
+  echo "FAIL: sourcing manul-daemon.sh returned rc=$SOURCE_RC" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
+# manul-daemon.sh prepends its runtime PATH while sourcing, so restore the
+# fake-bin precedence for the gh calls used by this hermetic test.
+export PATH="$FAKE_BIN:$PATH"
 
 sqlite3 "$DB" "
 CREATE TABLE processed_comments (
@@ -141,3 +161,4 @@ verify_required_pr "$REPO" pr "$WORKTREE" master
 echo "PASS: real PR accepted"
 
 echo "All focused worker lifecycle tests passed."
+exit 0

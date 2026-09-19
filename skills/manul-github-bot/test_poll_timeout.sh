@@ -176,7 +176,25 @@ mkdir -p "$MANUL_DIR/repo-locks"
 
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test3a.txt" 2>&1 &
 pid1=$!
-sleep 0.5
+
+# Wait deterministically until the first poll owns the flock instead of using
+# a fixed sleep, which is flaky on loaded CI runners.
+lock_observed=0
+for _ in {1..50}; do
+  if flock -n "$POLL_FLOCK" -c true 2>/dev/null; then
+    sleep 0.05
+  else
+    lock_observed=1
+    break
+  fi
+done
+if [ "$lock_observed" -ne 1 ]; then
+  echo "FAIL 3: First poll never acquired poll.flock"
+  cat "$TEST_DIR/test3a.txt" || true
+  kill "$pid1" 2>/dev/null || true
+  wait "$pid1" 2>/dev/null || true
+  exit 1
+fi
 
 bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test3b.txt" 2>&1 &
 pid2=$!

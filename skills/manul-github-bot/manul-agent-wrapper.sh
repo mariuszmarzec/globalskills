@@ -18,6 +18,19 @@ PROMPT_FILE="$1"
 STDOUT_FILE="$2"
 STDERR_FILE="$3"
 
+# Resolve the OpenClaw binary.
+# The daemon exports OPENCLAW_BIN, but it may be empty if `openclaw` is not on the
+# daemon's PATH at startup. Falling back to PATH lookup keeps the wrapper usable
+# even when the exported variable is missing/blank, and fails loudly otherwise.
+if [ -z "${OPENCLAW_BIN:-}" ] || [ ! -x "$OPENCLAW_BIN" ]; then
+  OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
+fi
+if [ -z "${OPENCLAW_BIN:-}" ] || [ ! -x "$OPENCLAW_BIN" ]; then
+  echo "ERROR: OpenClaw binary not found (OPENCLAW_BIN='${OPENCLAW_BIN:- unset}') and 'openclaw' is not on PATH" >&2
+  exit 127
+fi
+export OPENCLAW_BIN
+
 # Local logging function
 log() {
   echo "$@" >&2
