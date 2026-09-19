@@ -17,7 +17,9 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 MANUL_DIR="$TEST_DIR/manul"
 DB="$MANUL_DIR/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-export MANUL_DIR DB CONFIG
+LOG="$MANUL_DIR/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG MANUL_TESTING=true
 mkdir -p "$MANUL_DIR/workspaces" "$MANUL_DIR/tasks"
 
 cat >"$CONFIG" <<'CONFIGEOF'
