@@ -197,7 +197,8 @@ if [ "$lock_observed" -ne 1 ]; then
 fi
 
 bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test3b.txt" 2>&1 &
-pid2=$!sleep 2
+pid2=$!
+sleep 2
 
 wait $pid1 2>/dev/null || true
 wait $pid2 2>/dev/null || true
