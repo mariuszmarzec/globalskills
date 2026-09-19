@@ -1725,6 +1725,41 @@ log "dispatch: verified PR head branch $verify_branch in workspace"
     CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local DEFAULT_BRANCH
     DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
+
+    # Branch lifecycle is owned by Manul, not the agent.
+    # For standalone (issue) tasks the daemon deterministically creates the
+    # dedicated task branch BEFORE invoking the agent, so the agent works on a
+    # branch whose name the daemon already knows. The agent must NOT create its
+    # own branch — verify_required_pr() checks the checked-out branch, and if the
+    # agent silently stayed on the default branch the task fails.
+    local TASK_BRANCH=""
+    if [ -z "$PR_HEAD_BRANCH" ]; then
+      TASK_BRANCH="manul-task-${COMMENT_ID}-${timestamp}"
+      log "dispatch: creating task branch $TASK_BRANCH from $DEFAULT_BRANCH for task $COMMENT_ID"
+      if ! git -C "$WORKDIR" checkout -B "$TASK_BRANCH" "origin/$DEFAULT_BRANCH" 2>>"$LOG"; then
+        log "ERROR: failed to create task branch $TASK_BRANCH for task $COMMENT_ID, failing task"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      git -C "$WORKDIR" reset --hard "origin/$DEFAULT_BRANCH" --quiet 2>>"$LOG" || true
+      local verify_branch
+      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
+      if [ "$verify_branch" != "$TASK_BRANCH" ]; then
+        log "ERROR: task branch verification failed (expected=$TASK_BRANCH got=$verify_branch), failing task $COMMENT_ID"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: task branch $TASK_BRANCH verified for task $COMMENT_ID"
+    fi
+
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
@@ -1748,15 +1783,17 @@ PROMPT_APPEND
 - Do NOT create a new branch for this task
 PROMPT_APPEND
     else
-      # Issue or non-PR task: create a dedicated task branch
+      # Standalone (issue) task: Manul has ALREADY created the task branch.
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
 - Default branch: __DEFAULT_BRANCH__
-- Create a dedicated task branch from the default branch BEFORE making any changes
-- Branch name format: `manul-task-__COMMENT_ID__-__TIMESTAMP__`
+- Your task branch has ALREADY been created for you by Manul: `__TASK_BRANCH__`
+- You are ALREADY checked out on your task branch — do NOT run `git checkout -b`
+- Make all repository changes on this branch
 - Do NOT make any repository changes while on the default branch
-- After completing changes, commit and push to your task branch
+- After completing changes, commit and push to your task branch: `__TASK_BRANCH__`
+- Do NOT create a new branch — the branch name is fixed and already known to Manul
 PROMPT_APPEND
     fi
 
@@ -1782,8 +1819,14 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
+    # Recompute CURRENT_BRANCH AFTER branch creation so the agent sees the real
+    # branch it is working on (not the pre-creation default branch).
+    if [ -z "$PR_HEAD_BRANCH" ]; then
+      CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "$TASK_BRANCH")"
+    fi
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    prompt_content="${prompt_content//__TASK_BRANCH__/$TASK_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory

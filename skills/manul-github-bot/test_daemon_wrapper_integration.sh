@@ -70,6 +70,14 @@ if [[ "$1" == "api" ]]; then
                         # Test H: autoCreatePr disabled, no PR -> task fails
                         json_output='[{"id":1008,"body":"<!-- manul-task:COMMENT_H:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
                         ;;
+                    50)
+                        # Test I: agent left on default branch -> verify_required_pr must fail
+                        json_output='[{"id":1009,"body":"<!-- manul-task:COMMENT_I:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
+                    51)
+                        # Test J: agent on real task branch -> verify_required_pr accepts
+                        json_output='[{"id":1010,"body":"<!-- manul-task:COMMENT_J:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
                     *)
                         json_output='[]'
                         ;;
@@ -358,6 +366,74 @@ fi
 export CONFIG="$SCRIPT_DIR/config.json"
 echo "[OK] Test H: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
+# ─── Test I: issue task left on default branch -> verify_required_pr must FAIL ─
+# Regression for the branch-lifecycle contract: Manul owns branch creation for
+# standalone (issue) tasks. If the checked-out branch is the default branch,
+# verify_required_pr() must reject the task rather than silently accept it.
+echo ""
+echo "=== Test I: agent left on default branch -> verify_required_pr fails ==="
+WORKDIR_I="$TEST_TMPDIR/workdir-i"
+mkdir -p "$WORKDIR_I"
+git -C "$WORKDIR_I" init -q
+git -C "$WORKDIR_I" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_I" config user.email test@example.com
+git -C "$WORKDIR_I" config user.name test
+printf 'test\n' >"$WORKDIR_I/README.md"
+git -C "$WORKDIR_I" add README.md
+git -C "$WORKDIR_I" commit -qm initial
+# Intentionally stay on the default branch (agent did NOT create a task branch)
+git -C "$WORKDIR_I" checkout -q master
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_I';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutI.txt"
+echo "TASK_DONE" > "$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test I - expected COMPLETION_SUCCESS=false when checked-out branch is the default branch, got '$COMPLETION_SUCCESS'"
+    exit 1
+fi
+if ! printf '%s' "$FAIL_REASON" | grep -q "did not produce a real PR"; then
+    echo "FAIL: Test I - expected FAIL_REASON about missing PR, got '$FAIL_REASON'"
+    exit 1
+fi
+if ! grep -q "invalid_task_branch\|MISSING_PR\|no PR found" "$LOG_FILE" 2>/dev/null; then
+    echo "FAIL: Test I - expected verify_required_pr to log invalid_task_branch / MISSING_PR"
+    exit 1
+fi
+echo "[OK] Test I: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+
+# ─── Test J: agent on a real task branch with autoCreatePr -> verify_required_pr accepts ─
+# Confirms the positive half of the contract: a dedicated task branch (not the
+# default) is accepted by verify_required_pr when autoCreatePr can create the PR.
+echo ""
+echo "=== Test J: agent on task branch + autoCreatePr -> verify_required_pr accepts ==="
+WORKDIR_J="$TEST_TMPDIR/workdir-j"
+mkdir -p "$WORKDIR_J"
+git -C "$WORKDIR_J" init -q
+git -C "$WORKDIR_J" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_J" config user.email test@example.com
+git -C "$WORKDIR_J" config user.name test
+printf 'test\n' >"$WORKDIR_J/README.md"
+git -C "$WORKDIR_J" add README.md
+git -C "$WORKDIR_J" commit -qm initial
+git -C "$WORKDIR_J" checkout -qb manul-task-COMMENT_J
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_J';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutJ.txt"
+echo "TASK_DONE" > "$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J"
+if [ "$COMPLETION_SUCCESS" != "true" ]; then
+    echo "FAIL: Test J - expected COMPLETION_SUCCESS=true on a real task branch, got '$COMPLETION_SUCCESS'"
+    exit 1
+fi
+echo "[OK] Test J: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
@@ -369,5 +445,7 @@ echo "[OK] Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
 echo "[OK] Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
 echo "[OK] Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> COMPLETION_SUCCESS=true"
 echo "[OK] Test H: autoCreatePr disabled + no PR -> COMPLETION_SUCCESS=false"
+echo "[OK] Test I: agent left on default branch -> verify_required_pr FAILS (regression)"
+echo "[OK] Test J: agent on real task branch -> verify_required_pr ACCEPTS"
 echo "[OK] All tests call real evaluate_task_completion() from manul-daemon.sh"
 echo "=== ALL INTEGRATION TESTS PASSED ==="
