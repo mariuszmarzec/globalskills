@@ -37,7 +37,17 @@ mkdir -p "$FAKE_BIN"
 printf "#!/usr/bin/env bash\\nexit 0\\n" > "$FAKE_BIN/openclaw"
 chmod +x "$FAKE_BIN/openclaw"
 export PATH="$FAKE_BIN:$PATH"
+# Source under a controlled errexit boundary so a future daemon initialization
+# regression is reported in this test instead of terminating the shell silently.
+set +e
 source "$SCRIPT_DIR/manul-daemon.sh"
+SOURCE_RC=$?
+set -e
+if [ "$SOURCE_RC" -ne 0 ]; then
+  echo "FAIL: sourcing manul-daemon.sh returned rc=$SOURCE_RC" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
 
 sqlite3 "$DB" "
 CREATE TABLE processed_comments (
