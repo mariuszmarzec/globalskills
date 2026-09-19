@@ -158,3 +158,4 @@ verify_required_pr "$REPO" pr "$WORKTREE" master
 echo "PASS: real PR accepted"
 
 echo "All focused worker lifecycle tests passed."
+exit 0
