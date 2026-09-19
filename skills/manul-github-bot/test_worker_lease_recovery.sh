@@ -16,7 +16,7 @@ mkdir -p "$MANUL_DIR"
 
 cat >"$CONFIG" <<'JSON'
 {
-  "autoCreatePr": true,
+  "autoCreatePr": false,
   "automation": {
     "maxAttemptsBeforeFail": 3,
     "lockTtl": 1800,
