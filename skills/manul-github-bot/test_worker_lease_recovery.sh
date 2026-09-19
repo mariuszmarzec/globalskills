@@ -48,6 +48,9 @@ if [ "$SOURCE_RC" -ne 0 ]; then
   cat "$LIFECYCLE_LOG" 2>/dev/null || true
   exit 1
 fi
+# manul-daemon.sh prepends its runtime PATH while sourcing, so restore the
+# fake-bin precedence for the gh calls used by this hermetic test.
+export PATH="$FAKE_BIN:$PATH"
 
 sqlite3 "$DB" "
 CREATE TABLE processed_comments (
