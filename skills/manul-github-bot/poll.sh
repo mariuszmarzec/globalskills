@@ -1248,7 +1248,20 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # before the normal end-of-loop cleanup can run. The cleanup trap is
   # installed only after poll.flock is acquired, so the per-repo worker
   # subprocesses (which cannot acquire this lock) cannot release a parent's lock.
+  ACTIVE_REPO_PID=""
+  ACTIVE_REPO_LAUNCHER_PID=""
+
   cleanup_repo_locks() {
+    # Kill an active repo worker when poll.sh is interrupted; otherwise the
+    # detached setsid session can survive and keep CI pipes open.
+    if [ -n "${ACTIVE_REPO_PID:-}" ]; then
+      kill -TERM -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+      kill -KILL -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+    fi
+    if [ -n "${ACTIVE_REPO_LAUNCHER_PID:-}" ]; then
+      kill -TERM "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+      kill -KILL "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+    fi
     local cleanup_repo
     for cleanup_repo in "${REPOS[@]}"; do
       [ -n "$cleanup_repo" ] || continue
@@ -1320,6 +1333,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       sleep 0.01
     done
     pid="${pid:-$launcher_pid}"
+    ACTIVE_REPO_PID="$pid"
+    ACTIVE_REPO_LAUNCHER_PID="$launcher_pid"
 
     while kill -0 "$pid" 2>/dev/null; do
       if [ $((SECONDS - started)) -ge "$REPO_POLL_TIMEOUT" ]; then
@@ -1330,12 +1345,16 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         kill -KILL -- "-$pid" 2>/dev/null || true
         kill -KILL "$launcher_pid" 2>/dev/null || true
         wait "$launcher_pid" 2>/dev/null || true
+        ACTIVE_REPO_PID=""
+        ACTIVE_REPO_LAUNCHER_PID=""
         return 124
       fi
       sleep 0.1
     done
 
     wait "$launcher_pid" 2>/dev/null || result=$?
+    ACTIVE_REPO_PID=""
+    ACTIVE_REPO_LAUNCHER_PID=""
     return "$result"
   }
 
