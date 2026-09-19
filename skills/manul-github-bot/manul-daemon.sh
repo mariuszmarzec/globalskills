@@ -764,9 +764,18 @@ ensure_workspace_pool() {
 
   # Source here as well as in loop() so direct run-once invocations get the
   # same workspace-pool lifecycle guarantees as the long-running daemon.
-  source "$workspace_manager"
-  workspace_cleanup_stale 3600
-  workspace_pool_init "$MAX_CONCURRENT_TASKS"
+  if ! source "$workspace_manager"; then
+    log "ERROR: failed to source workspace manager: $workspace_manager"
+    return 1
+  fi
+  if ! workspace_cleanup_stale 3600; then
+    log "ERROR: workspace stale cleanup failed"
+    return 1
+  fi
+  if ! workspace_pool_init "$MAX_CONCURRENT_TASKS"; then
+    log "ERROR: workspace pool initialization failed (size=$MAX_CONCURRENT_TASKS)"
+    return 1
+  fi
 
   local total
   total="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');" 2>/dev/null || echo 0)"
