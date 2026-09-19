@@ -161,6 +161,4 @@ verify_required_pr "$REPO" pr "$WORKTREE" master
 echo "PASS: real PR accepted"
 
 echo "All focused worker lifecycle tests passed."
-echo "DEBUG: remaining processes before exit:" >&2
-ps -eo pid,ppid,pgid,stat,cmd --forest >&2
 exit 0
