@@ -1296,29 +1296,46 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   run_repo_with_timeout() {
     local repo="$1"
     local script
-    local pid
+    local launcher_pid
+    local pid=""
     local started
     local result=0
 
     script="$(readlink -f "${BASH_SOURCE[0]}")"
     started="$SECONDS"
 
-    setsid bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
-    pid=$!
+    # --fork + --wait gives us a stable launcher we can wait on while the
+    # actual worker is guaranteed to be a session/process-group leader.
+    # Plain "setsid ... &" is racy: setsid may fork when its caller is already
+    # a process-group leader and the $! PID can then belong to the short-lived
+    # parent rather than the real worker.
+    setsid --fork --wait bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
+    launcher_pid=$!
+
+    # Resolve the real session leader created by setsid --fork.
+    for _ in {1..50}; do
+      pid="$(ps -o pid= --ppid "$launcher_pid" 2>/dev/null | awk 'NR==1 {gsub(/[[:space:]]/, ""); print}')"
+      [ -n "$pid" ] && break
+      kill -0 "$launcher_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    pid="${pid:-$launcher_pid}"
 
     while kill -0 "$pid" 2>/dev/null; do
       if [ $((SECONDS - started)) -ge "$REPO_POLL_TIMEOUT" ]; then
         log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, terminating process group"
         kill -TERM -- "-$pid" 2>/dev/null || true
+        kill -TERM "$launcher_pid" 2>/dev/null || true
         sleep 0.2
         kill -KILL -- "-$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -KILL "$launcher_pid" 2>/dev/null || true
+        wait "$launcher_pid" 2>/dev/null || true
         return 124
       fi
       sleep 0.1
     done
 
-    wait "$pid" 2>/dev/null || result=$?
+    wait "$launcher_pid" 2>/dev/null || result=$?
     return "$result"
   }
 
