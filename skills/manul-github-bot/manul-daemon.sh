@@ -22,7 +22,10 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 # `command -v openclaw` fail and every agent invocation die instantly.
 # The OpenClaw CLI itself is a wrapper that execs `npx`, so the nvm node bin
 # must also be reachable or the agent dies with "npx: not found".
-export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/*/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# NOTE: the nvm glob must be expanded BEFORE assignment (unquoted), otherwise
+# the literal string "*.bin" ends up on PATH and `npx` is still not found.
+_NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
+export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Ensure OpenClaw uses the native state directory (post-migration)
 export OPENCLAW_STATE_DIR="/home/marzec/.openclaw-native/state"
