@@ -72,8 +72,19 @@ sqlite3 "$DB" "DELETE FROM workspaces;"
 # The production daemon sources the runtime copy/symlink of workspace-manager.sh.
 # Reproduce that runtime layout inside the isolated test directory.
 cp "$SCRIPT_DIR/workspace-manager.sh" "$MANUL_DIR/workspace-manager.sh"
-MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 set +e
+MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
+source_rc=$?
+set -e
+if [ "$source_rc" -ne 0 ]; then
+  echo "FAIL 3: sourcing daemon returned rc=$source_rc" >&2
+  cat "$LIFECYCLE_LOG" 2>/dev/null || true
+  exit 1
+fi
+set +e
+enforce_rc=0
+env | grep -q "^MAX_CONCURRENT_TASKS=" || true
+enforce_rc=0
 ensure_workspace_pool
 pool_rc=$?
 set -e
