@@ -7,9 +7,15 @@ CONFIG="$MANUL_DIR/config.json"
 SIG="— manul 🐈"
 
 arg="${1:-}"
-if [ -z "$arg" ]; then
+if [ -z "$arg" ] || [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
   echo "Usage: $0 <pr-url-or-ref-or-issue>"
-  exit 1
+  echo "Removes all manul-signed comments from a GitHub PR or issue."
+  echo
+  echo "Arguments:"
+  echo "  <pr-url>      Full GitHub PR URL, e.g. https://github.com/owner/repo/pull/123"
+  echo "  <repo#issue>  Shorthand, e.g. owner/repo#123"
+  echo "  <issue>       Bare issue number (repo inferred from config.json)"
+  exit 0
 fi
 
 if [[ "$arg" =~ ^[0-9]+$ ]]; then

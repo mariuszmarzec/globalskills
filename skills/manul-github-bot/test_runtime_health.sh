@@ -130,6 +130,7 @@ RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+[ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
@@ -213,6 +214,143 @@ else
 fi
 
 rm -rf "$SELFHEAL_ROOT"
+
+# ── Test 3c: CLI entrypoints resolve in a fresh shell ────────────────────────
+echo
+echo "Test 3c: CLI entrypoints resolve in a fresh shell"
+CLI_ROOT="$(mktemp -d /tmp/manul-cli-XXXXXX)"
+CANON="$CLI_ROOT/canonical"
+RUN="$CLI_ROOT/runtime"
+mkdir -p "$CANON"
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+[ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
+
+# Deploy a real runtime so the CLI can actually run
+set +e
+MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+set -e
+
+# 1) All three CLI entrypoints exist as symlinks in the runtime
+for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
+  if [ -L "$RUN/$entry" ] && [ -f "$(readlink -f "$RUN/$entry")" ]; then
+    ok "Runtime symlink $entry -> canonical source"
+  else
+    fail "Runtime symlink $entry missing or broken"
+  fi
+done
+
+# 2) Each symlink target is the canonical script of the same name
+for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
+  target="$(readlink -f "$RUN/$entry")"
+  if [ "$target" = "$CANON/$entry" ]; then
+    ok "$entry resolves to canonical $entry"
+  else
+    fail "$entry resolves to $target (expected $CANON/$entry)"
+  fi
+done
+
+# 2b) The self-healing guard must check ALL THREE entrypoints, not just
+#     manul-daemon.sh. A broken manul-status.sh or manul-comments-remove.sh
+#     must also trigger the repair path.
+ZSHRC="${MANUL_TEST_ZSHRC:-$HOME/.zshrc}"
+GUARD_OK=true
+GUARD_BLOCK="$(sed -n '/manul-ensure-runtime()/,/^}/p' "$ZSHRC" 2>/dev/null || true)"
+for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
+  if echo "$GUARD_BLOCK" | grep -qF "$entry"; then
+    : # guard references this entrypoint
+  else
+    fail "Self-healing guard does not reference $entry"
+    GUARD_OK=false
+  fi
+done
+$GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
+
+# 2c) No CLI alias may be wrapped in a conditional that can silently vanish
+#     when the runtime is absent (the command must always be defined).
+for cmd in manul manul-status manul-comments-remove; do
+  line="$(grep -n "alias $cmd=" "$ZSHRC" 2>/dev/null | head -1 || true)"
+  if [ -z "$line" ]; then
+    fail "$cmd alias is missing entirely"
+  elif echo "$line" | grep -qE '^\s*[0-9]+:\s*if\s+\[.*\].*then'; then
+    fail "$cmd alias is wrapped in a conditional (can vanish)"
+  else
+    ok "$cmd alias is unconditional"
+  fi
+done
+
+# 3) Deleting the runtime does not remove the CLI entrypoints from a fresh
+#    shell — the shell definitions are in .zshrc, not in the runtime dir.
+rm -rf "$RUN"
+# Simulate a fresh shell: aliases must still be defined even though the
+# runtime is gone. We check the zshrc source directly since the test runs
+# outside an interactive shell.
+ZSHRC="${MANUL_TEST_ZSHRC:-$HOME/.zshrc}"
+if grep -q "alias manul=" "$ZSHRC" 2>/dev/null; then
+  ok "manul alias defined in shell rc (survives runtime deletion)"
+else
+  fail "manul alias missing from shell rc"
+fi
+for cmd in manul-status manul-comments-remove; do
+  if grep -q "alias $cmd=" "$ZSHRC" 2>/dev/null; then
+    ok "$cmd alias defined in shell rc (unconditional, survives runtime deletion)"
+  else
+    fail "$cmd alias missing from shell rc"
+  fi
+done
+
+# 4) The repair path (installer) recreates all required symlinks from scratch
+set +e
+MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC_REPAIR=$?
+set -e
+if [ "$RC_REPAIR" -eq 0 ]; then
+  ok "Installer recreates runtime after full deletion"
+else
+  fail "Installer failed to recreate runtime (rc=$RC_REPAIR)"
+fi
+for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
+  if [ -L "$RUN/$entry" ] && [ -f "$(readlink -f "$RUN/$entry")" ]; then
+    ok "Repaired runtime symlink $entry exists"
+  else
+    fail "Repaired runtime symlink $entry missing"
+  fi
+done
+
+# 5) manul-status --list works (requires a DB; the canonical backup provides one)
+if [ -f "$CANON/manul.db" ]; then
+  cp "$CANON/manul.db" "$RUN/manul.db"
+  chmod 600 "$RUN/manul.db"
+fi
+set +e
+MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list >/dev/null 2>&1
+RC_STATUS=$?
+set -e
+if [ "$RC_STATUS" -eq 0 ]; then
+  ok "manul-status --list runs successfully"
+else
+  fail "manul-status --list failed (rc=$RC_STATUS)"
+fi
+
+# 6) manul-comments-remove --help shows usage and never touches GitHub
+set +e
+HELP_OUT="$(MANUL_DIR="$RUN" "$RUN/manul-comments-remove.sh" --help 2>&1)"
+RC_HELP=$?
+set -e
+if [ "$RC_HELP" -eq 0 ] && echo "$HELP_OUT" | grep -q "Usage:"; then
+  ok "manul-comments-remove --help shows usage and exits 0"
+else
+  fail "manul-comments-remove --help did not show usage (rc=$RC_HELP)"
+fi
+# --help must not have triggered any deletion (no network call, no comment removal).
+# Check for actual command invocations rather than the word "github.com",
+# which legitimately appears in usage examples.
+if echo "$HELP_OUT" | grep -qiE 'gh api|curl |wget |DELETE|POST '; then
+  fail "manul-comments-remove --help output mentions network/API calls"
+fi
+
+rm -rf "$CLI_ROOT"
 
 # ── Test 4: Recovery without a backup fails safely ────────────────────────────
 echo
