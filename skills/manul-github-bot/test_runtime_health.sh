@@ -121,6 +121,99 @@ else
   fail "Installer declares only $SCRIPT_COUNT runtime entries (expected at least 20)"
 fi
 
+# ── Test 3b: installer self-healing (idempotent, safe to run repeatedly) ───────
+echo
+echo "Test 3b: Installer self-healing"
+SELFHEAL_ROOT="$(mktemp -d /tmp/manul-selfheal-XXXXXX)"
+CANON="$SELFHEAL_ROOT/canonical"
+RUN1="$SELFHEAL_ROOT/runtime1"
+RUN2="$SELFHEAL_ROOT/runtime2"
+mkdir -p "$CANON"
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+
+# 1) Missing runtime -> installer creates it and exits 0
+set +e
+MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC1=$?
+set -e
+if [ "$RC1" -eq 0 ] && [ -d "$RUN1" ] && [ -L "$RUN1/manul-daemon.sh" ]; then
+  ok "Installer recreates a missing runtime directory"
+else
+  fail "Installer did not recreate missing runtime (rc=$RC1)"
+fi
+
+# 2) Idempotent: second run exits 0 and leaves symlinks intact
+set +e
+MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC2=$?
+set -e
+if [ "$RC2" -eq 0 ]; then
+  ok "Installer is idempotent (second run exits 0)"
+else
+  fail "Installer is not idempotent (second run rc=$RC2)"
+fi
+
+# 3) Every declared symlink resolves to a real file inside canonical source
+LINK_FAILS=0
+for entry in "$RUN1"/*.sh "$RUN1"/*.md; do
+  [ -e "$entry" ] || continue
+  [ -L "$entry" ] || { LINK_FAILS=$((LINK_FAILS + 1)); continue; }
+  target="$(readlink -f "$entry" 2>/dev/null || true)"
+  case "$target" in
+    "$CANON"/*) [ -f "$target" ] || LINK_FAILS=$((LINK_FAILS + 1)) ;;
+    *) LINK_FAILS=$((LINK_FAILS + 1)) ;;
+  esac
+done
+if [ "$LINK_FAILS" -eq 0 ]; then
+  ok "All runtime symlinks resolve into the canonical source"
+else
+  fail "$LINK_FAILS runtime symlinks are broken or misplaced"
+fi
+
+# 4) Regular file slot is converted to a symlink (no data copied into runtime)
+rm -f "$RUN1/manul-status.sh"
+echo "junk" > "$RUN1/manul-status.sh"
+set +e
+MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC3=$?
+set -e
+if [ "$RC3" -eq 0 ] && [ -L "$RUN1/manul-status.sh" ]; then
+  ok "Installer converts a regular file slot into a symlink"
+else
+  fail "Installer did not convert regular file slot (rc=$RC3)"
+fi
+
+# 5) Directory collision is refused and the installer exits non-zero
+rm -f "$RUN1/poll.sh"
+mkdir -p "$RUN1/poll.sh"
+set +e
+MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC4=$?
+set -e
+if [ "$RC4" -ne 0 ] && [ -d "$RUN1/poll.sh" ]; then
+  ok "Installer refuses a directory collision and exits non-zero"
+else
+  fail "Installer should refuse directory collision (rc=$RC4)"
+fi
+
+# 6) Missing canonical source is fatal
+set +e
+MANUL_RUNTIME_DIR="$RUN2" MANUL_CANONICAL_DIR="$SELFHEAL_ROOT/missing" \
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+RC5=$?
+set -e
+if [ "$RC5" -ne 0 ]; then
+  ok "Installer exits non-zero when canonical source is missing"
+else
+  fail "Installer should exit non-zero when canonical source is missing"
+fi
+
+rm -rf "$SELFHEAL_ROOT"
+
 # ── Test 4: Recovery without a backup fails safely ────────────────────────────
 echo
 echo "Test 4: Recovery without DB backup fails safely"

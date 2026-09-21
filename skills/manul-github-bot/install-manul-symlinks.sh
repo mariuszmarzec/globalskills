@@ -21,7 +21,11 @@ set -euo pipefail
 
 # Defaults
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
-CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+# Self-detect canonical source from this script's own location so the installer
+# keeps working even if the skill is moved or the env var is unset. Explicit
+# MANUL_CANONICAL_DIR always wins.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 DRY_RUN=false
 
 # Parse arguments
@@ -52,6 +56,9 @@ if [ ! -d "$CANONICAL_DIR" ]; then
     echo "ERROR: Canonical directory not found: $CANONICAL_DIR" >&2
     exit 1
 fi
+# Canonicalize to an absolute path so every symlink is absolute and survives
+# changes of the current working directory (required for systemd/unattended use).
+CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 
 # List of scripts to symlink (in executable order)
 SCRIPTS=(
@@ -83,7 +90,10 @@ echo "Runtime target:   $RUNTIME_DIR"
 echo "Dry run:          $DRY_RUN"
 echo
 
-# Create runtime directory if needed
+# Ensure the runtime directory exists. This is the first self-healing step:
+# if the runtime was deleted/archived, recreate the directory before touching
+# anything inside it. Runtime data (config.json, manul.db, logs, workspaces)
+# lives alongside the symlinks and MUST be preserved.
 if [ ! -d "$RUNTIME_DIR" ]; then
     if $DRY_RUN; then
         echo "[dry-run] Would create runtime directory: $RUNTIME_DIR"
@@ -93,8 +103,11 @@ if [ ! -d "$RUNTIME_DIR" ]; then
     fi
 fi
 
-# Deploy each script
+# Deploy each script. Idempotent: only touch entries that are missing, broken,
+# or pointing at the wrong target. Never copies canonical source into the
+# runtime — every entry is an absolute symlink to $CANONICAL_DIR.
 CHANGED=0
+DEPLOY_FAILURES=0
 for script in "${SCRIPTS[@]}"; do
     canonical_file="$CANONICAL_DIR/$script"
     runtime_path="$RUNTIME_DIR/$script"
@@ -104,50 +117,80 @@ for script in "${SCRIPTS[@]}"; do
         continue
     fi
 
-    # Check current state
+    # Determine whether the runtime entry is already correct.
+    needs_deploy=false
     if [ -L "$runtime_path" ]; then
-        current_target="$(readlink "$runtime_path")"
-        if [ "$current_target" = "$canonical_file" ]; then
+        current_target="$(readlink "$runtime_path" 2>/dev/null || true)"
+        if [ "$current_target" = "$canonical_file" ] && [ -f "$runtime_path" ]; then
             echo "OK $script: symlink already correct"
             continue
-        else
-            echo "Updating $script: $current_target -> $canonical_file"
         fi
-    elif [ -f "$runtime_path" ]; then
+        needs_deploy=true
+        echo "Updating $script: ${current_target:-<broken>} -> $canonical_file"
+    elif [ -e "$runtime_path" ]; then
+        # A regular file or directory occupies the slot. Only a regular file
+        # (or a broken symlink) is safe to replace; a directory would hide data.
+        if [ -d "$runtime_path" ]; then
+            echo "ERROR: $runtime_path is a directory, refusing to overwrite" >&2
+            DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+            continue
+        fi
+        needs_deploy=true
         echo "Converting $script: regular file -> symlink"
     else
+        needs_deploy=true
         echo "Creating $script: new symlink"
     fi
 
     if $DRY_RUN; then
         echo "  [dry-run] Would create symlink: $runtime_path -> $canonical_file"
-    else
-        # Remove existing file (if regular file, not directory)
-        if [ -f "$runtime_path" ] && [ ! -L "$runtime_path" ]; then
-            rm -f "$runtime_path"
-        fi
-        # Create symlink (absolute path)
-        ln -s "$canonical_file" "$runtime_path"
-        # Ensure executable
-        chmod +x "$runtime_path"
+        CHANGED=$((CHANGED + 1))
+        continue
+    fi
+
+    # Remove existing entry (regular file or broken symlink only).
+    if [ -f "$runtime_path" ] || [ -L "$runtime_path" ]; then
+        rm -f "$runtime_path"
+    fi
+    # Create absolute symlink to canonical source.
+    if ! ln -s "$canonical_file" "$runtime_path"; then
+        echo "ERROR: failed to create symlink $runtime_path -> $canonical_file" >&2
+        DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+        continue
+    fi
+    # Preserve canonical permissions on the symlink target. Guard against
+    # dangling symlinks (chmod on a broken link is a no-op error on some systems).
+    if [ -x "$canonical_file" ]; then
+        chmod +x "$runtime_path" 2>/dev/null || true
     fi
     CHANGED=$((CHANGED + 1))
 done
 
-# Verify deployment
+# Verify deployment. Every declared entry must be a symlink whose resolved
+# target is a real file inside the canonical source. A broken or misplaced
+# link is a hard failure — the installer must exit non-zero so callers
+# (systemd, watchdog, humans) know the runtime is not healthy.
 echo
 echo "=== Verification ==="
+VERIFY_FAILURES=0
 for script in "${SCRIPTS[@]}"; do
     runtime_path="$RUNTIME_DIR/$script"
+    canonical_file="$CANONICAL_DIR/$script"
+    if [ ! -f "$canonical_file" ]; then
+        continue
+    fi
     if [ -L "$runtime_path" ]; then
-        target="$(readlink "$runtime_path")"
-        if [ -f "$target" ]; then
+        target="$(readlink "$runtime_path" 2>/dev/null || true)"
+        resolved="$(readlink -f "$runtime_path" 2>/dev/null || true)"
+        if [ "$target" = "$canonical_file" ] && [ -f "$resolved" ]; then
             echo "OK $script -> $target"
         else
-            echo "FAIL $script -> BROKEN: $target"
+            echo "FAIL $script -> BROKEN: target=$target resolved=$resolved" >&2
+            VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
         fi
     else
-        echo "FAIL $script: NOT a symlink"
+        echo "FAIL $script: NOT a symlink" >&2
+        VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
     fi
 done
 
@@ -155,14 +198,23 @@ done
 echo
 if $DRY_RUN; then
     echo "Dry run complete. No changes made."
-else
-    echo "Deployment complete. $CHANGED script(s) updated."
-    echo
-    echo "Runtime data preserved:"
-    echo "  - $RUNTIME_DIR/config.json"
-    echo "  - $RUNTIME_DIR/manul.db"
-    echo "  - $RUNTIME_DIR/*.log"
-    echo "  - $RUNTIME_DIR/tasks/"
-    echo "  - $RUNTIME_DIR/repo-locks/"
-    echo "  - $RUNTIME_DIR/workspace/"
+    exit 0
 fi
+
+echo "Deployment complete. $CHANGED script(s) updated."
+echo
+echo "Runtime data preserved (not touched by this installer):"
+echo "  - $RUNTIME_DIR/config.json"
+echo "  - $RUNTIME_DIR/manul.db"
+echo "  - $RUNTIME_DIR/*.log"
+echo "  - $RUNTIME_DIR/tasks/"
+echo "  - $RUNTIME_DIR/repo-locks/"
+echo "  - $RUNTIME_DIR/workspace/"
+echo "  - $RUNTIME_DIR/workspaces/"
+
+# Exit non-zero if any declared symlink is missing, broken, or misplaced.
+if [ "$DEPLOY_FAILURES" -gt 0 ] || [ "$VERIFY_FAILURES" -gt 0 ]; then
+    echo "ERROR: installer finished with $DEPLOY_FAILURES deploy failure(s) and $VERIFY_FAILURES verification failure(s)" >&2
+    exit 1
+fi
+exit 0
