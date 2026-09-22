@@ -174,18 +174,35 @@ reset_to_fresh_db() {
 }
 
 if [ ! -f "$DB_FILE" ]; then
-    echo "[4/7] DB not found, bootstrapping fresh..."
-    BOOTSTRAP_FRESH=true
-elif [ ! -s "$DB_FILE" ]; then
-    echo "[4/7] DB is empty, bootstrapping fresh..."
-    rm -f "$DB_FILE"
-    BOOTSTRAP_FRESH=true
+    echo "[4/7] DB not found."
+    if [ "$INIT_STATE" = true ]; then
+        echo "  Explicit --init-state supplied; bootstrapping fresh DB."
+        BOOTSTRAP_FRESH=true
+    else
+        fail "Manul DB is missing. Refusing to create a fresh DB implicitly; use repair-manul-runtime.sh or run install-manul.sh --init-state for first-time setup"
+    fi
+elif ! -s "$DB_FILE"; then
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] DB is empty; explicit --init-state allows fresh bootstrap."
+        rm -f "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm"
+        BOOTSTRAP_FRESH=true
+    else
+        fail "Manul DB is empty. Refusing to replace task state implicitly; restore a backup or run install-manul.sh --init-state only for a deliberate fresh initialization"
+    fi
 elif ! head -c 16 "$DB_FILE" 2>/dev/null | grep -q "^SQLite format 3"; then
-    echo "[4/7] Existing DB is not SQLite; replacing with a fresh DB..."
-    reset_to_fresh_db
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] Existing DB is not SQLite; explicit --init-state allows replacement."
+        reset_to_fresh_db
+    else
+        fail "Existing Manul DB is not SQLite. Refusing automatic replacement; repair or restore it explicitly"
+    fi
 elif ! sqlite3 "$DB_FILE" "PRAGMA integrity_check;" 2>/dev/null | grep -q "^ok$"; then
-    echo "[4/7] Existing DB failed integrity check; replacing with a fresh DB..."
-    reset_to_fresh_db
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] Existing DB failed integrity check; explicit --init-state allows replacement."
+        reset_to_fresh_db
+    else
+        fail "Existing Manul DB failed integrity check. Refusing automatic replacement; repair or restore it explicitly"
+    fi
 else
     echo "[4/7] DB present and valid, validating/migrating schema..."
 fi
