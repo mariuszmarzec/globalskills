@@ -127,11 +127,11 @@ test_task_recovery_retry() {
   fi
 
   sqlite3 "$DB" "INSERT INTO processed_comments (commentId, repository, issueNumber, status, attempts, createdAt) VALUES ('failed-retry-2','owner/repo',2,'failed',5,datetime('now'));"
-  printf 'yes\n' | MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/task-recovery.sh" --retry-failed-all > /dev/null 2>&1
+  printf 'yes\n' | MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/task-recovery.sh" --reset-all=failed > /dev/null 2>&1
   STATUS2=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='failed-retry-2';")
   ATTEMPTS2=$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='failed-retry-2';")
-  assert_eq "Retry all failed tasks requeues failed task" "queued" "$STATUS2"
-  assert_eq "Retry all failed tasks resets attempts" "0" "$ATTEMPTS2"
+  assert_eq "reset-all=failed requeues failed task" "queued" "$STATUS2"
+  assert_eq "reset-all=failed resets attempts" "0" "$ATTEMPTS2"
 }
 
 test_submit() {
