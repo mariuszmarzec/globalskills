@@ -15,10 +15,12 @@ run_test() {
   local name="$1"
   local func="$2"
   TOTAL=$((TOTAL + 1))
-  if ! declare -F "$func" >/dev/null 2>&1; then
+  local defined
+  defined="$(declare -F "$func" 2>/dev/null || true)"
+  if [ -z "$defined" ]; then
     echo "ERROR: test function '$func' is not defined"
     echo "Defined test functions:"
-    declare -F | awk '$3 ~ /^test_/ {print $3}'
+    declare -F | grep -E '^declare -f test_' || true
     FAILED=$((FAILED + 1))
     return 1
   fi
@@ -441,6 +443,9 @@ MOCK_EOF
   task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
   if [ "$task_count" -ne 1 ]; then
     echo "ERROR: Expected 1 task (baseId dedup), found $task_count"
+    echo "---- poll.log ----"
+    cat "$manul_dir/poll.log" 2>/dev/null || true
+    echo "---- end poll.log ----"
     rm -rf "$test_dir"
     return 1
   fi
