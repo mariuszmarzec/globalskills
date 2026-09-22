@@ -63,21 +63,6 @@ retry_failed_task() {
     " 2>/dev/null
 }
 
-retry_all_failed_tasks() {
-    log "WARNING: Retrying ALL failed tasks from scratch (DANGEROUS)"
-    read -p "Are you sure? (yes/no): " -r confirm
-    if [ "$confirm" != "yes" ]; then
-        log "Aborted"
-        return
-    fi
-    sqlite3 "$DB" "
-        UPDATE processed_comments
-        SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
-        WHERE status='failed';
-    " 2>/dev/null
-    log "All failed tasks requeued from scratch"
-}
-
 reset_all_tasks() {
     local status_filter="${1:-running}"
     case "$status_filter" in
