@@ -73,11 +73,12 @@ manul status
 
 ```bash
 task-recovery.sh --reset-all
-task-recovery.sh --retry TASK_ID
-task-recovery.sh --retry-failed-all
+task-recovery.sh --reset-all=running
+ task-recovery.sh --reset-all=failed
+ task-recovery.sh --retry TASK_ID
 ```
 
-`--reset-all` requeues only currently running tasks. `--retry` and `--retry-failed-all` requeue failed tasks **from scratch** by resetting their attempt counter, so tasks that already reached `maxAttemptsBeforeFail` can run again.
+`--reset-all` is kept as shorthand for `--reset-all=running`. `--reset-all=failed` requeues all failed tasks **from scratch** by resetting their attempt counter, so tasks that already reached `maxAttemptsBeforeFail` can run again.
 
 ---
 
