@@ -88,7 +88,7 @@ echo
 #   curl      - HTTP used by manul-comments-remove.sh
 #   openclaw  - the agent runtime the daemon invokes (checked when starting)
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl crontab; do
+for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -141,6 +141,7 @@ fi
 # paths use repair-manul-runtime.sh, which restores an existing DB/backup.
 echo
 DB_FILE="$RUNTIME_DIR/manul.db"
+INSTALL_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BOOTSTRAP_FRESH=false
 
 backup_db() {
@@ -227,6 +228,18 @@ for table in $REQUIRED_TABLES; do
     fi
 done
 echo "  Required tables present: $REQUIRED_TABLES"
+
+# Persist the installation cutoff. Fresh installs get the exact installer
+# timestamp; upgrades preserve an existing baseline so old GitHub comments stay
+# excluded forever.
+EXISTING_BASELINE="$(sqlite3 "$DB_FILE" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+if [ -z "$EXISTING_BASELINE" ]; then
+    sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','$INSTALL_BASELINE');" 2>/dev/null ||         fail "Could not persist Manul installation baseline"
+    echo "  Baseline initialized: $INSTALL_BASELINE"
+else
+    echo "  Baseline preserved: $EXISTING_BASELINE"
+fi
+
 if $BOOTSTRAP_FRESH; then
     echo "  Fresh DB bootstrap complete"
 fi
