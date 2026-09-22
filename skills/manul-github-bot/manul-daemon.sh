@@ -466,18 +466,16 @@ recover_stale_tasks() {
   log "recover_stale_tasks: checking for stuck tasks"
   lc_log "RECOVERY_START" ""
 
-  # Find running tasks with expired leases or NULL worker PIDs
-  # Note: We check for dead PIDs in bash after fetching, since SQLite can't execute OS commands
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts
+    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken
     FROM processed_comments
     WHERE status='running'
       AND (
-        leaseExpiresAt IS NULL
+        heartbeatAt IS NULL
+        OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+        OR leaseExpiresAt IS NULL
         OR leaseExpiresAt < datetime('now')
-        OR workerPid IS NULL
-        OR workerPid = 0
       )
     LIMIT 100;" 2>/dev/null)"
 
@@ -487,55 +485,44 @@ recover_stale_tasks() {
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
     [ -n "$comment_id" ] || continue
 
-    # Verify worker PID is actually dead
     local worker_alive=0
-    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
-      kill -0 "$worker_pid" 2>/dev/null && worker_alive=1
+    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; then
+      worker_alive=1
+    fi
+    log "recover_stale_tasks: stale task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires attempts=$attempts)"
+
+    local max_attempts
+    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    local safe_comment_id
+    safe_comment_id="$(sql_escape "$comment_id")"
+    local ownership_clause
+    if [ -n "$claim_token" ]; then
+      local safe_claim_token
+      safe_claim_token="$(sql_escape "$claim_token")"
+      ownership_clause="AND claimToken='$safe_claim_token'"
+    else
+      ownership_clause="AND claimToken IS NULL"
     fi
 
-    if [ "$worker_alive" -eq 0 ]; then
-      log "recover_stale_tasks: marking stale task as failed: $comment_id (worker=$worker_pid, lease=$lease_expires)"
-      lc_log "TASK_RECOVERED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_worker"
-
-      # Determine if we should retry or mark as failed
-      local max_attempts
-      max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-      local safe_comment_id
-      safe_comment_id="$(sql_escape "$comment_id")"
-
-      local ownership_clause
-      if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
-        ownership_clause="AND workerPid=$worker_pid"
-      else
-        ownership_clause="AND (workerPid IS NULL OR workerPid=0)"
-      fi
-
-      if [ "${attempts:-0}" -ge "$max_attempts" ]; then
-        # Mark as failed only while the stale worker still owns the row.
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), resultSummary='Daemon recovery: worker died (pid=$worker_pid), max attempts reached' WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
-      else
-        # Requeue only while the same stale worker still owns the row. This
-        # prevents recovery from resetting a task newly claimed by another worker.
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, leaseExpiresAt=NULL, processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
-        log "recover_stale_tasks: requeued task $comment_id for retry (attempt $((attempts + 1))/$max_attempts)"
-        lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempt=$((attempts + 1)) max=$max_attempts reason=stale_worker"
-      fi
-      recovered=$((recovered + 1))
+    if [ "${attempts:-0}" -ge "$max_attempts" ]; then
+      log "recover_stale_tasks: marking stale task as failed: $comment_id"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
+      lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
+    else
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
+      log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
+      lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
     fi
+    recovered=$((recovered + 1))
   done <<<"$stale_tasks"
 
   log "recover_stale_tasks: recovered $recovered stale task(s)"
   lc_log "RECOVERY_COMPLETE" "recovered=$recovered"
   return 0
 }
-
-# Heartbeat tracking for long-running tasks
-declare -A HEARTBEAT_PIDS
-
-
 start_heartbeat() {
   local comment_id="$1"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
