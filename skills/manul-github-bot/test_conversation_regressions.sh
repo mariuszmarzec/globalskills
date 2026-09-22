@@ -544,6 +544,71 @@ MOCK_EOF
 }
 
 # =============================================================================
+# Test 6: first poll catches a trigger created shortly before startup
+# =============================================================================
+test_first_poll_initial_catchup() {
+  local test_dir manul_dir mock_gh_dir poll_db
+  test_dir="$(mktemp -d /tmp/manul-initial-catchup-XXXXXX)"
+  manul_dir="$test_dir/manul"
+  mock_gh_dir="$test_dir/mock-gh"
+  poll_db="$manul_dir/manul.db"
+  mkdir -p "$manul_dir" "$mock_gh_dir"
+
+  cat > "$manul_dir/config.json" <<'CFGEOF'
+{"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"repositories":["test-org/test-repo"],"trigger":"/manul","agents":["coder"]}
+CFGEOF
+
+  sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+  sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+set -u
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  args="${@/--paginate/}"
+  if [[ "$args" == *"/issues/comments"* ]]; then
+    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"2099-01-01T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
+    exit 0
+  fi
+  echo '[]'
+  exit 0
+fi
+echo '{}'
+exit 0
+MOCK_EOF
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_INITIAL_LOOKBACK_SECONDS=86400 MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || {
+    rm -rf "$test_dir"
+    return 1
+  }
+
+  local count baseline
+  count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:recent-trigger';" 2>/dev/null)"
+  baseline="$(sqlite3 "$poll_db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null)"
+  if [ "$count" -ne 1 ]; then
+    echo "ERROR: expected pre-start trigger to be queued, found $count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  if [ -z "$baseline" ]; then
+    echo "ERROR: initial catch-up baseline was not persisted"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  rm -rf "$test_dir"
+  return 0
+}
+
+# =============================================================================
 # Run tests
 # =============================================================================
 run_test "helper functions and persistence logic" test_helpers_and_persistence
@@ -551,6 +616,7 @@ run_test "issue conversation: trigger→ordinary→follow-up preserves context" 
 run_test "review thread: every comment persisted, identity based on root only" test_review_thread_regression
 run_test "baseId dedup prevents duplicate queued tasks" test_baseid_dedup_no_duplicates
 run_test "bot comments (.user.type == Bot) are filtered out" test_bot_comment_filtering
+run_test "first poll catches a trigger created shortly before startup" test_first_poll_initial_catchup
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
