@@ -1612,7 +1612,7 @@ PROMPT_EOF
     if [ $? -ne 0 ]; then
       log "dispatch: FAILED to ensure repository $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -1625,7 +1625,7 @@ PROMPT_EOF
     if ! verify_repo "$REPO" "$REPO_DIR"; then
       log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -1645,7 +1645,7 @@ PROMPT_EOF
     if [ -z "$WORKSPACE_ID" ]; then
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -1951,7 +1951,7 @@ PROMPT_APPEND
       
       set_activity "$COMMENT_ID" "completed"
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
     else
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>>"$LOG"
     fi
