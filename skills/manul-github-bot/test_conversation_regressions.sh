@@ -15,6 +15,13 @@ run_test() {
   local name="$1"
   local func="$2"
   TOTAL=$((TOTAL + 1))
+  if ! declare -F "$func" >/dev/null 2>&1; then
+    echo "ERROR: test function '$func' is not defined"
+    echo "Defined test functions:"
+    declare -F | awk '$3 ~ /^test_/ {print $3}'
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
   if "$func"; then
     PASSED=$((PASSED + 1))
     echo "  PASS: $name"
