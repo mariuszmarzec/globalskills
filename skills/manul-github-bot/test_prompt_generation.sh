@@ -72,7 +72,6 @@ generate_prompt() {
     local timestamp="${13}"
     local CURRENT_BRANCH="${14}"
     local DEFAULT_BRANCH="${15}"
-    local TASK_BRANCH="${16:-}"
 
     # Top of prompt (static text + placeholders for single-line runtime values)
     cat > "$out_file" <<'PROMPT_EOF'
@@ -181,13 +180,13 @@ PROMPT_APPEND
       cat >> "$out_file" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
-- Default branch: __DEFAULT_BRANCH__
-- Your task branch has ALREADY been created for you by Manul: `__TASK_BRANCH__`
-- You are ALREADY checked out on your task branch — do NOT run `git checkout -b`
-- Make all repository changes on this branch
-- Do NOT make any repository changes while on the default branch
-- After completing changes, commit and push to your task branch: `__TASK_BRANCH__`
-- Do NOT create a new branch — the branch name is fixed and already known to Manul
+- Repository default branch: __DEFAULT_BRANCH__
+- The daemon prepares an up-to-date base but does NOT create the task branch
+- First determine whether this is informational or requires repository changes
+- For informational tasks: do NOT modify the repository and do NOT create a branch
+- For repository changes: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy
+- Create the branch yourself before committing or pushing changes
+- Never commit or push changes directly to the base/default branch
 PROMPT_APPEND
     fi
 
@@ -214,7 +213,6 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
-    prompt_content="${prompt_content//__TASK_BRANCH__/$TASK_BRANCH}"
     printf '%s' "$prompt_content" > "$out_file"
 }
 
@@ -442,9 +440,9 @@ else
     fail "Prompt file is inspectable as actual file (file missing or empty)"
 fi
 
-# Test G: standalone task prompt substitutes __TASK_BRANCH__ and tells the agent
-# the branch is ALREADY checked out (branch lifecycle is owned by Manul).
-echo -n "Test: __TASK_BRANCH__ substituted for standalone task ... "
+# Test G: standalone issue prompt delegates branch creation to the agent and
+# points it at the authoritative branching skill.
+echo -n "Test: standalone prompt delegates branch creation to agent ... "
 rm -f "$WORK/prompt.md"
 generate_prompt \
     "$WORK/prompt.md" \
@@ -460,35 +458,38 @@ generate_prompt \
     "/tmp/repo" \
     "" \
     "1234567890" \
-    "manul-task-test-comment-branch-1234567890" \
     "master" \
-    "manul-task-test-comment-branch-1234567890"
-if assert_file_contains "task branch substituted" "$WORK/prompt.md" "manul-task-test-comment-branch-1234567890"; then
+    "master"
+if assert_file_not_contains "agent must not be told task branch already exists" "$WORK/prompt.md" "Your task branch has ALREADY been created for you by Manul"; then
     :
 else
     :
 fi
-if assert_file_contains "agent told branch already checked out" "$WORK/prompt.md" "You are ALREADY checked out on your task branch"; then
+if assert_file_not_contains "agent must not be told to avoid branch creation" "$WORK/prompt.md" "Do NOT create a new branch"; then
     :
 else
     :
 fi
-if assert_file_contains "agent told not to create a new branch" "$WORK/prompt.md" "Do NOT create a new branch"; then
+if assert_file_contains "agent told to use feature branching skill" "$WORK/prompt.md" "~/.agents/skills/feature-branching-strategy/SKILL.md"; then
     :
 else
     :
 fi
-if assert_file_not_contains "unresolved __TASK_BRANCH__ placeholder" "$WORK/prompt.md" "__TASK_BRANCH__"; then
+if assert_file_contains "agent told branch creation is its responsibility" "$WORK/prompt.md" "Create the branch yourself before committing or pushing changes"; then
     :
 else
     :
 fi
-if assert_file_not_contains "unresolved __CURRENT_BRANCH__ placeholder" "$WORK/prompt.md" "__CURRENT_BRANCH__"; then
+if assert_file_contains "agent told not to commit base" "$WORK/prompt.md" "Never commit or push changes directly to the base/default branch"; then
     :
 else
     :
 fi
-
+if assert_file_not_contains "legacy TASK_BRANCH placeholder removed" "$WORK/prompt.md" "__TASK_BRANCH__"; then
+    :
+else
+    :
+fi
 # Test H: PR-tied task prompt must NOT contain the standalone-task branch policy
 # (it must not instruct the agent to create a task branch for PR tasks).
 echo -n "Test: PR-tied prompt has no standalone branch policy ... "
