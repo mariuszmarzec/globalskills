@@ -818,6 +818,21 @@ ensure_nextattemptat_column() {
   return 0
 }
 
+# Ensure each task claim has a unique ownership token. workerPid identifies a long-lived worker loop, not one specific task execution.
+ensure_claim_token_column() {
+  local has_column
+  has_column="$(sqlite3 \"$DB\" \"PRAGMA table_info(processed_comments);\" 2>>\"$LOG\" | grep -c '|claimToken|' || echo \"0\")"
+  if [ \"$has_column\" -eq 0 ]; then
+    log \"migration: adding claimToken column to processed_comments\"
+    sqlite3 \"$DB\" \"ALTER TABLE processed_comments ADD COLUMN claimToken TEXT;\" 2>>\"$LOG\" || {
+      log \"ERROR: failed to add claimToken column\"
+      return 1
+    }
+    log \"migration: claimToken column added\"
+  fi
+  return 0
+}
+
 post_github_comment() {
   local repo="$1"
   local issue="$2"
