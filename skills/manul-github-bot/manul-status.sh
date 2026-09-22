@@ -79,7 +79,7 @@ if [ "$LIST_MODE" = true ]; then
 
   RESULTS="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId, 
-           attempts, createdAt, processedAt, heartbeatAt, leaseExpiresAt, workerPid, workspaceId, nextAttemptAt
+           attempts, createdAt, processedAt, workerPid, workspaceId, nextAttemptAt
     FROM processed_comments $WHERE_CLAUSE
     ORDER BY createdAt DESC
     LIMIT 100;
@@ -100,7 +100,7 @@ if [ "$LIST_MODE" = true ]; then
   if [ "$OUTPUT_FORMAT" = "json" ]; then
     echo "["
     FIRST=true
-    while IFS='|' read -r tid repo issue status conv attempts created started heartbeat lease worker ws next; do
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next; do
       if [ "$FIRST" = true ]; then
         FIRST=false
       else
