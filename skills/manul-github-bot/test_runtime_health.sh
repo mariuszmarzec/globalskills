@@ -891,7 +891,7 @@ INSTALL_EXIT=$?
 set -e
 
 if [ "$INSTALL_EXIT" -eq 0 ]; then
-  ok "install-manul.sh succeeds on a fresh runtime"
+  ok "install-manul.sh --init-state succeeds on a fresh runtime"
 else
   fail "install-manul.sh failed on a fresh runtime (exit=$INSTALL_EXIT)"
   echo "$INSTALL_OUTPUT"
