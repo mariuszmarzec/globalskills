@@ -1401,9 +1401,13 @@ run_once() {
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
     local CURRENT_WORKER_PID
-    CURRENT_WORKER_PID="$$"
+    CURRENT_WORKER_PID="$"
+    local CLAIM_TOKEN
+    CLAIM_TOKEN="$(printf '%s-%s-%s' "$(date +%s%N)" "$CURRENT_WORKER_PID" "$RANDOM")"
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$CLAIM_TOKEN")"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token' WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
