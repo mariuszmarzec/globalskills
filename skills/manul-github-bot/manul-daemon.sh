@@ -1123,9 +1123,9 @@ pr_auto_create() {
   return 0
 }
 
-# Verify that implementation tasks have a real PR against the repository
-# default branch. A /pull/new/... or /compare/... URL returned by the agent is
-# NOT a concrete PR — only a real PR (verified via the GitHub API) counts.
+# Verify that a repository-change task has a real PR against the branch that
+# the agent actually based its task branch on. A /pull/new/... or /compare/...
+# URL is NOT a concrete PR — only a real PR (verified via the GitHub API) counts.
 #
 # autoCreatePr controls ONLY whether the daemon creates the PR itself when the
 # agent pushed its branch but did not open a PR (e.g. it returned a
@@ -1170,7 +1170,7 @@ verify_required_pr() {
 }
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
-# Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir]
+# Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir] [workdir] [claim_token] [initial_head] [initial_branch] [initial_base_branch]
 evaluate_task_completion() {
   local REPO="$1"
   local ISSUE_NUM="$2"
