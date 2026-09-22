@@ -99,12 +99,32 @@ fi
 # Never let a broken/hung daemon block OpenCode startup.
 # The canonical installer self-heals a missing/broken runtime before startup.
 MANUL_INSTALLER="$HOME/.globalskills/skills/manul-github-bot/install-manul.sh"
-MANUL_SCRIPT="$HOME/.openclaw/manul/manul-daemon.sh"
+MANUL_REPAIRER="$HOME/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh"
+MANUL_RUNTIME="$HOME/.openclaw/manul"
+MANUL_DB="$MANUL_RUNTIME/manul.db"
+MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
 
-if [ -x "$MANUL_INSTALLER" ]; then
-    if ! "$MANUL_INSTALLER" >/dev/null 2>&1; then
-        echo "WARNING: Manul runtime repair failed; continuing with OpenCode."
+# Prepare Manul without ever replacing existing task state implicitly.
+# repair-manul-runtime.sh restores a missing/corrupt DB from a known backup.
+# Only a truly fresh runtime with no recoverable DB may use --init-state.
+if [ -x "$MANUL_REPAIRER" ]; then
+    if ! "$MANUL_REPAIRER" >/dev/null 2>&1; then
+        if [ ! -f "$MANUL_DB" ] && [ -x "$MANUL_INSTALLER" ]; then
+            if ! "$MANUL_INSTALLER" --init-state >/dev/null 2>&1; then
+                echo "WARNING: Manul fresh initialization failed; continuing with OpenCode."
+            fi
+        else
+            echo "WARNING: Manul runtime repair failed; continuing with OpenCode."
+        fi
+    fi
+elif [ -x "$MANUL_INSTALLER" ]; then
+    if [ ! -f "$MANUL_DB" ]; then
+        if ! "$MANUL_INSTALLER" --init-state >/dev/null 2>&1; then
+            echo "WARNING: Manul fresh initialization failed; continuing with OpenCode."
+        fi
+    elif ! "$MANUL_INSTALLER" >/dev/null 2>&1; then
+        echo "WARNING: Manul installer validation failed; continuing with OpenCode."
     fi
 fi
 
