@@ -86,9 +86,9 @@ echo
 #   jq        - config.json parsing throughout the runtime
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
-#   openclaw  - the agent runtime the daemon invokes
+#   openclaw  - the agent runtime the daemon invokes (checked when starting)
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -133,12 +133,12 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 # 5. Bootstrap/migrate the DB
-#    - missing/empty file -> init_schema creates the schema
+#    - missing/empty file -> only --init-state may bootstrap a fresh schema
 #    - valid SQLite file -> init_schema/workspace_init are idempotent
-#    - schema initialization failure -> preserve old DB and bootstrap a fresh one
+#    - schema initialization failure -> fail closed; never replace the DB
 #
-# Old data is disposable for installation purposes, but the previous DB is
-# always preserved as a timestamped .old-* file before replacement.
+# Explicit --init-state is the only destructive installer operation. Repair
+# paths use repair-manul-runtime.sh, which restores an existing DB/backup.
 echo
 DB_FILE="$RUNTIME_DIR/manul.db"
 BOOTSTRAP_FRESH=false
@@ -217,9 +217,7 @@ init_current_db() {
 }
 
 if ! init_current_db; then
-    echo "WARNING: current DB schema initialization failed; replacing the DB with a fresh schema..." >&2
-    reset_to_fresh_db
-    init_current_db || fail "Fresh DB schema initialization failed"
+    fail "DB schema initialization failed; refusing to replace existing task state automatically"
 fi
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
