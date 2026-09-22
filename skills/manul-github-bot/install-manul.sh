@@ -200,7 +200,7 @@ if ! init_current_db; then
     echo "WARNING: current DB schema initialization failed; replacing the DB with a fresh schema..." >&2
     reset_to_fresh_db
     init_current_db || fail "Fresh DB schema initialization failed"
-}
+fi
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 for table in $REQUIRED_TABLES; do
