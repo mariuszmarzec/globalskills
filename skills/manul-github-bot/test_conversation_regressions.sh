@@ -195,6 +195,12 @@ MOCK_EOF
   if [ "$msg_count" -ne 4 ]; then
     echo "ERROR: Expected 4 conversation_messages (Issue root + 3 comments), found $msg_count"
     rm -rf "$test_dir"
+    echo "---- poll.log ----"
+    cat "$manul_dir/poll.log" 2>/dev/null || true
+    echo "---- end poll.log ----"
+    echo "---- poll.log ----"
+    cat "$manul_dir/poll.log" 2>/dev/null || true
+    echo "---- end poll.log ----"
     return 1
   fi
 
