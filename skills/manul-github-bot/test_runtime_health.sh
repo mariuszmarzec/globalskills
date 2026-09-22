@@ -146,6 +146,14 @@ mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
 
+# The repository intentionally does not carry application state. Create a
+# production-schema DB fixture so --list tests the CLI contract rather than
+# failing merely because no runtime state file exists.
+CLI_DB="$CLI_ROOT/backup/manul.db"
+create_canonical_backup "$CLI_DB"
+cp "$CLI_DB" "$RUN/manul.db"
+chmod 600 "$RUN/manul.db"
+
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
 MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
@@ -320,11 +328,8 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
   fi
 done
 
-# 5) manul-status --list works (requires a DB; the canonical backup provides one)
-if [ -f "$CANON/manul.db" ]; then
-  cp "$CANON/manul.db" "$RUN/manul.db"
-  chmod 600 "$RUN/manul.db"
-fi
+# 5) manul-status --list works against the production-schema fixture
+
 set +e
 MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list >/dev/null 2>&1
 RC_STATUS=$?
@@ -910,13 +915,14 @@ else
 fi
 
 set +e
-HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" >/dev/null 2>&1
+INSTALL_OUTPUT_2=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
   ok "Canonical installer remains idempotent after explicit initialization"
 else
   fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
+  echo "$INSTALL_OUTPUT_2"
 fi
 
 
