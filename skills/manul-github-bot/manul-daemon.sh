@@ -1436,7 +1436,7 @@ run_once() {
     set_activity "$COMMENT_ID" "claimed"
 
     # Start heartbeat for long-running task
-    start_heartbeat "$COMMENT_ID"
+    start_heartbeat "$COMMENT_ID" "$CURRENT_WORKER_PID" "$CLAIM_TOKEN"
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
     refresh_heartbeat "$COMMENT_ID"
 
