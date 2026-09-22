@@ -575,7 +575,13 @@ stop_heartbeat() {
 refresh_heartbeat() {
   local comment_id="$1"
   if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
-    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+    local worker_pid="${CURRENT_WORKER_PID:-$}"
+    local claim_token
+    claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid LIMIT 1;" 2>/dev/null)"
+    [ -n "$claim_token" ] || return 0
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid AND claimToken='$safe_claim_token';" 2>/dev/null || true
   fi
 }
 
