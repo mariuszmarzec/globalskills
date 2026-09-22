@@ -539,6 +539,58 @@ recover_stale_tasks() {
 # Per-task heartbeat child processes, keyed by comment/task id.
 declare -A HEARTBEAT_PIDS
 
+# Determine the base branch that a standalone task should start from.
+# This mirrors feature-branching-strategy's preferred order for the initial
+# workspace: develop -> master -> repository default branch. The agent may
+# later choose a different, explicitly required base branch before branching.
+determine_task_base_branch() {
+  local workdir="$1"
+  local default_branch="$2"
+  if git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/develop"; then echo "develop"; return 0; fi
+  if git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/master"; then echo "master"; return 0; fi
+  if [ -n "$default_branch" ]; then echo "$default_branch"; return 0; fi
+  default_branch="$(git -C "$workdir" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || true)"
+  [ -n "$default_branch" ] && { echo "$default_branch"; return 0; }
+  echo "master"
+}
+
+repository_changed_since() {
+  local workdir="$1" initial_head="$2"
+  [ -n "$initial_head" ] || return 1
+  local current_head
+  current_head="$(git -C "$workdir" rev-parse HEAD 2>/dev/null || echo "")"
+  [ -n "$current_head" ] && [ "$current_head" != "$initial_head" ] && return 0
+  ! git -C "$workdir" diff --quiet 2>/dev/null && return 0
+  ! git -C "$workdir" diff --cached --quiet 2>/dev/null && return 0
+  local untracked
+  untracked="$(git -C "$workdir" ls-files --others --exclude-standard 2>/dev/null || true)"
+  [ -n "$untracked" ] && return 0
+  return 1
+}
+
+infer_task_base_branch() {
+  local workdir="$1" branch="$2" fallback="$3"
+  local message created_from
+  while IFS= read -r message; do
+    case "$message" in
+      "branch: Created from "*) created_from="${message#branch: Created from }" ;;
+      "branch: Reset to "*) created_from="${message#branch: Reset to }" ;;
+      *) continue ;;
+    esac
+    case "$created_from" in
+      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"$branch") continue ;;
+    esac
+    created_from="${created_from#refs/remotes/origin/}"
+    created_from="${created_from#origin/}"
+    created_from="${created_from#refs/heads/}"
+    if git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/$created_from" || git -C "$workdir" show-ref --verify --quiet "refs/heads/$created_from"; then
+      echo "$created_from"
+      return 0
+    fi
+  done < <(git -C "$workdir" reflog show --format='%gs' "$branch" 2>/dev/null || true)
+  echo "$fallback"
+}
+
 start_heartbeat() {
   ensure_claim_token_column || return 1
   local comment_id="$1"
@@ -1003,9 +1055,9 @@ verify_result_comment() {
 # Returns 0 if a real PR exists, 1 otherwise.
 # A /pull/new/... or /compare/... URL returned by the agent is NOT a concrete PR.
 pr_check_existing() {
-  local repo="$1" branch="$2" default_branch="$3"
+  local repo="$1" branch="$2" expected_base="${3:-}"
   local pr_json api_rc
-  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --base "$default_branch" --json number,url,state --limit 10 2>>"$LOG")"
+  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --json number,url,state,baseRefName,headRefName --limit 10 2>>"$LOG")"
   api_rc=$?
   if [ "$api_rc" -ne 0 ]; then
     if [ "$api_rc" -eq 124 ]; then
@@ -1017,10 +1069,12 @@ pr_check_existing() {
     fi
     return 1
   fi
-  if printf '%s' "$pr_json" | jq -e 'length > 0' >/dev/null 2>&1; then
-    return 0
+  if [ -n "$expected_base" ]; then
+    if printf '%s' "$pr_json" | jq -e --arg expected "$expected_base" 'any(.[]; .baseRefName == $expected)' >/dev/null 2>&1; then return 0; fi
+    log "WARN: pr_check_existing: PR found for $repo/$branch but none targets expected base '$expected_base'"
+    return 1
   fi
-  return 1
+  jq -e 'length > 0' <<<"$pr_json" >/dev/null 2>&1
 }
 
 # Auto-create a GitHub PR for the given branch against the default branch.
@@ -1028,7 +1082,7 @@ pr_check_existing() {
 # itself open a PR (e.g. it only returned a /compare/... URL).
 # Returns 0 on success, 1 on failure.
 pr_auto_create() {
-  local repo="$1" branch="$2" default_branch="$3" comment_id="$4" workdir="$5"
+  local repo="$1" branch="$2" base_branch="$3" comment_id="$4" workdir="$5"
   local title body pr_url api_rc remote
 
   # Best-effort: ensure the branch is present on the remote before creating a PR.
@@ -1050,7 +1104,7 @@ pr_auto_create() {
   body="Automatically created by Manul for task $comment_id."
 
   local pr_create_output
-  pr_create_output="$(timeout "$GH_API_TIMEOUT" gh pr create --repo "$repo" --base "$default_branch" --head "$branch" --title "$title" --body "$body" 2>>"$LOG")"
+  pr_create_output="$(timeout "$GH_API_TIMEOUT" gh pr create --repo "$repo" --base "$base_branch" --head "$branch" --title "$title" --body "$body" 2>>"$LOG")"
   api_rc=$?
   if [ "$api_rc" -ne 0 ]; then
     if [ "$api_rc" -eq 124 ]; then
@@ -1064,8 +1118,8 @@ pr_auto_create() {
   fi
 
   pr_url="$(printf '%s' "$pr_create_output" | tr -d '[:space:]')"
-  log "pr_auto_create: created PR for branch $branch -> $pr_url"
-  lc_log "PR_CREATE_SUCCESS" "task=$comment_id repo=$repo branch=$branch base=$default_branch url=$pr_url"
+  log "pr_auto_create: created PR for branch $branch against $base_branch -> $pr_url"
+  lc_log "PR_CREATE_SUCCESS" "task=$comment_id repo=$repo branch=$branch base=$base_branch url=$pr_url"
   return 0
 }
 
@@ -1078,58 +1132,42 @@ pr_auto_create() {
 # /compare/... URL instead of a PR). It must NOT mask the requirement: when no
 # PR exists and autoCreatePr is false, the task still fails.
 verify_required_pr() {
-  local repo="$1"
-  local comment_id="$2"
-  local workdir="$3"
-  local default_branch="$4"
-
+  local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
   local auto_create_pr
   auto_create_pr="$(jq -r '.autoCreatePr // false' "$CONFIG" 2>/dev/null || echo false)"
-
-  local safe_comment_id
-  safe_comment_id="$(sql_escape "$comment_id")"
+  local safe_comment_id="$(sql_escape "$comment_id")"
   local action
   action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   [ "$action" = "IMPLEMENT" ] || return 0
-
   local comment_url
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
-  # Tasks originating from an existing PR already have a delivery PR.
   [[ "$comment_url" == *"/pull/"* ]] && return 0
-
   local branch
   branch="$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)"
-  if [ -z "$branch" ] || [ "$branch" = "$default_branch" ]; then
-    log "ERROR: verify_required_pr: invalid task branch for $comment_id (branch=$branch default=$default_branch)"
-    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=invalid_task_branch branch=$branch default=$default_branch"
+  if [ -z "$branch" ] || [ "$branch" = "$initial_base_branch" ]; then
+    log "ERROR: verify_required_pr: invalid task branch for $comment_id (branch=$branch initial_base=$initial_base_branch)"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=invalid_task_branch branch=$branch base=$initial_base_branch"
     return 1
   fi
-
-  # A concrete PR must be verified via the GitHub API, never via a /compare URL.
-  if pr_check_existing "$repo" "$branch" "$default_branch"; then
-    log "verify_required_pr: found PR for task $comment_id branch=$branch base=$default_branch"
+  local expected_base
+  expected_base="$(infer_task_base_branch "$workdir" "$branch" "$initial_base_branch")"
+  log "verify_required_pr: task $comment_id branch=$branch expected_base=$expected_base"
+  if pr_check_existing "$repo" "$branch" "$expected_base"; then
+    log "verify_required_pr: found PR for task $comment_id branch=$branch base=$expected_base"
     return 0
   fi
-
-  # No PR found. With autoCreatePr enabled the daemon creates one so the task
-  # does not fail merely because the agent pushed its branch but did not open
-  # a PR itself (e.g. it returned a /compare/... URL instead of a PR). Without
-  # autoCreatePr the missing PR is a hard failure — the requirement is not
-  # masked by a config flag.
   if [ "$auto_create_pr" = "true" ]; then
-    log "verify_required_pr: no PR for branch $branch; auto-creating PR (autoCreatePr=true)"
-    lc_log "PR_CREATE_ATTEMPT" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
-    if pr_auto_create "$repo" "$branch" "$default_branch" "$comment_id" "$workdir"; then
-      log "verify_required_pr: PR auto-created for task $comment_id branch=$branch base=$default_branch"
+    log "verify_required_pr: no PR for branch $branch; auto-creating PR against $expected_base"
+    lc_log "PR_CREATE_ATTEMPT" "task=$comment_id repo=$repo branch=$branch base=$expected_base"
+    if pr_auto_create "$repo" "$branch" "$expected_base" "$comment_id" "$workdir"; then
+      log "verify_required_pr: PR auto-created for task $comment_id branch=$branch base=$expected_base"
       return 0
     fi
   fi
-
-  log "ERROR: verify_required_pr: no PR found for branch $branch against $default_branch"
-  lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$default_branch"
+  log "ERROR: verify_required_pr: no PR found for branch $branch against expected base $expected_base"
+  lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$expected_base"
   return 1
 }
-
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
 # Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir]
@@ -1145,6 +1183,9 @@ evaluate_task_completion() {
   local REPO_DIR="${9:-}"
   local WORKDIR="${10:-$REPO_DIR}"
   local CLAIM_TOKEN="${11:-}"
+  local INITIAL_HEAD="${12:-}"
+  local INITIAL_BRANCH="${13:-}"
+  local INITIAL_BASE_BRANCH="${14:-${INITIAL_BRANCH:-$DEFAULT_BRANCH}}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -1203,12 +1244,33 @@ evaluate_task_completion() {
     fi
   fi
   
-  # 7.6 Verify implementation tasks have an actual GitHub PR, not merely a /pull/new URL
+  # 7.6 Determine whether the agent actually changed repository state.
+  # Informational tasks may legitimately finish without a branch or PR.
   if [ "$SUCCESS" = "true" ]; then
-    if ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$DEFAULT_BRANCH"; then
-      SUCCESS="false"
-      FAIL_REASON="Implementation task did not produce a real PR against the default branch"
-      log "dispatch: task $COMMENT_ID PR verification failed"
+    local repo_changed="false"
+    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
+    if [ "$repo_changed" = "true" ]; then
+      local current_branch
+      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+      if [ -z "$current_branch" ]; then
+        SUCCESS="false"
+        FAIL_REASON="Repository changed but the agent is not on a named branch"
+        log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
+      elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BRANCH" ]; then
+        SUCCESS="false"
+        FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
+        log "dispatch: task $COMMENT_ID changed repository on forbidden base branch $current_branch"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
+      elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        SUCCESS="false"
+        FAIL_REASON="Implementation task did not produce a real PR against its branch base"
+        log "dispatch: task $COMMENT_ID PR verification failed"
+      else
+        log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR verified"
+      fi
+    else
+      log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
+      lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
     fi
   fi
 
@@ -1750,65 +1812,40 @@ log "dispatch: verified PR head branch $verify_branch in workspace"
        # changes from an unrelated task. (Do NOT use clean -fdx: the workspace
        # holds untracked helper dirs like .agents that must be preserved.)
        local default_branch
-       default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "master")"
-       log "dispatch: resetting workspace $WORKDIR to default branch '$default_branch'"
+       default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "")"
+       local base_branch
+       base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+       log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
        if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
-         log "WARN: failed to fetch origin for workspace reset on $REPO"
+         log "ERROR: failed to fetch origin before task setup on $REPO"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
-       if ! git -C "$WORKDIR" checkout -f "origin/$default_branch" 2>>"$LOG"; then
-         log "WARN: failed to checkout origin/$default_branch in $WORKDIR"
+       base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+       if ! git -C "$WORKDIR" checkout -B "$base_branch" "origin/$base_branch" 2>>"$LOG"; then
+         log "ERROR: failed to checkout base branch '$base_branch' for task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
-       if ! git -C "$WORKDIR" checkout -B "$default_branch" 2>>"$LOG"; then
-         log "WARN: failed to create/reset local $default_branch in $WORKDIR"
+       if ! git -C "$WORKDIR" reset --hard "origin/$base_branch" --quiet 2>>"$LOG"; then
+         log "ERROR: failed to reset workspace to origin/$base_branch for task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
-       git -C "$WORKDIR" reset --hard "origin/$default_branch" --quiet 2>>"$LOG" || true
-       git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG" || true
+       if ! git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG"; then
+         log "ERROR: failed to clean workspace before task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+       fi
      fi
      log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
-    # Generate timestamp for unique branch name
-    local timestamp
-    timestamp="$(date +%s)"
-
-    # Compute current/default branches safely (avoid command substitution in heredoc)
+    # Capture the exact repository state we hand to the agent.
     local CURRENT_BRANCH
     CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
+    local INITIAL_BRANCH="$CURRENT_BRANCH"
+    local INITIAL_HEAD
+    INITIAL_HEAD="$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null || echo "")"
     local DEFAULT_BRANCH
-    DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "master")"
-
-    # Branch lifecycle is owned by Manul, not the agent.
-    # For standalone (issue) tasks the daemon deterministically creates the
-    # dedicated task branch BEFORE invoking the agent, so the agent works on a
-    # branch whose name the daemon already knows. The agent must NOT create its
-    # own branch — verify_required_pr() checks the checked-out branch, and if the
-    # agent silently stayed on the default branch the task fails.
-    local TASK_BRANCH=""
-    if [ -z "$PR_HEAD_BRANCH" ]; then
-      TASK_BRANCH="manul-task-${COMMENT_ID}-${timestamp}"
-      log "dispatch: creating task branch $TASK_BRANCH from $DEFAULT_BRANCH for task $COMMENT_ID"
-      if ! git -C "$WORKDIR" checkout -B "$TASK_BRANCH" "origin/$DEFAULT_BRANCH" 2>>"$LOG"; then
-        log "ERROR: failed to create task branch $TASK_BRANCH for task $COMMENT_ID, failing task"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
-        return 0
-      fi
-      git -C "$WORKDIR" reset --hard "origin/$DEFAULT_BRANCH" --quiet 2>>"$LOG" || true
-      local verify_branch
-      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
-      if [ "$verify_branch" != "$TASK_BRANCH" ]; then
-        log "ERROR: task branch verification failed (expected=$TASK_BRANCH got=$verify_branch), failing task $COMMENT_ID"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
-        return 0
-      fi
-      log "dispatch: task branch $TASK_BRANCH verified for task $COMMENT_ID"
-    fi
+    DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "")"
+    local INITIAL_BASE_BRANCH="${base_branch:-$CURRENT_BRANCH}"
+    log "dispatch: task $COMMENT_ID starts on branch=$INITIAL_BRANCH head=$INITIAL_HEAD initialBase=$INITIAL_BASE_BRANCH default=$DEFAULT_BRANCH"
 
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
@@ -1833,17 +1870,20 @@ PROMPT_APPEND
 - Do NOT create a new branch for this task
 PROMPT_APPEND
     else
-      # Standalone (issue) task: Manul has ALREADY created the task branch.
+      # Standalone issue task: daemon prepares the base; the agent owns the
+      # repository-change branch decision and follows feature-branching-strategy.
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
-- Default branch: __DEFAULT_BRANCH__
-- Your task branch has ALREADY been created for you by Manul: `__TASK_BRANCH__`
-- You are ALREADY checked out on your task branch — do NOT run `git checkout -b`
-- Make all repository changes on this branch
-- Do NOT make any repository changes while on the default branch
-- After completing changes, commit and push to your task branch: `__TASK_BRANCH__`
-- Do NOT create a new branch — the branch name is fixed and already known to Manul
+- Repository default branch: __DEFAULT_BRANCH__
+- Initial prepared base branch: __INITIAL_BASE_BRANCH__
+- The daemon does NOT create your task branch for you
+- First determine whether this is informational or requires repository changes
+- For informational tasks: do NOT modify the repository and do NOT create a branch; post the answer to GitHub and finish
+- For repository changes: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy
+- Create the branch yourself before committing or pushing changes
+- If the task explicitly requires another branch as the base, including another feature branch, use it as the base and update it from the remote before creating your branch
+- Never commit or push repository changes directly to the prepared/base/default branch
 PROMPT_APPEND
     fi
 
@@ -1868,15 +1908,9 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
-    prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
-    # Recompute CURRENT_BRANCH AFTER branch creation so the agent sees the real
-    # branch it is working on (not the pre-creation default branch).
-    if [ -z "$PR_HEAD_BRANCH" ]; then
-      CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "$TASK_BRANCH")"
-    fi
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
-    prompt_content="${prompt_content//__TASK_BRANCH__/$TASK_BRANCH}"
+    prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
     # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
@@ -1910,7 +1944,7 @@ PROMPT_APPEND
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
     # Call production completion evaluation function
-    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN"
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
@@ -2107,4 +2141,3 @@ case "${1:-}" in
   loop) shift; loop "$@" ;;
   *) echo "usage: $0 start|stop|status|run-once [loop]" >&2; exit 2 ;;
 esac
-
