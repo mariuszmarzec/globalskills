@@ -573,6 +573,9 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
 
+  local recent_created_at
+  recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
@@ -587,7 +590,7 @@ fi
 if [[ "$1" == "api" ]]; then
   args="${@/--paginate/}"
   if [[ "$args" == *"/issues/comments"* ]]; then
-    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"'"$recent_created_at"'","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
+    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"__RECENT_CREATED_AT__","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
     exit 0
   fi
   echo '[]'
@@ -596,6 +599,7 @@ fi
 echo '{}'
 exit 0
 MOCK_EOF
+  sed -i "s/__RECENT_CREATED_AT__/$recent_created_at/g" "$mock_gh_dir/gh"
   chmod +x "$mock_gh_dir/gh"
 
   MANUL_INITIAL_LOOKBACK_SECONDS=86400 MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || {
