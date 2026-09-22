@@ -112,7 +112,7 @@ recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
 
 # 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$,'live-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task recovered by expired lease"
 # Simulate the same long-lived worker claiming the retry with a new token. The old execution must not finalize it.
@@ -141,7 +141,7 @@ git -C "$WORKTREE" add README.md
 git -C "$WORKTREE" commit -qm initial
 git -C "$WORKTREE" checkout -qb manul-task-test
 
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'pr-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'pr-token',NULL,NULL);"
 
 FAKE_BIN="$TEST_DIR/bin"
 mkdir -p "$FAKE_BIN"
