@@ -977,7 +977,7 @@ INIT_RUNTIME="$INIT_ROOT/runtime"
 mkdir -p "$INIT_RUNTIME"
 set +e
 INIT_OUTPUT=$(
-  MANUL_RUNTIME_DIR="$INIT_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
+  PATH="$FAKE_BIN:$PATH" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
 )
 INIT_EXIT=$?
 set -e
