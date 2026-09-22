@@ -568,6 +568,20 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
     log "migration: added context column"
 fi
+# migration for existing DBs (pre-action/PR fields)
+# The poller writes these fields directly; older DBs may predate them.
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|action|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>>"$LOG"
+    log "migration: added action column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|prNumber|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>>"$LOG"
+    log "migration: added prNumber column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|prUrl|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>>"$LOG"
+    log "migration: added prUrl column"
+fi
 # migration for existing DBs (pre-heartbeatAt column)
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|heartbeatAt|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;" 2>>"$LOG"
