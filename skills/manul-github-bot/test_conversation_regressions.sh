@@ -124,10 +124,7 @@ EOF
 [{"id":"trigger-comment","body":"/manul do this","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"trigger-comment-2","body":"/manul Now implement the change according to my previous feedback.","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
 EOF
 
-  local recent_created_at
-  recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-
-  cat > "$mock_gh_dir/gh" <<EOF
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
@@ -281,7 +278,7 @@ CFGEOF
   {"id":103,"user":{"login":"test-user"},"body":"Good point, added.","html_url":"https://github.com/test-org/test-repo/pull/50#discussion_r103","created_at":"2026-09-16T00:02:00Z","in_reply_to_id":102,"path":"src/auth.py","line":48,"diff_hunk":"@@ -40,3 +40,3 @@","original_line":48},
   {"id":201,"user":{"login":"test-user"},"body":"/manul Add unit tests for the new endpoint","html_url":"https://github.com/test-org/test-repo/pull/50#discussion_r201","created_at":"2026-09-16T00:03:00Z","in_reply_to_id":null,"path":"tests/test_api.py","line":10,"diff_hunk":"@@ -8,3 +8,3 @@","original_line":10}
 ]
-EOF
+MOCK_EOF
 
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
@@ -572,6 +569,9 @@ CFGEOF
 
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
+
+  local recent_created_at
+  recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
 
   local recent_created_at
   recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
