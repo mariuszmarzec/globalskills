@@ -552,7 +552,8 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
     status TEXT NOT NULL DEFAULT 'queued',
     attempts INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT,
-    processedAt TEXT
+    processedAt TEXT,
+    claimToken TEXT
 );" 2>>"$LOG"
 # migration for existing DBs (pre-agent column)
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|agent|'; then
@@ -597,6 +598,11 @@ fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|workerPid|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;" 2>>"$LOG"
     log "migration: added workerPid column"
+fi
+# migration for existing DBs (pre-claimToken column)
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|claimToken|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN claimToken TEXT;" 2>>"$LOG"
+    log "migration: added claimToken column"
 fi
 # migration for existing DBs (pre-nextAttemptAt column)
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|nextAttemptAt|'; then
