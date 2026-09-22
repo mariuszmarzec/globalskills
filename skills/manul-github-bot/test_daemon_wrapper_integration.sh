@@ -78,6 +78,10 @@ if [[ "$1" == "api" ]]; then
                         # Test J: agent on real task branch -> verify_required_pr accepts
                         json_output='[{"id":1010,"body":"<!-- manul-task:COMMENT_J:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
                         ;;
+                    52)
+                        # Test K: informational task makes no repository changes; PR/branch is not required
+                        json_output='[{"id":1011,"body":"<!-- manul-task:COMMENT_K:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        ;;
                     *)
                         json_output='[]'
                         ;;
@@ -453,6 +457,37 @@ if [ "$COMPLETION_SUCCESS" != "true" ]; then
     exit 1
 fi
 echo "[OK] Test J: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+
+# ─── Test K: informational task with no repo changes -> success without PR ─
+echo ""
+echo "=== Test K: informational task + no repository changes -> COMPLETION_SUCCESS=true ==="
+WORKDIR_K="$TEST_TMPDIR/workdir-k"
+mkdir -p "$WORKDIR_K"
+git -C "$WORKDIR_K" init -q
+git -C "$WORKDIR_K" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_K" config user.email test@example.com
+git -C "$WORKDIR_K" config user.name test
+printf "test\n" >"$WORKDIR_K/README.md"
+git -C "$WORKDIR_K" add README.md
+git -C "$WORKDIR_K" commit -qm initial
+INITIAL_HEAD_K="$(git -C "$WORKDIR_K" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutK.txt"
+echo "TASK_DONE" > "$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "52" "COMMENT_K" "COMMENT_K" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_K" "" "$INITIAL_HEAD_K" "master" "master"
+if [ "$COMPLETION_SUCCESS" != "true" ]; then
+    echo "FAIL: Test K - expected informational task with no repo changes to succeed, got $COMPLETION_SUCCESS ($FAIL_REASON)"
+    exit 1
+fi
+if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
+    echo "FAIL: Test K - informational task should not require a PR"
+    exit 1
+fi
+echo "[OK] Test K: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
