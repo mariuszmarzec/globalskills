@@ -235,17 +235,6 @@ echo "[7/7] Runtime prepared (not started)."
 echo "  .enabled marker: absent"
 echo "  Watchdog cron: installed but dormant until an intentional start"
 
-# 6. Intentional-enable marker is NOT created here.
-#    install-manul.sh prepares the runtime but never starts the daemon and never
-#    creates the .enabled marker. That marker is the lifecycle contract between
-#    intentional start/stop and the watchdog, and it is created ONLY by an
-#    explicit start (the `manul` alias / start-manul-automation.sh start).
-#    If install-manul.sh created it, the watchdog would start the daemon on the
-#    next cron tick — i.e. automatic startup from an install that promised not
-#    to start anything.
-echo
-echo "[5/5] Runtime prepared (not started)."
-
 # 7. Verify
 echo
 echo "=== Verification ==="
