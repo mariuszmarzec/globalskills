@@ -305,13 +305,23 @@ update_task_completion() {
       ;;
   esac
 
-  if [ -z "$claim_token" ]; then
-    log "ERROR: Refusing task state transition for $comment_id without claim token"
-    return 1
+  local where_clause="WHERE commentId='$safe_comment_id' AND status='running'"
+  if [ -n "$claim_token" ]; then
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    where_clause+=" AND claimToken='$safe_claim_token'"
+  else
+    # Backward compatibility for rows created before claimToken existed.
+    # Once a new claim has a token, an old execution without one cannot finalize it.
+    local legacy_worker_pid="${BASHPID}"
+    local db_claim_token
+    db_claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$safe_comment_id' AND status='running' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$db_claim_token" ]; then
+      log "ERROR: Refusing legacy finalization for $comment_id because current claim has a token"
+      return 1
+    fi
+    where_clause+=" AND workerPid=$legacy_worker_pid AND claimToken IS NULL"
   fi
-  local safe_claim_token
-  safe_claim_token="$(sql_escape "$claim_token")"
-  local where_clause="WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'"
 
   local update_sql="UPDATE processed_comments SET status='$status'"
   case "$status" in
