@@ -536,6 +536,9 @@ recover_stale_tasks() {
   lc_log "RECOVERY_COMPLETE" "recovered=$recovered"
   return 0
 }
+# Per-task heartbeat child processes, keyed by comment/task id.
+declare -A HEARTBEAT_PIDS
+
 start_heartbeat() {
   ensure_claim_token_column || return 1
   local comment_id="$1"
