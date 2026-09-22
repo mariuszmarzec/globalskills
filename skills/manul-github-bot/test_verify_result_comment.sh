@@ -80,6 +80,7 @@ eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^complete_task_with_verification() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^ensure_claim_token_column() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^start_heartbeat() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^stop_heartbeat() {/,/^}/p' "$DAEMON")"
 # Heartbeat tracking array must be declared in test scope
@@ -115,6 +116,7 @@ setup_db() {
             heartbeatAt TEXT,
             leaseExpiresAt TEXT,
             workerPid INTEGER,
+            claimToken TEXT,
             nextAttemptAt TEXT
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
