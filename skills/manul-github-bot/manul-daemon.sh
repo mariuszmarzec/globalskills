@@ -1204,9 +1204,11 @@ evaluate_task_completion() {
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
       # Fallback: attempt direct completion with ownership verification
       local fallback_worker_pid
-      fallback_worker_pid="$$"
+      fallback_worker_pid="$"
+      local fallback_claim_token
+      fallback_claim_token="$(sql_escape "$CLAIM_TOKEN")"
       local fallback_result
-      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_worker_pid; SELECT changes();" 2>/dev/null)"
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL WHERE commentId='$safe_comment_id' AND status='running' AND workerPid=$fallback_worker_pid AND claimToken='$fallback_claim_token'; SELECT changes();" 2>/dev/null)"
       local fallback_changes
       fallback_changes="$(echo "$fallback_result" | tail -n 1)"
       if [ "${fallback_changes:-0}" -eq 1 ]; then
