@@ -3,7 +3,7 @@
 #
 # Usage: manul-agent-wrapper.sh <prompt-file> <stdout-file> <stderr-file>
 #
-# Runs the OpenClaw orchestrator with the given prompt, then appends
+# Runs the OpenClaw orchestrator with a dedicated per-task session, then appends
 # TASK_DONE (if exit code 0) or TASK_FAILED (if exit code non-zero) to the stdout file.
 # The orchestrator's stdout and stderr are appended to the respective files.
 
@@ -19,9 +19,9 @@ STDOUT_FILE="$2"
 STDERR_FILE="$3"
 
 # Resolve the OpenClaw binary.
-# The daemon exports OPENCLAW_BIN, but it may be empty if `openclaw` is not on the
-# daemon's PATH at startup. Falling back to PATH lookup keeps the wrapper usable
-# even when the exported variable is missing/blank, and fails loudly otherwise.
+# The daemon exports OPENCLAW_BIN, but it may be empty if openclaw was not on
+# PATH at daemon startup. Falling back to PATH lookup keeps the wrapper usable
+# and fails loudly when the runtime is genuinely unavailable.
 if [ -z "${OPENCLAW_BIN:-}" ] || [ ! -x "$OPENCLAW_BIN" ]; then
   OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
 fi
@@ -31,15 +31,30 @@ if [ -z "${OPENCLAW_BIN:-}" ] || [ ! -x "$OPENCLAW_BIN" ]; then
 fi
 export OPENCLAW_BIN
 
-# Local logging function
+# OpenClaw's main session can already be busy. In that case an invocation
+# without --session-key queues behind the main turn and Manul can observe an
+# immediate/short-lived worker failure instead of getting an independent agent
+# turn. Give every Manul task its own stable session key so retries reuse the
+# same task session without competing for the main session.
+TASK_NAME="$(basename "$PROMPT_FILE")"
+TASK_NAME="${TASK_NAME//[^a-zA-Z0-9_.-]/-}"
+SESSION_KEY="${MANUL_SESSION_KEY:-manul-${TASK_NAME}}"
+
+# Local logging function. Keep launcher diagnostics in the task stderr file so
+# daemon.log remains concise while the exact launch failure is retained.
 log() {
-  echo "$@" >&2
+  echo "$@" >>"$STDERR_FILE"
 }
 
-# Flag to track if we're receiving a termination signal
+log "manul-agent-wrapper: starting"
+log "manul-agent-wrapper: openclaw=$OPENCLAW_BIN"
+log "manul-agent-wrapper: cwd=$(pwd)"
+log "manul-agent-wrapper: prompt=$PROMPT_FILE"
+log "manul-agent-wrapper: session-key=$SESSION_KEY"
+
+# Flag to track if we're receiving a termination signal.
 TERMINATING=0
 
-# Function to clean up on exit
 cleanup() {
     if [ "$TERMINATING" -eq 0 ]; then
         TERMINATING=1
@@ -51,23 +66,26 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Run the orchestrator in the background
-"$OPENCLAW_BIN" agent --agent main --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE" &
+# Run the orchestrator in the background. The dedicated session key is
+# intentional: do not route Manul work through an already-busy main session.
+"$OPENCLAW_BIN" agent --agent main --session-key "$SESSION_KEY" --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE" &
 ORCHESTRATOR_PID=$!
+log "manul-agent-wrapper: orchestrator-pid=$ORCHESTRATOR_PID"
+
 wait "$ORCHESTRATOR_PID"
 rc=$?
+log "manul-agent-wrapper: orchestrator-exit=$rc"
 
-# If we were interrupted by a signal, don't emit TASK_DONE/TASK_FAILED
+# If we were interrupted by a signal, don't emit TASK_DONE/TASK_FAILED.
 if [ "$TERMINATING" -eq 1 ]; then
     log "WARNING: Agent wrapper interrupted by signal, not emitting task status"
     exit 1
 fi
 
-if [ $rc -eq 0 ]; then
+if [ "$rc" -eq 0 ]; then
     echo "TASK_DONE" >>"$STDOUT_FILE"
 else
-    echo "TASK_FAILED: Orchestrator exited with non-zero status" >>"$STDOUT_FILE"
+    echo "TASK_FAILED: Orchestrator exited with non-zero status (rc=$rc)" >>"$STDOUT_FILE"
 fi
 
-exit $rc
-
+exit "$rc"
