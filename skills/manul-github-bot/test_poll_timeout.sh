@@ -27,8 +27,11 @@ export MANUL_DIR
 
 mkdir -p "$MANUL_DIR/repo-locks"
 : >"$LOG"
-# Polling requires an installation baseline; this test owns its state DB.
-sqlite3 "$DB" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
+
+init_poll_db() {
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT); INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
+}
+init_poll_db
 
 # Fake gh: for repo "hang", sleep forever; for any other repo, fast return empty
 cat > "$TEST_DIR/gh" << 'FAKEGH'
@@ -136,6 +139,7 @@ echo ""
 echo "Test 2: Multiple repos, no starvation"
 
 rm -f "$DB"
+init_poll_db
 rm -rf "$MANUL_DIR/repo-locks"
 mkdir -p "$MANUL_DIR/repo-locks"
 
@@ -172,6 +176,7 @@ echo ""
 echo "Test 3: poll.flock prevents concurrent instances"
 
 rm -f "$DB"
+init_poll_db
 rm -f "$POLL_FLOCK"
 rm -rf "$MANUL_DIR/repo-locks"
 mkdir -p "$MANUL_DIR/repo-locks"
@@ -321,6 +326,7 @@ echo ""
 echo "Test 6: Partial result emitted on outer SIGTERM"
 
 rm -f "$DB" "$POLL_FLOCK"
+init_poll_db
 rm -rf "$MANUL_DIR/repo-locks"
 mkdir -p "$MANUL_DIR/repo-locks"
 
