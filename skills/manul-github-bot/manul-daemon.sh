@@ -475,6 +475,7 @@ release_task_lock() {
 # 2. Lease expired but task not finalized
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
+  ensure_claim_token_column || return 1
   log "recover_stale_tasks: checking for stuck tasks"
   lc_log "RECOVERY_START" ""
 
