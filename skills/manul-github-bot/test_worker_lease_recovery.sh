@@ -99,7 +99,7 @@ echo "PASS: non-owner completion rejected"
 
 # 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('hb','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),12345,'hb-token',NULL,NULL);"
-HEARTBEAT_PIDS[hb]=1
+HEARTBEAT_PIDS["hb"]=1
 CURRENT_WORKER_PID=12345
 LEASE_TIMEOUT=900
 refresh_heartbeat hb
