@@ -547,11 +547,12 @@ MOCK_EOF
 }
 
 # =============================================================================
-# Test 6: first poll requires an installation baseline
+# Test 6: installation baseline excludes pre-install comments
 # =============================================================================
-test_first_poll_requires_install_baseline() {
+test_installation_baseline_filtering() {
   local test_dir manul_dir mock_gh_dir poll_db
-  test_dir="$(mktemp -d /tmp/manul-baseline-required-XXXXXX)"
+  local baseline old_created new_created count old_count new_count persisted_baseline
+  test_dir="$(mktemp -d /tmp/manul-install-baseline-XXXXXX)"
   manul_dir="$test_dir/manul"
   mock_gh_dir="$test_dir/mock-gh"
   poll_db="$manul_dir/manul.db"
@@ -564,6 +565,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
 
+  # Without an installation baseline, the poller must fail closed.
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
@@ -585,6 +587,53 @@ MOCK_EOF
     rm -rf "$test_dir"
     return 1
   fi
+
+  # A baseline created at install time must exclude older comments and accept
+  # comments created after the installation cutoff.
+  baseline="$(date -u -d 'now - 1 minute' +%Y-%m-%dT%H:%M:%SZ)"
+  old_created="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  new_created="$(date -u -d 'now - 30 seconds' +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$poll_db" "INSERT INTO meta(key,value) VALUES('baseline','$baseline');"
+
+  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+#!/bin/bash
+set -u
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "$1" == "api" ]]; then
+  echo '[{"id":"old-trigger","body":"/manul old task","user":{"login":"test-user","type":"User"},"created_at":"__OLD_CREATED__","html_url":"https://github.com/test-org/test-repo/issues/1#old"},{"id":"new-trigger","body":"/manul new task","user":{"login":"test-user","type":"User"},"created_at":"__NEW_CREATED__","html_url":"https://github.com/test-org/test-repo/issues/1#new"}]'
+  exit 0
+fi
+echo '{}'
+exit 0
+MOCK_EOF
+  sed -i "s/__OLD_CREATED__/$old_created/; s/__NEW_CREATED__/$new_created/" "$mock_gh_dir/gh"
+  chmod +x "$mock_gh_dir/gh"
+
+  MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || {
+    rm -rf "$test_dir"
+    return 1
+  }
+
+  count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
+  old_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:old-trigger';" 2>/dev/null)"
+  new_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:new-trigger';" 2>/dev/null)"
+  persisted_baseline="$(sqlite3 "$poll_db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null)"
+
+  if [ "$count" -eq 1 ] && [ "$old_count" -eq 0 ] && [ "$new_count" -eq 1 ] && [ "$persisted_baseline" = "$baseline" ]; then
+    echo "  PASS: installation baseline excludes old comments and accepts new comments"
+  else
+    echo "ERROR: baseline filtering failed (count=$count old=$old_count new=$new_count baseline=$persisted_baseline expected=$baseline)"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
   rm -rf "$test_dir"
   return 0
 }
@@ -597,7 +646,7 @@ run_test "issue conversation: trigger→ordinary→follow-up preserves context" 
 run_test "review thread: every comment persisted, identity based on root only" test_review_thread_regression
 run_test "baseId dedup prevents duplicate queued tasks" test_baseid_dedup_no_duplicates
 run_test "bot comments (.user.type == Bot) are filtered out" test_bot_comment_filtering
-run_test "first poll requires an installation baseline" test_first_poll_requires_install_baseline
+run_test "installation baseline excludes pre-install comments" test_installation_baseline_filtering
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
