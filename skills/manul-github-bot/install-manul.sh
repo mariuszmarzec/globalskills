@@ -63,7 +63,8 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 
 for required in install-manul-symlinks.sh config.json.example \
-             manul-conversation.sh workspace-manager.sh; do
+             manul-conversation.sh workspace-manager.sh watchdog.sh \
+             manul-shell.zsh manul-daemon.sh manul-status.sh; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
         fail "Missing required canonical file: $CANONICAL_DIR/$required"
     fi
@@ -144,17 +145,27 @@ backup_db() {
     local base="${DB_FILE}.old-$(date +%Y%m%d-%H%M%S)"
     local backup="$base"
     local n=1
-    while [ -e "$backup" ]; do
+    while [ -e "$backup" ] || [ -e "${backup}-wal" ] || [ -e "${backup}-shm" ]; do
         backup="${base}-${n}"
         n=$((n + 1))
     done
     mv "$DB_FILE" "$backup" || return 1
+    # Preserve SQLite sidecars with the DB backup so an old WAL cannot be
+    # accidentally applied to the newly-created database.
+    if [ -e "${DB_FILE}-wal" ]; then
+        mv "${DB_FILE}-wal" "${backup}-wal" || return 1
+    fi
+    if [ -e "${DB_FILE}-shm" ]; then
+        mv "${DB_FILE}-shm" "${backup}-shm" || return 1
+    fi
     echo "  Previous DB preserved as: $backup"
 }
 
 reset_to_fresh_db() {
     if [ -f "$DB_FILE" ]; then
         backup_db || fail "Could not preserve existing DB before fresh bootstrap"
+    else
+        rm -f "${DB_FILE}-wal" "${DB_FILE}-shm"
     fi
     rm -f "$DB_FILE"
     BOOTSTRAP_FRESH=true
