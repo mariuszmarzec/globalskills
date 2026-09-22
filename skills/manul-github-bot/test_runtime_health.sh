@@ -968,6 +968,27 @@ else
 fi
 rm -rf "$INIT_ROOT"
 
+# ── Test: runtime repair cannot turn an existing queue into a new empty DB ─────
+echo
+echo "Test: Self-healing never loses an existing queue"
+PERSIST_ROOT="$(mktemp -d /tmp/manul-persistence-XXXXXX)"
+PERSIST_RUNTIME="$PERSIST_ROOT/runtime"
+mkdir -p "$PERSIST_RUNTIME"
+cp "$SCRIPT_DIR/config.json.example" "$PERSIST_RUNTIME/config.json"
+sqlite3 "$PERSIST_RUNTIME/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
+PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
+set +e
+PERSIST_OUTPUT="$(MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
+PERSIST_EXIT=$?
+set -e
+PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"
+if [ "$PERSIST_EXIT" -eq 0 ] && [ "$PERSIST_BEFORE" = "$PERSIST_AFTER" ] && [ "$PERSIST_AFTER" -eq 1 ]; then
+  ok "Repair preserves an existing queued task"
+else
+  fail "Repair changed/lost an existing queued task (exit=$PERSIST_EXIT before=$PERSIST_BEFORE after=$PERSIST_AFTER)"
+  echo "$PERSIST_OUTPUT"
+fi
+rm -rf "$PERSIST_ROOT"
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
