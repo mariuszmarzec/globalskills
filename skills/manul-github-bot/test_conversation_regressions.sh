@@ -575,7 +575,7 @@ fi
 if [[ "$1" == "api" ]]; then
   args="${@/--paginate/}"
   if [[ "$args" == *"/issues/comments"* ]]; then
-    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"2099-01-01T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
+    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"2026-09-22T13:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
     exit 0
   fi
   echo '[]'
