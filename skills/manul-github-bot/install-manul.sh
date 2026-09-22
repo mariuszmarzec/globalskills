@@ -18,7 +18,7 @@
 # immediately until .enabled is present.
 #
 # Usage:
-#   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>]
+#   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]
 #
 # Environment overrides:
 #   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.openclaw/manul)
