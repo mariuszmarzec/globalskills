@@ -823,17 +823,16 @@ ensure_claim_token_column() {
   if sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|claimToken|'; then
     return 0
   fi
-    log "migration: adding claimToken column to processed_comments"
-    local alter_err
-    alter_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN claimToken TEXT; COMMIT;" 2>&1)" || {
-      # Another worker may have won the migration race.
-      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|claimToken|'; then
-        log "ERROR: failed to add claimToken column: $alter_err"
-        return 1
-      fi
-    }
-    log "migration: claimToken column added or already present"
-  fi
+  log "migration: adding claimToken column to processed_comments"
+  local alter_err
+  alter_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN claimToken TEXT; COMMIT;" 2>&1)" || {
+    # Another worker may have won the migration race.
+    if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|claimToken|'; then
+      log "ERROR: failed to add claimToken column: $alter_err"
+      return 1
+    fi
+  }
+  log "migration: claimToken column added or already present"
   return 0
 }
 post_github_comment() {
