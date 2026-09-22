@@ -85,7 +85,7 @@ REPO="owner/repo"
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES
-('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'owner-token',NULL,NULL);
+('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'owner-token',NULL,NULL);
 INSERT INTO processed_comments VALUES
 ('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,'other-token',NULL,NULL);
 "
@@ -99,7 +99,8 @@ echo "PASS: non-owner completion rejected"
 
 # 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('hb','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$,'hb-token',NULL,NULL);"
-HEARTBEAT_PIDS[hb]=$$
+HEARTBEAT_PIDS[hb]=1
+CURRENT_WORKER_PID=12345
 LEASE_TIMEOUT=900
 refresh_heartbeat hb
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN heartbeatAt > datetime('now','-5 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='hb';")" "heartbeat timestamp refreshed"
