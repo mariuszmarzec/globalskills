@@ -31,7 +31,7 @@
 # 25. watchdog.sh starts the daemon when .enabled is present and the daemon is dead
 # 26. start-manul-automation.sh start creates the .enabled marker
 # 27. start-manul-automation.sh stop removes the .enabled marker
-# 28. manul-shell.zsh defines unconditional aliases + a self-healing guard
+# 28. manul-shell.zsh defines lifecycle functions + a self-healing guard
 # 29. .zshrc sources manul-shell.zsh and contains no hardcoded machine paths
 
 set -uo pipefail
@@ -877,6 +877,59 @@ for tbl in processed_comments conversations meta workspaces; do
   fi
 done
 ok "Preserved DB retains all required tables"
+
+
+# ── Test 15-20: canonical installer lifecycle ────────────────────────────────
+echo
+echo "Test 15-20: Canonical installer lifecycle"
+INSTALL_ROOT="$TMPROOT/install-runtime"
+INSTALL_HOME="$TMPROOT/install-home"
+mkdir -p "$INSTALL_HOME"
+set +e
+INSTALL_OUTPUT=$(HOME="$INSTALL_HOME"   MANUL_RUNTIME_DIR="$INSTALL_ROOT"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" 2>&1)
+INSTALL_EXIT=$?
+set -e
+
+if [ "$INSTALL_EXIT" -eq 0 ]; then
+  ok "install-manul.sh succeeds on a fresh runtime"
+else
+  fail "install-manul.sh failed on a fresh runtime (exit=$INSTALL_EXIT)"
+  echo "$INSTALL_OUTPUT"
+fi
+
+if [ -f "$INSTALL_ROOT/manul.db" ] && [ -f "$INSTALL_ROOT/config.json" ]; then
+  ok "Fresh installer creates DB and config"
+else
+  fail "Fresh installer did not create DB/config"
+fi
+
+if [ ! -f "$INSTALL_ROOT/.enabled" ]; then
+  ok "Fresh installer does not create .enabled"
+else
+  fail "Fresh installer unexpectedly created .enabled"
+fi
+
+if grep -qF "source \"$SCRIPT_DIR/manul-shell.zsh\"" "$INSTALL_HOME/.zshrc" 2>/dev/null; then
+  ok "Fresh installer installs canonical zsh integration"
+else
+  fail "Fresh installer did not install zsh integration"
+fi
+
+if [ -L "$INSTALL_ROOT/watchdog.sh" ] && crontab -l 2>/dev/null | grep -qF "$INSTALL_ROOT/watchdog.sh"; then
+  ok "Fresh installer installs watchdog cron entry"
+else
+  fail "Fresh installer did not install watchdog cron entry"
+fi
+
+set +e
+HOME="$INSTALL_HOME"   MANUL_RUNTIME_DIR="$INSTALL_ROOT"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" >/dev/null 2>&1
+INSTALL_EXIT_2=$?
+set -e
+if [ "$INSTALL_EXIT_2" -eq 0 ]; then
+  ok "Canonical installer is idempotent"
+else
+  fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
