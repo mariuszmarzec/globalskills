@@ -8,11 +8,10 @@
 # runtime dir. This means deleting/archiving ~/.openclaw/manul can never
 # permanently break `manul`, `manul-status`, or `manul-comments-remove`.
 #
-# Self-healing: manul-ensure-runtime() runs the full canonical installer
-# (install-manul.sh: symlinks + config + DB + watchdog setup) whenever the
-# runtime is missing or any CLI entrypoint is not a usable file. The installer
-# is idempotent and lives in the canonical source, so this works even when the
-# whole runtime is gone. Checking all three entrypoints (not just
+# Self-healing: manul-ensure-runtime() runs the repair path when the
+# runtime is missing or any CLI entrypoint is not a usable file. Repair is
+# fail-closed: it will restore an existing DB from backup/archive but will
+# never silently fabricate a fresh application DB during self-healing. Checking all three entrypoints (not just
 # manul-daemon.sh) means a broken/missing manul-status.sh or
 # manul-comments-remove.sh is also repaired.
 #
@@ -28,6 +27,7 @@
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
 MANUL_INSTALLER="$MANUL_CANONICAL_DIR/install-manul.sh"
+MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"
 
 manul-ensure-runtime() {
@@ -36,8 +36,9 @@ manul-ensure-runtime() {
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ]; then
-        if ! "$installer"; then
-            echo "ERROR: failed to repair Manul runtime" >&2
+        if ! "$MANUL_REPAIR"; then
+            echo "ERROR: failed to repair Manul runtime without risking task state" >&2
+            echo "Run the installer explicitly for a first-time initialization." >&2
             return 1
         fi
     fi
