@@ -79,18 +79,29 @@ retry_all_failed_tasks() {
 }
 
 reset_all_tasks() {
-    log "WARNING: Resetting ALL running tasks to queued (DANGEROUS)"
+    local status_filter="${1:-running}"
+    case "$status_filter" in
+        running|failed) ;;
+        *)
+            echo "Error: --reset-all supports only running or failed" >&2
+            return 1
+            ;;
+    esac
+
+    log "WARNING: Resetting ALL $status_filter tasks to queued (DANGEROUS)"
     read -p "Are you sure? (yes/no): " -r confirm
     if [ "$confirm" != "yes" ]; then
         log "Aborted"
         return
     fi
-    sqlite3 "$DB" "
-        UPDATE processed_comments
-        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
-        WHERE status='running';
-    " 2>/dev/null
-    log "All running tasks reset"
+
+    if [ "$status_filter" = "failed" ]; then
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now') WHERE status='failed';" 2>/dev/null
+    else
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE status='running';" 2>/dev/null
+    fi
+
+    log "All $status_filter tasks reset"
 }
 
 health_check() {
@@ -132,7 +143,10 @@ case "${1:-}" in
         mark_task_failed "$1"
         ;;
     --reset-all)
-        reset_all_tasks
+        reset_all_tasks "running"
+        ;;
+    --reset-all=*)
+        reset_all_tasks "${1#--reset-all=}"
         ;;
     --retry)
         shift
@@ -142,14 +156,11 @@ case "${1:-}" in
         fi
         retry_failed_task "$1"
         ;;
-    --retry-failed-all)
-        retry_all_failed_tasks
-        ;;
     --health-check)
         health_check
         ;;
     *)
-        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all|--retry <id>|--retry-failed-all|--health-check]"
+        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all[=running|failed]|--retry <id>|--health-check]"
         exit 1
         ;;
 esac
