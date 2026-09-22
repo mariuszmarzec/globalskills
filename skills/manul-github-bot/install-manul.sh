@@ -182,7 +182,7 @@ if [ ! -f "$DB_FILE" ]; then
     else
         fail "Manul DB is missing. Refusing to create a fresh DB implicitly; use repair-manul-runtime.sh or run install-manul.sh --init-state for first-time setup"
     fi
-elif ! -s "$DB_FILE"; then
+elif [ ! -s "$DB_FILE" ]; then
     if [ "$INIT_STATE" = true ]; then
         echo "[4/7] DB is empty; explicit --init-state allows fresh bootstrap."
         rm -f "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm"
