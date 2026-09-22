@@ -14,8 +14,9 @@
 #   meta(baseline)   — BASELINE = manul install/config moment (UTC ISO).
 #     Only issues/comments created AFTER baseline are considered, so manul
 #     never picks up old posts after a (re)install on a new machine.
-#     Set explicitly during install; falls back to first-run time if empty.
-#   meta(baseline)   — BASELINE = manul install/config moment (UTC ISO).
+#     Set explicitly during install/repair. Polling fails closed when it is
+#     missing, because the cutoff must never silently become "now" or a lookback.
+#
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
@@ -637,13 +638,8 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversation_messages(messageId TEXT P
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
 if [ -z "$BASELINE" ]; then
-    # First-run catch-up window: commands created shortly before the daemon
-    # starts must not be lost. The old behavior used "now" and permanently
-    # skipped comments created a few seconds/minutes before startup.
-    INITIAL_LOOKBACK_SECONDS="${MANUL_INITIAL_LOOKBACK_SECONDS:-86400}"
-    BASELINE="$(date -u -d "now - ${INITIAL_LOOKBACK_SECONDS} seconds" +%Y-%m-%dT%H:%M:%SZ)"
-    sqlite3 "$DB" "INSERT OR IGNORE INTO meta(key,value) VALUES('baseline','$BASELINE');" 2>>"$LOG"
-    log "baseline set with initial catch-up window (${INITIAL_LOOKBACK_SECONDS}s): $BASELINE"
+    log "ERROR: baseline is missing from Manul state; refusing to poll without an installation baseline"
+    fail "baseline is missing from Manul state (run install-manul.sh or repair-manul-runtime.sh)"
 fi
 
 # === context enrichment helpers ===
