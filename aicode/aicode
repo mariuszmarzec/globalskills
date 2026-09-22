@@ -97,8 +97,16 @@ fi
 
 # Ensure manul GitHub bot daemon is running.
 # Never let a broken/hung daemon block OpenCode startup.
+# The canonical installer self-heals a missing/broken runtime before startup.
+MANUL_INSTALLER="$HOME/.globalskills/skills/manul-github-bot/install-manul.sh"
 MANUL_SCRIPT="$HOME/.openclaw/manul/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
+
+if [ -x "$MANUL_INSTALLER" ]; then
+    if ! "$MANUL_INSTALLER" >/dev/null 2>&1; then
+        echo "WARNING: Manul runtime repair failed; continuing with OpenCode."
+    fi
+fi
 
 if [ -x "$MANUL_SCRIPT" ]; then
     if timeout 5 "$MANUL_SCRIPT" start >"$MANUL_LOG" 2>&1; then
