@@ -9,6 +9,9 @@
 #   --json           Output JSON format
 #   --list           List all tasks (optional filter by status)
 #   --status S       Filter by status (queued, running, completed, failed)
+#   --log            Show daemon.log instead of task status
+#   --tail N         Number of log lines to show (default: 100)
+#   --tail=N         Same as --tail N
 #
 # Returns:
 #   JSON with task details or list of tasks
@@ -19,6 +22,7 @@
 #   manul-status.sh --task cli-abc123 --json
 #   manul-status.sh --list --status queued
 #   manul-status.sh --list --json
+#   manul-status.sh --log --tail=200
 #
 # JSON Output Schema:
 #   {
@@ -46,18 +50,44 @@ OUTPUT_FORMAT="text"
 LIST_MODE=false
 FILTER_STATUS=""
 TASK_ID=""
+LOG_MODE=false
+LOG_TAIL=100
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --task) TASK_ID="$2"; shift 2 ;;
+    --task)
+      [ $# -ge 2 ] || { echo "Error: --task requires an ID" >&2; exit 1; }
+      TASK_ID="$2"; shift 2 ;;
     --json) OUTPUT_FORMAT="json"; shift ;;
     --list) LIST_MODE=true; shift ;;
-    --status) FILTER_STATUS="$2"; shift 2 ;;
+    --status)
+      [ $# -ge 2 ] || { echo "Error: --status requires a value" >&2; exit 1; }
+      FILTER_STATUS="$2"; shift 2 ;;
+    --log) LOG_MODE=true; shift ;;
+    --tail)
+      [ $# -ge 2 ] || { echo "Error: --tail requires a number" >&2; exit 1; }
+      LOG_TAIL="$2"; shift 2 ;;
+    --tail=*) LOG_TAIL="${1#--tail=}"; shift ;;
     -*) echo "Unknown option: $1" >&2; exit 1 ;;
     *) TASK_ID="$1"; shift ;;
   esac
 done
+
+if ! [[ "$LOG_TAIL" =~ ^[0-9]+$ ]] || [ "$LOG_TAIL" -lt 1 ]; then
+  echo "Error: --tail must be a positive integer" >&2
+  exit 1
+fi
+
+if [ "$LOG_MODE" = true ]; then
+  LOG_FILE="$MANUL_DIR/daemon.log"
+  if [ ! -f "$LOG_FILE" ]; then
+    echo "Error: Manul daemon log not found at $LOG_FILE" >&2
+    exit 1
+  fi
+  tail -n "$LOG_TAIL" "$LOG_FILE"
+  exit 0
+fi
 
 # Ensure database exists
 if [ ! -f "$DB" ]; then
