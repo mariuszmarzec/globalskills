@@ -7,16 +7,15 @@
 #   3. Ensure runtime directory
 #   4. Deploy symlinks via install-manul-symlinks.sh
 #   5. Restore config.json from example if missing
-#   6. Bootstrap/migrate manul.db (create+init if missing; migrate if valid;
-#      abort if corrupt)
-#   7. Mark the runtime as intentionally enabled (.enabled)
-#   8. Verify and print summary
+#   6. Bootstrap/migrate manul.db (create+init if missing; replace with a fresh
+#      DB if schema initialization fails)
+#   7. Install the dormant watchdog cron (it only acts when .enabled exists)
+#   8. Install canonical zsh shell integration
+#   9. Verify and print summary
 #
-# This installer does NOT start the daemon and does NOT install the watchdog
-# cron. Intentional start (the `manul` alias / start-manul-automation.sh) is a
-# separate step. That separation is the whole point of the `.enabled` marker:
-# the watchdog only restarts the daemon when `.enabled` is present, so a fresh
-# install is intentionally-enabled while crash recovery never re-enables it.
+# This installer does NOT start the daemon and does NOT create the .enabled
+# marker. The watchdog cron may exist after installation, but it exits
+# immediately until .enabled is present.
 #
 # Usage:
 #   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>]
@@ -85,7 +84,7 @@ echo
 #   curl      - HTTP used by manul-comments-remove.sh
 #   openclaw  - the agent runtime the daemon invokes
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl openclaw; do
+for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -130,46 +129,67 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 # 5. Bootstrap/migrate the DB
-#    - missing/empty file  -> init_schema creates the schema (bootstrap)
-#    - valid SQLite file  -> init_schema is idempotent (migrate, preserved)
-#    - corrupt file       -> moved aside as manul.db.old-<ts>, fresh DB bootstrapped
-# A corrupt DB is NEVER silently migrated or overwritten; the old file is
-# preserved as a timestamped backup so it can be restored manually if desired.
+#    - missing/empty file -> init_schema creates the schema
+#    - valid SQLite file -> init_schema/workspace_init are idempotent
+#    - schema initialization failure -> preserve old DB and bootstrap a fresh one
+#
+# Old data is disposable for installation purposes, but the previous DB is
+# always preserved as a timestamped .old-* file before replacement.
 echo
 DB_FILE="$RUNTIME_DIR/manul.db"
 BOOTSTRAP_FRESH=false
+
+backup_db() {
+    [ -f "$DB_FILE" ] || return 0
+    local base="${DB_FILE}.old-$(date +%Y%m%d-%H%M%S)"
+    local backup="$base"
+    local n=1
+    while [ -e "$backup" ]; do
+        backup="${base}-${n}"
+        n=$((n + 1))
+    done
+    mv "$DB_FILE" "$backup" || return 1
+    echo "  Previous DB preserved as: $backup"
+}
+
+reset_to_fresh_db() {
+    if [ -f "$DB_FILE" ]; then
+        backup_db || fail "Could not preserve existing DB before fresh bootstrap"
+    fi
+    rm -f "$DB_FILE"
+    BOOTSTRAP_FRESH=true
+}
+
 if [ ! -f "$DB_FILE" ]; then
-    echo "[4/5] DB not found, bootstrapping..."
+    echo "[4/7] DB not found, bootstrapping fresh..."
     BOOTSTRAP_FRESH=true
 elif [ ! -s "$DB_FILE" ]; then
-    # Empty file: treat as missing, bootstrap fresh.
-    echo "[4/5] DB is empty, bootstrapping..."
+    echo "[4/7] DB is empty, bootstrapping fresh..."
     rm -f "$DB_FILE"
     BOOTSTRAP_FRESH=true
 elif ! head -c 16 "$DB_FILE" 2>/dev/null | grep -q "^SQLite format 3"; then
-    # Not a SQLite file at all — preserve and bootstrap fresh.
-    TS="$(date +%Y%m%d-%H%M%S)"
-    mv "$DB_FILE" "${DB_FILE}.old-${TS}"
-    echo "[4/5] Existing DB is not a SQLite database; moved to ${DB_FILE}.old-${TS}, bootstrapping fresh..."
-    BOOTSTRAP_FRESH=true
+    echo "[4/7] Existing DB is not SQLite; replacing with a fresh DB..."
+    reset_to_fresh_db
 elif ! sqlite3 "$DB_FILE" "PRAGMA integrity_check;" 2>/dev/null | grep -q "^ok$"; then
-    # Corrupt SQLite — preserve and bootstrap fresh.
-    TS="$(date +%Y%m%d-%H%M%S)"
-    mv "$DB_FILE" "${DB_FILE}.old-${TS}"
-    echo "[4/5] Existing DB failed integrity check; moved to ${DB_FILE}.old-${TS}, bootstrapping fresh..."
-    BOOTSTRAP_FRESH=true
+    echo "[4/7] Existing DB failed integrity check; replacing with a fresh DB..."
+    reset_to_fresh_db
 else
-    echo "[4/5] DB present and valid, validating/migrating schema..."
+    echo "[4/7] DB present and valid, validating/migrating schema..."
 fi
 
 export MANUL_DIR="$RUNTIME_DIR"
 export DB="$DB_FILE"
 
-"$RUNTIME_DIR/manul-conversation.sh" init-schema || \
-    fail "Canonical conversation schema initialization failed"
+init_current_db() {
+    "$RUNTIME_DIR/manul-conversation.sh" init-schema &&
+    bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"
+}
 
-bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" || \
-    fail "Canonical workspace initialization failed"
+if ! init_current_db; then
+    echo "WARNING: current DB schema initialization failed; replacing the DB with a fresh schema..." >&2
+    reset_to_fresh_db
+    init_current_db || fail "Fresh DB schema initialization failed"
+}
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 for table in $REQUIRED_TABLES; do
@@ -179,8 +199,41 @@ for table in $REQUIRED_TABLES; do
 done
 echo "  Required tables present: $REQUIRED_TABLES"
 if $BOOTSTRAP_FRESH; then
-    echo "  (fresh DB bootstrap complete)"
+    echo "  Fresh DB bootstrap complete"
 fi
+
+# 6. Install watchdog cron + zsh shell integration.
+#    Neither operation starts the daemon. The watchdog is dormant until .enabled
+#    is created by an intentional start.
+WATCHDOG_CRON="*/5 * * * * $RUNTIME_DIR/watchdog.sh"
+if crontab -l 2>/dev/null | grep -qF "$WATCHDOG_CRON"; then
+    echo
+    echo "[5/7] Watchdog cron already installed"
+else
+    echo
+    echo "[5/7] Installing watchdog cron (dormant until .enabled exists)..."
+    (crontab -l 2>/dev/null; echo "$WATCHDOG_CRON") | crontab - || \
+        fail "Could not install watchdog cron"
+fi
+
+ZSHRC="$HOME/.zshrc"
+MANUL_SHELL_LINE="source \"$CANONICAL_DIR/manul-shell.zsh\""
+if [ ! -f "$ZSHRC" ]; then
+    touch "$ZSHRC" || fail "Could not create $ZSHRC"
+fi
+if grep -Fq "$MANUL_SHELL_LINE" "$ZSHRC"; then
+    echo "[6/7] Manul zsh integration already installed"
+else
+    echo >> "$ZSHRC"
+    echo "# Manul CLI (managed by globalskills)" >> "$ZSHRC"
+    echo "$MANUL_SHELL_LINE" >> "$ZSHRC"
+    echo "[6/7] Installed Manul zsh integration"
+fi
+
+echo
+echo "[7/7] Runtime prepared (not started)."
+echo "  .enabled marker: absent"
+echo "  Watchdog cron: installed but dormant until an intentional start"
 
 # 6. Intentional-enable marker is NOT created here.
 #    install-manul.sh prepares the runtime but never starts the daemon and never
