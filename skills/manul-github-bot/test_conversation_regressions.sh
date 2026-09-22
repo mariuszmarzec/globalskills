@@ -332,6 +332,9 @@ MOCK_EOF
   task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND prNumber=50;" 2>/dev/null)"
   if [ "$task_count" -ne 2 ]; then
     echo "ERROR: Expected 2 tasks, found $task_count"
+    echo "---- poll.log ----"
+    cat "$manul_dir/poll.log" 2>/dev/null || true
+    echo "---- end poll.log ----"
     rm -rf "$test_dir"
     return 1
   fi
@@ -605,6 +608,9 @@ MOCK_EOF
   baseline="$(sqlite3 "$poll_db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null)"
   if [ "$count" -ne 1 ]; then
     echo "ERROR: expected pre-start trigger to be queued, found $count"
+    echo "---- poll.log ----"
+    cat "$manul_dir/poll.log" 2>/dev/null || true
+    echo "---- end poll.log ----"
     rm -rf "$test_dir"
     return 1
   fi
