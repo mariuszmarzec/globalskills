@@ -537,6 +537,7 @@ recover_stale_tasks() {
   return 0
 }
 start_heartbeat() {
+  ensure_claim_token_column || return 1
   local comment_id="$1"
   local worker_pid="${2:-$BASHPID}"
   local claim_token="${3:-}"
