@@ -31,7 +31,6 @@ MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"
 
 manul-ensure-runtime() {
-    local installer="$MANUL_INSTALLER"
     if [ ! -d "$MANUL_RUNTIME_DIR" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
