@@ -9,7 +9,7 @@
 # permanently break `manul`, `manul-status`, or `manul-comments-remove`.
 #
 # Self-healing: manul-ensure-runtime() runs the full canonical installer
-# (install-manul.sh: symlinks + config + DB + .enabled marker) whenever the
+# (install-manul.sh: symlinks + config + DB + watchdog setup) whenever the
 # runtime is missing or any CLI entrypoint is not a usable file. The installer
 # is idempotent and lives in the canonical source, so this works even when the
 # whole runtime is gone. Checking all three entrypoints (not just
@@ -36,13 +36,44 @@ manul-ensure-runtime() {
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ]; then
-        "$installer" >/dev/null 2>&1 || true
+        if ! "$installer"; then
+            echo "ERROR: failed to repair Manul runtime" >&2
+            return 1
+        fi
     fi
 }
 
-# `manul` is the intentional-start path: it ensures the runtime, then starts
-# the daemon AND installs the watchdog cron. This creates the .enabled marker
-# (via start-manul-automation.sh start) so the watchdog is allowed to recover it.
-alias manul='manul-ensure-runtime; "$MANUL_AUTOMATION" start'
-alias manul-status='manul-ensure-runtime; "$MANUL_CANONICAL_DIR/manul-status.sh"'
-alias manul-comments-remove='manul-ensure-runtime; "$MANUL_CANONICAL_DIR/manul-comments-remove.sh"'
+# Remove legacy aliases before defining the canonical functions.
+unalias manul manul-status manul-comments-remove 2>/dev/null || true
+
+# manul is the intentional lifecycle entrypoint.
+# With no arguments it starts Manul; explicit subcommands are passed through.
+manul() {
+    local action="start"
+    if (( $# > 0 )); then
+        action="$1"
+        shift
+    fi
+
+    case "$action" in
+        start|stop|restart|status)
+            ;;
+        *)
+            echo "Usage: manul [start|stop|restart|status]" >&2
+            return 2
+            ;;
+    esac
+
+    manul-ensure-runtime || return $?
+    "$MANUL_AUTOMATION" "$action" "$@"
+}
+
+manul-status() {
+    manul-ensure-runtime || return $?
+    "$MANUL_CANONICAL_DIR/manul-status.sh" "$@"
+}
+
+manul-comments-remove() {
+    manul-ensure-runtime || return $?
+    "$MANUL_CANONICAL_DIR/manul-comments-remove.sh" "$@"
+}
