@@ -127,6 +127,12 @@ else
   fail "Installer default runtime is not HOME/.openclaw/manul"
 fi
 
+if grep -q 'for cmd in bash git gh jq sqlite3 curl openclaw crontab' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer requires OpenClaw"
+else
+  fail "Installer does not require OpenClaw"
+fi
+
 SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' \
   "$SCRIPT_DIR/install-manul-symlinks.sh" | grep -c '^ *"' || true)
 if [ "$SCRIPT_COUNT" -ge 20 ]; then
@@ -877,8 +883,10 @@ INSTALL_ROOT="$TMPROOT/install-runtime"
 INSTALL_HOME="$TMPROOT/install-home"
 mkdir -p "$INSTALL_HOME"
 set +e
+INSTALL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 INSTALL_OUTPUT=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
 INSTALL_EXIT=$?
+INSTALL_END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set -e
 
 if [ "$INSTALL_EXIT" -eq 0 ]; then
@@ -892,6 +900,13 @@ if [ -f "$INSTALL_ROOT/manul.db" ] && [ -f "$INSTALL_ROOT/config.json" ]; then
   ok "Fresh installer creates DB and config"
 else
   fail "Fresh installer did not create DB/config"
+fi
+
+INSTALL_BASELINE_VALUE="$(sqlite3 "$INSTALL_ROOT/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+if [ -n "$INSTALL_BASELINE_VALUE" ] && [[ "$INSTALL_BASELINE_VALUE" > "$INSTALL_START" || "$INSTALL_BASELINE_VALUE" == "$INSTALL_START" ]] && [[ "$INSTALL_BASELINE_VALUE" < "$INSTALL_END" || "$INSTALL_BASELINE_VALUE" == "$INSTALL_END" ]]; then
+  ok "Fresh installer persists baseline at installation time"
+else
+  fail "Fresh installer baseline is missing or outside installation window (value=$INSTALL_BASELINE_VALUE start=$INSTALL_START end=$INSTALL_END)"
 fi
 
 if [ ! -f "$INSTALL_ROOT/.enabled" ]; then
@@ -917,6 +932,12 @@ INSTALL_OUTPUT_2=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
+  INSTALL_BASELINE_AFTER="$(sqlite3 "$INSTALL_ROOT/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+  if [ "$INSTALL_BASELINE_AFTER" = "$INSTALL_BASELINE_VALUE" ]; then
+    ok "Canonical installer preserves the existing installation baseline"
+  else
+    fail "Canonical installer moved the existing baseline ($INSTALL_BASELINE_VALUE -> $INSTALL_BASELINE_AFTER)"
+  fi
   ok "Canonical installer remains idempotent after explicit initialization"
 else
   fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
