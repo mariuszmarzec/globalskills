@@ -98,6 +98,7 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 DB_FILE="$RUNTIME_DIR/manul.db"
+REPAIR_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # ---------------------------------------------------------------------------
 # db_is_valid: return 0 if the file is a non-empty, integrity-passing SQLite DB
@@ -218,6 +219,16 @@ for table in $REQUIRED_TABLES; do
         fail "Required table '$table' is missing from $DB_FILE"
     fi
 done
+
+# Legacy DBs may predate the persistent polling cutoff. Initialize it once
+# during repair; an existing baseline is always preserved.
+EXISTING_BASELINE="$(sqlite3 "$DB_FILE" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+if [ -z "$EXISTING_BASELINE" ]; then
+    sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','$REPAIR_BASELINE');" 2>/dev/null ||         fail "Could not persist Manul repair baseline"
+    echo "  Baseline initialized during repair: $REPAIR_BASELINE"
+else
+    echo "  Baseline preserved: $EXISTING_BASELINE"
+fi
 
 echo "  Required tables present: $REQUIRED_TABLES"
 echo
