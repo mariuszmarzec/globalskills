@@ -1943,6 +1943,20 @@ PROMPT_APPEND
      timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+
+     # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
+     # up. This is especially important for fast launch failures where the worker
+     # can exit before producing a GitHub-visible result.
+     if [ "$rc" -ne 0 ]; then
+       log "dispatch: agent launcher exited rc=$rc for task $COMMENT_ID"
+       if [ -s "$STDERR_FILE" ]; then
+         log "dispatch: agent stderr for task $COMMENT_ID (tail 80):"
+         tail -n 80 "$STDERR_FILE" >>"$LOG" 2>/dev/null || true
+       else
+         log "dispatch: agent stderr file is empty for task $COMMENT_ID"
+       fi
+     fi
+
     # Call production completion evaluation function
     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
 
