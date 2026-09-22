@@ -95,7 +95,7 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git gh jq sqlite3 curl openclaw crontab"
+echo "Prerequisites OK: bash git jq sqlite3 curl openclaw crontab"
 echo
 
 # 2. Ensure runtime directory
