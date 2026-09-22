@@ -62,7 +62,7 @@ reset_all_tasks() {
     fi
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
+        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE status='running';
     " 2>/dev/null
     log "All running tasks reset"
