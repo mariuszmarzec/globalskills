@@ -36,6 +36,7 @@ env:
     skills/manul-github-bot/test_error_observability.sh
     skills/manul-github-bot/test_verify_result_comment.sh
     skills/manul-github-bot/test_poll_timeout.sh
+    skills/manul-github-bot/test_task_branch_lifecycle.sh
     skills/manul-github-bot/test_worker_lease_recovery.sh
 
 jobs:
