@@ -41,8 +41,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
         --canonical-dir) CANONICAL_DIR="$2"; shift 2 ;;
+        --init-state) INIT_STATE=true; shift ;;
         --help|-h)
-            echo "Usage: $0 [--runtime-dir <path>] [--canonical-dir <path>]"
+            echo "Usage: $0 [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]"
             echo ""
             echo "Environment overrides:"
             echo "  MANUL_RUNTIME_DIR    Runtime directory"
