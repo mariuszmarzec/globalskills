@@ -81,52 +81,57 @@ fi
 
 # --- 3) heartbeat-based task recovery -------------------------------------
 if [ -f "$DB" ]; then
+    # Migrate legacy databases before recovery.
+    if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|claimToken|'; then
+        sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN claimToken TEXT;" 2>>"$LOG"
+        log "migration: added claimToken column"
+    fi
     # Find tasks with stale heartbeat or expired lease
     # CRITICAL: Only recover tasks where the worker is dead (not alive)
     # This prevents stealing from live workers
     STUCK_TASKS="$(sqlite3 "$DB" "
-        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid
+        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid, claimToken
         FROM processed_comments
         WHERE status='running'
         AND (
+            heartbeatAt IS NULL OR
             heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds') OR
+            leaseExpiresAt IS NULL OR
             leaseExpiresAt < datetime('now')
         )
     " 2>/dev/null)"
 
     if [ -n "$STUCK_TASKS" ] && [ "$STUCK_TASKS" != "" ]; then
-        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at worker_pid; do
+        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at worker_pid claim_token; do
             [ -z "$comment_id" ] && continue
 
-            # SAFETY: Check if worker PID is still alive
-            # If worker is alive, do NOT recover — it may still be processing
+            # workerPid identifies the long-lived worker loop, not one task.
+            worker_alive=0
             if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
-                log "RECOVERY: $comment_id ($repo#$issue_num) skipped — worker $worker_pid is still alive"
-                continue
+                worker_alive=1
             fi
+            log "RECOVERY: $comment_id ($repo#$issue_num) stale (worker=$worker_pid alive=$worker_alive heartbeat=$heartbeat_at lease=$lease_at attempts=$attempts)"
 
-            log "RECOVERY: $comment_id ($repo#$issue_num) stuck (heartbeat: $heartbeat_at, lease: $lease_at), attempts=$attempts, worker=$worker_pid"
-
-            # Check if we've exceeded max attempts
-            local ownership_clause
-            if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ]; then
-                ownership_clause="AND workerPid=$worker_pid"
+            ownership_clause=""
+            if [ -n "$claim_token" ]; then
+                safe_claim_token="$(printf '%s' "$claim_token" | sed "s/'/''/g")"
+                ownership_clause="AND claimToken='$safe_claim_token'"
             else
-                ownership_clause="AND (workerPid IS NULL OR workerPid=0)"
+                ownership_clause="AND claimToken IS NULL"
             fi
 
             if [ "${attempts:-0}" -ge "$MAX_ATTEMPTS" ]; then
-                log "  → marking as FAILED (exceeded max attempts: $MAX_ATTEMPTS)"
+                log "  → marking as FAILED (max attempts: $MAX_ATTEMPTS)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
+                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
                     WHERE commentId='$comment_id' AND status='running' $ownership_clause;
                 " 2>/dev/null
             else
                 log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
+                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
                     WHERE commentId='$comment_id' AND status='running' $ownership_clause;
                 " 2>/dev/null
             fi
