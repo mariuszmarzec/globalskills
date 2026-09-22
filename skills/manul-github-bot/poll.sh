@@ -623,9 +623,13 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversation_messages(messageId TEXT P
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
 if [ -z "$BASELINE" ]; then
-    BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # First-run catch-up window: commands created shortly before the daemon
+    # starts must not be lost. The old behavior used "now" and permanently
+    # skipped comments created a few seconds/minutes before startup.
+    INITIAL_LOOKBACK_SECONDS="${MANUL_INITIAL_LOOKBACK_SECONDS:-86400}"
+    BASELINE="$(date -u -d "now - ${INITIAL_LOOKBACK_SECONDS} seconds" +%Y-%m-%dT%H:%M:%SZ)"
     sqlite3 "$DB" "INSERT OR IGNORE INTO meta(key,value) VALUES('baseline','$BASELINE');" 2>>"$LOG"
-    log "baseline set: $BASELINE"
+    log "baseline set with initial catch-up window (${INITIAL_LOOKBACK_SECONDS}s): $BASELINE"
 fi
 
 # === context enrichment helpers ===
