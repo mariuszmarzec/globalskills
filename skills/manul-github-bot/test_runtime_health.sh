@@ -146,14 +146,6 @@ mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
 
-# The repository intentionally does not carry application state. Create a
-# production-schema DB fixture so --list tests the CLI contract rather than
-# failing merely because no runtime state file exists.
-CLI_DB="$CLI_ROOT/backup/manul.db"
-create_canonical_backup "$CLI_DB"
-cp "$CLI_DB" "$RUN/manul.db"
-chmod 600 "$RUN/manul.db"
-
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
 MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
@@ -328,7 +320,13 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
   fi
 done
 
-# 5) manul-status --list works against the production-schema fixture
+# 5) manul-status --list works against a production-schema DB fixture.
+# The repository intentionally does not carry application state, so create a
+# real schema fixture instead of coupling this CLI test to a repository DB.
+CLI_DB="$CLI_ROOT/backup/manul.db"
+create_canonical_backup "$CLI_DB"
+cp "$CLI_DB" "$RUN/manul.db"
+chmod 600 "$RUN/manul.db"
 
 set +e
 MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list >/dev/null 2>&1
