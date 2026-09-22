@@ -108,6 +108,7 @@ init_schema() {
         heartbeatAt TEXT,
         leaseExpiresAt TEXT,
         workerPid INTEGER,
+        claimToken TEXT,
         nextAttemptAt TEXT,
         conversationId TEXT,
         parentTaskId TEXT,
@@ -157,6 +158,9 @@ init_schema() {
   fi
   if ! echo "$col_check" | grep -q '|prUrl|'; then
     alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN prUrl TEXT; "
+  fi
+  if ! echo "$col_check" | grep -q '|claimToken|'; then
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN claimToken TEXT; "
   fi
 
   if [ -n "$alter_sql" ]; then

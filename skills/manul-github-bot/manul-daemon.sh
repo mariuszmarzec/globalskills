@@ -266,12 +266,13 @@ release_repo_lock() {
 
 # Enhanced SQLite UPDATE with verification and error handling
 update_task_completion() {
+  ensure_claim_token_column || return 1
   local comment_id="$1"
   local safe_comment_id="$(sql_escape "$comment_id")"
   local status="$2"
   local error_message="${3:-}"
+  local claim_token="${4:-}"
 
-  # Verify task exists before updating
   local task_exists
   task_exists="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
   if [ -z "$task_exists" ]; then
@@ -279,87 +280,72 @@ update_task_completion() {
     return 1
   fi
 
-  # Verify task is in a state that can transition to the target status
   local current_status
   current_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
-  # Validate state transitions
   case "$status" in
-    "completed")
-      # Allow completion if already completed (idempotent)
-      if [ "$current_status" = "completed" ]; then
-        log "SUCCESS: Task $comment_id already completed (idempotent)"
+    completed|failed)
+      if [ "$current_status" = "$status" ]; then
+        log "SUCCESS: Task $comment_id already $status (idempotent)"
         return 0
       fi
-      # Allow completion if currently queued (race condition recovery)
-      if [ "$current_status" = "queued" ]; then
-        log "WARN: Task $comment_id was requeued during processing, completing anyway"
-      elif [ "$current_status" != "running" ]; then
-        log "ERROR: Cannot complete task $comment_id from current status: $current_status"
+      if [ "$current_status" != "running" ]; then
+        log "ERROR: Cannot $status task $comment_id from current status: $current_status"
         return 1
       fi
       ;;
-    "failed")
-      if [ "$current_status" != "running" ] && [ "$current_status" != "queued" ]; then
-        log "ERROR: Cannot fail task $comment_id from current status: $current_status"
-        return 1
-      fi
-      ;;
-    "queued")
+    queued)
       if [ "$current_status" != "running" ]; then
         log "ERROR: Cannot requeue task $comment_id from current status: $current_status"
         return 1
       fi
       ;;
+    *)
+      log "ERROR: Unsupported task completion status: $status"
+      return 1
+      ;;
   esac
 
-  # Perform the update with worker ownership verification for completion/failure
-  local where_clause="WHERE commentId='$safe_comment_id'"
-
-  # For completed/failed tasks, verify worker ownership to prevent stealing
-  if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
-    local current_worker_pid
-    current_worker_pid="$$"
-    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_worker_pid"
-
-    # If no workerPid assigned yet, this is a transition from queued
-    if [ "$current_status" = "queued" ]; then
-      where_clause="WHERE commentId='$safe_comment_id'"
+  local where_clause="WHERE commentId='$safe_comment_id' AND status='running'"
+  if [ -n "$claim_token" ]; then
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    where_clause+=" AND claimToken='$safe_claim_token'"
+  else
+    # Backward compatibility for rows created before claimToken existed.
+    # Once a new claim has a token, an old execution without one cannot finalize it.
+    local legacy_worker_pid="${BASHPID}"
+    local db_claim_token
+    db_claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$safe_comment_id' AND status='running' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$db_claim_token" ]; then
+      log "ERROR: Refusing legacy finalization for $comment_id because current claim has a token"
+      return 1
     fi
+    where_clause+=" AND workerPid=$legacy_worker_pid AND claimToken IS NULL"
   fi
 
-  # Execute the update
   local update_sql="UPDATE processed_comments SET status='$status'"
-
   case "$status" in
-    "completed")
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
+    completed|failed)
+      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
       ;;
-    "failed")
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
-      ;;
-    "queued")
-      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
+    queued)
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
       ;;
   esac
 
-  update_sql+=" $where_clause;"
-
-  # Execute the update and capture changes() in the same connection
   local update_result
-  update_result="$(sqlite3 "$DB" "$update_sql; SELECT changes();" 2>/dev/null)"
+  update_result="$(sqlite3 "$DB" "$update_sql $where_clause; SELECT changes();" 2>/dev/null)"
   local changes
   changes="$(echo "$update_result" | tail -n 1)"
 
   if [ "${changes:-0}" -eq 1 ]; then
     log "SUCCESS: Task $comment_id transitioned to $status (previous: $current_status)"
     return 0
-  else
-    log "ERROR: Task $comment_id update failed (changes=$changes, previous: $current_status)"
-    return 1
   fi
+  log "ERROR: Task $comment_id update failed (changes=$changes, previous=$current_status)"
+  return 1
 }
-
 # Finalization verification: ensure heartbeat and locks don't revert completion
 # FIX: Stop any lingering heartbeat BEFORE verifying finalization.
 # The old code compared heartbeat PID vs daemon PID and could fail when
@@ -427,9 +413,10 @@ verify_finalization() {
 # Enhanced task completion with verification
 complete_task_with_verification() {
   local comment_id="$1"
+  local claim_token="${2:-}"
 
   # Mark task as completed with verification
-  if ! update_task_completion "$comment_id" "completed"; then
+  if ! update_task_completion "$comment_id" "completed" "" "$claim_token"; then
     log "ERROR: Failed to complete task $comment_id"
     return 1
   fi
@@ -488,21 +475,20 @@ release_task_lock() {
 # 2. Lease expired but task not finalized
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
+  ensure_claim_token_column || return 1
   log "recover_stale_tasks: checking for stuck tasks"
   lc_log "RECOVERY_START" ""
 
-  # Find running tasks with expired leases or NULL worker PIDs
-  # Note: We check for dead PIDs in bash after fetching, since SQLite can't execute OS commands
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts
+    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken
     FROM processed_comments
     WHERE status='running'
       AND (
-        leaseExpiresAt IS NULL
+        heartbeatAt IS NULL
+        OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+        OR leaseExpiresAt IS NULL
         OR leaseExpiresAt < datetime('now')
-        OR workerPid IS NULL
-        OR workerPid = 0
       )
     LIMIT 100;" 2>/dev/null)"
 
@@ -512,62 +498,74 @@ recover_stale_tasks() {
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
     [ -n "$comment_id" ] || continue
 
-    # Verify worker PID is actually dead
     local worker_alive=0
-    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
-      kill -0 "$worker_pid" 2>/dev/null && worker_alive=1
+    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; then
+      worker_alive=1
+    fi
+    log "recover_stale_tasks: stale task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires attempts=$attempts)"
+
+    local max_attempts
+    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    local safe_comment_id
+    safe_comment_id="$(sql_escape "$comment_id")"
+    local ownership_clause
+    if [ -n "$claim_token" ]; then
+      local safe_claim_token
+      safe_claim_token="$(sql_escape "$claim_token")"
+      ownership_clause="AND claimToken='$safe_claim_token'"
+    else
+      ownership_clause="AND claimToken IS NULL"
     fi
 
-    if [ "$worker_alive" -eq 0 ]; then
-      log "recover_stale_tasks: marking stale task as failed: $comment_id (worker=$worker_pid, lease=$lease_expires)"
-      lc_log "TASK_RECOVERED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_worker"
-
-      # Determine if we should retry or mark as failed
-      local max_attempts
-      max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-      local safe_comment_id
-      safe_comment_id="$(sql_escape "$comment_id")"
-
-      local ownership_clause
-      if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null; then
-        ownership_clause="AND workerPid=$worker_pid"
-      else
-        ownership_clause="AND (workerPid IS NULL OR workerPid=0)"
-      fi
-
-      if [ "${attempts:-0}" -ge "$max_attempts" ]; then
-        # Mark as failed only while the stale worker still owns the row.
-        sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), resultSummary='Daemon recovery: worker died (pid=$worker_pid), max attempts reached' WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
-      else
-        # Requeue only while the same stale worker still owns the row. This
-        # prevents recovery from resetting a task newly claimed by another worker.
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, leaseExpiresAt=NULL, processedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
-        log "recover_stale_tasks: requeued task $comment_id for retry (attempt $((attempts + 1))/$max_attempts)"
-        lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempt=$((attempts + 1)) max=$max_attempts reason=stale_worker"
-      fi
-      recovered=$((recovered + 1))
+    if [ "${attempts:-0}" -ge "$max_attempts" ]; then
+      log "recover_stale_tasks: marking stale task as failed: $comment_id"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
+      lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
+    else
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
+      log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
+      lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
     fi
+    recovered=$((recovered + 1))
   done <<<"$stale_tasks"
 
   log "recover_stale_tasks: recovered $recovered stale task(s)"
   lc_log "RECOVERY_COMPLETE" "recovered=$recovered"
   return 0
 }
-
-# Heartbeat tracking for long-running tasks
+# Per-task heartbeat child processes, keyed by comment/task id.
 declare -A HEARTBEAT_PIDS
 
-
 start_heartbeat() {
+  ensure_claim_token_column || return 1
   local comment_id="$1"
+  local worker_pid="${2:-$BASHPID}"
+  local claim_token="${3:-}"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
-  # Start a background heartbeat loop
+
+  local ownership_sql
+  if [ -n "$claim_token" ]; then
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    ownership_sql="AND claimToken='$safe_claim_token'"
+  else
+    # Legacy rows created before claimToken used workerPid only.
+    ownership_sql="AND claimToken IS NULL"
+  fi
   (
     while true; do
-      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      # Heartbeat belongs to this worker process and this exact claim.
+      if ! kill -0 "$worker_pid" 2>/dev/null; then
+        exit 0
+      fi
+      local changed
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>/dev/null | tail -n 1)"
+      if [ "${changed:-0}" -ne 1 ]; then
+        exit 0
+      fi
       sleep "$HEARTBEAT_INTERVAL"
     done
   ) &
@@ -575,9 +573,8 @@ start_heartbeat() {
   echo "$heartbeat_pid" > "$pid_file" 2>/dev/null || true
   HEARTBEAT_PIDS["$comment_id"]=$heartbeat_pid
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
-  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s"
+  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
-
 stop_heartbeat() {
   local comment_id="$1"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
@@ -594,7 +591,13 @@ stop_heartbeat() {
 refresh_heartbeat() {
   local comment_id="$1"
   if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
-    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+    local worker_pid="${CURRENT_WORKER_PID:-$BASHPID}"
+    local claim_token
+    claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid LIMIT 1;" 2>/dev/null)"
+    [ -n "$claim_token" ] || return 0
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid AND claimToken='$safe_claim_token';" 2>/dev/null || true
   fi
 }
 
@@ -818,6 +821,23 @@ ensure_nextattemptat_column() {
   return 0
 }
 
+# Ensure each task claim has a unique ownership token. workerPid identifies a long-lived worker loop, not one specific task execution.
+ensure_claim_token_column() {
+  if sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|claimToken|'; then
+    return 0
+  fi
+  log "migration: adding claimToken column to processed_comments"
+  local alter_err
+  alter_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN claimToken TEXT; COMMIT;" 2>&1)" || {
+    # Another worker may have won the migration race.
+    if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|claimToken|'; then
+      log "ERROR: failed to add claimToken column: $alter_err"
+      return 1
+    fi
+  }
+  log "migration: claimToken column added or already present"
+  return 0
+}
 post_github_comment() {
   local repo="$1"
   local issue="$2"
@@ -1124,6 +1144,7 @@ evaluate_task_completion() {
   local DB="$8"
   local REPO_DIR="${9:-}"
   local WORKDIR="${10:-$REPO_DIR}"
+  local CLAIM_TOKEN="${11:-}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -1200,9 +1221,11 @@ evaluate_task_completion() {
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
       # Fallback: attempt direct completion with ownership verification
       local fallback_worker_pid
-      fallback_worker_pid="$$"
+      fallback_worker_pid="$BASHPID"
+      local fallback_claim_token
+      fallback_claim_token="$(sql_escape "$CLAIM_TOKEN")"
       local fallback_result
-      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now') WHERE commentId='$safe_comment_id' AND workerPid=$fallback_worker_pid; SELECT changes();" 2>/dev/null)"
+      fallback_result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='completed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL WHERE commentId='$safe_comment_id' AND status='running' AND workerPid=$fallback_worker_pid AND claimToken='$fallback_claim_token'; SELECT changes();" 2>/dev/null)"
       local fallback_changes
       fallback_changes="$(echo "$fallback_result" | tail -n 1)"
       if [ "${fallback_changes:-0}" -eq 1 ]; then
@@ -1388,7 +1411,7 @@ run_once() {
     if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='queued' AND attempts >= $MAX_ATTEMPTS;" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to complete the task after $ACTUAL_ATTEMPTS attempts (max reached)."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       release_task_lock
@@ -1399,9 +1422,13 @@ run_once() {
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
     local CURRENT_WORKER_PID
-    CURRENT_WORKER_PID="$$"
+    CURRENT_WORKER_PID="$BASHPID"
+    local CLAIM_TOKEN
+    CLAIM_TOKEN="$(printf '%s-%s-%s' "$(date +%s%N)" "$CURRENT_WORKER_PID" "$RANDOM")"
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$CLAIM_TOKEN")"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token' WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
@@ -1430,7 +1457,7 @@ run_once() {
     set_activity "$COMMENT_ID" "claimed"
 
     # Start heartbeat for long-running task
-    start_heartbeat "$COMMENT_ID"
+    start_heartbeat "$COMMENT_ID" "$CURRENT_WORKER_PID" "$CLAIM_TOKEN"
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
     refresh_heartbeat "$COMMENT_ID"
 
@@ -1450,7 +1477,7 @@ run_once() {
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
@@ -1590,7 +1617,7 @@ PROMPT_EOF
     if [ $? -ne 0 ]; then
       log "dispatch: FAILED to ensure repository $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -1603,7 +1630,7 @@ PROMPT_EOF
     if ! verify_repo "$REPO" "$REPO_DIR"; then
       log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
       post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
@@ -1623,7 +1650,7 @@ PROMPT_EOF
     if [ -z "$WORKSPACE_ID" ]; then
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -1883,7 +1910,7 @@ PROMPT_APPEND
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
     # Call production completion evaluation function
-    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR"
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN"
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
@@ -1929,9 +1956,9 @@ PROMPT_APPEND
       
       set_activity "$COMMENT_ID" "completed"
     elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), nextAttemptAt=NULL WHERE commentId='$safe_comment_id';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
     else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id';" 2>>"$LOG"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>>"$LOG"
     fi
 
     # Auto-close conversation when all tasks are finalized (completed or failed).
@@ -2025,6 +2052,12 @@ loop() {
   # Ensure nextAttemptAt column exists before any scheduler query
   if ! ensure_nextattemptat_column; then
     log "FATAL: schema migration failed, cannot start loop"
+    exit 1
+  fi
+
+  # Ensure task claim ownership support before any claim/recovery.
+  if ! ensure_claim_token_column; then
+    log "FATAL: claimToken schema migration failed, cannot start loop"
     exit 1
   fi
 

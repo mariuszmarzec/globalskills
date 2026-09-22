@@ -146,7 +146,7 @@ running → queued  (watchdog recovery)
 - **queued → running**: atomic claim by `manul-daemon.sh`; `attempts` increments by 1; `heartbeatAt`, `startedAt`, `workerPid`, and `leaseExpiresAt` are set.
 - **running → done**: task completed successfully.
 - **running → failed**: task failed permanently (after `attempts >= maxAttemptsBeforeFail`).
-- **running → queued**: watchdog recovery for stale tasks. **Does NOT increment `attempts`.**
+- **running → queued**: watchdog recovery for stale leases/heartbeats. **Does NOT increment `attempts`.** Recovery is based on the lease/heartbeat, not worker PID liveness, because workers are long-lived loops.
 
 `attempts` counts actual execution attempts and is incremented only when a queued task is claimed for execution (queued → running transition). Recovery from `running → queued` does NOT increment `attempts`.
 
@@ -158,8 +158,9 @@ The `processed_comments` table in SQLite carries the following liveness/lease fi
 |-------|---------|
 | `heartbeatAt` | last heartbeat timestamp updated by the worker |
 | `startedAt` | when the task started executing |
-| `workerPid` | PID of the worker process |
-| `leaseExpiresAt` | when the task lease expires |
+| `workerPid` | PID of the long-lived worker loop that currently owns the task |
+| `leaseExpiresAt` | when the current task lease expires |
+| `claimToken` | unique token for the current execution claim; required for heartbeat/finalization ownership |
 | `attempts` | number of actual execution attempts (incremented on claim) |
 | `recoveryCount` | number of times the task has been recovered by watchdog |
 
