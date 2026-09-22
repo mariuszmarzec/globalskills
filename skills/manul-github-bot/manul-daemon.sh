@@ -402,9 +402,10 @@ verify_finalization() {
 # Enhanced task completion with verification
 complete_task_with_verification() {
   local comment_id="$1"
+  local claim_token="${2:-}"
 
   # Mark task as completed with verification
-  if ! update_task_completion "$comment_id" "completed"; then
+  if ! update_task_completion "$comment_id" "completed" "" "$claim_token"; then
     log "ERROR: Failed to complete task $comment_id"
     return 1
   fi
