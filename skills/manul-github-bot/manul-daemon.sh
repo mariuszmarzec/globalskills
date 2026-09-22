@@ -526,7 +526,7 @@ recover_stale_tasks() {
 }
 start_heartbeat() {
   local comment_id="$1"
-  local worker_pid="${2:-$$}"
+  local worker_pid="${2:-$BASHPID}"
   local claim_token="${3:-}"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
 
@@ -576,7 +576,7 @@ stop_heartbeat() {
 refresh_heartbeat() {
   local comment_id="$1"
   if [ -n "${HEARTBEAT_PIDS[$comment_id]:-}" ]; then
-    local worker_pid="${CURRENT_WORKER_PID:-$}"
+    local worker_pid="${CURRENT_WORKER_PID:-$BASHPID}"
     local claim_token
     claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid LIMIT 1;" 2>/dev/null)"
     [ -n "$claim_token" ] || return 0
@@ -1204,7 +1204,7 @@ evaluate_task_completion() {
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
       # Fallback: attempt direct completion with ownership verification
       local fallback_worker_pid
-      fallback_worker_pid="$"
+      fallback_worker_pid="$BASHPID"
       local fallback_claim_token
       fallback_claim_token="$(sql_escape "$CLAIM_TOKEN")"
       local fallback_result
@@ -1405,7 +1405,7 @@ run_once() {
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
     local CURRENT_WORKER_PID
-    CURRENT_WORKER_PID="$"
+    CURRENT_WORKER_PID="$BASHPID"
     local CLAIM_TOKEN
     CLAIM_TOKEN="$(printf '%s-%s-%s' "$(date +%s%N)" "$CURRENT_WORKER_PID" "$RANDOM")"
     local safe_claim_token
