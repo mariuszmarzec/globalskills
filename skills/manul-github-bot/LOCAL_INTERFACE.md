@@ -50,6 +50,25 @@ Examples:
 
 ---
 
+### `manul` - Lifecycle shortcuts
+
+The interactive shell integration provides one command for starting/stopping the automation:
+
+```bash
+manul --start
+manul --stop
+manul --restart
+manul --status
+```
+
+The readable subcommands remain supported too:
+
+```bash
+manul start
+manul stop
+manul restart
+manul status
+```
 ### `manul-status.sh` - Query task status
 
 ```bash
@@ -60,6 +79,9 @@ Options:
   --json           Output JSON format
   --list           List all tasks (optional filter by status)
   --status S       Filter by status (queued, running, completed, failed)
+  --log            Show daemon.log instead of task status
+  --tail N         Number of log lines to show (default: 100)
+  --tail=N         Same as --tail N
 ```
 
 **Single task output:**
