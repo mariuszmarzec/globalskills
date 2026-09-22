@@ -27,6 +27,8 @@ export MANUL_DIR
 
 mkdir -p "$MANUL_DIR/repo-locks"
 : >"$LOG"
+# Polling requires an installation baseline; this test owns its state DB.
+sqlite3 "$DB" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
 
 # Fake gh: for repo "hang", sleep forever; for any other repo, fast return empty
 cat > "$TEST_DIR/gh" << 'FAKEGH'
