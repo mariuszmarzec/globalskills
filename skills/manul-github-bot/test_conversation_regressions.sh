@@ -124,7 +124,10 @@ EOF
 [{"id":"trigger-comment","body":"/manul do this","user":{"login":"test-user"},"created_at":"2026-09-16T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"ordinary-comment","body":"Also make sure the assertion uses float comparison.","user":{"login":"test-user"},"created_at":"2026-09-16T00:05:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-ordinary","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"},{"id":"trigger-comment-2","body":"/manul Now implement the change according to my previous feedback.","user":{"login":"test-user"},"created_at":"2026-09-16T00:10:00Z","html_url":"https://github.com/test-org/test-repo/issues/1#issuecomment-trigger-2","issue_url":"https://api.github.com/repos/test-org/test-repo/issues/1"}]
 EOF
 
-  cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
+  local recent_created_at
+  recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+
+  cat > "$mock_gh_dir/gh" <<EOF
 #!/bin/bash
 set -u
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
@@ -575,7 +578,7 @@ fi
 if [[ "$1" == "api" ]]; then
   args="${@/--paginate/}"
   if [[ "$args" == *"/issues/comments"* ]]; then
-    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"2026-09-22T13:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
+    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"'"$recent_created_at"'","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
     exit 0
   fi
   echo '[]'
