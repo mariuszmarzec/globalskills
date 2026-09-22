@@ -931,6 +931,43 @@ else
   fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
 fi
 
+
+# ── Test: repair must fail closed when DB is missing ─────────────────────────
+echo
+echo "Test: Repair refuses implicit fresh DB creation"
+FAIL_CLOSED_ROOT="$(mktemp -d /tmp/manul-fail-closed-XXXXXX)"
+FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"
+mkdir -p "$FAIL_CLOSED_RUNTIME"
+set +e
+FAIL_CLOSED_OUTPUT=$(
+  MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+FAIL_CLOSED_EXIT=$?
+set -e
+if [ "$FAIL_CLOSED_EXIT" -ne 0 ] && echo "$FAIL_CLOSED_OUTPUT" | grep -q "No valid backup DB found"; then
+  ok "Repair fails closed when DB is missing and no backup exists"
+else
+  fail "Repair unexpectedly fabricated/accepted a fresh DB (exit=$FAIL_CLOSED_EXIT)"
+fi
+rm -rf "$FAIL_CLOSED_ROOT"
+
+# ── Test: explicit installer opt-in is the only fresh-DB path ────────────────
+INIT_ROOT="$(mktemp -d /tmp/manul-init-optin-XXXXXX)"
+INIT_RUNTIME="$INIT_ROOT/runtime"
+mkdir -p "$INIT_RUNTIME"
+set +e
+INIT_OUTPUT=$(
+  MANUL_RUNTIME_DIR="$INIT_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
+)
+INIT_EXIT=$?
+set -e
+if [ "$INIT_EXIT" -eq 0 ] && [ -s "$INIT_RUNTIME/manul.db" ]; then
+  ok "Fresh DB creation requires explicit --init-state"
+else
+  fail "Explicit --init-state did not initialize a fresh DB (exit=$INIT_EXIT)"
+fi
+rm -rf "$INIT_ROOT"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
