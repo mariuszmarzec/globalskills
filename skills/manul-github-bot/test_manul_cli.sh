@@ -554,6 +554,7 @@ test_status_log() {
   set -e
   assert_eq "Invalid --tail=0 returns error" "1" "$RC"
 }
+test_task_recovery_retry
 test_submit
 test_status
 test_status_log
