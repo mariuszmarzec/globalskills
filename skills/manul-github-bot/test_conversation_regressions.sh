@@ -547,11 +547,11 @@ MOCK_EOF
 }
 
 # =============================================================================
-# Test 6: first poll catches a trigger created shortly before startup
+# Test 6: first poll requires an installation baseline
 # =============================================================================
-test_first_poll_initial_catchup() {
+test_first_poll_requires_install_baseline() {
   local test_dir manul_dir mock_gh_dir poll_db
-  test_dir="$(mktemp -d /tmp/manul-initial-catchup-XXXXXX)"
+  test_dir="$(mktemp -d /tmp/manul-baseline-required-XXXXXX)"
   manul_dir="$test_dir/manul"
   mock_gh_dir="$test_dir/mock-gh"
   poll_db="$manul_dir/manul.db"
@@ -564,50 +564,24 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
 
-  local recent_created_at
-  recent_created_at="$(date -u -d 'now - 5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
 set -u
-if [[ "$1" == "issue" && "$2" == "list" ]]; then
-  echo '[]'
-  exit 0
-fi
-if [[ "$1" == "pr" && "$2" == "list" ]]; then
-  echo '[]'
-  exit 0
-fi
-if [[ "$1" == "api" ]]; then
-  args="${@/--paginate/}"
-  if [[ "$args" == *"/issues/comments"* ]]; then
-    echo '[{"id":"recent-trigger","body":"/manul do that task","user":{"login":"test-user","type":"User"},"created_at":"__RECENT_CREATED_AT__","html_url":"https://github.com/test-org/test-repo/issues/27#issuecomment-recent"}]'
-    exit 0
-  fi
-  echo '[]'
-  exit 0
-fi
-echo '{}'
+echo '[]'
 exit 0
 MOCK_EOF
-  sed -i "s/__RECENT_CREATED_AT__/$recent_created_at/g" "$mock_gh_dir/gh"
   chmod +x "$mock_gh_dir/gh"
 
-  MANUL_INITIAL_LOOKBACK_SECONDS=86400 MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1 || {
-    rm -rf "$test_dir"
-    return 1
-  }
-
-  local count baseline
-  count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:recent-trigger';" 2>/dev/null)"
-  baseline="$(sqlite3 "$poll_db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null)"
-  if [ "$count" -ne 1 ]; then
-    echo "ERROR: expected pre-start trigger to be queued, found $count"
-    rm -rf "$test_dir"
-    return 1
-  fi
-  if [ -z "$baseline" ]; then
-    echo "ERROR: initial catch-up baseline was not persisted"
+  set +e
+  local output rc
+  output="$(MANUL_DIR="$manul_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ] && [[ "$output" == *"baseline is missing from Manul state"* ]]; then
+    echo "  PASS: poll refuses to fabricate an installation baseline"
+  else
+    echo "ERROR: poll did not fail closed without installation baseline"
+    echo "$output"
     rm -rf "$test_dir"
     return 1
   fi
@@ -623,7 +597,7 @@ run_test "issue conversation: trigger→ordinary→follow-up preserves context" 
 run_test "review thread: every comment persisted, identity based on root only" test_review_thread_regression
 run_test "baseId dedup prevents duplicate queued tasks" test_baseid_dedup_no_duplicates
 run_test "bot comments (.user.type == Bot) are filtered out" test_bot_comment_filtering
-run_test "first poll catches a trigger created shortly before startup" test_first_poll_initial_catchup
+run_test "first poll requires an installation baseline" test_first_poll_requires_install_baseline
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
