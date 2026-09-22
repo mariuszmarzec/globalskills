@@ -25,7 +25,7 @@ After you commit and push your task branch, you MUST open a real, concrete
 GitHub pull request. Do this explicitly with:
 
 ```
-gh pr create --base <default-branch> --head <your-task-branch> --title "<title>" --body "<description>"
+gh pr create --base <actual-base-branch> --head <your-task-branch> --title "<title>" --body "<description>"
 ```
 
 Verify the PR actually exists with `gh pr list --head <your-task-branch> --state all`
@@ -65,8 +65,11 @@ run gh api repos/REPO/issues/ISSUE_NUM/comments -f body="YOUR_REPLY" -f in_reply
 
 ## Branch Policy
 - **PR review/conversation tasks**: Work on the PR's existing head branch. Do NOT create a new branch.
-- **Issue tasks**: Manul has ALREADY created your dedicated task branch and you are ALREADY checked out on it. Do NOT run `git checkout -b` or create a new branch — the branch name is fixed and already known to Manul. Make all changes on the current branch, commit, and push it. If the task prompt tells you a branch name, that IS your branch.
-- **Informational tasks**: No branch operations needed.
+- **Issue tasks**: Manul prepares a fresh, up-to-date base branch but does NOT create the task branch for you. First decide whether the task is informational or requires repository changes.
+  - **Informational**: do not modify the repository and do not create a branch. Post the answer to GitHub and finish.
+  - **Repository change**: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy. Create the required feature/bugfix branch yourself before committing or pushing. Pull/fetch the chosen base first; the base may be an explicitly required existing feature branch rather than the repository default.
+  - Never commit or push repository changes directly to a base/default branch.
+- **Existing PR tasks**: reuse the branch already associated with the PR when fixing review or conversation feedback.
 
 ## Completion Markers
 - Success: `TASK_DONE`
