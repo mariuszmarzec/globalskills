@@ -142,7 +142,11 @@ git -C "$WORKDIR" config user.name test
 printf 'test\n' >"$WORKDIR/README.md"
 git -C "$WORKDIR" add README.md
 git -C "$WORKDIR" commit -qm initial
+INITIAL_HEAD_A="$(git -C "$WORKDIR" rev-parse HEAD)"
 git -C "$WORKDIR" checkout -qb manul-task-COMMENT_1
+echo "implementation change" >> "$WORKDIR/README.md"
+git -C "$WORKDIR" add README.md
+git -C "$WORKDIR" commit -qm "implementation change"
 
 # Create test database with the SAME 25-column schema as poll.sh's real DB so
 # update_task_completion() (which sets heartbeatAt/leaseExpiresAt) and
@@ -193,7 +197,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR"
+evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -300,14 +304,18 @@ git -C "$WORKDIR_G" config user.name test
 printf 'test\n' >"$WORKDIR_G/README.md"
 git -C "$WORKDIR_G" add README.md
 git -C "$WORKDIR_G" commit -qm initial
+INITIAL_HEAD_G="$(git -C "$WORKDIR_G" rev-parse HEAD)"
 git -C "$WORKDIR_G" checkout -qb manul-task-COMMENT_G
+echo "implementation change" >> "$WORKDIR_G/README.md"
+git -C "$WORKDIR_G" add README.md
+git -C "$WORKDIR_G" commit -qm "implementation change"
 
 STDOUT_FILE="$TEST_TMPDIR/stdoutG.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G"
+evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G" "" "$INITIAL_HEAD_G" "manul-task-COMMENT_G" "master"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test G - expected COMPLETION_SUCCESS=true (daemon should auto-create PR), got '$COMPLETION_SUCCESS'"
     exit 1
@@ -342,14 +350,18 @@ git -C "$WORKDIR_H" config user.name test
 printf 'test\n' >"$WORKDIR_H/README.md"
 git -C "$WORKDIR_H" add README.md
 git -C "$WORKDIR_H" commit -qm initial
+INITIAL_HEAD_H="$(git -C "$WORKDIR_H" rev-parse HEAD)"
 git -C "$WORKDIR_H" checkout -qb manul-task-COMMENT_H
+echo "implementation change" >> "$WORKDIR_H/README.md"
+git -C "$WORKDIR_H" add README.md
+git -C "$WORKDIR_H" commit -qm "implementation change"
 
 STDOUT_FILE="$TEST_TMPDIR/stdoutH.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H"
+evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H" "" "$INITIAL_HEAD_H" "manul-task-COMMENT_H" "master"
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test H - expected COMPLETION_SUCCESS=false when autoCreatePr disabled, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -383,6 +395,10 @@ git -C "$WORKDIR_I" add README.md
 git -C "$WORKDIR_I" commit -qm initial
 # Intentionally stay on the default branch (agent did NOT create a task branch)
 git -C "$WORKDIR_I" checkout -q master
+INITIAL_HEAD_I="$(git -C "$WORKDIR_I" rev-parse HEAD)"
+echo "forbidden direct base change" >> "$WORKDIR_I/README.md"
+git -C "$WORKDIR_I" add README.md
+git -C "$WORKDIR_I" commit -qm "forbidden direct base change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_I';" 2>/dev/null
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutI.txt"
@@ -390,7 +406,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I"
+evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I" "" "$INITIAL_HEAD_I" "master" "master"
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test I - expected COMPLETION_SUCCESS=false when checked-out branch is the default branch, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -419,7 +435,11 @@ git -C "$WORKDIR_J" config user.name test
 printf 'test\n' >"$WORKDIR_J/README.md"
 git -C "$WORKDIR_J" add README.md
 git -C "$WORKDIR_J" commit -qm initial
+INITIAL_HEAD_J="$(git -C "$WORKDIR_J" rev-parse HEAD)"
 git -C "$WORKDIR_J" checkout -qb manul-task-COMMENT_J
+echo "implementation change" >> "$WORKDIR_J/README.md"
+git -C "$WORKDIR_J" add README.md
+git -C "$WORKDIR_J" commit -qm "implementation change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_J';" 2>/dev/null
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutJ.txt"
@@ -427,7 +447,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J"
+evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J" "" "$INITIAL_HEAD_J" "manul-task-COMMENT_J" "master"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test J - expected COMPLETION_SUCCESS=true on a real task branch, got '$COMPLETION_SUCCESS'"
     exit 1
