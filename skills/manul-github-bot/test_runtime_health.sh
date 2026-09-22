@@ -842,6 +842,8 @@ mkdir -p "$VALID_RUNTIME"
 cp "$BACKUP_DB" "$VALID_RUNTIME/manul.db"
 chmod 600 "$VALID_RUNTIME/manul.db"
 cp "$SCRIPT_DIR/config.json.example" "$VALID_RUNTIME/config.json" 2>/dev/null || true
+# Seed an explicit baseline so repair has no state migration to perform in this test.
+sqlite3 "$VALID_RUNTIME/manul.db" "INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
 
 DB_BEFORE=$(sha256sum "$VALID_RUNTIME/manul.db" | awk '{print $1}')
 
@@ -881,10 +883,15 @@ echo
 echo "Test 15-20: Canonical installer lifecycle"
 INSTALL_ROOT="$TMPROOT/install-runtime"
 INSTALL_HOME="$TMPROOT/install-home"
-mkdir -p "$INSTALL_HOME"
+FAKE_BIN="$TMPROOT/fake-bin"
+mkdir -p "$INSTALL_HOME" "$FAKE_BIN"
+printf '#!/bin/sh
+exit 0
+' > "$FAKE_BIN/openclaw"
+chmod +x "$FAKE_BIN/openclaw"
 set +e
 INSTALL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-INSTALL_OUTPUT=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
+INSTALL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
 INSTALL_EXIT=$?
 INSTALL_END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set -e
@@ -928,7 +935,7 @@ else
 fi
 
 set +e
-INSTALL_OUTPUT_2=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
+INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
