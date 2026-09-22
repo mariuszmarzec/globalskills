@@ -1891,7 +1891,7 @@ PROMPT_APPEND
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
     # Call production completion evaluation function
-    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR"
+    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN"
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
