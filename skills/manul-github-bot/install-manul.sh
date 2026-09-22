@@ -100,15 +100,15 @@ echo
 
 # 2. Ensure runtime directory
 if [ ! -d "$RUNTIME_DIR" ]; then
-    echo "[1/5] Creating runtime directory: $RUNTIME_DIR"
+    echo "[1/7] Creating runtime directory: $RUNTIME_DIR"
     mkdir -p "$RUNTIME_DIR"
 else
-    echo "[1/5] Runtime directory exists: $RUNTIME_DIR"
+    echo "[1/7] Runtime directory exists: $RUNTIME_DIR"
 fi
 
 # 3. Deploy symlinks
 echo
-echo "[2/5] Deploying symlinks..."
+echo "[2/7] Deploying symlinks..."
 "$CANONICAL_DIR/install-manul-symlinks.sh" \
     --runtime-dir "$RUNTIME_DIR" \
     --canonical-dir "$CANONICAL_DIR" || \
@@ -117,12 +117,12 @@ echo "[2/5] Deploying symlinks..."
 # 4. Restore config.json from example if missing
 echo
 if [ ! -f "$RUNTIME_DIR/config.json" ]; then
-    echo "[3/5] Config not found, restoring template..."
+    echo "[3/7] Config not found, restoring template..."
     cp "$CANONICAL_DIR/config.json.example" "$RUNTIME_DIR/config.json"
     echo "  Copied config.json.example -> config.json"
     echo "  WARNING: Edit $RUNTIME_DIR/config.json before starting the daemon"
 else
-    echo "[3/5] Config exists: $RUNTIME_DIR/config.json"
+    echo "[3/7] Config exists: $RUNTIME_DIR/config.json"
 fi
 
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
