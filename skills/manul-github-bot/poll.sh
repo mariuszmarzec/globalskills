@@ -568,6 +568,20 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
     log "migration: added context column"
 fi
+# migration for existing DBs (pre-action/PR fields)
+# The poller writes these fields directly; older DBs may predate them.
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|action|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT';" 2>>"$LOG"
+    log "migration: added action column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|prNumber|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prNumber INTEGER;" 2>>"$LOG"
+    log "migration: added prNumber column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|prUrl|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN prUrl TEXT;" 2>>"$LOG"
+    log "migration: added prUrl column"
+fi
 # migration for existing DBs (pre-heartbeatAt column)
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|heartbeatAt|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;" 2>>"$LOG"
@@ -623,9 +637,13 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS conversation_messages(messageId TEXT P
 
 BASELINE="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
 if [ -z "$BASELINE" ]; then
-    BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # First-run catch-up window: commands created shortly before the daemon
+    # starts must not be lost. The old behavior used "now" and permanently
+    # skipped comments created a few seconds/minutes before startup.
+    INITIAL_LOOKBACK_SECONDS="${MANUL_INITIAL_LOOKBACK_SECONDS:-86400}"
+    BASELINE="$(date -u -d "now - ${INITIAL_LOOKBACK_SECONDS} seconds" +%Y-%m-%dT%H:%M:%SZ)"
     sqlite3 "$DB" "INSERT OR IGNORE INTO meta(key,value) VALUES('baseline','$BASELINE');" 2>>"$LOG"
-    log "baseline set: $BASELINE"
+    log "baseline set with initial catch-up window (${INITIAL_LOOKBACK_SECONDS}s): $BASELINE"
 fi
 
 # === context enrichment helpers ===

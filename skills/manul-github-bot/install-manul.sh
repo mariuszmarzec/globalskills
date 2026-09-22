@@ -7,8 +7,8 @@
 #   3. Ensure runtime directory
 #   4. Deploy symlinks via install-manul-symlinks.sh
 #   5. Restore config.json from example if missing
-#   6. Bootstrap/migrate manul.db (create+init if missing; replace with a fresh
-#      DB if schema initialization fails)
+#   6. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
+#      is created only with explicit --init-state on a first-time installation.
 #   7. Install the dormant watchdog cron (it only acts when .enabled exists)
 #   8. Install canonical zsh shell integration
 #   9. Verify and print summary
@@ -18,7 +18,7 @@
 # immediately until .enabled is present.
 #
 # Usage:
-#   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>]
+#   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]
 #
 # Environment overrides:
 #   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.openclaw/manul)
@@ -29,6 +29,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+INIT_STATE=false
 
 fail() {
     echo "ERROR: $*" >&2
@@ -40,12 +41,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
         --canonical-dir) CANONICAL_DIR="$2"; shift 2 ;;
+        --init-state) INIT_STATE=true; shift ;;
         --help|-h)
-            echo "Usage: $0 [--runtime-dir <path>] [--canonical-dir <path>]"
+            echo "Usage: $0 [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]"
             echo ""
             echo "Environment overrides:"
             echo "  MANUL_RUNTIME_DIR    Runtime directory"
             echo "  MANUL_CANONICAL_DIR  Canonical skill directory"
+            echo "  --init-state         Explicitly initialize a brand-new DB if no valid DB/backup exists"
             exit 0
             ;;
         *)
@@ -83,9 +86,9 @@ echo
 #   jq        - config.json parsing throughout the runtime
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
-#   openclaw  - the agent runtime the daemon invokes
+#   openclaw  - the agent runtime the daemon invokes (checked when starting)
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -130,12 +133,12 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 # 5. Bootstrap/migrate the DB
-#    - missing/empty file -> init_schema creates the schema
+#    - missing/empty file -> only --init-state may bootstrap a fresh schema
 #    - valid SQLite file -> init_schema/workspace_init are idempotent
-#    - schema initialization failure -> preserve old DB and bootstrap a fresh one
+#    - schema initialization failure -> fail closed; never replace the DB
 #
-# Old data is disposable for installation purposes, but the previous DB is
-# always preserved as a timestamped .old-* file before replacement.
+# Explicit --init-state is the only destructive installer operation. Repair
+# paths use repair-manul-runtime.sh, which restores an existing DB/backup.
 echo
 DB_FILE="$RUNTIME_DIR/manul.db"
 BOOTSTRAP_FRESH=false
@@ -172,18 +175,35 @@ reset_to_fresh_db() {
 }
 
 if [ ! -f "$DB_FILE" ]; then
-    echo "[4/7] DB not found, bootstrapping fresh..."
-    BOOTSTRAP_FRESH=true
+    echo "[4/7] DB not found."
+    if [ "$INIT_STATE" = true ]; then
+        echo "  Explicit --init-state supplied; bootstrapping fresh DB."
+        BOOTSTRAP_FRESH=true
+    else
+        fail "Manul DB is missing. Refusing to create a fresh DB implicitly; use repair-manul-runtime.sh or run install-manul.sh --init-state for first-time setup"
+    fi
 elif [ ! -s "$DB_FILE" ]; then
-    echo "[4/7] DB is empty, bootstrapping fresh..."
-    rm -f "$DB_FILE"
-    BOOTSTRAP_FRESH=true
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] DB is empty; explicit --init-state allows fresh bootstrap."
+        rm -f "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm"
+        BOOTSTRAP_FRESH=true
+    else
+        fail "Manul DB is empty. Refusing to replace task state implicitly; restore a backup or run install-manul.sh --init-state only for a deliberate fresh initialization"
+    fi
 elif ! head -c 16 "$DB_FILE" 2>/dev/null | grep -q "^SQLite format 3"; then
-    echo "[4/7] Existing DB is not SQLite; replacing with a fresh DB..."
-    reset_to_fresh_db
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] Existing DB is not SQLite; explicit --init-state allows replacement."
+        reset_to_fresh_db
+    else
+        fail "Existing Manul DB is not SQLite. Refusing automatic replacement; repair or restore it explicitly"
+    fi
 elif ! sqlite3 "$DB_FILE" "PRAGMA integrity_check;" 2>/dev/null | grep -q "^ok$"; then
-    echo "[4/7] Existing DB failed integrity check; replacing with a fresh DB..."
-    reset_to_fresh_db
+    if [ "$INIT_STATE" = true ]; then
+        echo "[4/7] Existing DB failed integrity check; explicit --init-state allows replacement."
+        reset_to_fresh_db
+    else
+        fail "Existing Manul DB failed integrity check. Refusing automatic replacement; repair or restore it explicitly"
+    fi
 else
     echo "[4/7] DB present and valid, validating/migrating schema..."
 fi
@@ -197,9 +217,7 @@ init_current_db() {
 }
 
 if ! init_current_db; then
-    echo "WARNING: current DB schema initialization failed; replacing the DB with a fresh schema..." >&2
-    reset_to_fresh_db
-    init_current_db || fail "Fresh DB schema initialization failed"
+    fail "DB schema initialization failed; refusing to replace existing task state automatically"
 fi
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"

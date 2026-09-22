@@ -280,36 +280,24 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
 done
 $GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
 
-# 2c) No CLI alias may be wrapped in a conditional that can silently vanish
-#     when the runtime is absent (the command must always be defined).
+# 2c) All CLI entrypoints must be unconditional shell functions. They must
+#     remain defined even when the runtime directory has been deleted.
 for cmd in manul manul-status manul-comments-remove; do
-  line="$(grep -n "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null | head -1 || true)"
-  if [ -z "$line" ]; then
-    fail "$cmd alias is missing entirely"
-  elif echo "$line" | grep -qE '^\s*[0-9]+:\s*if\s+\[.*\].*then'; then
-    fail "$cmd alias is wrapped in a conditional (can vanish)"
+  if grep -qF "$cmd() {" "$MANUL_SHELL_FILE" 2>/dev/null; then
+    ok "$cmd function is unconditional"
   else
-    ok "$cmd alias is unconditional"
+    fail "$cmd function is missing"
   fi
 done
 
 # 3) Deleting the runtime does not remove the CLI entrypoints from a fresh
-#    shell — the shell definitions are in manul-shell.zsh, not in the
-#    runtime dir.
+#    shell — the command definitions live in manul-shell.zsh, not in runtime.
 rm -rf "$RUN"
-# Simulate a fresh shell: aliases must still be defined even though the
-# runtime is gone. We check the shell file directly since the test runs
-# outside an interactive shell.
-if grep -q "alias manul=" "$MANUL_SHELL_FILE" 2>/dev/null; then
-  ok "manul alias defined in shell file (survives runtime deletion)"
-else
-  fail "manul alias missing from shell file"
-fi
-for cmd in manul-status manul-comments-remove; do
-  if grep -q "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null; then
-    ok "$cmd alias defined in shell file (unconditional, survives runtime deletion)"
+for cmd in manul manul-status manul-comments-remove; do
+  if grep -qF "$cmd() {" "$MANUL_SHELL_FILE" 2>/dev/null; then
+    ok "$cmd function survives runtime deletion"
   else
-    fail "$cmd alias missing from shell file"
+    fail "$cmd function missing from shell file"
   fi
 done
 
@@ -332,11 +320,14 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
   fi
 done
 
-# 5) manul-status --list works (requires a DB; the canonical backup provides one)
-if [ -f "$CANON/manul.db" ]; then
-  cp "$CANON/manul.db" "$RUN/manul.db"
-  chmod 600 "$RUN/manul.db"
-fi
+# 5) manul-status --list works against a production-schema DB fixture.
+# The repository intentionally does not carry application state, so create a
+# real schema fixture instead of coupling this CLI test to a repository DB.
+CLI_DB="$CLI_ROOT/backup/manul.db"
+create_canonical_backup "$CLI_DB"
+cp "$CLI_DB" "$RUN/manul.db"
+chmod 600 "$RUN/manul.db"
+
 set +e
 MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list >/dev/null 2>&1
 RC_STATUS=$?
@@ -886,12 +877,12 @@ INSTALL_ROOT="$TMPROOT/install-runtime"
 INSTALL_HOME="$TMPROOT/install-home"
 mkdir -p "$INSTALL_HOME"
 set +e
-INSTALL_OUTPUT=$(HOME="$INSTALL_HOME"   MANUL_RUNTIME_DIR="$INSTALL_ROOT"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" 2>&1)
+INSTALL_OUTPUT=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
 INSTALL_EXIT=$?
 set -e
 
 if [ "$INSTALL_EXIT" -eq 0 ]; then
-  ok "install-manul.sh succeeds on a fresh runtime"
+  ok "install-manul.sh --init-state succeeds on a fresh runtime"
 else
   fail "install-manul.sh failed on a fresh runtime (exit=$INSTALL_EXIT)"
   echo "$INSTALL_OUTPUT"
@@ -922,15 +913,74 @@ else
 fi
 
 set +e
-HOME="$INSTALL_HOME"   MANUL_RUNTIME_DIR="$INSTALL_ROOT"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" >/dev/null 2>&1
+INSTALL_OUTPUT_2=$(HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
-  ok "Canonical installer is idempotent"
+  ok "Canonical installer remains idempotent after explicit initialization"
 else
   fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
+  echo "$INSTALL_OUTPUT_2"
 fi
 
+
+# ── Test: repair must fail closed when DB is missing ─────────────────────────
+echo
+echo "Test: Repair refuses implicit fresh DB creation"
+FAIL_CLOSED_ROOT="$(mktemp -d /tmp/manul-fail-closed-XXXXXX)"
+FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"
+mkdir -p "$FAIL_CLOSED_RUNTIME"
+set +e
+FAIL_CLOSED_OUTPUT=$(
+  MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+FAIL_CLOSED_EXIT=$?
+set -e
+if [ "$FAIL_CLOSED_EXIT" -ne 0 ] && echo "$FAIL_CLOSED_OUTPUT" | grep -q "No valid backup DB found"; then
+  ok "Repair fails closed when DB is missing and no backup exists"
+else
+  fail "Repair unexpectedly fabricated/accepted a fresh DB (exit=$FAIL_CLOSED_EXIT)"
+fi
+rm -rf "$FAIL_CLOSED_ROOT"
+
+# ── Test: explicit installer opt-in is the only fresh-DB path ────────────────
+INIT_ROOT="$(mktemp -d /tmp/manul-init-optin-XXXXXX)"
+INIT_RUNTIME="$INIT_ROOT/runtime"
+mkdir -p "$INIT_RUNTIME"
+set +e
+INIT_OUTPUT=$(
+  MANUL_RUNTIME_DIR="$INIT_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
+)
+INIT_EXIT=$?
+set -e
+if [ "$INIT_EXIT" -eq 0 ] && [ -s "$INIT_RUNTIME/manul.db" ]; then
+  ok "Fresh DB creation requires explicit --init-state"
+else
+  fail "Explicit --init-state did not initialize a fresh DB (exit=$INIT_EXIT)"
+fi
+rm -rf "$INIT_ROOT"
+
+# ── Test: runtime repair cannot turn an existing queue into a new empty DB ─────
+echo
+echo "Test: Self-healing never loses an existing queue"
+PERSIST_ROOT="$(mktemp -d /tmp/manul-persistence-XXXXXX)"
+PERSIST_RUNTIME="$PERSIST_ROOT/runtime"
+mkdir -p "$PERSIST_RUNTIME"
+cp "$SCRIPT_DIR/config.json.example" "$PERSIST_RUNTIME/config.json"
+sqlite3 "$PERSIST_RUNTIME/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
+PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
+set +e
+PERSIST_OUTPUT="$(MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
+PERSIST_EXIT=$?
+set -e
+PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"
+if [ "$PERSIST_EXIT" -eq 0 ] && [ "$PERSIST_BEFORE" = "$PERSIST_AFTER" ] && [ "$PERSIST_AFTER" -eq 1 ]; then
+  ok "Repair preserves an existing queued task"
+else
+  fail "Repair changed/lost an existing queued task (exit=$PERSIST_EXIT before=$PERSIST_BEFORE after=$PERSIST_AFTER)"
+  echo "$PERSIST_OUTPUT"
+fi
+rm -rf "$PERSIST_ROOT"
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
