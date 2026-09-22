@@ -540,16 +540,15 @@ start_heartbeat() {
   local claim_token="${3:-}"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
 
-  if [ -z "$claim_token" ]; then
-    claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' AND status='running' LIMIT 1;" 2>/dev/null)"
+  local ownership_sql
+  if [ -n "$claim_token" ]; then
+    local safe_claim_token
+    safe_claim_token="$(sql_escape "$claim_token")"
+    ownership_sql="AND claimToken='$safe_claim_token'"
+  else
+    # Legacy rows created before claimToken used workerPid only.
+    ownership_sql="AND claimToken IS NULL"
   fi
-  if [ -z "$claim_token" ]; then
-    log "ERROR: cannot start heartbeat for $comment_id without claim token"
-    return 1
-  fi
-
-  local safe_claim_token
-  safe_claim_token="$(sql_escape "$claim_token")"
   (
     while true; do
       # Heartbeat belongs to this worker process and this exact claim.
@@ -557,7 +556,7 @@ start_heartbeat() {
         exit 0
       fi
       local changed
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null | tail -n 1)"
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>/dev/null | tail -n 1)"
       if [ "${changed:-0}" -ne 1 ]; then
         exit 0
       fi
