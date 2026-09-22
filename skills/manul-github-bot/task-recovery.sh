@@ -53,6 +53,31 @@ mark_task_failed() {
     " 2>/dev/null
 }
 
+retry_failed_task() {
+    local comment_id="$1"
+    log "Retrying failed task $comment_id from scratch"
+    sqlite3 "$DB" "
+        UPDATE processed_comments
+        SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
+        WHERE commentId='$comment_id' AND status='failed';
+    " 2>/dev/null
+}
+
+retry_all_failed_tasks() {
+    log "WARNING: Retrying ALL failed tasks from scratch (DANGEROUS)"
+    read -p "Are you sure? (yes/no): " -r confirm
+    if [ "$confirm" != "yes" ]; then
+        log "Aborted"
+        return
+    fi
+    sqlite3 "$DB" "
+        UPDATE processed_comments
+        SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
+        WHERE status='failed';
+    " 2>/dev/null
+    log "All failed tasks requeued from scratch"
+}
+
 reset_all_tasks() {
     log "WARNING: Resetting ALL running tasks to queued (DANGEROUS)"
     read -p "Are you sure? (yes/no): " -r confirm
@@ -109,11 +134,22 @@ case "${1:-}" in
     --reset-all)
         reset_all_tasks
         ;;
+    --retry)
+        shift
+        if [ -z "${1:-}" ]; then
+            echo "Error: --retry requires a task id" >&2
+            exit 1
+        fi
+        retry_failed_task "$1"
+        ;;
+    --retry-failed-all)
+        retry_all_failed_tasks
+        ;;
     --health-check)
         health_check
         ;;
     *)
-        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all|--health-check]"
+        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all|--retry <id>|--retry-failed-all|--health-check]"
         exit 1
         ;;
 esac
