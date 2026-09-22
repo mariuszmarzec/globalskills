@@ -107,6 +107,33 @@ init_db() {
 # ============================================================
 # Section 1: manul-submit.sh tests
 # ============================================================
+
+test_task_recovery_retry() {
+  echo ""
+  echo "=== task-recovery retry tests ==="
+
+  sqlite3 "$DB" "DELETE FROM processed_comments;"
+  sqlite3 "$DB" "INSERT INTO processed_comments (commentId, repository, issueNumber, status, attempts, createdAt, nextAttemptAt) VALUES ('failed-retry','owner/repo',1,'failed',3,datetime('now'),datetime('now','+1 hour'));"
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/task-recovery.sh" --retry failed-retry 2>&1)
+  STATUS=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='failed-retry';")
+  ATTEMPTS=$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='failed-retry';")
+  NEXT_ATTEMPT=$(sqlite3 "$DB" "SELECT nextAttemptAt FROM processed_comments WHERE commentId='failed-retry';")
+  assert_eq "Retry failed task requeues it" "queued" "$STATUS"
+  assert_eq "Retry failed task resets attempts" "0" "$ATTEMPTS"
+  if [ -n "$NEXT_ATTEMPT" ]; then
+    pass "Retry failed task schedules immediate attempt"
+  else
+    fail "Retry failed task schedules immediate attempt" "timestamp" "$NEXT_ATTEMPT"
+  fi
+
+  sqlite3 "$DB" "INSERT INTO processed_comments (commentId, repository, issueNumber, status, attempts, createdAt) VALUES ('failed-retry-2','owner/repo',2,'failed',5,datetime('now'));"
+  printf 'yes\n' | MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/task-recovery.sh" --retry-failed-all > /dev/null 2>&1
+  STATUS2=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='failed-retry-2';")
+  ATTEMPTS2=$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='failed-retry-2';")
+  assert_eq "Retry all failed tasks requeues failed task" "queued" "$STATUS2"
+  assert_eq "Retry all failed tasks resets attempts" "0" "$ATTEMPTS2"
+}
+
 test_submit() {
   echo ""
   echo "=== manul-submit.sh tests ==="
