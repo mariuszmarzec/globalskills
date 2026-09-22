@@ -94,7 +94,7 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git gh jq sqlite3 curl openclaw"
+echo "Prerequisites OK: bash git gh jq sqlite3 curl openclaw crontab"
 echo
 
 # 2. Ensure runtime directory
@@ -269,13 +269,27 @@ for data in config.json manul.db; do
     fi
 done
 
+if grep -Fq "$MANUL_SHELL_LINE" "$ZSHRC"; then
+    echo "OK zsh integration present"
+else
+    echo "FAIL zsh integration missing from $ZSHRC" >&2
+    VERIFY_OK=false
+fi
+
+if crontab -l 2>/dev/null | grep -qF "$WATCHDOG_CRON"; then
+    echo "OK watchdog cron present"
+else
+    echo "FAIL watchdog cron missing" >&2
+    VERIFY_OK=false
+fi
+
 echo
 if $VERIFY_OK; then
     echo "=== Install Complete ==="
     echo "Runtime:    $RUNTIME_DIR"
     echo "Canonical:  $CANONICAL_DIR"
     echo
-    echo "Start the automation with:"
+    echo "Start Manul manually with:"
     echo "  manul"
     echo "  # or explicitly:"
     echo "  $RUNTIME_DIR/start-manul-automation.sh start"
