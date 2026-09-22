@@ -286,6 +286,13 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
 done
 $GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
 
+# 2c) Lifecycle CLI accepts both long flags and readable subcommands.
+if grep -qF -- '--start) action="start"' "$MANUL_SHELL_FILE"    && grep -qF -- '--stop) action="stop"' "$MANUL_SHELL_FILE"    && grep -qF -- '--restart) action="restart"' "$MANUL_SHELL_FILE"    && grep -qF -- '--status) action="status"' "$MANUL_SHELL_FILE"; then
+  ok "manul supports --start/--stop/--restart/--status"
+else
+  fail "manul long lifecycle flags are missing"
+fi
+
 # 2c) All CLI entrypoints must be unconditional shell functions. They must
 #     remain defined even when the runtime directory has been deleted.
 for cmd in manul manul-status manul-comments-remove; do
