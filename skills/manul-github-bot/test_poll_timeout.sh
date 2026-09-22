@@ -301,6 +301,7 @@ fi
 # timeout can fire. The poll process must clean the lock it acquired before
 # receiving SIGTERM.
 rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/repo-locks/hang.lock"
+init_poll_db
 export MANUL_REPO_POLL_TIMEOUT=30
 if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test5.txt" 2>&1; then
   echo "FAIL 5: Global timeout unexpectedly returned success"
