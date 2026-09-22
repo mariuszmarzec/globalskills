@@ -65,6 +65,7 @@ CREATE TABLE processed_comments (
   heartbeatAt TEXT,
   leaseExpiresAt TEXT,
   workerPid INTEGER,
+  claimToken TEXT,
   nextAttemptAt TEXT,
   resultSummary TEXT
 );
@@ -84,20 +85,20 @@ REPO="owner/repo"
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES
-('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$$,NULL,NULL);
+('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'owner-token',NULL,NULL);
 INSERT INTO processed_comments VALUES
-('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,NULL,NULL);
+('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,'other-token',NULL,NULL);
 "
-update_task_completion owner completed
+update_task_completion owner completed "" owner-token
 assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='owner';")" "owner can complete"
-if update_task_completion other completed; then
+if update_task_completion other completed "" wrong-token; then
   echo "FAIL: non-owner completion unexpectedly succeeded" >&2
   exit 1
 fi
 echo "PASS: non-owner completion rejected"
 
 # 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('hb','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$$,NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('hb','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$,'hb-token',NULL,NULL);"
 HEARTBEAT_PIDS[hb]=$$
 LEASE_TIMEOUT=900
 refresh_heartbeat hb
@@ -105,17 +106,26 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN heartbeatAt > datetime('now','-5 
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN leaseExpiresAt > datetime('now') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='hb';")" "lease expiry extended"
 
 # 3) Dead worker + expired lease is requeued.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,'dead-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
 
-# 4) Live worker + expired lease is NOT stolen.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$$,NULL,NULL);"
+# 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),$,'live-token',NULL,NULL);"
 recover_stale_tasks
-assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task preserved"
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task recovered by expired lease"
+# Simulate the same long-lived worker claiming the retry with a new token. The old execution must not finalize it.
+sqlite3 "$DB" "UPDATE processed_comments SET status='running', heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=$, claimToken='new-token' WHERE commentId='live';"
+if update_task_completion live completed "" live-token; then
+  echo "FAIL: stale claim unexpectedly finalized a newer execution" >&2
+  exit 1
+fi
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "stale claim cannot finalize newer execution"
+update_task_completion live completed "" new-token
+assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "current claim can finalize"
 
 # 5) Max attempts on dead worker becomes failed.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
 
@@ -130,7 +140,7 @@ git -C "$WORKTREE" add README.md
 git -C "$WORKTREE" commit -qm initial
 git -C "$WORKTREE" checkout -qb manul-task-test
 
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$$,NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'pr-token',NULL,NULL);"
 
 FAKE_BIN="$TEST_DIR/bin"
 mkdir -p "$FAKE_BIN"
