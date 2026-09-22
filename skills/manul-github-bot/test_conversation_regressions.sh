@@ -15,15 +15,6 @@ run_test() {
   local name="$1"
   local func="$2"
   TOTAL=$((TOTAL + 1))
-  local defined
-  defined="$(declare -F "$func" 2>/dev/null || true)"
-  if [ -z "$defined" ]; then
-    echo "ERROR: test function '$func' is not defined"
-    echo "Defined test functions:"
-    declare -F | grep -E '^declare -f test_' || true
-    FAILED=$((FAILED + 1))
-    return 1
-  fi
   if "$func"; then
     PASSED=$((PASSED + 1))
     echo "  PASS: $name"
@@ -201,12 +192,6 @@ MOCK_EOF
   if [ "$msg_count" -ne 4 ]; then
     echo "ERROR: Expected 4 conversation_messages (Issue root + 3 comments), found $msg_count"
     rm -rf "$test_dir"
-    echo "---- poll.log ----"
-    cat "$manul_dir/poll.log" 2>/dev/null || true
-    echo "---- end poll.log ----"
-    echo "---- poll.log ----"
-    cat "$manul_dir/poll.log" 2>/dev/null || true
-    echo "---- end poll.log ----"
     return 1
   fi
 
@@ -443,9 +428,6 @@ MOCK_EOF
   task_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE repository='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
   if [ "$task_count" -ne 1 ]; then
     echo "ERROR: Expected 1 task (baseId dedup), found $task_count"
-    echo "---- poll.log ----"
-    cat "$manul_dir/poll.log" 2>/dev/null || true
-    echo "---- end poll.log ----"
     rm -rf "$test_dir"
     return 1
   fi
@@ -621,9 +603,6 @@ MOCK_EOF
   baseline="$(sqlite3 "$poll_db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null)"
   if [ "$count" -ne 1 ]; then
     echo "ERROR: expected pre-start trigger to be queued, found $count"
-    echo "---- poll.log ----"
-    cat "$manul_dir/poll.log" 2>/dev/null || true
-    echo "---- end poll.log ----"
     rm -rf "$test_dir"
     return 1
   fi
