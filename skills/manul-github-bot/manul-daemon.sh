@@ -525,11 +525,31 @@ recover_stale_tasks() {
 }
 start_heartbeat() {
   local comment_id="$1"
+  local worker_pid="${2:-$$}"
+  local claim_token="${3:-}"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
-  # Start a background heartbeat loop
+
+  if [ -z "$claim_token" ]; then
+    claim_token="$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' AND status='running' LIMIT 1;" 2>/dev/null)"
+  fi
+  if [ -z "$claim_token" ]; then
+    log "ERROR: cannot start heartbeat for $comment_id without claim token"
+    return 1
+  fi
+
+  local safe_claim_token
+  safe_claim_token="$(sql_escape "$claim_token")"
   (
     while true; do
-      sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$comment_id' AND status='running';" 2>/dev/null || true
+      # Heartbeat belongs to this worker process and this exact claim.
+      if ! kill -0 "$worker_pid" 2>/dev/null; then
+        exit 0
+      fi
+      local changed
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null | tail -n 1)"
+      if [ "${changed:-0}" -ne 1 ]; then
+        exit 0
+      fi
       sleep "$HEARTBEAT_INTERVAL"
     done
   ) &
@@ -537,9 +557,8 @@ start_heartbeat() {
   echo "$heartbeat_pid" > "$pid_file" 2>/dev/null || true
   HEARTBEAT_PIDS["$comment_id"]=$heartbeat_pid
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
-  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s"
+  lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
-
 stop_heartbeat() {
   local comment_id="$1"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
