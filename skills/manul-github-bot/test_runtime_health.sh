@@ -922,7 +922,7 @@ else
 fi
 
 set +e
-HOME="$INSTALL_HOME"   MANUL_RUNTIME_DIR="$INSTALL_ROOT"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/install-manul.sh" >/dev/null 2>&1
+HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" >/dev/null 2>&1
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
