@@ -2038,6 +2038,12 @@ loop() {
     exit 1
   fi
 
+  # Ensure task claim ownership support before any claim/recovery.
+  if ! ensure_claim_token_column; then
+    log "FATAL: claimToken schema migration failed, cannot start loop"
+    exit 1
+  fi
+
   # Recover any stale tasks from previous crashes/deadlocks
   recover_stale_tasks
 
