@@ -287,7 +287,7 @@ CFGEOF
   {"id":103,"user":{"login":"test-user"},"body":"Good point, added.","html_url":"https://github.com/test-org/test-repo/pull/50#discussion_r103","created_at":"2026-09-16T00:02:00Z","in_reply_to_id":102,"path":"src/auth.py","line":48,"diff_hunk":"@@ -40,3 +40,3 @@","original_line":48},
   {"id":201,"user":{"login":"test-user"},"body":"/manul Add unit tests for the new endpoint","html_url":"https://github.com/test-org/test-repo/pull/50#discussion_r201","created_at":"2026-09-16T00:03:00Z","in_reply_to_id":null,"path":"tests/test_api.py","line":10,"diff_hunk":"@@ -8,3 +8,3 @@","original_line":10}
 ]
-MOCK_EOF
+EOF
 
   cat > "$mock_gh_dir/gh" <<'MOCK_EOF'
 #!/bin/bash
