@@ -1127,6 +1127,7 @@ evaluate_task_completion() {
   local DB="$8"
   local REPO_DIR="${9:-}"
   local WORKDIR="${10:-$REPO_DIR}"
+  local CLAIM_TOKEN="${11:-}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
