@@ -10,10 +10,9 @@
 #
 # Self-healing: manul-ensure-runtime() runs the repair path when the
 # runtime is missing or any CLI entrypoint is not a usable file. Repair is
-# fail-closed: it will restore an existing DB from backup/archive but will
-# never silently fabricate a fresh application DB during self-healing. Checking all three entrypoints (not just
-# manul-daemon.sh) means a broken/missing manul-status.sh or
-# manul-comments-remove.sh is also repaired.
+# fail-closed: it restores an existing DB from backup/archive and never
+# fabricates a fresh application DB during self-healing. All three CLI
+# entrypoints are checked, not just manul-daemon.sh.
 #
 # The `.enabled` marker is the lifecycle contract:
 #   - install-manul.sh prepares the runtime but does NOT start anything and does
