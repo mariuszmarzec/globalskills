@@ -270,8 +270,8 @@ update_task_completion() {
   local safe_comment_id="$(sql_escape "$comment_id")"
   local status="$2"
   local error_message="${3:-}"
+  local claim_token="${4:-}"
 
-  # Verify task exists before updating
   local task_exists
   task_exists="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
   if [ -z "$task_exists" ]; then
@@ -279,87 +279,62 @@ update_task_completion() {
     return 1
   fi
 
-  # Verify task is in a state that can transition to the target status
   local current_status
   current_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
-  # Validate state transitions
   case "$status" in
-    "completed")
-      # Allow completion if already completed (idempotent)
-      if [ "$current_status" = "completed" ]; then
-        log "SUCCESS: Task $comment_id already completed (idempotent)"
+    completed|failed)
+      if [ "$current_status" = "$status" ]; then
+        log "SUCCESS: Task $comment_id already $status (idempotent)"
         return 0
       fi
-      # Allow completion if currently queued (race condition recovery)
-      if [ "$current_status" = "queued" ]; then
-        log "WARN: Task $comment_id was requeued during processing, completing anyway"
-      elif [ "$current_status" != "running" ]; then
-        log "ERROR: Cannot complete task $comment_id from current status: $current_status"
+      if [ "$current_status" != "running" ]; then
+        log "ERROR: Cannot $status task $comment_id from current status: $current_status"
         return 1
       fi
       ;;
-    "failed")
-      if [ "$current_status" != "running" ] && [ "$current_status" != "queued" ]; then
-        log "ERROR: Cannot fail task $comment_id from current status: $current_status"
-        return 1
-      fi
-      ;;
-    "queued")
+    queued)
       if [ "$current_status" != "running" ]; then
         log "ERROR: Cannot requeue task $comment_id from current status: $current_status"
         return 1
       fi
       ;;
+    *)
+      log "ERROR: Unsupported task completion status: $status"
+      return 1
+      ;;
   esac
 
-  # Perform the update with worker ownership verification for completion/failure
-  local where_clause="WHERE commentId='$safe_comment_id'"
-
-  # For completed/failed tasks, verify worker ownership to prevent stealing
-  if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
-    local current_worker_pid
-    current_worker_pid="$$"
-    where_clause="WHERE commentId='$safe_comment_id' AND workerPid=$current_worker_pid"
-
-    # If no workerPid assigned yet, this is a transition from queued
-    if [ "$current_status" = "queued" ]; then
-      where_clause="WHERE commentId='$safe_comment_id'"
-    fi
+  if [ -z "$claim_token" ]; then
+    log "ERROR: Refusing task state transition for $comment_id without claim token"
+    return 1
   fi
+  local safe_claim_token
+  safe_claim_token="$(sql_escape "$claim_token")"
+  local where_clause="WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'"
 
-  # Execute the update
   local update_sql="UPDATE processed_comments SET status='$status'"
-
   case "$status" in
-    "completed")
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
+    completed|failed)
+      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
       ;;
-    "failed")
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
-      ;;
-    "queued")
-      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL"
+    queued)
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
       ;;
   esac
 
-  update_sql+=" $where_clause;"
-
-  # Execute the update and capture changes() in the same connection
   local update_result
-  update_result="$(sqlite3 "$DB" "$update_sql; SELECT changes();" 2>/dev/null)"
+  update_result="$(sqlite3 "$DB" "$update_sql $where_clause; SELECT changes();" 2>/dev/null)"
   local changes
   changes="$(echo "$update_result" | tail -n 1)"
 
   if [ "${changes:-0}" -eq 1 ]; then
     log "SUCCESS: Task $comment_id transitioned to $status (previous: $current_status)"
     return 0
-  else
-    log "ERROR: Task $comment_id update failed (changes=$changes, previous: $current_status)"
-    return 1
   fi
+  log "ERROR: Task $comment_id update failed (changes=$changes, previous=$current_status)"
+  return 1
 }
-
 # Finalization verification: ensure heartbeat and locks don't revert completion
 # FIX: Stop any lingering heartbeat BEFORE verifying finalization.
 # The old code compared heartbeat PID vs daemon PID and could fail when
