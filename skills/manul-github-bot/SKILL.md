@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for all Manul executable scripts. Runtime scripts are symlinked from this directory into `~/.openclaw/manul/`.
+description: Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, prepares an isolated workspace, lets the agent decide whether branching is needed, pushes repository changes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. This skill directory is the canonical source for all Manul executable scripts. Runtime scripts are symlinked from this directory into `~/.openclaw/manul/`.
 ---
 
 # Manul GitHub Bot 🐈
