@@ -507,8 +507,29 @@ echo "============================================================"
 
 init_db
 
+# ============================================================
+# Section 3: manul-status.sh log mode tests
+# ============================================================
+test_status_log() {
+  echo ""
+  echo "=== manul-status.sh log tests ==="
+  printf 'line-1\nline-2\nline-3\n' > "$MANUL_DIR/daemon.log"
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --log --tail=2 2>&1)
+  assert_eq "Log mode --tail=2 returns last two lines" $'line-2\nline-3' "$OUTPUT"
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --log --tail 1 2>&1)
+  assert_eq "Log mode --tail 1 returns last line" "line-3" "$OUTPUT"
+
+  set +e
+  MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --log --tail=0 > /dev/null 2>&1
+  RC=$?
+  set -e
+  assert_eq "Invalid --tail=0 returns error" "1" "$RC"
+}
 test_submit
 test_status
+test_status_log
 test_result
 test_integration
 
