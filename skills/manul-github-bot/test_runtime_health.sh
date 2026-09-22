@@ -926,7 +926,7 @@ HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCR
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
-  ok "Canonical installer is idempotent"
+  ok "Canonical installer remains idempotent after explicit initialization"
 else
   fail "Canonical installer is not idempotent (exit=$INSTALL_EXIT_2)"
 fi
