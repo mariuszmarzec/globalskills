@@ -7,8 +7,8 @@
 #   3. Ensure runtime directory
 #   4. Deploy symlinks via install-manul-symlinks.sh
 #   5. Restore config.json from example if missing
-#   6. Bootstrap/migrate manul.db (create+init if missing; replace with a fresh
-#      DB if schema initialization fails)
+#   6. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
+#      is created only with explicit --init-state on a first-time installation.
 #   7. Install the dormant watchdog cron (it only acts when .enabled exists)
 #   8. Install canonical zsh shell integration
 #   9. Verify and print summary
@@ -29,6 +29,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+INIT_STATE=false
 
 fail() {
     echo "ERROR: $*" >&2
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
             echo "Environment overrides:"
             echo "  MANUL_RUNTIME_DIR    Runtime directory"
             echo "  MANUL_CANONICAL_DIR  Canonical skill directory"
+            echo "  --init-state         Explicitly initialize a brand-new DB if no valid DB/backup exists"
             exit 0
             ;;
         *)
