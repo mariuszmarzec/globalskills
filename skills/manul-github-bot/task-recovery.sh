@@ -38,7 +38,7 @@ reset_task() {
     log "Resetting task $comment_id to queued"
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
+        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE commentId='$comment_id' AND status='running';
     " 2>/dev/null
 }
@@ -48,7 +48,7 @@ mark_task_failed() {
     log "Marking task $comment_id as failed"
     sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, nextAttemptAt=NULL
+        SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
         WHERE commentId='$comment_id' AND status='running';
     " 2>/dev/null
 }
