@@ -116,7 +116,7 @@ sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task recovered by expired lease"
 # Simulate the same long-lived worker claiming the retry with a new token. The old execution must not finalize it.
-sqlite3 "$DB" "UPDATE processed_comments SET status='running', heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=$, claimToken='new-token' WHERE commentId='live';"
+sqlite3 "$DB" "UPDATE processed_comments SET status='running', heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=1, claimToken='new-token' WHERE commentId='live';"
 if update_task_completion live completed "" live-token; then
   echo "FAIL: stale claim unexpectedly finalized a newer execution" >&2
   exit 1
