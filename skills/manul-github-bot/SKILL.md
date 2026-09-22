@@ -387,31 +387,31 @@ The `manul-ensure-runtime()` guard auto-heals a missing runtime by running `inst
 
 Run the canonical installer or use the skill directly. After installation:
 
-1. **Install the canonical bundle** (recommended — handles prerequisites, symlinks, config, DB bootstrap, and corruption recovery):
+1. **Install the canonical bundle** (recommended — handles prerequisites, symlinks, config, DB bootstrap/recovery, dormant watchdog cron, and zsh integration):
    ```bash
    ~/.globalskills/skills/manul-github-bot/install-manul.sh
    ```
 
-2. **Start the automation** (creates `.enabled` and starts the daemon + watchdog cron):
+2. **Start the automation** (creates `.enabled` and starts the daemon; the installer has already installed the dormant watchdog cron):
    ```bash
    ~/.openclaw/manul/start-manul-automation.sh start
    # or equivalently:
    manul start
    ```
 
-3. **Stop the automation** (removes `.enabled` and stops the daemon + watchdog cron):
+3. **Stop the automation** (removes `.enabled` and stops the daemon; the watchdog cron remains installed but is dormant):
    ```bash
    ~/.openclaw/manul/start-manul-automation.sh stop
    # or equivalently:
    manul stop
    ```
 
-**Shell CLI aliases** are installed automatically by the user's `~/.zshrc` sourcing `manul-shell.zsh`:
-- `manul` — start/stop/restart the daemon
+**Shell CLI functions** are installed automatically by install-manul.sh, which adds a single source line for manul-shell.zsh to `~/.zshrc`:
+- `manul` — start/stop/restart/status the daemon
 - `manul-status` — list tasks and show task details
 - `manul-comments-remove` — remove manul GitHub comments by issue/PR URL
 
-If any symlink is broken or the runtime is missing, the aliases auto-heal via `manul-ensure-runtime()`.
+If any symlink is broken or the runtime is missing, the CLI functions auto-heal via manul-ensure-runtime().
 
 ### Manual Recovery
 
