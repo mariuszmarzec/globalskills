@@ -280,36 +280,24 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
 done
 $GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
 
-# 2c) No CLI alias may be wrapped in a conditional that can silently vanish
-#     when the runtime is absent (the command must always be defined).
+# 2c) All CLI entrypoints must be unconditional shell functions. They must
+#     remain defined even when the runtime directory has been deleted.
 for cmd in manul manul-status manul-comments-remove; do
-  line="$(grep -n "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null | head -1 || true)"
-  if [ -z "$line" ]; then
-    fail "$cmd alias is missing entirely"
-  elif echo "$line" | grep -qE '^\s*[0-9]+:\s*if\s+\[.*\].*then'; then
-    fail "$cmd alias is wrapped in a conditional (can vanish)"
+  if grep -qF "$cmd() {" "$MANUL_SHELL_FILE" 2>/dev/null; then
+    ok "$cmd function is unconditional"
   else
-    ok "$cmd alias is unconditional"
+    fail "$cmd function is missing"
   fi
 done
 
 # 3) Deleting the runtime does not remove the CLI entrypoints from a fresh
-#    shell — the shell definitions are in manul-shell.zsh, not in the
-#    runtime dir.
+#    shell — the command definitions live in manul-shell.zsh, not in runtime.
 rm -rf "$RUN"
-# Simulate a fresh shell: aliases must still be defined even though the
-# runtime is gone. We check the shell file directly since the test runs
-# outside an interactive shell.
-if grep -q "alias manul=" "$MANUL_SHELL_FILE" 2>/dev/null; then
-  ok "manul alias defined in shell file (survives runtime deletion)"
-else
-  fail "manul alias missing from shell file"
-fi
-for cmd in manul-status manul-comments-remove; do
-  if grep -q "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null; then
-    ok "$cmd alias defined in shell file (unconditional, survives runtime deletion)"
+for cmd in manul manul-status manul-comments-remove; do
+  if grep -qF "$cmd() {" "$MANUL_SHELL_FILE" 2>/dev/null; then
+    ok "$cmd function survives runtime deletion"
   else
-    fail "$cmd alias missing from shell file"
+    fail "$cmd function missing from shell file"
   fi
 done
 
