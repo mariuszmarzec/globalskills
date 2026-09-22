@@ -372,16 +372,15 @@ Manul tracks its operational state via the `~/.openclaw/manul/.enabled` marker f
 
 ## Shell Integration
 
-Manul registers three shell aliases in `~/.zshrc` via `manul-shell.zsh`:
+Manul installs three zsh functions from `manul-shell.zsh`:
 
 ```bash
-# Loaded from ~/.globalskills/skills/manul-github-bot/manul-shell.zsh
-alias manul='manul-ensure-runtime && ~/.openclaw/manul/manul-daemon.sh'
-alias manul-status='manul-ensure-runtime && ~/.openclaw/manul/manul-status.sh'
-alias manul-comments-remove='manul-ensure-runtime && ~/.openclaw/manul/manul-comments-remove.sh'
+manul [start|stop|restart|status]
+manul-status [OPTIONS] [TASK_ID]
+manul-comments-remove <PR-or-issue>
 ```
 
-The `manul-ensure-runtime()` guard auto-heals a missing runtime by running `install-manul.sh` and sourcing `manul-shell.zsh` again. Environment variables `MANUL_RUNTIME_DIR` and `MANUL_SOURCE_DIR` can override defaults.
+The installer adds one source line to `~/.zshrc` so the shell entrypoints are reproducible from the canonical repository. The shared `manul-ensure-runtime()` guard auto-heals a missing or broken runtime by running `install-manul.sh`. Installer failures are returned to the caller.
 
 ## Installation
 
