@@ -54,11 +54,20 @@ manul() {
         shift
     fi
 
+    # Accept both readable subcommands and convenient long-option flags.
+    case "$action" in
+        --start) action="start" ;;
+        --stop) action="stop" ;;
+        --restart) action="restart" ;;
+        --status) action="status" ;;
+    esac
+
     case "$action" in
         start|stop|restart|status)
             ;;
         *)
-            echo "Usage: manul [start|stop|restart|status]" >&2
+            echo "Usage: manul [--start|--stop|--restart|--status]" >&2
+            echo "       manul [start|stop|restart|status]" >&2
             return 2
             ;;
     esac
