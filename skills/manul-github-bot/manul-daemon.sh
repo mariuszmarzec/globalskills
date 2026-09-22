@@ -638,6 +638,14 @@ start() {
     return 1
   fi
 
+  # Lifecycle marker: this is an INTENTIONAL start. The .enabled marker is the
+  # contract between intentional start/stop and the watchdog: the watchdog only
+  # restarts the daemon when it is present, so crash recovery never re-enables
+  # automation. Direct callers (aicode, the `manul` alias) reach this point
+  # via start-manul-automation.sh, which also touches the marker; this touch is
+  # the safety net for any path that invokes manul-daemon.sh start directly.
+  touch "$MANUL_DIR/.enabled"
+
   # Atomically write PID file under flock to prevent concurrent start races
   exec 200>"$FLOCK_FILE"
   flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
@@ -719,6 +727,12 @@ if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
   return 0
 }
 stop() {
+  # Lifecycle marker: this is an INTENTIONAL stop. Remove .enabled so the
+  # watchdog stops trying to restart the daemon (crash recovery never
+  # re-enables automation). Done before the early return so a "not running"
+  # answer still clears a stale marker left by a previous crash.
+  rm -f "$MANUL_DIR/.enabled"
+
   if [ ! -f "$PID_FILE" ]; then
     echo "not running"
     return 0

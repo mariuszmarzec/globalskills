@@ -45,6 +45,12 @@ case "${1:-}" in
         log "Starting manul automation..."
         # Ensure scripts are executable
         chmod +x "$DAEMON" "$WATCHDOG" 2>/dev/null || true
+        # Lifecycle marker: this is an INTENTIONAL start. Touch .enabled
+        # unconditionally — even if the daemon is already running (and its
+        # start() early-returns before touching the marker), the wrapper is the
+        # authoritative start path and must leave the marker present so the
+        # watchdog is allowed to recover the daemon.
+        touch "$MANUL_DIR/.enabled"
         # Start daemon. Install watchdog even when startup fails so the
         # independent recovery path remains available, but preserve the failure
         # status instead of claiming automation started successfully.
@@ -72,6 +78,10 @@ case "${1:-}" in
         ;;
     stop)
         log "Stopping manul automation..."
+        # Lifecycle marker: this is an INTENTIONAL stop. Remove .enabled so the
+        # watchdog stops trying to restart the daemon. Done before the daemon
+        # stop so a "not running" answer still clears a stale marker.
+        rm -f "$MANUL_DIR/.enabled"
         "$DAEMON" stop
         remove_watchdog_cron
         log "Manul automation stopped"

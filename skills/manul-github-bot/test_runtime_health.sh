@@ -2,23 +2,37 @@
 # test_runtime_health.sh — Regression tests for Manul runtime health/recovery
 #
 # Tests that verify:
-# 1. Shell syntax of all runtime scripts
-# 2. No hardcoded /mnt/f or /home/marzec/.openclaw/manul paths in source
-# 3. install-manul-symlinks.sh contracts
-# 4. repair-manul-runtime.sh aborts safely without a DB backup
-# 5. repair-manul-runtime.sh restores from a canonical-init DB backup
-# 6. Restored symlinks are valid and point into canonical source
-# 7. Recovered DB contains the required tables and columns (strengthened)
-# 8. Second repair is idempotent (DB and config are not replaced)
-# 9. Archive fallback works with supported sibling archive layout
+#  1. Shell syntax of all runtime scripts
+#  2. No hardcoded /mnt/f or /home/marzec/.openclaw/manul paths in source
+#  3. install-manul-symlinks.sh contracts
+#  3b. installer self-healing (idempotent, safe to run repeatedly)
+#  3c. CLI entrypoints resolve in a fresh shell
+#  4. repair-manul-runtime.sh aborts safely without a DB backup
+#  5. repair-manul-runtime.sh restores from a canonical-init DB backup
+#  6. Restored symlinks are valid and point into canonical source
+#  7. Recovered DB contains the required tables and columns (strengthened)
+#  8. Second repair is idempotent (DB and config are not replaced)
+#  9. Archive fallback works with supported sibling archive layout
 # 10. init-schema failure is fatal — repair does not complete
 # 11. workspace_init failure is fatal — repair does not complete
 # 12. Existing empty manul.db + valid backup → backup is restored, repair succeeds
 # 13. Existing invalid/corrupt manul.db + no backup → repair aborts, no schema fabricated
 # 14. Existing valid DB + no backup → repair preserves it, remains idempotent (extends Test 8)
-# 12. Existing empty manul.db + valid backup → backup is restored, repair succeeds
-# 13. Existing invalid/corrupt manul.db + no backup → repair aborts, no schema fabricated
-# 14. Existing valid DB + no backup → repair preserves it, remains idempotent (extends Test 8)
+# 15. install-manul.sh fresh install
+# 16. install-manul.sh is idempotent
+# 17. install-manul.sh preserves an existing config.json
+# 18. install-manul.sh preserves a valid existing DB
+# 19. install-manul.sh moves a corrupt DB aside and bootstraps fresh
+# 20. install-manul.sh does NOT auto-start (no daemon, no .enabled marker)
+# 21. install-manul.sh fails on a missing canonical directory
+# 22. install-manul.sh fails on a missing canonical script
+# 23. install-manul-symlinks.sh fails (non-zero) when a canonical script is missing
+# 24. watchdog.sh skips recovery when .enabled is absent
+# 25. watchdog.sh starts the daemon when .enabled is present and the daemon is dead
+# 26. start-manul-automation.sh start creates the .enabled marker
+# 27. start-manul-automation.sh stop removes the .enabled marker
+# 28. manul-shell.zsh defines unconditional aliases + a self-healing guard
+# 29. .zshrc sources manul-shell.zsh and contains no hardcoded machine paths
 
 set -uo pipefail
 
@@ -252,10 +266,10 @@ done
 
 # 2b) The self-healing guard must check ALL THREE entrypoints, not just
 #     manul-daemon.sh. A broken manul-status.sh or manul-comments-remove.sh
-#     must also trigger the repair path.
-ZSHRC="${MANUL_TEST_ZSHRC:-$HOME/.zshrc}"
+#     must also trigger the repair path. The guard lives in manul-shell.zsh.
+MANUL_SHELL_FILE="${MANUL_TEST_SHELL_FILE:-$SCRIPT_DIR/manul-shell.zsh}"
 GUARD_OK=true
-GUARD_BLOCK="$(sed -n '/manul-ensure-runtime()/,/^}/p' "$ZSHRC" 2>/dev/null || true)"
+GUARD_BLOCK="$(sed -n '/manul-ensure-runtime()/,/^}/p' "$MANUL_SHELL_FILE" 2>/dev/null || true)"
 for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
   if echo "$GUARD_BLOCK" | grep -qF "$entry"; then
     : # guard references this entrypoint
@@ -269,7 +283,7 @@ $GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
 # 2c) No CLI alias may be wrapped in a conditional that can silently vanish
 #     when the runtime is absent (the command must always be defined).
 for cmd in manul manul-status manul-comments-remove; do
-  line="$(grep -n "alias $cmd=" "$ZSHRC" 2>/dev/null | head -1 || true)"
+  line="$(grep -n "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null | head -1 || true)"
   if [ -z "$line" ]; then
     fail "$cmd alias is missing entirely"
   elif echo "$line" | grep -qE '^\s*[0-9]+:\s*if\s+\[.*\].*then'; then
@@ -280,22 +294,22 @@ for cmd in manul manul-status manul-comments-remove; do
 done
 
 # 3) Deleting the runtime does not remove the CLI entrypoints from a fresh
-#    shell — the shell definitions are in .zshrc, not in the runtime dir.
+#    shell — the shell definitions are in manul-shell.zsh, not in the
+#    runtime dir.
 rm -rf "$RUN"
 # Simulate a fresh shell: aliases must still be defined even though the
-# runtime is gone. We check the zshrc source directly since the test runs
+# runtime is gone. We check the shell file directly since the test runs
 # outside an interactive shell.
-ZSHRC="${MANUL_TEST_ZSHRC:-$HOME/.zshrc}"
-if grep -q "alias manul=" "$ZSHRC" 2>/dev/null; then
-  ok "manul alias defined in shell rc (survives runtime deletion)"
+if grep -q "alias manul=" "$MANUL_SHELL_FILE" 2>/dev/null; then
+  ok "manul alias defined in shell file (survives runtime deletion)"
 else
-  fail "manul alias missing from shell rc"
+  fail "manul alias missing from shell file"
 fi
 for cmd in manul-status manul-comments-remove; do
-  if grep -q "alias $cmd=" "$ZSHRC" 2>/dev/null; then
-    ok "$cmd alias defined in shell rc (unconditional, survives runtime deletion)"
+  if grep -q "alias $cmd=" "$MANUL_SHELL_FILE" 2>/dev/null; then
+    ok "$cmd alias defined in shell file (unconditional, survives runtime deletion)"
   else
-    fail "$cmd alias missing from shell rc"
+    fail "$cmd alias missing from shell file"
   fi
 done
 
@@ -819,8 +833,50 @@ if [ -f "$CORRUPT_RUNTIME/manul.db" ]; then
     ok "No schema fabricated; corrupt DB untouched"
   fi
 else
-  ok "Corrupt DB was not replaced (no backup available)"
+    ok "Corrupt DB was not replaced (no backup available)"
+  fi
+
+# ── Test 14: existing valid DB + no backup → repair preserves it ─────────────
+echo
+echo "Test 14: Valid DB + no backup → repair preserves it"
+VALID_RUNTIME="$TMPROOT/valid-db-runtime"
+mkdir -p "$VALID_RUNTIME"
+# Use the canonical backup as the "existing valid DB" seed.
+cp "$BACKUP_DB" "$VALID_RUNTIME/manul.db"
+chmod 600 "$VALID_RUNTIME/manul.db"
+cp "$SCRIPT_DIR/config.json.example" "$VALID_RUNTIME/config.json" 2>/dev/null || true
+
+DB_BEFORE=$(sha256sum "$VALID_RUNTIME/manul.db" | awk '{print $1}')
+
+set +e
+VALID_OUTPUT=$( \
+  MANUL_RUNTIME_DIR="$VALID_RUNTIME" \
+  MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
+  "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+)
+VALID_EXIT=$?
+set -e
+
+if [ "$VALID_EXIT" -eq 0 ] && echo "$VALID_OUTPUT" | grep -q "Repair Complete"; then
+  ok "Repair succeeds with an existing valid DB and no backup"
+else
+  fail "Repair failed with existing valid DB (exit=$VALID_EXIT)"
+  echo "$VALID_OUTPUT"
 fi
+
+DB_AFTER=$(sha256sum "$VALID_RUNTIME/manul.db" | awk '{print $1}')
+if [ "$DB_BEFORE" = "$DB_AFTER" ]; then
+  ok "Existing valid DB was preserved (not replaced) when no backup is available"
+else
+  fail "Existing valid DB was replaced when no backup is available"
+fi
+
+for tbl in processed_comments conversations meta workspaces; do
+  if ! sqlite3 "$VALID_RUNTIME/manul.db" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
+    fail "Preserved DB missing table '$tbl'"
+  fi
+done
+ok "Preserved DB retains all required tables"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo

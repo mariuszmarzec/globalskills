@@ -190,6 +190,9 @@ Do NOT use legacy names `maxTaskRunningTime` or `taskHealthCheckInterval`; they 
 | **`~/.globalskills/skills/manul-github-bot/task-health-check.sh`** | **LEGACY/DEPRECATED — do not install or use in automatic operation** |
 | `~/.globalskills/skills/manul-github-bot/start-manul-automation.sh` | startup wrapper for daemon + watchdog cron (symlinked) |
 | `~/.globalskills/skills/manul-github-bot/manul-status.sh` | status reporting script (symlinked) |
+| `~/.globalskills/skills/manul-github-bot/manul-shell.zsh` | canonical shell entrypoints (`manul`, `manul-status`, `manul-comments-remove` aliases + runtime guard) |
+| `~/.globalskills/skills/manul-github-bot/install-manul.sh` | **canonical idempotent installer** — prerequisites, symlinks, config, DB bootstrap, corruption recovery, and verification |
+| `~/.globalskills/skills/manul-github-bot/install-manul-symlinks.sh` | low-level symlink deployment (called by `install-manul.sh`) |
 | `~/.globalskills/skills/manul-github-bot/config.json.example` | configuration template (copy to `~/.openclaw/manul/config.json` and customize) |
 
 ### watchdog.sh
@@ -354,50 +357,61 @@ If missing, run:
 ~/.openclaw/manul/start-manul-automation.sh start
 ```
 
+## Lifecycle State
+
+Manul tracks its operational state via the `~/.openclaw/manul/.enabled` marker file:
+
+| Action | Creates `.enabled`? | Starts daemon? |
+|---|---|---|
+| `install-manul.sh` | No | No |
+| `manul start` / `manul-daemon.sh start` / `start-manul-automation.sh start` | Yes | Yes (if not already running) |
+| `manul stop` / `manul-daemon.sh stop` / `start-manul-automation.sh stop` | No (removes it) | Yes (kills it) |
+| `watchdog.sh` | N/A | Only if `.enabled` exists |
+
+**`watchdog.sh` exits immediately if `.enabled` is absent**, preventing unintended automatic startup during installation or troubleshooting.
+
+## Shell Integration
+
+Manul registers three shell aliases in `~/.zshrc` via `manul-shell.zsh`:
+
+```bash
+# Loaded from ~/.globalskills/skills/manul-github-bot/manul-shell.zsh
+alias manul='manul-ensure-runtime && ~/.openclaw/manul/manul-daemon.sh'
+alias manul-status='manul-ensure-runtime && ~/.openclaw/manul/manul-status.sh'
+alias manul-comments-remove='manul-ensure-runtime && ~/.openclaw/manul/manul-comments-remove.sh'
+```
+
+The `manul-ensure-runtime()` guard auto-heals a missing runtime by running `install-manul.sh` and sourcing `manul-shell.zsh` again. Environment variables `MANUL_RUNTIME_DIR` and `MANUL_SOURCE_DIR` can override defaults.
+
 ## Installation
 
-Run the installer or use the skill directly. After installation:
+Run the canonical installer or use the skill directly. After installation:
 
-1. **Create runtime directory and deploy symlinks:**
+1. **Install the canonical bundle** (recommended — handles prerequisites, symlinks, config, DB bootstrap, and corruption recovery):
    ```bash
-   # Use the automated installer (recommended)
-   ~/.globalskills/skills/manul-github-bot/install-manul-symlinks.sh
-   
-   # Or manually:
-   mkdir -p ~/.openclaw/manul
-   
-   for script in manul-daemon.sh poll.sh watchdog.sh task-recovery.sh \
-                 start-manul-automation.sh manul-status.sh \
-                 manul-comments-remove.sh github-api-wrapper.sh; do
-     ln -sf ~/.globalskills/skills/manul-github-bot/$script \
-            ~/.openclaw/manul/$script
-   done
+   ~/.globalskills/skills/manul-github-bot/install-manul.sh
    ```
 
-2. **Copy and customize the config:**
-   ```bash
-   cp ~/.globalskills/skills/manul-github-bot/config.json.example \
-      ~/.openclaw/manul/config.json
-   # then edit ~/.openclaw/manul/config.json with your repos, allowedUsers, etc.
-   ```
-
-3. **Start the automation:**
+2. **Start the automation** (creates `.enabled` and starts the daemon + watchdog cron):
    ```bash
    ~/.openclaw/manul/start-manul-automation.sh start
+   # or equivalently:
+   manul start
    ```
 
-```bash
-alias manul-status='$OPENCLAW_MANUL_DIR/manul-status.sh'
-alias manul-comments-remove='$OPENCLAW_MANUL_DIR/manul-comments-remove.sh'
-```
+3. **Stop the automation** (removes `.enabled` and stops the daemon + watchdog cron):
+   ```bash
+   ~/.openclaw/manul/start-manul-automation.sh stop
+   # or equivalently:
+   manul stop
+   ```
 
-**Symlink verification:** Use the installer in dry‑run mode to check that all runtime scripts are correctly linked:
+**Shell CLI aliases** are installed automatically by the user's `~/.zshrc` sourcing `manul-shell.zsh`:
+- `manul` — start/stop/restart the daemon
+- `manul-status` — list tasks and show task details
+- `manul-comments-remove` — remove manul GitHub comments by issue/PR URL
 
-```bash
-~/.globalskills/skills/manul-github-bot/install-manul-symlinks.sh --dry-run
-```
-
-If any symlink is broken, re‑run the installer without `--dry-run` to recreate them.
+If any symlink is broken or the runtime is missing, the aliases auto-heal via `manul-ensure-runtime()`.
 
 ### Manual Recovery
 

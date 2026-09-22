@@ -37,6 +37,23 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
+# --- .enabled gate --------------------------------------------------------
+# The .enabled marker is the lifecycle contract between intentional start/stop
+# and the watchdog. It is created by install-manul.sh (fresh install), the `manul`
+# alias, and start-manul-automation.sh start; it is removed by
+# start-manul-automation.sh stop and manul-daemon.sh stop.
+#
+# The watchdog ONLY performs recovery when .enabled is present. This is what
+# prevents an endless restart loop: if the daemon dies, the watchdog restarts
+# it — but it never re-enables automation. A human (or the `manul` alias) must
+# intentionally re-enable it. Without this gate, a crash during boot would leave
+# the watchdog spinning forever, and a machine that was intentionally stopped
+# would silently come back to life.
+if [ ! -f "$MANUL_DIR/.enabled" ]; then
+    log "Manul not intentionally enabled (no .enabled marker) — skipping recovery"
+    exit 0
+fi
+
 # --- 1) daemon liveness ----------------------------------------------------
 # Reclaim stale workspaces before attempting daemon startup. Without this,
 # a dead worker can leave a BUSY workspace forever and make daemon start fail

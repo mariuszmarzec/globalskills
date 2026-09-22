@@ -113,7 +113,8 @@ for script in "${SCRIPTS[@]}"; do
     runtime_path="$RUNTIME_DIR/$script"
 
     if [ ! -f "$canonical_file" ]; then
-        echo "WARNING: Canonical script not found: $canonical_file" >&2
+        echo "ERROR: Canonical script not found: $canonical_file" >&2
+        DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
         continue
     fi
 
