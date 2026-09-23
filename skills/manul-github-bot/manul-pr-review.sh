@@ -300,6 +300,19 @@ cmd_handle() {
     error_exit "handle requires --repo, --pr-number, and --review-state" 3
   fi
 
+  # Serialize processing of the exact same review event.
+  # This is intentionally narrower than a global review lock: distinct review
+  # IDs may still run concurrently, while duplicate deliveries of one review
+  # cannot race through schema migration/state-machine/task creation.
+  local review_id="${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}"
+  local review_lock_dir="${MANUL_DIR}/review-locks"
+  local review_lock_key
+  review_lock_key="$(printf '%s\0%s' "$REPO" "$review_id" | sha256sum | awk '{print $1}')"
+  local review_lock_file="$review_lock_dir/$review_lock_key.lock"
+  mkdir -p "$review_lock_dir"
+  exec 201>"$review_lock_file"
+  flock -x 201
+
   # Initialize schema (migrate if needed)
   init_schema || error_exit "Failed to initialize schema" 1
 
@@ -338,7 +351,6 @@ cmd_handle() {
 
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local review_id="${REVIEW_ID:-review-$PR_NUMBER-$REVIEW_STATE}"
   local review_comment_id="review:$review_id"
 
   # ========================================================================
