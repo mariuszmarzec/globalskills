@@ -93,7 +93,7 @@ printf '%s' "$LIST_JSON" | jq -e 'map(.taskId) | sort == ["completed-recent","qu
 pass "--list keeps active + terminal tasks within listDays"
 
 HISTORY_JSON="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --history --json)"
-printf '%s' "$HISTORY_JSON" | jq -e 'map(.taskId) | sort == ["completed-history","completed-recent","failed-expired","stale-recent"]' >/dev/null || fail "--history keeps terminal tasks within historyDays"
+printf '%s' "$HISTORY_JSON" | jq -e 'map(.taskId) | sort == ["completed-history","completed-recent","stale-recent"]' >/dev/null || fail "--history keeps terminal tasks within historyDays"
 pass "--history keeps terminal tasks within historyDays"
 
 # ---------------------------------------------------------------------------
