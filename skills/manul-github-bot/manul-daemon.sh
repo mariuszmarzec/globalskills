@@ -1394,28 +1394,12 @@ run_once() {
   # Record poll result for observability. poll.sh writes diagnostics to stderr,
   # so stdout+stderr can contain arbitrary lines around the final MANUL_RESULT.
   # Parse the last MANUL_RESULT line instead of treating the whole output as JSON.
-  #
-  # Robustness note: poll.sh can emit MORE THAN ONE MANUL_RESULT line in a single
-  # capture (its repo workers are forked poll.sh children that inherit this
-  # process's redirected stdout and run emit_result independently). Two lines
-  # glued together by a literal-\n (see the printf below) used to be fed to jq as
-  # one blob, so jq parsed both JSON objects and returned two values that got
-  # concatenated into e.g. "true\nfalse" -- which then failed the exact
-  # `poll_fire = "true"` gate below and permanently skipped every queued task.
-  # We now isolate the last line on a REAL newline, validate it is a single JSON
-  # object, and only parse it if it validates.
   local poll_fire poll_new poll_pending
-  local result_line json_out
-  result_line="$(printf '%s\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
-  result_line="$(printf '%s' "$result_line" | tr -d '\r')"
+  local result_line
+  result_line="$(printf '%s\\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
+  local json_out="${result_line#MANUL_RESULT }"
   if [ -z "$result_line" ]; then
     json_out='{}'
-  else
-    json_out="${result_line#MANUL_RESULT }"
-    if ! printf '%s' "$json_out" | jq -e . >/dev/null 2>&1; then
-      log "WARN: poll produced an invalid MANUL_RESULT line, ignoring it: $(printf '%s' "$json_out" | tr '\n' ' ')"
-      json_out='{}'
-    fi
   fi
   poll_fire="$(printf '%s' "$json_out" | jq -r '.fire // false' 2>/dev/null || echo false)"
   poll_new="$(printf '%s' "$json_out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
@@ -1436,22 +1420,8 @@ run_once() {
     lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
   fi
 
-  # Safety-net dispatch path. poll.sh's fire flag is advisory: it can be wrong
-  # (see the multi-line MANUL_RESULT corruption above), and even when correct it
-  # only reflects state at the moment poll.sh ran. If poll.sh did not fire but
-  # there are eligible queued tasks in the DB, the daemon must still attempt the
-  # atomic claim+dispatch -- otherwise a queued task can be skipped forever.
-  # The claim itself is atomic in SQLite (acquire_task_lock), so this is safe
-  # even when poll.sh would also have fired.
   if [ "$poll_fire" != "true" ]; then
-    local safety_eligible
-    safety_eligible="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0)"
-    if [ "${safety_eligible:-0}" -gt 0 ]; then
-      log "dispatch: poll_fire=$poll_fire but $safety_eligible eligible queued task(s) found; attempting safety-net claim"
-      lc_log "SAFETY_NET" "poll_fire=$poll_fire eligible=$safety_eligible"
-    else
-      return 0
-    fi
+    return 0
   fi
 
     # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races
