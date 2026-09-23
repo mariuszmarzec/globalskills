@@ -497,8 +497,7 @@ release_task_lock() {
 }
 
 # Recover tasks stuck in 'running' state due to daemon crash, deadlock, or process death.
-# This handles cases where:
-# 1. Worker process died but task still marked 'running'
+# This handles cases where:# 1. Worker process died but task still marked 'running'
 # 2. Lease expired but task not finalized
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
@@ -883,6 +882,13 @@ status() {
   fi
 }
 
+
+# Return the number of queued tasks that are eligible to run now.
+# SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
+eligible_queued_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+}
+
 sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
@@ -997,8 +1003,7 @@ verify_result_comment() {
   local attempt="$5"
 
   # Get the task's commentUrl for correlation
-  local comment_url
-  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+  local comment_url  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
   if [ -z "$comment_url" ]; then
     log "ERROR: verify_result_comment: missing commentUrl for task $comment_id — fail-closed"
@@ -1452,7 +1457,7 @@ run_once() {
   # an existing eligible queued task must still be dispatched even when poll
   # output is malformed, stale, or reports fire=false.
   local eligible_queued
-  eligible_queued="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0)"
+  eligible_queued="$(eligible_queued_count)"
   if [ "$poll_fire" != "true" ] && [ "${eligible_queued:-0}" -eq 0 ]; then
     return 0
   fi
@@ -1497,7 +1502,6 @@ run_once() {
       # Check if this exact task is already completed by commentId
       local already_completed
       already_completed="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$safe_comment_id_for_guard' AND status='completed';" 2>/dev/null || echo "0")"
-
       if [ "$already_completed" -gt 0 ]; then
         log "dispatch: task $COMMENT_ID already completed (duplicate detected via commentId), consuming safely"
         lc_log "DUPLICATE_COMPLETE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM reason=already_completed"
@@ -1997,8 +2001,7 @@ PROMPT_APPEND
     # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s
      # Change to repository directory and invoke agent
      local prev_dir
-     prev_dir="$(pwd)"
-     cd "$WORKDIR" || {
+     prev_dir="$(pwd)"     cd "$WORKDIR" || {
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        stop_heartbeat "$COMMENT_ID"
        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
