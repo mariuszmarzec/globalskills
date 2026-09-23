@@ -571,6 +571,11 @@ repository_changed_since() {
 infer_task_base_branch() {
   local workdir="$1" branch="$2" fallback="$3"
   local message created_from
+
+  # Git's branch reflog usually records "branch: Created from HEAD", which
+  # does not preserve the actual source branch. Prefer explicit reset/create
+  # entries when available, then inspect the HEAD reflog for the checkout
+  # transition that created/entered this branch.
   while IFS= read -r message; do
     case "$message" in
       "branch: Created from "*) created_from="${message#branch: Created from }" ;;
@@ -578,7 +583,7 @@ infer_task_base_branch() {
       *) continue ;;
     esac
     case "$created_from" in
-      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"$branch") continue ;;
+      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"${branch}") continue ;;
     esac
     created_from="${created_from#refs/remotes/origin/}"
     created_from="${created_from#origin/}"
@@ -587,7 +592,31 @@ infer_task_base_branch() {
       echo "$created_from"
       return 0
     fi
-  done < <(git -C "$workdir" reflog show --format='%gs' "$branch" 2>/dev/null || true)
+  done < <(git -C "$workdir" reflog show --format="%gs" "$branch" 2>/dev/null || true)
+
+  while IFS= read -r message; do
+    case "$message" in
+      "checkout: moving from "*)
+        created_from="${message#checkout: moving from }"
+        case "$created_from" in
+          *" to $branch") created_from="${created_from% to $branch}" ;;
+          *) continue ;;
+        esac
+        ;;
+      *) continue ;;
+    esac
+    case "$created_from" in
+      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"${branch}") continue ;;
+    esac
+    created_from="${created_from#refs/remotes/origin/}"
+    created_from="${created_from#origin/}"
+    created_from="${created_from#refs/heads/}"
+    if git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/$created_from" || git -C "$workdir" show-ref --verify --quiet "refs/heads/$created_from"; then
+      echo "$created_from"
+      return 0
+    fi
+  done < <(git -C "$workdir" reflog show --format="%gs" HEAD 2>/dev/null || true)
+
   echo "$fallback"
 }
 
