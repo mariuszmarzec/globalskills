@@ -134,7 +134,7 @@ parse_poll_result() {
   fi
 
   json_out="${result_line#MANUL_RESULT }"
-  validated_json="$(printf '%s' "$json_out" | jq -e -c 'select(type == "object")' 2>/dev/null || true)"
+  validated_json="$(printf '%s' "$json_out" | jq -e -c -s 'if length == 1 then .[0] | select(type == "object") else empty end' 2>/dev/null || true)"
   if [ -z "$validated_json" ]; then
     log "WARN: invalid MANUL_RESULT ignored"
     printf 'false|0|0\n'
