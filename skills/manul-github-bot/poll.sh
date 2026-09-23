@@ -1309,16 +1309,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     _EMITTED=1
     PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
 
-    LOCKED=0
-    if [ -f "$LOCK" ]; then
-      age=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
-      [ "$age" -lt "$LOCK_TTL_SECONDS" ] && LOCKED=1
-    fi
-
-    if { [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; } && [ "$LOCKED" -eq 0 ]; then
+      # poll.flock above is the authoritative overlap guard. The legacy
+    # \$LOCK marker is maintained by watchdog for stale-state cleanup, but it
+    # must never suppress dispatch of work already persisted in SQLite.
+    if [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
       echo "MANUL_RESULT {\"fire\":true,\"new\":$NEW,\"pending\":$PENDING}"
-    elif [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
-      echo "MANUL_RESULT {\"fire\":false,\"new\":$NEW,\"pending\":$PENDING,\"locked\":true}"
     else
       echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":0}"
     fi
