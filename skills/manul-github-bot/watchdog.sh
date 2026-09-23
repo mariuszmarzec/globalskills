@@ -59,8 +59,13 @@ fi
 # a dead worker can leave a BUSY workspace forever and make daemon start fail
 # with "insufficient workspaces for concurrency".
 if [ -f "$DB" ] && [ -f "$MANUL_DIR/workspace-manager.sh" ]; then
-    source "$MANUL_DIR/workspace-manager.sh"
-    workspace_cleanup_stale 3600
+    if bash -n "$MANUL_DIR/workspace-manager.sh" 2>/dev/null && source "$MANUL_DIR/workspace-manager.sh"; then
+        if ! workspace_cleanup_stale 3600; then
+            log "workspace stale cleanup failed"
+        fi
+    else
+        log "ERROR: invalid workspace manager: $MANUL_DIR/workspace-manager.sh"
+    fi
 fi
 
 if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
