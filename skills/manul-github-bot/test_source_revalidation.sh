@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 # Hermetic regression tests for Manul source revalidation.
 # No GitHub token/network is required: REST and GraphQL are fully mocked.
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(mktemp -d)"
