@@ -99,7 +99,7 @@ JSON
       ;;
     4004:cursor1)
       cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1404}]}}]}}}}}
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":4404}]}}]}}}}}
 JSON
       ;;
     4005:)
