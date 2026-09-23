@@ -171,7 +171,7 @@ CREATE TABLE processed_comments (
   action TEXT,
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
-  createdAt TEXT DEFAULT datetime('now'),
+  createdAt TEXT,
   processedAt TEXT,
   heartbeatAt TEXT,
   leaseExpiresAt TEXT,
