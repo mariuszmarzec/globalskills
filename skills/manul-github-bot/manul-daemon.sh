@@ -497,7 +497,8 @@ release_task_lock() {
 }
 
 # Recover tasks stuck in 'running' state due to daemon crash, deadlock, or process death.
-# This handles cases where:# 1. Worker process died but task still marked 'running'
+# This handles cases where:
+# 1. Worker process died but task still marked 'running'
 # 2. Lease expired but task not finalized
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
@@ -523,7 +524,8 @@ recover_stale_tasks() {
     return 0
   fi
 
-  local recovered=0  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
+  local recovered=0
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
@@ -1003,7 +1005,8 @@ verify_result_comment() {
   local attempt="$5"
 
   # Get the task's commentUrl for correlation
-  local comment_url  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+  local comment_url
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
 
   if [ -z "$comment_url" ]; then
     log "ERROR: verify_result_comment: missing commentUrl for task $comment_id — fail-closed"
@@ -1039,7 +1042,8 @@ verify_result_comment() {
   timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$url_issue_num/comments" \
     --paginate \
     --jq '.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" > "$bodies_file" || {      local api_rc=$?
+    2>>"$LOG" > "$bodies_file" || {
+      local api_rc=$?
       if [ "$api_rc" -eq 124 ]; then
         log "ERROR: verify_result_comment: gh api timed out after ${GH_API_TIMEOUT}s — fail-closed"
         lc_log "API_TIMEOUT" "task=$comment_id repo=$repo issue=$url_issue_num timeout=${GH_API_TIMEOUT}s"
@@ -1502,6 +1506,7 @@ run_once() {
       # Check if this exact task is already completed by commentId
       local already_completed
       already_completed="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$safe_comment_id_for_guard' AND status='completed';" 2>/dev/null || echo "0")"
+
       if [ "$already_completed" -gt 0 ]; then
         log "dispatch: task $COMMENT_ID already completed (duplicate detected via commentId), consuming safely"
         lc_log "DUPLICATE_COMPLETE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM reason=already_completed"
@@ -1538,6 +1543,7 @@ run_once() {
     safe_repo="$(sql_escape "$REPO")"
     # Initialize REPLY_TO early to prevent unbound variable errors
     local REPLY_TO=""
+
     # Read actual attempts from database (authoritative source)
     local ACTUAL_ATTEMPTS
     ACTUAL_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' AND status='queued';" 2>/dev/null || echo "0")"
@@ -2001,7 +2007,8 @@ PROMPT_APPEND
     # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s
      # Change to repository directory and invoke agent
      local prev_dir
-     prev_dir="$(pwd)"     cd "$WORKDIR" || {
+     prev_dir="$(pwd)"
+     cd "$WORKDIR" || {
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        stop_heartbeat "$COMMENT_ID"
        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
@@ -2036,7 +2043,8 @@ PROMPT_APPEND
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
-    FINAL_COMMENT="${FINAL_COMMENT:-}"    FAIL_REASON="${FAIL_REASON:-}"
+    FINAL_COMMENT="${FINAL_COMMENT:-}"
+    FAIL_REASON="${FAIL_REASON:-}"
 
     # 9. Post lifecycle comment to the SAME GitHub thread
     # The agent posts its own result comment; daemon posts lifecycle markers only.
