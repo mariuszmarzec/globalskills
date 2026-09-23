@@ -9,7 +9,7 @@
 #   --json           Output JSON format
 #   --list           List active tasks plus recent terminal tasks
 #   --history        List terminal task history retained for the longer window
-#   --status S       Filter by status (queued, running, completed, failed, stale)
+#   --status S       Filter by status (queued, running, blocked_user, completed, failed, stale)
 #   --log            Show daemon.log instead of task status
 #   --tail N         Number of log lines to show (default: 100)
 #   --tail=N         Same as --tail N
@@ -127,8 +127,8 @@ load_task_retention() {
 
 if [ "$LIST_MODE" = true ]; then
   # List mode: query multiple tasks
-  # Active tasks are always shown. Terminal tasks are limited by the
-  # configured retention window. --history uses the longer window.
+  # Active tasks are always shown, including blocked_user tasks. Terminal tasks
+  # are limited by the configured retention window. --history uses the longer window.
   load_task_retention
   local_retention_days="$TASK_LIST_RETENTION_DAYS"
   if [ "$HISTORY_MODE" = true ]; then
@@ -136,7 +136,7 @@ if [ "$LIST_MODE" = true ]; then
   fi
 
   if [ -n "$FILTER_STATUS" ]; then
-    if [ "$FILTER_STATUS" = "queued" ] || [ "$FILTER_STATUS" = "running" ]; then
+    if [ "$FILTER_STATUS" = "queued" ] || [ "$FILTER_STATUS" = "running" ] || [ "$FILTER_STATUS" = "blocked_user" ]; then
       WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")'"
     else
       WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")' AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
@@ -144,7 +144,7 @@ if [ "$LIST_MODE" = true ]; then
   elif [ "$HISTORY_MODE" = true ]; then
     WHERE_CLAUSE="WHERE status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
   else
-    WHERE_CLAUSE="WHERE (status IN ('queued', 'running') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
+    WHERE_CLAUSE="WHERE (status IN ('queued', 'running', 'blocked_user') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
   fi
 
   RESULTS="$(sqlite3 "$DB" "
