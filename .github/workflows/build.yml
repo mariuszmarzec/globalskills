@@ -85,11 +85,18 @@ jobs:
             name="$(basename "$script" .sh)"
             log="test-results/${name}.log"
             echo "Running: $script"
-            if timeout --signal=TERM --kill-after=10s 180s bash "$script" 2>&1 | tee "$log"; then
+            start_ts="$(date +%s)"
+            set +e
+            timeout --signal=TERM --kill-after=10s 180s bash "$script" >"$log" 2>&1
+            rc=$?
+            set -e
+            duration="$(( $(date +%s) - start_ts ))s"
+            cat "$log"
+            if [ "$rc" -eq 0 ]; then
+              echo "Suite passed (${duration}): $script"
               passed=$((passed + 1))
             else
-              rc=${PIPESTATUS[0]}
-              echo "Suite failed or timed out (exit=$rc): $script"
+              echo "Suite failed or timed out (${duration}, exit=$rc): $script"
               failed=$((failed + 1))
             fi
           done

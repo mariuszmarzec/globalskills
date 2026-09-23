@@ -149,7 +149,7 @@ cat >"$FAKE_BIN/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ "$*" == *"pr list"* ]]; then
   if [ "${FAKE_PR_EXISTS:-0}" = "1" ]; then
-    printf '[{"number":123,"url":"https://github.com/example/repo/pull/123","state":"OPEN"}]\n'
+    printf '[{"number":123,"url":"https://github.com/example/repo/pull/123","state":"OPEN","baseRefName":"master","headRefName":"manul-task-test"}]\n'
   else
     printf '[]\n'
   fi

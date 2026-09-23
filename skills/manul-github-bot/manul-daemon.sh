@@ -571,6 +571,11 @@ repository_changed_since() {
 infer_task_base_branch() {
   local workdir="$1" branch="$2" fallback="$3"
   local message created_from
+
+  # Git's branch reflog usually records "branch: Created from HEAD", which
+  # does not preserve the actual source branch. Prefer explicit reset/create
+  # entries when available, then inspect the HEAD reflog for the checkout
+  # transition that created/entered this branch.
   while IFS= read -r message; do
     case "$message" in
       "branch: Created from "*) created_from="${message#branch: Created from }" ;;
@@ -578,7 +583,7 @@ infer_task_base_branch() {
       *) continue ;;
     esac
     case "$created_from" in
-      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"$branch") continue ;;
+      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"${branch}") continue ;;
     esac
     created_from="${created_from#refs/remotes/origin/}"
     created_from="${created_from#origin/}"
@@ -587,7 +592,31 @@ infer_task_base_branch() {
       echo "$created_from"
       return 0
     fi
-  done < <(git -C "$workdir" reflog show --format='%gs' "$branch" 2>/dev/null || true)
+  done < <(git -C "$workdir" reflog show --format="%gs" "$branch" 2>/dev/null || true)
+
+  while IFS= read -r message; do
+    case "$message" in
+      "checkout: moving from "*)
+        created_from="${message#checkout: moving from }"
+        case "$created_from" in
+          *" to $branch") created_from="${created_from% to $branch}" ;;
+          *) continue ;;
+        esac
+        ;;
+      *) continue ;;
+    esac
+    case "$created_from" in
+      HEAD|""|refs/remotes/origin/HEAD|refs/heads/"$branch"|"${branch}") continue ;;
+    esac
+    created_from="${created_from#refs/remotes/origin/}"
+    created_from="${created_from#origin/}"
+    created_from="${created_from#refs/heads/}"
+    if git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/$created_from" || git -C "$workdir" show-ref --verify --quiet "refs/heads/$created_from"; then
+      echo "$created_from"
+      return 0
+    fi
+  done < <(git -C "$workdir" reflog show --format="%gs" HEAD 2>/dev/null || true)
+
   echo "$fallback"
 }
 
@@ -1362,10 +1391,16 @@ run_once() {
     fi
   fi
 
-  # Record poll result for observability
+  # Record poll result for observability. poll.sh writes diagnostics to stderr,
+  # so stdout+stderr can contain arbitrary lines around the final MANUL_RESULT.
+  # Parse the last MANUL_RESULT line instead of treating the whole output as JSON.
   local poll_fire poll_new poll_pending
-  # Strip MANUL_RESULT prefix if present (poll.sh outputs "MANUL_RESULT {json}")
-  local json_out="${out#MANUL_RESULT }"
+  local result_line
+  result_line="$(printf '%s\\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
+  local json_out="${result_line#MANUL_RESULT }"
+  if [ -z "$result_line" ]; then
+    json_out='{}'
+  fi
   poll_fire="$(printf '%s' "$json_out" | jq -r '.fire // false' 2>/dev/null || echo false)"
   poll_new="$(printf '%s' "$json_out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
   poll_pending="$(printf '%s' "$json_out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
@@ -1943,6 +1978,20 @@ PROMPT_APPEND
      timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+
+     # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
+     # up. This is especially important for fast launch failures where the worker
+     # can exit before producing a GitHub-visible result.
+     if [ "$rc" -ne 0 ]; then
+       log "dispatch: agent launcher exited rc=$rc for task $COMMENT_ID"
+       if [ -s "$STDERR_FILE" ]; then
+         log "dispatch: agent stderr for task $COMMENT_ID (tail 80):"
+         tail -n 80 "$STDERR_FILE" >>"$LOG" 2>/dev/null || true
+       else
+         log "dispatch: agent stderr file is empty for task $COMMENT_ID"
+       fi
+     fi
+
     # Call production completion evaluation function
     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
 
