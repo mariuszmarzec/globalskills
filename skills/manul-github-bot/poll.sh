@@ -998,6 +998,10 @@ process_repo_body() {
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # processed_comments is short-lived; conversation_messages is the durable
+    # message-identity record used to prevent old triggers from being requeued.
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
@@ -1062,6 +1066,10 @@ process_repo_body() {
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # See the issue-comment path above: keep processed_comments short-lived,
+    # but never rediscover an already-ingested issue as a new task.
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
