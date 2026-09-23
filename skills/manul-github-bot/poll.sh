@@ -126,10 +126,38 @@ PARSE='(.body | split("\n")) as $lines
 | {agent: $agent, prompt: $prompt}'
 
 # Only these GitHub logins may invoke manul. Default: repo owner.
+#
+# IMPORTANT: `allowedUsers` is the only authoritative allow-list. The fallback
+# to repo owners was a silent opt-out trap — if a deployer copied
+# config.json.example verbatim (which still ships `"allowedUsers": ["<GITHUB_LOGIN>"]`),
+# the literal string "<GITHUB_LOGIN>" never matched any real GitHub login, so
+# EVERY comment was filtered out and no task ever reached SQLite. A placeholder
+# must never be treated as a valid allow-list; when it is present we fall back to
+# the documented default (repo owners) and warn, instead of silently dropping
+# all traffic.
+#
+# GitHub logins may not contain '<' or '>', so any entry with those characters
+# is treated as an unresolved placeholder and stripped before filtering.
+#
+# Resolution is deferred to process_repo_body() so the per-repo fallback can
+# use the repo owner (which requires the repo name). Without that, a
+# placeholder config would silently disable filtering for every repo.
 ALLOWED_JSON="$(jq -c '.allowedUsers // ([.repositories[]? | split("/")[0]] | if length == 0 then [] else . end)' "$CONFIG" 2>/dev/null)"
 if [ -z "$ALLOWED_JSON" ] || [ "$ALLOWED_JSON" = "null" ]; then
   ALLOWED_JSON='[]'
 fi
+CONFIG_ALLOWED_USERS="$ALLOWED_JSON"
+resolve_allowed_users() {
+  local repo="$1"
+  if printf '%s' "$ALLOWED_JSON" | jq -e 'any(.[]; test("[<>]"))' >/dev/null 2>&1; then
+    ALLOWED_JSON="$(printf '%s' "$ALLOWED_JSON" | jq -c '[.[] | select(test("[<>]") | not)]')"
+    if [ "$(printf '%s' "$ALLOWED_JSON" | jq 'length')" -eq 0 ]; then
+      ALLOWED_JSON="$(jq -nc --arg repo "$repo" '[$repo | split("/")[0]]')"
+    fi
+    log "WARN: config.json allowedUsers contained an unresolved placeholder (config: $CONFIG_ALLOWED_USERS); "
+    log "WARN: falling back to repo owner allow-list: $ALLOWED_JSON"
+  fi
+}
 
 # CI Fix config
 CI_FIX_ENABLED="$(jq -r '.ciFix.enabled // false' "$CONFIG" 2>/dev/null)"
@@ -903,6 +931,10 @@ NEW=0
 process_repo_body() {
   local repo="$1"
 
+  # Resolve the allow-list for this repo before any GitHub traffic is filtered.
+  # A placeholder like "<GITHUB_LOGIN>" must never be treated as a real login.
+  resolve_allowed_users "$repo"
+
   # Batch-fetch issue/PR states for this repo to avoid per-comment API calls.
   # Populates: OPEN_ISSUES, CLOSED_ISSUES, OPEN_PRS, MERGED_PRS, CLOSED_PRS
   declare -A OPEN_ISSUES=() CLOSED_ISSUES=() OPEN_PRS=() MERGED_PRS=() CLOSED_PRS=()
@@ -1342,7 +1374,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     # Plain "setsid ... &" is racy: setsid may fork when its caller is already
     # a process-group leader and the $! PID can then belong to the short-lived
     # parent rather than the real worker.
-    setsid --fork --wait bash -c "source '$script'; process_repo_body \"\$1\"" _ "$repo" &
+    #
+    # The poll.flock fd (201) is inherited by this child and, through it, by
+    # the whole session it creates. If the daemon's outer timeout then SIGTERMs
+    # the poll.sh parent, the flock is never released — the child session keeps
+    # it alive forever and every subsequent poll cycle is skipped. Close the
+    # inherited lock fd in the worker so a killed parent cannot strand the lock.
+    setsid --fork --wait bash -c "exec 201>&-; source '$script'; process_repo_body \"\$1\"" _ "$repo" &
     launcher_pid=$!
 
     # Resolve the real session leader created by setsid --fork.
