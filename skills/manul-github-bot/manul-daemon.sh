@@ -1249,57 +1249,56 @@ verify_required_pr() {
 # Returns: 0=fresh (proceed), 1=stale (terminal), 2=transient (requeue).
 
 # Detect the source kind from a comment_id prefix.
-# Outputs one of: issue_comment | issue_state | pr_state | pr_review_comment
+# Prefixes are authoritative:
+#   issue:     -> issue comment
+#   issuebody: -> issue/PR state
+#   ci_fix:    -> PR state
+#   review:    -> PR review thread/comment
 detect_source_kind() {
   local comment_id="$1"
-  if [[ "$comment_id" == review:* ]]; then
-    echo "pr_review_comment"
-  elif [[ "$comment_id" == ci_fix:* ]] || [[ "$comment_id" == *"pull/"* ]] || [[ "$comment_id" == *"/compare/"* ]]; then
-    echo "pr_state"
-  elif [[ "$comment_id" == issuebody:* ]]; then
-    echo "issue_state"
-  elif [[ "$comment_id" == issue:* ]]; then
-    echo "issue_comment"
-  else
-    # Unknown prefix — assume issue_comment for safety
-    echo "issue_comment"
-  fi
+  case "$comment_id" in
+    review:*)    echo "pr_review_comment" ;;
+    issuebody:*) echo "issue_state" ;;
+    ci_fix:*)    echo "pr_state" ;;
+    issue:*)     echo "issue_comment" ;;
+    *)           echo "issue_comment" ;;
+  esac
 }
 
-# Revalidate a single source.  Returns:
-#   0 = fresh (source still valid, proceed)
-#   1 = stale  (source deleted/resolved/closed — terminal, do NOT requeue)
-#   2 = transient (API error / timeout — requeue)
+# Revalidate a single source. Returns:
+#   0 = fresh
+#   1 = stale (terminal)
+#   2 = transient (requeue)
+# The issue/PR number is passed separately because review:<id> contains only
+# the review comment database ID.
 revalidate_source() {
   local comment_id="$1"
   local repo="$2"
+  local issue_num="${3:-}"
   local kind
   kind="$(detect_source_kind "$comment_id")"
   case "$kind" in
     issue_comment)      revalidate_issue_comment "$comment_id" "$repo" ;;
     issue_state)        revalidate_issue_state "$comment_id" "$repo" ;;
     pr_state)           revalidate_pr_state "$comment_id" "$repo" ;;
-    pr_review_comment)  revalidate_pr_review_comment "$comment_id" "$repo" ;;
+    pr_review_comment)  revalidate_pr_review_comment "$comment_id" "$repo" "$issue_num" ;;
     *)                  return 2 ;;
   esac
 }
 
 # ── issue_comment ─────────────────────────────────────────────────────────────
-# Matched by prefix issue:<id>.  Verifies the comment still exists on GitHub.
+# Matched by prefix issue:<id>. Verifies the comment still exists on GitHub.
 revalidate_issue_comment() {
   local comment_id="$1" repo="$2"
   local num="${comment_id#issue:}"
-  local parts owner name
+  local owner name
   IFS='/' read -r owner name _ <<<"$repo"
+
   local resp rc
-  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/issues/comments/$num" --jq '.id' 2>/dev/null)" && rc=0 || rc=$?
+  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/issues/comments/$num" 2>/dev/null)" && rc=0 || rc=$?
   if [ "$rc" -ne 0 ]; then
-    # Could be 404 (deleted) or network error
-    if [ "$rc" -eq 124 ]; then
-      log "revalidate_source: issue comment API timeout for $comment_id"
-      return 2
-    fi
-    if echo "$resp" | grep -q '"Not Found"'; then
+    if [ "$rc" -eq 124 ]; then return 2; fi
+    if printf '%s' "$resp" | jq -e -r '.message == "Not Found"' >/dev/null 2>&1; then
       log "revalidate_source: issue comment $num not found on $repo — stale"
       lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=issue_comment reason=not_found"
       return 1
@@ -1307,29 +1306,30 @@ revalidate_issue_comment() {
     log "revalidate_source: issue comment API error for $comment_id (rc=$rc)"
     return 2
   fi
-  if [ -n "$resp" ] && [ "$resp" != "null" ]; then
+
+  local returned_id
+  returned_id="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
+  if [ -n "$returned_id" ]; then
     log "revalidate_source: issue comment $num still exists on $repo — fresh"
     return 0
   fi
-  log "revalidate_source: issue comment $num returned null — stale"
+  log "revalidate_source: issue comment $num returned no id — stale"
+  lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=issue_comment reason=missing_id"
   return 1
 }
 
 # ── issue_state ───────────────────────────────────────────────────────────────
-# Matched by prefix issuebody:<id>.  Verifies the issue/PR is still open.
 revalidate_issue_state() {
   local comment_id="$1" repo="$2"
   local num="${comment_id#issuebody:}"
-  local parts owner name
+  local owner name
   IFS='/' read -r owner name _ <<<"$repo"
+
   local resp rc
-  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/issues/$num" --jq '.state' 2>/dev/null)" && rc=0 || rc=$?
+  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/issues/$num" 2>/dev/null)" && rc=0 || rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 124 ]; then
-      log "revalidate_source: issue state API timeout for $comment_id"
-      return 2
-    fi
-    if echo "$resp" | grep -q '"Not Found"'; then
+    if [ "$rc" -eq 124 ]; then return 2; fi
+    if printf '%s' "$resp" | jq -e -r '.message == "Not Found"' >/dev/null 2>&1; then
       log "revalidate_source: issue $num not found on $repo — stale"
       lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=issue_state reason=not_found"
       return 1
@@ -1337,39 +1337,35 @@ revalidate_issue_state() {
     log "revalidate_source: issue state API error for $comment_id (rc=$rc)"
     return 2
   fi
-  if [ "$resp" = "open" ]; then
+  local state
+  state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || true)"
+  if [ "$state" = "open" ]; then
     log "revalidate_source: issue $num is still open on $repo — fresh"
     return 0
   fi
-  log "revalidate_source: issue $num is $resp on $repo — stale"
-  lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=issue_state reason=closed state=$resp"
+  log "revalidate_source: issue $num is ${state:-unknown} on $repo — stale"
+  lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=issue_state reason=closed state=${state:-unknown}"
   return 1
 }
 
 # ── pr_state ──────────────────────────────────────────────────────────────────
-# Matched by prefix ci_fix:<repo>:<pr_num>:<run_id> or any comment_id containing /pull/ or /compare/.
-# Verifies the PR is still open (or merged, which is also acceptable for post-merge checks).
+# Matched by prefix ci_fix:<repo>:<pr_num>:<run_id>. OPEN only.
 revalidate_pr_state() {
   local comment_id="$1" repo="$2"
-  # Extract PR number from ci_fix:repo:pr_num:run_id pattern
   local pr_num
-  if [[ "$comment_id" == ci_fix:* ]]; then
-    pr_num="$(printf '%s' "$comment_id" | awk -F: '{print $3}')"
-  else
-    # Fallback: extract from URL pattern
-    pr_num="$(printf '%s' "$comment_id" | grep -oE 'pull/[0-9]+' | head -1 | sed 's/pull//')"
-  fi
-  [ -z "$pr_num" ] && return 2
-  local parts owner name
+  case "$comment_id" in
+    ci_fix:*) pr_num="$(printf '%s' "$comment_id" | awk -F: '{print $3}')" ;;
+    *) return 2 ;;
+  esac
+  [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
+
+  local owner name
   IFS='/' read -r owner name _ <<<"$repo"
   local resp rc
-  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/pulls/$pr_num" --jq '.state' 2>/dev/null)" && rc=0 || rc=$?
+  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/pulls/$pr_num" 2>/dev/null)" && rc=0 || rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 124 ]; then
-      log "revalidate_source: PR state API timeout for $comment_id"
-      return 2
-    fi
-    if echo "$resp" | grep -q '"Not Found"'; then
+    if [ "$rc" -eq 124 ]; then return 2; fi
+    if printf '%s' "$resp" | jq -e -r '.message == "Not Found"' >/dev/null 2>&1; then
       log "revalidate_source: PR $pr_num not found on $repo — stale"
       lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_state reason=not_found"
       return 1
@@ -1377,70 +1373,68 @@ revalidate_pr_state() {
     log "revalidate_source: PR state API error for $comment_id (rc=$rc)"
     return 2
   fi
-  # PR must be OPEN or MERGED to be valid
-  if [ "$resp" = "open" ] || [ "$resp" = "closed" ]; then
-    log "revalidate_source: PR $pr_num is $resp on $repo — stale"
-    lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_state reason=pr_${resp}"
-    return 1
+  local state
+  state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || true)"
+  if [ "$state" = "open" ]; then
+    log "revalidate_source: PR $pr_num is open on $repo — fresh"
+    return 0
   fi
-  log "revalidate_source: PR $pr_num is $resp on $repo — fresh"
-  return 0
+  log "revalidate_source: PR $pr_num is ${state:-unknown} on $repo — stale"
+  lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_state reason=pr_${state:-unknown}"
+  return 1
 }
 
 # ── pr_review_comment ─────────────────────────────────────────────────────────
-# Matched by prefix review:<id>.  Verifies the review thread still exists and
-# is unresolved via GraphQL (paginating all reviewThreads to handle large PRs).
+# review:<id> uses issueNumber as the PR number. Verifies PR OPEN, thread
+# unresolved, and paginates reviewThreads until found/exhausted.
 revalidate_pr_review_comment() {
-  local comment_id="$1" repo="$2"
+  local comment_id="$1" repo="$2" pr_num="$3"
   local tid="${comment_id#review:}"
+  [[ "$tid" =~ ^[0-9]+$ ]] || return 2
+  [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
+
   local owner name
   IFS='/' read -r owner name _ <<<"$repo"
-
-  local tmp_cursor="" has_more=true resp rc
-
-  # GraphQL query template — uses --field variables for owner/name/num/cursor
-  local q_base='query($o:String!,$n:String!,$num:Int!,$c:String){repository(owner:$o,name:$n){pullRequest(number:$num){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:100){nodes{databaseId}}}}}}}'
-  local q_no_cursor='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){pullRequest(number:$num){reviewThreads(first:100){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:100){nodes{databaseId}}}}}}}'
+  local tmp_cursor="" has_more=true
+  local q_base='query($o:String!,$n:String!,$num:Int!,$c:String){repository(owner:$o,name:$n){pullRequest(number:$num){state reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:100){nodes{databaseId}}}}}}}'
+  local q_no_cursor='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){pullRequest(number:$num){state reviewThreads(first:100){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:100){nodes{databaseId}}}}}}}'
 
   while $has_more; do
+    local resp rc
     if [ -n "$tmp_cursor" ]; then
-      resp="$(timeout "$GH_API_TIMEOUT" gh api graphql \
-        --field query="$q_base" \
-        --field o="$owner" --field n="$name" --field num="$tid" --field c="$tmp_cursor" \
-        2>/dev/null)" && rc=0 || rc=$?
+      resp="$(timeout "$GH_API_TIMEOUT" gh api graphql --field query="$q_base" --field o="$owner" --field n="$name" --field num="$pr_num" --field c="$tmp_cursor" 2>/dev/null)" && rc=0 || rc=$?
     else
-      resp="$(timeout "$GH_API_TIMEOUT" gh api graphql \
-        --field query="$q_no_cursor" \
-        --field o="$owner" --field n="$name" --field num="$tid" \
-        2>/dev/null)" && rc=0 || rc=$?
+      resp="$(timeout "$GH_API_TIMEOUT" gh api graphql --field query="$q_no_cursor" --field o="$owner" --field n="$name" --field num="$pr_num" 2>/dev/null)" && rc=0 || rc=$?
     fi
-
     if [ "$rc" -eq 124 ]; then
-      log "revalidate_source: review thread API timeout for $comment_id"
+      log "revalidate_source: review GraphQL timeout for $comment_id"
+      return 2
+    fi
+    if [ "$rc" -ne 0 ]; then
+      log "revalidate_source: review GraphQL error for $comment_id (rc=$rc)"
       return 2
     fi
 
-    # Check if PR exists
     local pr_null
-    pr_null="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest == null' 2>/dev/null)"
+    pr_null="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest == null' 2>/dev/null || true)"
     if [ "$pr_null" = "true" ]; then
-      log "revalidate_source: PR not found for review $comment_id — stale"
+      log "revalidate_source: PR $pr_num not found for review $comment_id — stale"
       lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_review_comment reason=pr_not_found"
       return 1
     fi
 
-    # Check if target comment exists in any thread and its resolution state
-    local thread_info
-    thread_info="$(printf '%s' "$resp" | jq -r --argjson tid "$tid" '
-      .data.repository.pullRequest.reviewThreads.nodes[]? |
-      select(.comments.nodes | map(.databaseId) | index($tid) != null) |
-      "\(.isResolved)"
-    ' 2>/dev/null)"
+    local pr_state
+    pr_state="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.state // empty' 2>/dev/null || true)"
+    if [ "$pr_state" != "OPEN" ]; then
+      log "revalidate_source: PR $pr_num is ${pr_state:-unknown} on $repo — stale for review task"
+      lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_review_comment reason=pr_${pr_state:-unknown}"
+      return 1
+    fi
 
+    local thread_info
+    thread_info="$(printf '%s' "$resp" | jq -r --argjson tid "$tid" '.data.repository.pullRequest.reviewThreads.nodes[]? | select((.comments.nodes // []) | map(.databaseId) | index($tid) != null) | "(.isResolved)"' 2>/dev/null || true)"
     if [ -n "$thread_info" ]; then
-      local is_resolved
-      is_resolved="$(printf '%s' "$thread_info" | head -1)"
-      if [ "$is_resolved" = "true" ]; then
+      if [ "$(printf '%s' "$thread_info" | head -1)" = "true" ]; then
         log "revalidate_source: review thread $tid is resolved on $repo — stale"
         lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_review_comment reason=resolved"
         return 1
@@ -1449,11 +1443,9 @@ revalidate_pr_review_comment() {
       return 0
     fi
 
-    # Check page info for pagination
-    local next_cursor has_next
-    has_next="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' 2>/dev/null)"
-    next_cursor="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' 2>/dev/null)"
-
+    local has_next next_cursor
+    has_next="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' 2>/dev/null || echo false)"
+    next_cursor="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' 2>/dev/null || true)"
     if [ "$has_next" != "true" ] || [ -z "$next_cursor" ]; then
       has_more=false
     else
@@ -1461,7 +1453,6 @@ revalidate_pr_review_comment() {
     fi
   done
 
-  # Thread not found after full pagination
   log "revalidate_source: review thread $tid not found after pagination on $repo — stale"
   lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_review_comment reason=thread_not_found"
   return 1
@@ -1845,7 +1836,7 @@ run_once() {
 
     # 3.5 Pre-flight source revalidation — terminal if source no longer valid
     local reval_rc=0
-    revalidate_source "$COMMENT_ID" "$REPO" || reval_rc=$?
+    revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" || reval_rc=$?
     if [ "$reval_rc" -eq 1 ]; then
       log "dispatch: source stale for task $COMMENT_ID, marking terminal"
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
