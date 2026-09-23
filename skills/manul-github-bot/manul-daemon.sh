@@ -1505,6 +1505,57 @@ revalidate_pr_review_comment() {
   return 1
 }
 
+# Mark a running task as blocked on explicit user input.
+# This is not a failure and is not retryable. A later /manul continue resumes
+# this exact task.
+mark_task_blocked_user() {
+  local comment_id="$1" safe_comment_id="$2" claim_token="$3"
+  local safe_claim_token
+  safe_claim_token="$(sql_escape "$claim_token")"
+  local result changes
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  changes="$(printf '%s\n' "$result" | tail -1)"
+  if [ "$changes" = "1" ]; then
+    log "mark_task_blocked_user: task $comment_id is waiting for user input"
+    lc_log "TASK_NEEDS_USER" "task=$comment_id"
+    return 0
+  fi
+  log "ERROR: mark_task_blocked_user did not update task $comment_id (changes=$changes)"
+  lc_log "TASK_ERROR" "task=$comment_id reason=mark_blocked_failed"
+  return 1
+}
+
+post_task_needs_user_comment() {
+  local repo="$1" issue="$2" comment_id="$3" question="$4" reply_to="${5:-}"
+  local task_attempt conversation_id
+  task_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || echo "1")"
+  conversation_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || echo "")"
+
+  local event_json
+  event_json="$(jq -n \
+    --arg taskId "$comment_id" \
+    --arg conversationId "$conversation_id" \
+    --arg question "$question" \
+    --argjson attempt "$task_attempt" \
+    '{type:"TASK_NEEDS_USER", timestamp:(now | strftime("%Y-%m-%dT%H:%M:%SZ")), data:{taskId:$taskId,conversationId:$conversationId,attempt:$attempt,question:$question}}' | jq -c .)"
+
+  local body
+  body="<!-- manul:event $event_json -->
+
+❓ **Manul needs your input to continue**
+
+$question
+
+Reply with:
+
+\`/manul continue <your answer>\`
+
+The answer will resume this same task and conversation.
+
+— manul 🐈"
+
+  post_github_comment "$repo" "$issue" "$body" "$reply_to"
+}
 # Mark a running task as stale (terminal).
 mark_task_stale() {
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
@@ -1562,8 +1613,25 @@ evaluate_task_completion() {
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
   FINAL_COMMENT=""
+  NEEDS_USER_INPUT="false"
+  USER_QUESTION=""
   
   local SUCCESS="false"
+
+  # A user-input request is a deliberate pause, not task failure.
+  # Detect the structured block before any success/failure verification.
+  if [ -f "$STDOUT_FILE" ] && grep -q "^TASK_NEEDS_USER_BEGIN$" "$STDOUT_FILE"; then
+    local question
+    question="$(awk '/^TASK_NEEDS_USER_BEGIN$/{inside=1; next} /^TASK_NEEDS_USER_END$/{inside=0; exit} inside{print}' "$STDOUT_FILE" 2>/dev/null || true)"
+    if [ -n "$question" ]; then
+      NEEDS_USER_INPUT="true"
+      USER_QUESTION="$question"
+      log "dispatch: task $COMMENT_ID requested user input"
+      lc_log "TASK_NEEDS_USER" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+      return 0
+    fi
+    log "WARN: task $COMMENT_ID emitted TASK_NEEDS_USER_BEGIN without a question block; treating as normal failure"
+  fi
   
   # 7. Determine success using BOTH exit status AND explicit completion marker
   if [ "$rc" -eq 0 ]; then
@@ -2364,6 +2432,27 @@ PROMPT_APPEND
 
     # Call production completion evaluation function
     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
+
+    # A structured TASK_NEEDS_USER result pauses this task without entering the
+    # worker failure/retry path. The daemon asks the user and then waits for an
+    # explicit /manul continue response.
+    if [ "${NEEDS_USER_INPUT:-false}" = "true" ]; then
+      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"; then
+        if [ -n "${WORKSPACE_ID:-}" ]; then
+          workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
+        fi
+        if ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
+          log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
+        fi
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "$COMMENT_ID" "blocked_user"
+        return 0
+      fi
+      log "ERROR: could not transition $COMMENT_ID to blocked_user; falling through to failure handling"
+      NEEDS_USER_INPUT="false"
+    fi
 
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
