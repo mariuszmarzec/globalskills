@@ -1,7 +1,6 @@
 #!/usr/bin/bash
-# Focused regression tests for source revalidation (pre-flight check on claim).
-# Tests detect_source_kind, revalidate_source, mark_task_stale, requeue_task.
-# REST-based tests use a mock gh; GraphQL tests use live gh.
+# Hermetic regression tests for Manul source revalidation.
+# No GitHub token/network is required: REST and GraphQL are fully mocked.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,30 +26,140 @@ cat >"$CONFIG" <<'JSON'
   },
   "retryConfig": {
     "delaySeconds": 1
-  }
+  },
+  "repositories": []
 }
 JSON
 
-export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
-
 FAKE_BIN="$TEST_DIR/bin"
 mkdir -p "$FAKE_BIN"
-printf "#!/usr/bin/env bash\nexit 0\n" > "$FAKE_BIN/openclaw"
+
+cat >"$FAKE_BIN/openclaw" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
 chmod +x "$FAKE_BIN/openclaw"
+
+cat >"$FAKE_BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="rest"
+url=""
+pr_num=""
+cursor=""
+
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    graphql) mode="graphql" ;;
+    repos/*) url="${args[$i]}" ;;
+    --field)
+      i=$((i+1))
+      field="${args[$i]}"
+      case "$field" in
+        num=*) pr_num="${field#num=}" ;;
+        c=*) cursor="${field#c=}" ;;
+      esac
+      ;;
+  esac
+done
+
+if [[ "$mode" == "graphql" ]]; then
+  case "$pr_num:$cursor" in
+    4001:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1101}]}}]}}}}}
+JSON
+      ;;
+    4002:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":2100}]}}]}}}}}
+JSON
+      ;;
+    4002:cursor1)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1202}]}}]}}}}}
+JSON
+      ;;
+    4003:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":3100}]}}]}}}}}
+JSON
+      ;;
+    4003:cursor1)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":true,"comments":{"nodes":[{"databaseId":1303}]}}]}}}}}
+JSON
+      ;;
+    4004:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":4100}]}}]}}}}}
+JSON
+      ;;
+    4004:cursor1)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"OPEN","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1404}]}}]}}}}}
+JSON
+      ;;
+    4005:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"CLOSED","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1505}]}}]}}}}}
+JSON
+      ;;
+    4006:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":{"state":"MERGED","reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"comments":{"nodes":[{"databaseId":1606}]}}]}}}}}
+JSON
+      ;;
+    4999:)
+      cat <<'JSON'
+{"data":{"repository":{"pullRequest":null}}}
+JSON
+      ;;
+    5000:)
+      cat <<'JSON'
+{"errors":[{"message":"rate limit"}]}
+JSON
+      exit 1
+      ;;
+    *)
+      echo "unexpected GraphQL fixture: pr=$pr_num cursor=$cursor" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
+case "$url" in
+  */issues/comments/1001) echo '{"id":1001}' ;;
+  */issues/comments/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  */issues/comments/5000) echo '{"message":"network"}'; exit 7 ;;
+  */issues/2001) echo '{"state":"open"}' ;;
+  */issues/2002) echo '{"state":"closed"}' ;;
+  */issues/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  */issues/5000) echo '{"message":"network"}'; exit 7 ;;
+  */pulls/3001) echo '{"state":"open"}' ;;
+  */pulls/3002) echo '{"state":"closed"}' ;;
+  */pulls/3003) echo '{"state":"closed","merged":true}' ;;
+  */pulls/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  */pulls/5000) echo '{"message":"network"}'; exit 7 ;;
+  *) echo "unexpected REST fixture: $url" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/gh"
+
+export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
 export PATH="$FAKE_BIN:$PATH"
-# Source under a controlled errexit boundary so a future daemon initialization
-# regression is reported in this test instead of terminating the shell silently.
+
 set +e
 source "$SCRIPT_DIR/manul-daemon.sh"
 SOURCE_RC=$?
 set -e
 if [ "$SOURCE_RC" -ne 0 ]; then
   echo "FAIL: sourcing manul-daemon.sh returned rc=$SOURCE_RC" >&2
-  cat "$LIFECYCLE_LOG" 2>/dev/null || true
   exit 1
 fi
-# manul-daemon.sh prepends its runtime PATH while sourcing, so restore the
-# fake-bin precedence for the gh calls used by this hermetic test.
 export PATH="$FAKE_BIN:$PATH"
 
 sqlite3 "$DB" "
@@ -62,6 +171,7 @@ CREATE TABLE processed_comments (
   action TEXT,
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT DEFAULT datetime('now'),
   processedAt TEXT,
   heartbeatAt TEXT,
   leaseExpiresAt TEXT,
@@ -73,7 +183,7 @@ CREATE TABLE processed_comments (
 "
 
 REPO="owner/repo"
-GH_API_TIMEOUT=5
+GH_API_TIMEOUT=2
 PASS=0
 FAIL=0
 
@@ -99,129 +209,64 @@ assert_rc() {
   fi
 }
 
-# ── detect_source_kind tests ───────────────────────────────────────────────────
 echo "=== detect_source_kind ==="
-assert_eq "issue_comment prefix" "issue_comment" "$(detect_source_kind "issue:12345")"
-assert_eq "issuebody prefix" "issue_state" "$(detect_source_kind "issuebody:12346")"
-assert_eq "ci_fix prefix" "pr_state" "$(detect_source_kind "ci_fix:owner/repo:12347:run1")"
-assert_eq "review prefix" "pr_review_comment" "$(detect_source_kind "review:12348")"
-assert_eq "unknown defaults to issue_comment" "issue_comment" "$(detect_source_kind "random:123")"
+assert_eq "issue: -> issue_comment" "issue_comment" "$(detect_source_kind "issue:123")"
+assert_eq "issuebody: -> issue_state" "issue_state" "$(detect_source_kind "issuebody:123")"
+assert_eq "ci_fix: -> pr_state" "pr_state" "$(detect_source_kind "ci_fix:owner/repo:123:run")"
+assert_eq "review: -> pr_review_comment" "pr_review_comment" "$(detect_source_kind "review:123")"
+assert_eq "pull URL is not authoritative pr_state" "issue_comment" "$(detect_source_kind "foo/pull/123")"
+assert_eq "compare URL is not authoritative pr_state" "issue_comment" "$(detect_source_kind "foo/compare/123")"
 
-# ── Mock gh for REST-based revalidation tests ──────────────────────────────────
-# The mock implements --jq processing so the REST revalidation functions work.
-cat >"$FAKE_BIN/gh" <<'GHEOF'
-#!/usr/bin/env bash
-# Mock gh — handles --jq and returns appropriate REST responses
-cmd_jq=""
-url=""
-for ((i=1; i<"$#"; i++)); do
-  if [[ "${!i}" == --jq ]] && [[ -n "${!((i+1)):-}" ]]; then
-    cmd_jq="${!((i+1))}"
-  elif [[ "${!i}" != --* ]]; then
-    url="${!i}"
-  fi
-done
-# Issue comment REST
-if [[ "$url" == */issues/comments/1001 ]]; then
-  out='{"id":1001}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */issues/comments/9999 ]]; then
-  out='{"message":"Not Found","status":"404"}'
-  printf '%s' "$out"; exit 1
-fi
-# Issue state REST
-if [[ "$url" == */issues/2001 ]]; then
-  out='{"state":"open"}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */issues/2002 ]]; then
-  out='{"state":"closed"}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */issues/9999 ]]; then
-  out='{"message":"Not Found","status":"404"}'
-  printf '%s' "$out"; exit 1
-fi
-# PR state REST
-if [[ "$url" == */pulls/3001 ]]; then
-  out='{"state":"open"}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */pulls/3002 ]]; then
-  out='{"state":"closed"}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */pulls/3003 ]]; then
-  out='{"state":"merged"}'; [ -n "$cmd_jq" ] && out="$(printf '%s' "$out" | jq -r "$cmd_jq" 2>/dev/null)"
-  printf '%s' "$out"; exit 0
-fi
-if [[ "$url" == */pulls/9999 ]]; then
-  out='{"message":"Not Found","status":"404"}'
-  printf '%s' "$out"; exit 1
-fi
-exit 1
-GHEOF
-chmod +x "$FAKE_BIN/gh"
+echo "=== issue_comment ==="
+revalidate_issue_comment "issue:1001" "$REPO"; rc=$?; assert_rc "existing comment fresh" 0 "$rc"
+revalidate_issue_comment "issue:9999" "$REPO"; rc=$?; assert_rc "404 comment stale" 1 "$rc"
+revalidate_issue_comment "issue:5000" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
 
-# ── issue_comment revalidation tests ──────────────────────────────────────────
-echo "=== issue_comment revalidation ==="
-revalidate_issue_comment "issue:1001" "$REPO"
-assert_rc "existing issue comment is fresh" 0 $?
-revalidate_issue_comment "issue:9999" "$REPO"
-assert_rc "deleted issue comment is stale" 1 $?
+echo "=== issue_state ==="
+revalidate_issue_state "issuebody:2001" "$REPO"; rc=$?; assert_rc "open issue fresh" 0 "$rc"
+revalidate_issue_state "issuebody:2002" "$REPO"; rc=$?; assert_rc "closed issue stale" 1 "$rc"
+revalidate_issue_state "issuebody:9999" "$REPO"; rc=$?; assert_rc "404 issue stale" 1 "$rc"
+revalidate_issue_state "issuebody:5000" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
 
-# ── issue_state revalidation tests ────────────────────────────────────────────
-echo "=== issue_state revalidation ==="
-revalidate_issue_state "issuebody:2001" "$REPO"
-assert_rc "open issue is fresh" 0 $?
-revalidate_issue_state "issuebody:2002" "$REPO"
-assert_rc "closed issue is stale" 1 $?
-revalidate_issue_state "issuebody:9999" "$REPO"
-assert_rc "missing issue is stale" 1 $?
+echo "=== pr_state (OPEN only) ==="
+revalidate_pr_state "ci_fix:owner/repo:3001:run1" "$REPO"; rc=$?; assert_rc "open PR fresh" 0 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3002:run1" "$REPO"; rc=$?; assert_rc "closed PR stale" 1 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3003:run1" "$REPO"; rc=$?; assert_rc "merged PR stale" 1 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:9999:run1" "$REPO"; rc=$?; assert_rc "404 PR stale" 1 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:5000:run1" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
 
-# ── pr_state revalidation tests ───────────────────────────────────────────────
-echo "=== pr_state revalidation ==="
-revalidate_pr_state "ci_fix:owner/repo:3001:run1" "$REPO"
-assert_rc "open PR is fresh" 0 $?
-revalidate_pr_state "ci_fix:owner/repo:3002:run1" "$REPO"
-assert_rc "closed PR is stale" 1 $?
-revalidate_pr_state "ci_fix:owner/repo:3003:run1" "$REPO"
-assert_rc "merged PR is fresh" 0 $?
-revalidate_pr_state "ci_fix:owner/repo:9999:run1" "$REPO"
-assert_rc "missing PR is stale" 1 $?
+echo "=== pr_review_comment ==="
+revalidate_pr_review_comment "review:1101" "$REPO" 4001; rc=$?; assert_rc "page1 unresolved target fresh" 0 "$rc"
+revalidate_pr_review_comment "review:1202" "$REPO" 4002; rc=$?; assert_rc "page2 unresolved target fresh" 0 "$rc"
+revalidate_pr_review_comment "review:1303" "$REPO" 4003; rc=$?; assert_rc "page2 resolved target stale" 1 "$rc"
+revalidate_pr_review_comment "review:1404" "$REPO" 4004; rc=$?; assert_rc "target absent after all pages stale" 1 "$rc"
+revalidate_pr_review_comment "review:1505" "$REPO" 4005; rc=$?; assert_rc "closed PR stale" 1 "$rc"
+revalidate_pr_review_comment "review:1606" "$REPO" 4006; rc=$?; assert_rc "merged PR stale" 1 "$rc"
+revalidate_pr_review_comment "review:12345" "$REPO" 4999; rc=$?; assert_rc "missing PR stale" 1 "$rc"
+revalidate_pr_review_comment "review:12345" "$REPO" 5000; rc=$?; assert_rc "GraphQL error transient" 2 "$rc"
 
-# ── mark_task_stale / requeue_task tests ──────────────────────────────────────
-echo "=== mark_task_stale / requeue_task ==="
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('stale-test','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'token1',NULL,NULL);"
-mark_task_stale "stale-test" "stale-test" "token1"
-assert_eq "task marked stale" "stale" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='stale-test';")"
-assert_eq "claim token cleared on stale" "" "$(sqlite3 "$DB" "SELECT claimToken FROM processed_comments WHERE commentId='stale-test';")"
+echo "=== revalidate_source ==="
+revalidate_source "review:1202" "$REPO" 4002; rc=$?; assert_rc "wrapper passes issueNumber to review" 0 "$rc"
 
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('requeue-test','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12346,'token2',NULL,NULL);"
-requeue_task "requeue-test" "requeue-test" "token2"
-assert_eq "task requeued" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='requeue-test';")"
-assert_eq "nextAttemptAt set on requeue" "$(sqlite3 "$DB" "SELECT typeof(nextAttemptAt) FROM processed_comments WHERE commentId='requeue-test';")" "text"
+echo "=== stale/requeue helpers ==="
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid,heartbeatAt,leaseExpiresAt) VALUES('stale-test','$REPO',1,'url','IMPLEMENT','running',1,'token1',123,datetime('now'),datetime('now','+900 seconds'));"
+mark_task_stale "stale-test" "stale-test" "token1"; rc=$?; assert_rc "mark_task_stale succeeds" 0 "$rc"
+assert_eq "stale is terminal" "stale" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='stale-test';")"
+assert_eq "stale clears claim token" "" "$(sqlite3 "$DB" "SELECT coalesce(claimToken,'') FROM processed_comments WHERE commentId='stale-test';")"
+assert_eq "stale clears heartbeat" "" "$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processed_comments WHERE commentId='stale-test';")"
+assert_eq "stale clears worker pid" "" "$(sqlite3 "$DB" "SELECT coalesce(workerPid,'') FROM processed_comments WHERE commentId='stale-test';")"
 
-# ── GraphQL-based review comment tests (live gh, no mock) ─────────────────────
-echo "=== pr_review_comment revalidation (live) ==="
-# Remove mock gh from PATH for live GraphQL tests
-PATH="${PATH#"$FAKE_BIN":}"
-GH_API_TIMEOUT=10
-# Use real GitHub data for PR 21340 which has known review threads
-revalidate_pr_review_comment "review:4056613546" "eslint/eslint"
-assert_rc "unresolved review thread is fresh" 0 $?
-revalidate_pr_review_comment "review:4058170054" "eslint/eslint"
-assert_rc "resolved review thread is stale" 1 $?
-revalidate_pr_review_comment "review:999999999" "eslint/eslint"
-assert_rc "nonexistent review thread is stale" 1 $?
-revalidate_pr_review_comment "review:12345" "eslint/nonexistent-pr-99999"
-assert_rc "nonexistent PR is stale" 1 $?
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid) VALUES('requeue-test','$REPO',2,'url','IMPLEMENT','running',1,'token2',456);"
+requeue_task "requeue-test" "requeue-test" "token2"; rc=$?; assert_rc "requeue succeeds" 0 "$rc"
+assert_eq "transient returns queued" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='requeue-test';")"
+assert_eq "requeue clears claim token" "" "$(sqlite3 "$DB" "SELECT coalesce(claimToken,'') FROM processed_comments WHERE commentId='requeue-test';")"
+assert_eq "requeue sets nextAttemptAt" "1" "$(sqlite3 "$DB" "SELECT nextAttemptAt IS NOT NULL FROM processed_comments WHERE commentId='requeue-test';")"
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+echo "=== claim token guards ==="
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid) VALUES('guard-test','$REPO',3,'url','IMPLEMENT','running',1,'real-token',789);"
+mark_task_stale "guard-test" "guard-test" "wrong-token"; rc=$?; assert_rc "wrong token rejected" 1 "$rc"
+assert_eq "wrong token leaves task running" "running" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='guard-test';")"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-if [ "$FAIL" -gt 0 ]; then
-  exit 1
-fi
-exit 0
+[ "$FAIL" -eq 0 ]
