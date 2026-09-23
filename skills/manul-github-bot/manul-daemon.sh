@@ -1362,10 +1362,16 @@ run_once() {
     fi
   fi
 
-  # Record poll result for observability
+  # Record poll result for observability. poll.sh writes diagnostics to stderr,
+  # so stdout+stderr can contain arbitrary lines around the final MANUL_RESULT.
+  # Parse the last MANUL_RESULT line instead of treating the whole output as JSON.
   local poll_fire poll_new poll_pending
-  # Strip MANUL_RESULT prefix if present (poll.sh outputs "MANUL_RESULT {json}")
-  local json_out="${out#MANUL_RESULT }"
+  local result_line
+  result_line="$(printf '%s\\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
+  local json_out="${result_line#MANUL_RESULT }"
+  if [ -z "$result_line" ]; then
+    json_out='{}'
+  fi
   poll_fire="$(printf '%s' "$json_out" | jq -r '.fire // false' 2>/dev/null || echo false)"
   poll_new="$(printf '%s' "$json_out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
   poll_pending="$(printf '%s' "$json_out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
