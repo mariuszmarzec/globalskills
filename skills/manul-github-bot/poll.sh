@@ -1194,8 +1194,7 @@ process_repo_body() {
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
       diffHunk: (.diff_hunk // ""),
-      in_reply_to_id: (.in_reply_to_id // null),
-      isResolved: (.in_reply_to_id // null | . != null)
+      in_reply_to_id: (.in_reply_to_id // null)
     }' 2>>"$LOG" || true)
 
   # 2b) PR review events (REQUEST_CHANGES -> REVIEW_FIX tasks)
