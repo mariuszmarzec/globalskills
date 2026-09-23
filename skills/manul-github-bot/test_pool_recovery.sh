@@ -46,7 +46,12 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
   attempts INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT,
   processedAt TEXT
-);"
+);
+
+# Current runtime schema: stale cleanup uses worker liveness to reclaim BUSY rows.
+sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN heartbeatAt TEXT;"
+sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN leaseExpiresAt TEXT;"
+sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN workerPid INTEGER;"
 
 source "$SCRIPT_DIR/workspace-manager.sh"
 
