@@ -40,6 +40,10 @@
     "useLightContextOnFinalRetry": true,
     "sessionTimeoutSeconds": 300
   },
+  "retention": {
+    "listDays": 7,
+    "historyDays": 14
+  },
   "compaction": {
     "retryOnTimeout": true,
     "fallbackCutoffTokens": 240000
