@@ -2159,8 +2159,8 @@ Example informational task response:
 — manul 🐈
 ```
 
-The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed).
-You handle the result comment.
+The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, ❓ needs user).
+For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_BEGIN/END, do NOT post a normal result comment; the daemon will post the question and resume the same task after the user replies.
 PROMPT_EOF
 
     # Repository Management: Ensure target repository exists and is authoritative
