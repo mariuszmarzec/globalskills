@@ -1432,7 +1432,7 @@ revalidate_pr_review_comment() {
     fi
 
     local thread_info
-    thread_info="$(printf '%s' "$resp" | jq -r --argjson tid "$tid" '.data.repository.pullRequest.reviewThreads.nodes[]? | select((.comments.nodes // []) | map(.databaseId) | index($tid) != null) | "(.isResolved)"' 2>/dev/null || true)"
+    thread_info="$(printf '%s' "$resp" | jq -r --argjson tid "$tid" '.data.repository.pullRequest.reviewThreads.nodes[]? | select((.comments.nodes // []) | map(.databaseId) | index($tid) != null) | "\(.isResolved)"' 2>/dev/null || true)"
     if [ -n "$thread_info" ]; then
       if [ "$(printf '%s' "$thread_info" | head -1)" = "true" ]; then
         log "revalidate_source: review thread $tid is resolved on $repo — stale"
