@@ -30,7 +30,7 @@
 #   {
 #     "taskId": "string",
 #     "conversationId": "string",
-#     "status": "queued|running|completed|failed",
+#     "status": "queued|running|completed|failed|stale",
 #     "repo": "string",
 #     "issue": number,
 #     "attempts": number,
