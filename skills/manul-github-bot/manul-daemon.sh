@@ -121,6 +121,33 @@ record_poll() {
   echo "${fire}|${new}|${pending}|$(date -Is)" >>"$LIFECYCLE_LOG"
 }
 
+
+# Parse poll.sh output into exactly one normalized result.
+# Never let malformed/multi-value jq output reach the dispatch gate.
+parse_poll_result() {
+  local out="${1:-}"
+  local result_line json_out validated_json
+  result_line="$(printf '%s\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
+  if [ -z "$result_line" ]; then
+    printf 'false|0|0\n'
+    return 0
+  fi
+
+  json_out="${result_line#MANUL_RESULT }"
+  validated_json="$(printf '%s' "$json_out" | jq -e -c -s 'if length == 1 then .[0] | select(type == "object") else empty end' 2>/dev/null || true)"
+  if [ -z "$validated_json" ]; then
+    log "WARN: invalid MANUL_RESULT ignored"
+    printf 'false|0|0\n'
+    return 0
+  fi
+
+  local fire new pending
+  fire="$(printf '%s' "$validated_json" | jq -r 'if .fire == true then "true" else "false" end')"
+  new="$(printf '%s' "$validated_json" | jq -r 'if (.new|type) == "number" then .new else 0 end')"
+  pending="$(printf '%s' "$validated_json" | jq -r 'if (.pending|type) == "number" then .pending else 0 end')"
+  printf '%s|%s|%s\n' "$fire" "$new" "$pending"
+}
+
 # Get daemon PID as a function (handles empty file safely)
 get_daemon_pid() {
   local pid
@@ -686,8 +713,19 @@ start() {
   # Reclaim workspaces left BUSY by dead/stale workers before creating the pool.
   # This must happen before workspace_pool_init: a stale BUSY row otherwise
   # makes available_ws=0 and prevents the daemon from starting at all.
-  source "$MANUL_DIR/workspace-manager.sh"
-  workspace_cleanup_stale 3600
+  local workspace_manager="$MANUL_DIR/workspace-manager.sh"
+  if [ ! -f "$workspace_manager" ] || ! bash -n "$workspace_manager" 2>/dev/null; then
+    log "ERROR: invalid workspace manager: $workspace_manager"
+    return 1
+  fi
+  if ! source "$workspace_manager"; then
+    log "ERROR: failed to source workspace manager: $workspace_manager"
+    return 1
+  fi
+  if ! workspace_cleanup_stale 3600; then
+    log "ERROR: workspace stale cleanup failed"
+    return 1
+  fi
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
 
   # Singleton check: verify no other daemon is running
@@ -844,6 +882,13 @@ status() {
   else
     echo "not running"
   fi
+}
+
+
+# Return the number of queued tasks that are eligible to run now.
+# SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
+eligible_queued_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -1393,17 +1438,9 @@ run_once() {
 
   # Record poll result for observability. poll.sh writes diagnostics to stderr,
   # so stdout+stderr can contain arbitrary lines around the final MANUL_RESULT.
-  # Parse the last MANUL_RESULT line instead of treating the whole output as JSON.
+  # Parse exactly one complete MANUL_RESULT line and validate it before reading fields.
   local poll_fire poll_new poll_pending
-  local result_line
-  result_line="$(printf '%s\\n' "$out" | grep '^MANUL_RESULT ' | tail -n 1 || true)"
-  local json_out="${result_line#MANUL_RESULT }"
-  if [ -z "$result_line" ]; then
-    json_out='{}'
-  fi
-  poll_fire="$(printf '%s' "$json_out" | jq -r '.fire // false' 2>/dev/null || echo false)"
-  poll_new="$(printf '%s' "$json_out" | jq -r '.new // 0' 2>/dev/null || echo 0)"
-  poll_pending="$(printf '%s' "$json_out" | jq -r '.pending // 0' 2>/dev/null || echo 0)"
+  IFS='|' read -r poll_fire poll_new poll_pending < <(parse_poll_result "$out")
   record_poll "$poll_fire" "$poll_new" "$poll_pending"
 
   if [ "$poll_fire" = "true" ]; then
@@ -1420,8 +1457,17 @@ run_once() {
     lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
   fi
 
-  if [ "$poll_fire" != "true" ]; then
+  # SQLite is the authoritative task queue. poll_fire is only a wake-up hint:
+  # an existing eligible queued task must still be dispatched even when poll
+  # output is malformed, stale, or reports fire=false.
+  local eligible_queued
+  eligible_queued="$(eligible_queued_count)"
+  if [ "$poll_fire" != "true" ] && [ "${eligible_queued:-0}" -eq 0 ]; then
     return 0
+  fi
+  if [ "$poll_fire" != "true" ]; then
+    log "dispatch: poll fire=false but SQLite has eligible queued task(s); dispatching from queue"
+    lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
   fi
 
     # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races

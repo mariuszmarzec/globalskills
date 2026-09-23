@@ -195,8 +195,9 @@ workspace_get_path() {
 workspace_cleanup_stale() {
   local stale_threshold="${1:-3600}"
 
-  # Reclaim stale BUSY workspaces, but never evict a workspace owned by a
-  # live task/worker. lastUsedAt is only a coarse fallback for old DB schemas.
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
   local has_liveness_columns
   has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
 
@@ -211,8 +212,7 @@ workspace_cleanup_stale() {
              COALESCE(pc.workerPid,'')
       FROM workspaces w
       LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
-      WHERE w.status='BUSY'
-        AND w.lastUsedAt < datetime('now', '-${stale_threshold} seconds');
+      WHERE w.status='BUSY';
     " 2>/dev/null || true)"
 
     while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
