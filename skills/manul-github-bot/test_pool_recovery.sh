@@ -89,7 +89,7 @@ MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 source_rc=$?
 set -e
 if [ "$source_rc" -ne 0 ]; then
-  echo "FAIL 3: sourcing daemon returned rc=$source_rc" >&2
+  echo "FAIL 4: sourcing daemon returned rc=$source_rc" >&2
   cat "$LIFECYCLE_LOG" 2>/dev/null || true
   exit 1
 fi
@@ -101,7 +101,7 @@ ensure_workspace_pool
 pool_rc=$?
 set -e
 if [ "$pool_rc" -ne 0 ]; then
-  echo "FAIL 3: ensure_workspace_pool returned rc=$pool_rc" >&2
+  echo "FAIL 4: ensure_workspace_pool returned rc=$pool_rc" >&2
   cat "$LIFECYCLE_LOG" 2>/dev/null || true
   exit 1
 fi
