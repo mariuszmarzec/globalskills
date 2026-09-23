@@ -1056,6 +1056,16 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+      if resume_blocked_user_task "$conv_id" "$repo" "$issue" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
@@ -1079,6 +1089,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx
@@ -1144,6 +1155,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx
@@ -1204,6 +1216,15 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      if resume_blocked_user_task "$conv_id" "$repo" "$pr_num" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
@@ -1233,6 +1254,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx
