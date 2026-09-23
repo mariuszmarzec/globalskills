@@ -36,9 +36,10 @@ cat >"$CONFIG" <<'EOF'
 }
 EOF
 
-DAEMON_FUNCTIONS="$TEST_DIR/manul-daemon-functions.sh"
-sed '/^# Source guard: prevent CLI execution when sourced for testing$/,$d' "$SCRIPT_DIR/manul-daemon.sh" >"$DAEMON_FUNCTIONS"
-source "$DAEMON_FUNCTIONS"
+# Load only the exact production function bodies under test; do not execute daemon CLI/bootstrap code.
+log() { :; }
+eval "$(sed -n '/^parse_poll_result() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
+eval "$(sed -n '/^eligible_queued_count() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
