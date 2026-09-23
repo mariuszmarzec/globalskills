@@ -40,6 +40,7 @@ env:
     skills/manul-github-bot/test_task_branch_lifecycle.sh
     skills/manul-github-bot/test_worker_lease_recovery.sh
     skills/manul-github-bot/test_source_revalidation.sh
+    skills/manul-github-bot/test_task_retention.sh
 
 jobs:
   verify:
