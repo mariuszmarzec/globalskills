@@ -76,6 +76,11 @@ REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-${LOCK_TTL:-1800}}"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
+TASK_RETENTION_DEFAULT_LIST_DAYS=7
+TASK_RETENTION_DEFAULT_HISTORY_DAYS=14
+TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
+TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
+
 # Source operator overrides from ~/.openclaw/manul/.env if present.
   # This is what makes MANUL_POLL_TIMEOUT / MANUL_INTERVAL / etc. actually
   # take effect — without it the daemon ignores the .env file entirely and
@@ -96,6 +101,24 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
   log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+  configure_task_retention() {
+    local list_days history_days
+    list_days="$(jq -r '.retention.listDays // empty' "$CONFIG" 2>/dev/null || true)"
+    history_days="$(jq -r '.retention.historyDays // empty' "$CONFIG" 2>/dev/null || true)"
+
+    if ! [[ "$list_days" =~ ^[0-9]+$ ]] || [ "$list_days" -lt 1 ] || \
+       ! [[ "$history_days" =~ ^[0-9]+$ ]] || [ "$history_days" -lt 1 ] || \
+       [ "$history_days" -lt $((list_days * 2)) ]; then
+      TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
+      TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
+      TASK_RETENTION_CONFIG_MESSAGE="WARN: invalid retention config (listDays=${list_days:-missing}, historyDays=${history_days:-missing}); using defaults listDays=$TASK_RETENTION_DEFAULT_LIST_DAYS, historyDays=$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
+    else
+      TASK_LIST_RETENTION_DAYS="$list_days"
+      TASK_HISTORY_RETENTION_DAYS="$history_days"
+      TASK_RETENTION_CONFIG_MESSAGE="INFO: task retention configured (listDays=$TASK_LIST_RETENTION_DAYS, historyDays=$TASK_HISTORY_RETENTION_DAYS)"
+    fi
+  }
+
 
 # Lifecycle event logger — structured, machine-parsable, human-readable
 lc_log() {
@@ -710,6 +733,8 @@ refresh_heartbeat() {
 }
 
 start() {
+  configure_task_retention
+
   # Reclaim workspaces left BUSY by dead/stale workers before creating the pool.
   # This must happen before workspace_pool_init: a stale BUSY row otherwise
   # makes available_ws=0 and prevents the daemon from starting at all.
@@ -793,6 +818,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
     done
 
     flock -u 200
+    log "$TASK_RETENTION_CONFIG_MESSAGE"
     lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
     echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
 
@@ -894,6 +920,27 @@ eligible_queued_count() {
 sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
+# Remove terminal task rows older than the configured history retention.
+# Only processed_comments task data is removed; conversation_messages keeps
+# message IDs so an old GitHub trigger cannot be rediscovered and requeued.
+cleanup_expired_tasks() {
+  [ -f "$DB" ] || return 0
+
+  local deleted
+  deleted="$(sqlite3 "$DB" "
+    DELETE FROM processed_comments
+    WHERE status IN ('completed', 'failed', 'stale')
+      AND COALESCE(processedAt, createdAt) < datetime('now', '-${TASK_HISTORY_RETENTION_DAYS} days');
+    SELECT changes();
+  " 2>>"$LOG" | tail -n 1)"
+
+  if [[ "$deleted" =~ ^[0-9]+$ ]] && [ "$deleted" -gt 0 ]; then
+    log "task retention cleanup: removed $deleted terminal task(s) older than ${TASK_HISTORY_RETENTION_DAYS} days"
+  elif [ -n "$deleted" ] && ! [[ "$deleted" =~ ^[0-9]+$ ]]; then
+    log "WARN: task retention cleanup returned unexpected result: $deleted"
+  fi
+}
+
 
 # Ensure the workspace pool is healthy for long-lived daemons.
 # The watchdog may remove stale idle workspaces while this daemon remains alive;
@@ -1658,6 +1705,9 @@ evaluate_task_completion() {
 }
 
 run_once() {
+  configure_task_retention
+  cleanup_expired_tasks
+
   # Use timeout to prevent daemon deadlock if poll.sh hangs
   # This can happen if gh API is unresponsive or network is blocked.
   # The default scales with the number of configured repositories so one
