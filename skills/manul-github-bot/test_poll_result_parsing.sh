@@ -36,7 +36,9 @@ cat >"$CONFIG" <<'EOF'
 }
 EOF
 
-source "$SCRIPT_DIR/manul-daemon.sh"
+DAEMON_FUNCTIONS="$TEST_DIR/manul-daemon-functions.sh"
+sed '/^# Source guard: prevent CLI execution when sourced for testing$/,$d' "$SCRIPT_DIR/manul-daemon.sh" >"$DAEMON_FUNCTIONS"
+source "$DAEMON_FUNCTIONS"
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
