@@ -290,7 +290,7 @@ poll_path="$POLL_SCRIPT"
 if grep -q "REPO_POLL_TIMEOUT" "$poll_path" && \
    grep -q "setsid --fork --wait" "$poll_path" && \
    grep -q 'exec 201>&-' "$poll_path" && \
-   grep -q 'kill -TERM -- "-\\$pid"' "$poll_path"; then
+   grep -Fq 'kill -TERM -- "-$pid"' "$poll_path"; then
   echo "PASS 5: poll.sh uses per-repo process-group timeout with global safety net"
 else
   echo "FAIL 5: Timeout mechanism not clearly defined"
