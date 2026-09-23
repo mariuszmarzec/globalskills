@@ -103,10 +103,8 @@ MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" bash -c   'source "$1"; configure_task
 
 assert_eq "cleanup keeps active tasks" "2"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status IN ('queued','running');")"
 assert_eq "cleanup keeps recent terminal tasks" "2"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('completed-recent','stale-recent');")"
-assert_eq "cleanup removes terminal tasks older than historyDays" "2"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('failed-expired','completed-history');")" || true
-
-# The previous assertion intentionally checks zero rows via a direct query.
-assert_eq "expired terminal rows deleted" "0"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('failed-expired','completed-history');")"
+assert_eq "expired terminal rows deleted" "0"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='failed-expired';")"
+assert_eq "history-window terminal row is retained" "1"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='completed-history';")"
 
 # ---------------------------------------------------------------------------
 # 3. Invalid retention config falls back to 7/14 without failing
@@ -121,7 +119,9 @@ assert_eq "invalid config falls back to historyDays=14" "14" "$(printf '%s' "$RE
 assert_contains "invalid config produces WARN message" "$(printf '%s' "$RETENTION_OUT" | cut -d'|' -f3-)" "WARN: invalid retention config"
 
 # Also verify missing config values are non-fatal.
-write_config "" ""
+cat >"$MANUL_DIR/config.json" <<'EOF'
+{}
+EOF
 RETENTION_OUT="$(
   MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" bash -c     'source "$1"; configure_task_retention; printf "%s|%s|%s" "$TASK_LIST_RETENTION_DAYS" "$TASK_HISTORY_RETENTION_DAYS" "$TASK_RETENTION_CONFIG_MESSAGE"'     _ "$SCRIPT_DIR/manul-daemon.sh"
 )"
