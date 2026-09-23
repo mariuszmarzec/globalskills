@@ -1463,9 +1463,17 @@ mark_task_stale() {
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
   local safe_claim_token
   safe_claim_token="$(sql_escape "$claim_token")"
-  sqlite3 "$DB" "UPDATE processed_comments SET status='stale', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-  log "mark_task_stale: task $comment_id marked stale"
-  lc_log "TASK_STALE" "task=$comment_id"
+  local result changes
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='stale', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  changes="$(printf '%s\n' "$result" | tail -1)"
+  if [ "$changes" = "1" ]; then
+    log "mark_task_stale: task $comment_id marked stale"
+    lc_log "TASK_STALE" "task=$comment_id"
+    return 0
+  fi
+  log "ERROR: mark_task_stale did not update task $comment_id (changes=$changes)"
+  lc_log "TASK_ERROR" "task=$comment_id reason=mark_stale_failed"
+  return 1
 }
 
 # Requeue a running task for later retry.
@@ -1473,9 +1481,17 @@ requeue_task() {
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
   local safe_claim_token
   safe_claim_token="$(sql_escape "$claim_token")"
-  sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-  log "requeue_task: task $comment_id requeued"
-  lc_log "TASK_REQUEUED" "task=$comment_id reason=revalidation_transient"
+  local result changes
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  changes="$(printf '%s\n' "$result" | tail -1)"
+  if [ "$changes" = "1" ]; then
+    log "requeue_task: task $comment_id requeued"
+    lc_log "TASK_REQUEUED" "task=$comment_id reason=revalidation_transient"
+    return 0
+  fi
+  log "ERROR: requeue_task did not update task $comment_id (changes=$changes)"
+  lc_log "TASK_ERROR" "task=$comment_id reason=requeue_failed"
+  return 1
 }
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
