@@ -155,7 +155,7 @@ export PATH="$FAKE_BIN:$PATH"
 set +e
 source "$SCRIPT_DIR/manul-daemon.sh"
 SOURCE_RC=$?
-set -e
+set +e
 if [ "$SOURCE_RC" -ne 0 ]; then
   echo "FAIL: sourcing manul-daemon.sh returned rc=$SOURCE_RC" >&2
   exit 1
