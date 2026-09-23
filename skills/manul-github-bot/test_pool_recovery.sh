@@ -107,6 +107,6 @@ if [ "$pool_rc" -ne 0 ]; then
 fi
 count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status IN ('IDLE','BUSY');")"
 [ "$count" -ge 1 ]
-echo "PASS 3"
+echo "PASS 4"
 
 echo "All workspace pool recovery tests passed."
