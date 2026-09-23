@@ -7,7 +7,8 @@
 # Options:
 #   --task ID        Task/comment ID to query (required if no positional arg)
 #   --json           Output JSON format
-#   --list           List all tasks (optional filter by status)
+#   --list           List active tasks plus recent terminal tasks
+#   --history        List terminal task history retained for the longer window
 #   --status S       Filter by status (queued, running, completed, failed, stale)
 #   --log            Show daemon.log instead of task status
 #   --tail N         Number of log lines to show (default: 100)
@@ -22,6 +23,7 @@
 #   manul-status.sh --task cli-abc123 --json
 #   manul-status.sh --list --status queued
 #   manul-status.sh --list --json
+#   manul-status.sh --history --json
 #   manul-status.sh --log --tail=200
 #
 # JSON Output Schema:
@@ -51,7 +53,13 @@ LIST_MODE=false
 FILTER_STATUS=""
 TASK_ID=""
 LOG_MODE=false
+HISTORY_MODE=false
 LOG_TAIL=100
+
+TASK_RETENTION_DEFAULT_LIST_DAYS=7
+TASK_RETENTION_DEFAULT_HISTORY_DAYS=14
+TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
+TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -61,6 +69,7 @@ while [[ $# -gt 0 ]]; do
       TASK_ID="$2"; shift 2 ;;
     --json) OUTPUT_FORMAT="json"; shift ;;
     --list) LIST_MODE=true; shift ;;
+    --history) HISTORY_MODE=true; LIST_MODE=true; shift ;;
     --status)
       [ $# -ge 2 ] || { echo "Error: --status requires a value" >&2; exit 1; }
       FILTER_STATUS="$2"; shift 2 ;;
@@ -99,16 +108,47 @@ fi
 sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
+load_task_retention() {
+  local list_days history_days
+  list_days="$(jq -r '.retention.listDays // empty' "$MANUL_DIR/config.json" 2>/dev/null || true)"
+  history_days="$(jq -r '.retention.historyDays // empty' "$MANUL_DIR/config.json" 2>/dev/null || true)"
+
+  if ! [[ "$list_days" =~ ^[0-9]+$ ]] || [ "$list_days" -lt 1 ] || \
+     ! [[ "$history_days" =~ ^[0-9]+$ ]] || [ "$history_days" -lt 1 ] || \
+     [ "$history_days" -lt $((list_days * 2)) ]; then
+    TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
+    TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
+  else
+    TASK_LIST_RETENTION_DAYS="$list_days"
+    TASK_HISTORY_RETENTION_DAYS="$history_days"
+  fi
+}
+
 
 if [ "$LIST_MODE" = true ]; then
   # List mode: query multiple tasks
-  WHERE_CLAUSE=""
+  # Active tasks are always shown. Terminal tasks are limited by the
+  # configured retention window. --history uses the longer window.
+  load_task_retention
+  local_retention_days="$TASK_LIST_RETENTION_DAYS"
+  if [ "$HISTORY_MODE" = true ]; then
+    local_retention_days="$TASK_HISTORY_RETENTION_DAYS"
+  fi
+
   if [ -n "$FILTER_STATUS" ]; then
-    WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")'"
+    if [ "$FILTER_STATUS" = "queued" ] || [ "$FILTER_STATUS" = "running" ]; then
+      WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")'"
+    else
+      WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")' AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
+    fi
+  elif [ "$HISTORY_MODE" = true ]; then
+    WHERE_CLAUSE="WHERE status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
+  else
+    WHERE_CLAUSE="WHERE (status IN ('queued', 'running') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
   fi
 
   RESULTS="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, status, conversationId, 
+    SELECT commentId, repository, issueNumber, status, conversationId,
            attempts, createdAt, processedAt, workerPid, workspaceId, nextAttemptAt
     FROM processed_comments $WHERE_CLAUSE
     ORDER BY createdAt DESC
