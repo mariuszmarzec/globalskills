@@ -12,7 +12,15 @@ cat > "$MANUL_DIR/config.json" <<'JSON'
 {"automation":{"heartbeatInterval":60,"heartbeatTimeout":900,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
 JSON
 
-source "$ROOT_DIR/skills/manul-github-bot/manul-daemon.sh"
+set +e
+source "$ROOT_DIR/skills/manul-github-bot/manul-daemon.sh" 2>"$WORK/source.err"
+source_rc=$?
+set -e
+if [ "$source_rc" -ne 0 ]; then
+  echo "FAIL: sourcing manul-daemon.sh returned rc=$source_rc"
+  cat "$WORK/source.err" 2>/dev/null || true
+  exit 1
+fi
 
 git init -q "$WORK/repo"
 git -C "$WORK/repo" config user.email test@example.com
