@@ -2612,9 +2612,9 @@ PROMPT_APPEND
 # 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
      # The daemon never calls adapter scripts directly; the controller owns
      # timeout enforcement, session continuation, and result mapping.
-     local STDOUT_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stdout"
-     local STDERR_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stderr"
-     local EXEC_CTX_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.ctx.json"
+     local STDOUT_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stdout"
+     local STDERR_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stderr"
+     local EXEC_CTX_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.ctx.json"
 
      log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
      lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
