@@ -19,14 +19,14 @@
 #
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-CONFIG="${MANUL_DIR}/config.json"
-# DB on native ext4 (NOT on 9p /mnt/f)
-DB="${MANUL_DIR}/manul.db"
-LOCK="${MANUL_DIR}/lock"
-LOG="${MANUL_DIR}/poll.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+CONFIG="$MANUL_CONFIG"
+DB="${DB:-$MANUL_DB}"
+LOCK="${MANUL_LOCKS_DIR}/poll.lock"
+LOG="$MANUL_LOG_DIR/poll.log"
 LOCK_TTL_SECONDS="${MANUL_LOCK_TTL_SECONDS:-1800}"
-REPO_LOCK_DIR="${MANUL_DIR}/repo-locks"
+REPO_LOCK_DIR="$MANUL_LOCKS_DIR/repo"
 REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-1800}"
 # Per-repository timeout to prevent one slow repo from blocking all others
 REPO_POLL_TIMEOUT="${MANUL_REPO_POLL_TIMEOUT:-60}"
@@ -702,6 +702,11 @@ if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q 
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN resultSummary TEXT;" 2>>"$LOG"
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN resultJson TEXT;" 2>>"$LOG"
     log "migration: added result fields"
+fi
+# migration for runtime session identity used by AgentExecutor continuation.
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|session_id|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN session_id TEXT;" 2>>"$LOG"
+    log "migration: added session_id column"
 fi
 # migration for existing DBs (pre-baseId field for idempotency)
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|baseId|'; then
