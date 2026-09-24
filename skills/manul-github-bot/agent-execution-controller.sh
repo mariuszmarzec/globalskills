@@ -26,9 +26,6 @@
 #   BLOCKED          → transition to blocked_user
 #   NEEDS_CONTINUATION → requeue with same session_id (same logical task)
 #
-# The controller adds a small grace window: if the adapter times out but the
-# result file already contains TASK_DONE, the daemon should prefer the result
-# file over the raw timeout signal.
 
 MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$MANUL_SCRIPT_DIR/manul-paths.sh"
@@ -113,7 +110,8 @@ AgentExecutionController.continue_session() {
         --arg sid "$session_id" \
         '. + {session_id: $sid, continuation: true}')"
     local tmp_ctx
-    tmp_ctx="$(mktemp "${MANUL_TASKS_DIR:-$MANUL_DIR/tasks}/ctx-XXXXXX.json")"
+    mkdir -p "$MANUL_TASKS_DIR"
+    tmp_ctx="$(mktemp "$MANUL_TASKS_DIR/ctx-XXXXXX.json")"
     printf '%s\n' "$modified_ctx" > "$tmp_ctx"
     local result
     result="$(AgentExecutionController.execute "$tmp_ctx")"
