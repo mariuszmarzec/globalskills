@@ -29,10 +29,13 @@ MANUL_LOCKS_DIR="${MANUL_LOCKS_DIR:-$MANUL_STATE_DIR/locks}"
 MANUL_TASKS_DIR="${MANUL_TASKS_DIR:-$MANUL_STATE_DIR/tasks}"
 MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 
-# Runtime selection (default: openclaw)
-# Accepts: openclaw | opencode
-# Config file can override via .automation.agentRuntime key in config.json.
-AGENT_RUNTIME="${AGENT_RUNTIME:-${MANUL_AGENT_RUNTIME:-openclaw}}"
+# Runtime selection (default: openclaw). Environment overrides config.
+# Config key: .automation.agentRuntime
+_CONFIG_AGENT_RUNTIME=""
+if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+    _CONFIG_AGENT_RUNTIME="$(jq -r '.automation.agentRuntime // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
+fi
+AGENT_RUNTIME="${AGENT_RUNTIME:-${MANUL_AGENT_RUNTIME:-${_CONFIG_AGENT_RUNTIME:-openclaw}}}"
 
 # Validate runtime selection early so downstream code can assert it.
 case "$AGENT_RUNTIME" in
