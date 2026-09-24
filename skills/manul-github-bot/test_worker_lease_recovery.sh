@@ -7,12 +7,12 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-LOG="$MANUL_DIR/daemon.log"
-LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
-PID_FILE="$MANUL_DIR/daemon.pid"
-mkdir -p "$MANUL_DIR"
+LOG="$MANUL_DIR/logs/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/logs/lifecycle.log"
+PID_FILE="$MANUL_DIR/state/locks/daemon.pid"
+mkdir -p "$MANUL_DIR/state/locks" "$MANUL_DIR/logs"
 
 cat >"$CONFIG" <<'JSON'
 {
