@@ -71,20 +71,8 @@ test_process_runner_cwd_env() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
 
-  local result
-  result="$(
-    MANUL_DIR="$tmp/runtime" \
-    bash -c '
-      source "$1/manul-paths.sh"
-      source "$1/process-runner.sh"
-      ProcessRunner_TmpStdout="$2/out.txt"
-      ProcessRunner_TmpStderr="$2/err.txt"
-      ProcessRunner.run --cwd "$2/work" --env TEST_MANUL_VALUE "present" -- sh -c '"'"'printf "%s\\n" "$PWD"; printf "%s\\n" "$TEST_MANUL_VALUE"'"'"'
-    ' _ "$SCRIPT_DIR" "$tmp"
-  )"
   mkdir -p "$tmp/work"
-  # The command above ran before the work directory existed if this test is
-  # edited carelessly; recreate with the actual invocation for assertion.
+  local result
   result="$(
     MANUL_DIR="$tmp/runtime" \
     bash -c '
