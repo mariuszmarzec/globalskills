@@ -29,7 +29,6 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
-STATE_DIR="$RUNTIME_DIR/state"
 INIT_STATE=false
 
 fail() {
@@ -59,6 +58,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+STATE_DIR="$RUNTIME_DIR/state"
 
 # 1. Self-detect / validate canonical source
 if [ ! -d "$CANONICAL_DIR" ]; then
