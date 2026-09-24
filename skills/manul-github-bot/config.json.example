@@ -55,6 +55,7 @@
   },
   "automation": {
     "enabled": true,
+    "agentTimeoutSeconds": 43500,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,
