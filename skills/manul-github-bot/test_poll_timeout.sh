@@ -19,13 +19,14 @@ TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-LOG="$MANUL_DIR/poll.log"
-POLL_FLOCK="$MANUL_DIR/poll.flock"
-export MANUL_DIR
+LOG="$MANUL_DIR/logs/poll.log"
+POLL_FLOCK="$MANUL_DIR/state/locks/poll.flock"
+REPO_LOCK_DIR="$MANUL_DIR/state/locks/repo"
+export MANUL_DIR REPO_LOCK_DIR
 
-mkdir -p "$MANUL_DIR/repo-locks"
+mkdir -p "$MANUL_DIR/state/locks/repo" "$MANUL_DIR/logs"
 : >"$LOG"
 
 init_poll_db() {
@@ -107,7 +108,7 @@ no_orphans() {
   sleep 0.5
   ps -eo pid,ppid,cmd | grep "sleep 999999" | grep -v "grep" > /dev/null && return 1 || return 0
 }
-lock_cleaned() { [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; }
+lock_cleaned() { [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; }
 log_exists() { [ -f "$MANUL_DIR/poll.log" ]; }
 
 if has_timeout && log_exists; then
@@ -130,7 +131,7 @@ if lock_cleaned; then
   echo "PASS 1: Lock cleaned up"
 else
   echo "FAIL 1: Lock not cleaned up"
-  ls -la "$MANUL_DIR/repo-locks/" 2>/dev/null || true
+  ls -la "$MANUL_DIR/state/locks/repo/" 2>/dev/null || true
   exit 1
 fi
 
@@ -140,8 +141,8 @@ echo "Test 2: Multiple repos, no starvation"
 
 rm -f "$DB"
 init_poll_db
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 bash "$POLL_SCRIPT" "hang" "fast" > "$TEST_DIR/test2.txt" 2>&1 || true
 
@@ -153,7 +154,7 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ] && [ ! -f "$MANUL_DIR/repo-locks/fast.lock" ]; then
+if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ] && [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 2: Both locks cleaned"
 else
   echo "FAIL 2: Lock(s) still present"
