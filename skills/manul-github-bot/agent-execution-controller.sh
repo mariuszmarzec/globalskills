@@ -46,10 +46,9 @@ AgentExecutionController.execute() {
         return 1
     fi
 
-    local task_id timeout max_wait_grace
+    local task_id stdout_file
     task_id="$(jq -r '.taskId // ""' "$ctx_file" 2>/dev/null)"
-    timeout="$(jq -r '.timeout // 0' "$ctx_file" 2>/dev/null)"
-    max_wait_grace=60  # seconds to wait for result file after adapter returns
+    stdout_file="$(jq -r '.stdout_file // ""' "$ctx_file" 2>/dev/null)"
 
     AgentExecutionController_SessionId=""
 
@@ -75,12 +74,10 @@ AgentExecutionController.execute() {
 
     if [ "$status" = "TIMEOUT" ] || { [ "$exit_code" -eq 124 ] 2>/dev/null && [ "$status" != "COMPLETED" ]; }; then
         # Check if TASK_DONE was already emitted before the timeout killed us.
-        local stdout_file
-        stdout_file="$(printf '%s' "$result" | jq -r '.session_id // empty' 2>/dev/null)"
-        # We don't have stdout_file here; use ctx_file to derive.
-        local prompt_file
-        prompt_file="$(jq -r '.prompt // ""' "$ctx_file" 2>/dev/null)"
-        local check_file="${MANUL_TASKS_DIR:-$MANUL_DIR/tasks}/task-${task_id}.stdout"
+        if [ -z "$stdout_file" ] || [ "$stdout_file" = "null" ]; then
+            stdout_file="$MANUL_TASKS_DIR/task-${task_id}.stdout"
+        fi
+        local check_file="$stdout_file"
         if [ -f "$check_file" ] && grep -qE '^TASK_DONE' "$check_file" 2>/dev/null; then
             # The agent posted TASK_DONE before the outer timeout — treat as success.
             result="$(printf '%s' "$result" | jq -c '. + {status: "COMPLETED", exit_code: 0, summary: "Completed despite timeout wrapper (TASK_DONE already present)"}')"
