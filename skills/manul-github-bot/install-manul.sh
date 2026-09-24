@@ -300,9 +300,9 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh \
     fi
 done
 
-for data in config.json manul.db; do
-    if [ -f "$RUNTIME_DIR/$data" ]; then
-        echo "OK $data present"
+for data_path in "$RUNTIME_DIR/config.json" "$RUNTIME_DIR/state/manul.db"; do
+    if [ -f "$data_path" ]; then
+        echo "OK $(realpath --relative-to="$RUNTIME_DIR" "$data_path") present"
     else
         echo "FAIL $data missing" >&2
         VERIFY_OK=false
