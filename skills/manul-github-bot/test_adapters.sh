@@ -245,6 +245,37 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 8. OpenCode normal exit without TASK_DONE retains the session for continuation
+# ---------------------------------------------------------------------------
+test_opencode_no_marker_continuation() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_no_marker","part":{"type":"text","text":"I reached the end of this step budget."}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "NEEDS_CONTINUATION" "OpenCode normal step-boundary exit without TASK_DONE requests continuation"
+  [ "$rc" -eq 1 ] && ok "OpenCode no-marker continuation returns retryable rc=1" || fail "OpenCode no-marker continuation rc=$rc"
+  printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_no_marker' \
+    && ok "OpenCode no-marker continuation retains session ID" \
+    || fail "OpenCode no-marker continuation lost session ID"
+}
+
+# ---------------------------------------------------------------------------
 # 8. OpenCode failure
 # ---------------------------------------------------------------------------
 test_opencode_failure() {
@@ -454,6 +485,7 @@ test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
+test_opencode_no_marker_continuation
 test_opencode_failure
 test_opencode_missing
 test_opencode_continuation
