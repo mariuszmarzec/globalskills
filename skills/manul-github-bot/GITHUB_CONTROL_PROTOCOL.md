@@ -196,9 +196,13 @@ Never treat `/compare` or `/pull/new` URLs as proof of a PR.
 
 ## Current runtime boundary
 
-Current master executes the agent through OpenClaw.
+Manul executes the agent through `AgentExecutor`, which selects a backend
+adapter by `AGENT_RUNTIME` (OpenClaw by default, OpenCode alternate). The
+daemon never invokes an adapter script directly.
 
-The filesystem location of Manul's current runtime is an implementation detail. The approved next architecture moves Manul-owned state to `~/.manul` and hides runtime-specific execution behind `AgentExecutor`.
+The filesystem location of Manul's runtime is `~/.manul`. Runtime-specific
+execution details are an implementation detail of the adapter, not part of
+this protocol.
 
 ## Testing
 

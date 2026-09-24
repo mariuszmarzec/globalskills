@@ -4,9 +4,9 @@
 
 Manul is a GitHub task orchestrator. GitHub comments create tasks; Manul persists task state, prepares isolated repository workspaces, invokes an agent runtime, verifies the result, and delivers the result through GitHub.
 
-This document distinguishes the **current master baseline** from the **approved target architecture** for the next refactor.
+This document describes the current runtime architecture. The runtime-isolation refactor has landed, so the "approved target architecture" is no longer a plan — it is the implementation.
 
-## Current master baseline
+## Current runtime layout
 
 ```
 GitHub
@@ -40,15 +40,15 @@ Canonical source:
 
 Current default runtime:
 
-`~/.openclaw/manul/`
+`~/.manul/`
 
-The installer currently deploys the runtime scripts as symlinks from the canonical skill directory and keeps runtime data such as the SQLite DB, logs, locks and task files in the runtime directory.
+The installer deploys the runtime scripts as symlinks from the canonical skill directory and keeps runtime data such as the SQLite DB, logs, locks and task files in the runtime directory.
 
-Current default path selection is implemented through `MANUL_DIR`; some older helper scripts still accept `OPENCLAW_MANUL_DIR` as an alias. That coupling is an implementation detail to remove during runtime isolation.
+Path selection is centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates `AGENT_RUNTIME` against the known adapter set. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 ### Current runtime ownership
 
-Current master effectively treats these as Manul runtime data under `MANUL_DIR`:
+The runtime effectively treats these as Manul runtime data under `MANUL_DIR`:
 
 - `config.json`
 - `manul.db`
@@ -131,9 +131,9 @@ Manul task system
 GitHub
 ```
 
-## Approved target architecture
+## Runtime layout
 
-The next refactor will make Manul independent of the OpenClaw runtime layout:
+The runtime-isolation refactor makes Manul independent of the OpenClaw runtime layout:
 
 ```
 ~/.manul/
@@ -173,7 +173,7 @@ Manul should own **task lifecycle and scheduling**.
 
 The runtime should own **agent execution and its own loop/session semantics**.
 
-The first implementation will add the abstraction and an OpenClaw adapter. OpenCode continuation/step-limit handling belongs in a later adapter/controller change.
+Both the OpenClaw and OpenCode adapters are implemented. Additional runtimes can be added by writing a new adapter behind the same `AgentExecutor` boundary.
 
 ## Ownership rule
 
@@ -187,8 +187,8 @@ If it is required only to run one specific agent runtime, it belongs to that run
 
 ## Migration policy
 
-The new runtime architecture is intentionally a clean break.
+The runtime architecture is intentionally a clean break.
 
-There is no requirement to migrate old `~/.openclaw/manul` state into `~/.manul`. The migration work may remove obsolete paths and compatibility fallbacks rather than preserve them.
+There is no requirement to migrate old `~/.openclaw/manul` state into `~/.manul`. Obsolete paths and compatibility fallbacks are removed rather than preserved — `manul-paths.sh` has no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
-Until the runtime-isolation code lands, however, the current master baseline remains the source of truth for actual commands and paths.
+The runtime-isolation code has landed. `~/.manul` is the single canonical runtime directory and the `AgentExecutor` abstraction is the only path from the daemon to an agent runtime.

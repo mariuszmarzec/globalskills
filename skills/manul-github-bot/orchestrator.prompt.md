@@ -156,19 +156,23 @@ The result comment must already exist and be verifiable before `TASK_DONE`.
 
 ## Runtime boundary
 
-Current master uses OpenClaw's `main` agent as its execution backend.
+Manul task lifecycle logic is runtime-neutral. The daemon invokes
+`AgentExecutionController.execute`, which routes through `AgentExecutor` to a
+backend adapter selected by `AGENT_RUNTIME` (OpenClaw by default, OpenCode
+alternate).
 
-Do not spread OpenClaw-specific assumptions into task lifecycle logic.
-
-The approved architecture will introduce an `AgentExecutor` abstraction and runtime adapters. Runtime-specific loop/session/continuation details belong behind that boundary.
+Do not spread runtime-specific assumptions (sessions, continuation
+mechanics, tool paths) into task lifecycle logic. Those details belong in the
+adapter behind the `AgentExecutor` boundary.
 
 ## No accidental architecture drift
 
 Do not:
-- reintroduce `~/.openclaw/manul` ownership into future Manul runtime design;
+- reintroduce `~/.openclaw/manul` ownership into Manul runtime design;
 - build a second LLM/tool loop in Manul;
 - make future provider adapters depend on OpenClaw-specific concepts;
 - preserve obsolete filesystem compatibility merely because it existed before;
 - change behavioural contracts without updating `CONTRACTS.md` and tests.
 
-For the upcoming runtime-isolation refactor, a clean break from the old runtime directory is intentional.
+The runtime-isolation refactor is a clean break from the old runtime
+directory. There is no fallback to `~/.openclaw/manul`.

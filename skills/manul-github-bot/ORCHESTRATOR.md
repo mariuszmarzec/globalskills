@@ -43,10 +43,10 @@ The external orchestrator also persists its own control-plane state in `orchestr
 Current default location:
 
 ```
-${ORCHESTRATOR_DIR:-${MANUL_DIR:-$HOME/.openclaw/manul}}/orchestrator.db
+${ORCHESTRATOR_DIR:-${MANUL_DIR:-$HOME/.manul}}/orchestrator.db
 ```
 
-The upcoming runtime-isolation refactor is expected to move this Manul-owned state under `~/.manul`.
+The runtime-isolation refactor has moved this Manul-owned state under `~/.manul`. There is no fallback to `~/.openclaw/manul`.
 
 ## Conversation state machine
 
@@ -264,6 +264,4 @@ Because the external orchestrator uses the same Manul task interface, changes to
 
 ## Runtime note
 
-The current master defaults to the OpenClaw-era `MANUL_DIR` layout.
-
-That path is an implementation detail scheduled to move to the dedicated Manul runtime root. Do not encode the current filesystem path into new orchestration APIs.
+`MANUL_DIR` defaults to `~/.manul`. That path is an implementation detail; do not encode the current filesystem path into new orchestration APIs.
