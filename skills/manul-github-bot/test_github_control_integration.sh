@@ -920,9 +920,13 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$test_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$test_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-daemon.sh" "$test_dir/manul-daemon.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$test_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1031,8 +1035,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$test_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$test_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$test_dir/manul-github-events.sh"
 
   # Create conversation and initial task
