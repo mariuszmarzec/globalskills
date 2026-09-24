@@ -183,6 +183,41 @@ else
     echo "  FAIL: expected exactly one TASK_DONE marker"
 fi
 
+# Test 6: explicit OpenClaw timeout is passed to the agent CLI
+# This guards against the OpenClaw CLI default of 600s killing long coding tasks.
+echo "Test 6: explicit OpenClaw timeout is passed to OpenClaw"
+cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
+#!/bin/bash
+set -u
+printf '%s\\n' "$@" > "$ARGS_FILE"
+exit 0
+MOCK_EOF
+chmod +x "$TMPDIR/mock_orchestrator.sh"
+export OPENCLAW_BIN="$TMPDIR/mock_orchestrator.sh"
+export ARGS_FILE="$TMPDIR/openclaw-args.txt"
+export MANUL_OPENCLAW_AGENT_TIMEOUT=43200
+
+STDOUT_FILE="$TMPDIR/stdout6.txt"
+STDERR_FILE="$TMPDIR/stderr6.txt"
+"$WRAPPER" "$TMPDIR/prompt.txt" "$STDOUT_FILE" "$STDERR_FILE"
+rc=$?
+if [ $rc -eq 0 ]; then
+    PASS=$((PASS+1))
+    echo "  PASS: wrapper returns 0 with explicit OpenClaw timeout"
+else
+    FAIL=$((FAIL+1))
+    echo "  FAIL: wrapper returns $rc, expected 0"
+fi
+if grep -qx -- "--timeout" "$ARGS_FILE" && grep -qx -- "43200" "$ARGS_FILE"; then
+    PASS=$((PASS+1))
+    echo "  PASS: OpenClaw receives --timeout 43200"
+else
+    FAIL=$((FAIL+1))
+    echo "  FAIL: OpenClaw did not receive expected --timeout 43200"
+    cat "$ARGS_FILE" 2>/dev/null || true
+fi
+assert_contains "$STDERR_FILE" "openclaw-timeout=43200s" "timeout value logged for diagnostics"
+
 # Summary
 echo
 echo "═══════════════════════════════════════════════════════════"
