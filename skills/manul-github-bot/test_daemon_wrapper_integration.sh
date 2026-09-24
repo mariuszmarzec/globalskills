@@ -513,6 +513,42 @@ if [ "$actual_url" != "https://github.com/test/repo/pull/37" ]; then
 fi
 echo "[OK] Test L: PASSED (issue number replaced with verified PR #37)"
 
+# ─── Test M: issuebody task with repository changes must require a real PR ──
+echo ""
+echo "=== Test M: issuebody task with repository changes requires real PR ==="
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_M';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber) VALUES ('issuebody:COMMENT_M','test/repo',54,'https://github.com/test/repo/issues/54','user','test','task','queued',1,$,'IMPLEMENT',54);" 2>/dev/null
+
+WORKDIR_M="$TEST_TMPDIR/workdir-m"
+mkdir -p "$WORKDIR_M"
+git -C "$WORKDIR_M" init -q
+git -C "$WORKDIR_M" config user.email test@example.com
+git -C "$WORKDIR_M" config user.name test
+printf 'test\n' >"$WORKDIR_M/README.md"
+git -C "$WORKDIR_M" add README.md
+git -C "$WORKDIR_M" commit -qm initial
+INITIAL_HEAD_M="$(git -C "$WORKDIR_M" rev-parse HEAD)"
+git -C "$WORKDIR_M" checkout -qb manul-task-COMMENT_M
+echo "implementation change" >>"$WORKDIR_M/README.md"
+git -C "$WORKDIR_M" add README.md
+git -C "$WORKDIR_M" commit -qm "implementation change"
+
+STDOUT_FILE="$TEST_TMPDIR/stdoutM.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "54" "issuebody:COMMENT_M" "issuebody:COMMENT_M" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_M" "" "$INITIAL_HEAD_M" "manul-task-COMMENT_M" "master"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test M - issuebody task with repository changes must not succeed without a real PR"
+    exit 1
+fi
+if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
+    echo "FAIL: Test M - expected missing real PR failure, got '$FAIL_REASON'"
+    exit 1
+fi
+echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
