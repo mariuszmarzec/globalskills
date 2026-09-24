@@ -432,6 +432,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -592,6 +593,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -709,6 +711,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -808,6 +811,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1117,6 +1121,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1243,6 +1248,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1335,6 +1341,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1424,6 +1431,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1505,6 +1513,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -1603,6 +1612,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2032,6 +2042,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2110,6 +2121,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2238,6 +2250,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2327,6 +2340,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2414,6 +2428,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2486,6 +2501,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2579,6 +2595,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2693,6 +2710,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2795,6 +2813,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2894,6 +2913,7 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -2991,7 +3011,8 @@ CFGEOF
    sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
    sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
-   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
    cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
    cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
@@ -3175,6 +3196,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -3283,6 +3305,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -3384,6 +3407,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
@@ -3479,6 +3503,7 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
