@@ -812,6 +812,7 @@ ok "Restored DB has all required tables"
 echo
 echo "Test 13: Corrupt DB + no backup → repair aborts, no schema fabricated"
 CORRUPT_RUNTIME="$TMPROOT/corrupt-runtime"
+mkdir -p "$CORRUPT_RUNTIME/state"
 mkdir -p "$CORRUPT_RUNTIME"
 
 # Write an invalid file that is non-empty but NOT a SQLite DB.
