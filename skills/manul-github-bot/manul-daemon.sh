@@ -1357,9 +1357,8 @@ verify_result_comment_pr_url() {
   local marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   local target_comment_id=""
   target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$target_issue/comments" \
-    --paginate \
-    --jq --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' \
-    2>>"$LOG" | head -1 || true)"
+    --paginate 2>>"$LOG" | \
+    jq -r --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
 
   if [ -n "$target_comment_id" ]; then
     local repaired_body
