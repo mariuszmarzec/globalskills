@@ -29,6 +29,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
+STATE_DIR="$RUNTIME_DIR/state"
 INIT_STATE=false
 
 fail() {
@@ -111,9 +112,10 @@ echo
 # 2. Ensure runtime directory
 if [ ! -d "$RUNTIME_DIR" ]; then
     echo "[1/7] Creating runtime directory: $RUNTIME_DIR"
-    mkdir -p "$RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR" "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/tasks" "$RUNTIME_DIR/logs" "$RUNTIME_DIR/workspace"
 else
     echo "[1/7] Runtime directory exists: $RUNTIME_DIR"
+    mkdir -p "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/tasks" "$RUNTIME_DIR/logs" "$RUNTIME_DIR/workspace"
 fi
 
 # 3. Deploy symlinks
@@ -147,7 +149,7 @@ fi
 # Explicit --init-state is the only destructive installer operation. Repair
 # paths use repair-manul-runtime.sh, which restores an existing DB/backup.
 echo
-DB_FILE="$RUNTIME_DIR/manul.db"
+DB_FILE="$STATE_DIR/manul.db"
 INSTALL_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BOOTSTRAP_FRESH=false
 
@@ -220,8 +222,8 @@ export MANUL_DIR="$RUNTIME_DIR"
 export DB="$DB_FILE"
 
 init_current_db() {
-    "$RUNTIME_DIR/manul-conversation.sh" init-schema &&
-    bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"
+    MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" "$RUNTIME_DIR/manul-conversation.sh" init-schema &&
+    MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"
 }
 
 if ! init_current_db; then
