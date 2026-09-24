@@ -22,6 +22,7 @@
 set -euo pipefail
 
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
+STATE_DIR="$RUNTIME_DIR/state"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 
@@ -70,7 +71,7 @@ printf 'Canonical:  %s\n\n' "$CANONICAL_DIR"
 
 if [ ! -d "$RUNTIME_DIR" ]; then
     echo "[1/5] Creating runtime directory: $RUNTIME_DIR"
-    mkdir -p "$RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR" "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/tasks" "$RUNTIME_DIR/logs" "$RUNTIME_DIR/workspace"
 else
     echo "[1/5] Runtime directory exists: $RUNTIME_DIR"
 fi
@@ -97,7 +98,7 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
 
-DB_FILE="$RUNTIME_DIR/manul.db"
+DB_FILE="$STATE_DIR/manul.db"
 REPAIR_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # ---------------------------------------------------------------------------
@@ -210,7 +211,7 @@ MANUL_DIR="$RUNTIME_DIR" "$RUNTIME_DIR/manul-conversation.sh" init-schema || \
 
 export MANUL_DIR="$RUNTIME_DIR"
 export DB="$DB_FILE"
-bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" || \
+MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh" || \
     fail "Canonical workspace initialization failed"
 
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
