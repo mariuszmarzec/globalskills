@@ -103,19 +103,19 @@ echo "Test 1: Hanging repo is terminated after REPO_POLL_TIMEOUT"
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test1.txt" 2>&1 || true
 output1=$(cat "$TEST_DIR/test1.txt")
 
-has_timeout() { grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; }
+has_timeout() { grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; }
 no_orphans() {
   sleep 0.5
   ps -eo pid,ppid,cmd | grep "sleep 999999" | grep -v "grep" > /dev/null && return 1 || return 0
 }
 lock_cleaned() { [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; }
-log_exists() { [ -f "$MANUL_DIR/poll.log" ]; }
+log_exists() { [ -f "$MANUL_DIR/logs/poll.log" ]; }
 
 if has_timeout && log_exists; then
   echo "PASS 1: Timeout detected"
 else
   echo "FAIL 1: Timeout not detected"
-  cat "$MANUL_DIR/poll.log" 2>/dev/null || true
+  cat "$MANUL_DIR/logs/poll.log" 2>/dev/null || true
   exit 1
 fi
 
@@ -146,11 +146,11 @@ mkdir -p "$MANUL_DIR/state/locks/repo"
 
 bash "$POLL_SCRIPT" "hang" "fast" > "$TEST_DIR/test2.txt" 2>&1 || true
 
-if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
+if grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; then
   echo "PASS 2: Hang repo timed out"
 else
   echo "FAIL 2: Hang repo timeout missing"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -164,11 +164,11 @@ fi
 
 # Check that both repos were processed (hang timed out, fast completed)
 # The log will show "hang timed out" and poll.sh exits successfully
-if grep -q 'hang.*timed out' "$MANUL_DIR/poll.log" && [ $? -eq 0 ]; then
+if grep -q 'hang.*timed out' "$MANUL_DIR/logs/poll.log" && [ $? -eq 0 ]; then
   echo "PASS 2: Hang repo timed out, fast repo not starved"
 else
   echo "FAIL 2: Repo processing incomplete"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -235,11 +235,11 @@ bash "$POLL_SCRIPT" "hang" "other" > "$TEST_DIR/test4a.txt" 2>&1 || true
 sleep 0.3
 bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test4b.txt" 2>&1 || true
 
-if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
+if grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; then
   echo "PASS 4: Hang repo still timed out despite global failure"
 else
   echo "FAIL 4: Hang repo timeout missing"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -315,7 +315,7 @@ if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
 else
   echo "FAIL 5: Repo lock leaked after global SIGTERM"
   ls -la "$MANUL_DIR/repo-locks/" || true
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -353,7 +353,7 @@ else
   echo "--- poll.sh output ---"
   cat "$TEST_DIR/test6.txt"
   echo "--- poll.log tail ---"
-  tail -5 "$MANUL_DIR/poll.log" 2>/dev/null || true
+  tail -5 "$MANUL_DIR/logs/poll.log" 2>/dev/null || true
   exit 1
 fi
 
