@@ -154,11 +154,11 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ] && [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ] && [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 2: Both locks cleaned"
 else
   echo "FAIL 2: Lock(s) still present"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 
@@ -179,8 +179,8 @@ echo "Test 3: poll.flock prevents concurrent instances"
 rm -f "$DB"
 init_poll_db
 rm -f "$POLL_FLOCK"
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test3a.txt" 2>&1 &
 pid1=$!
@@ -243,11 +243,11 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/fast.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 4: Non-hang repo lock cleaned"
 else
   echo "FAIL 4: Non-hang repo lock still present"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 
@@ -301,7 +301,7 @@ fi
 # Simulate the outer daemon timeout interrupting poll.sh before the repo-level
 # timeout can fire. The poll process must clean the lock it acquired before
 # receiving SIGTERM.
-rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/repo-locks/hang.lock"
+rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/state/locks/repo/hang.lock"
 init_poll_db
 export MANUL_REPO_POLL_TIMEOUT=30
 if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test5.txt" 2>&1; then
@@ -310,11 +310,11 @@ if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
   echo "PASS 5: Repo lock cleaned after global SIGTERM"
 else
   echo "FAIL 5: Repo lock leaked after global SIGTERM"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
@@ -329,8 +329,8 @@ echo "Test 6: Partial result emitted on outer SIGTERM"
 
 rm -f "$DB" "$POLL_FLOCK"
 init_poll_db
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 # Pre-seed a queued task so poll.sh has something to report even if it is
 # killed before scanning any repo.
@@ -357,11 +357,11 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
   echo "PASS 6: Repo lock cleaned after SIGTERM"
 else
   echo "FAIL 6: Repo lock leaked after SIGTERM"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 
