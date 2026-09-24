@@ -489,6 +489,30 @@ if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
 fi
 echo "[OK] Test K: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
+# ─── Test L: verified PR metadata must replace the issue number ───────────────
+# Regression for issue-task feedback: queue ingestion may initialize prNumber
+# with the issue number, but once the daemon verifies the real PR it must store
+# the actual PR number/URL before TASK_DONE feedback is emitted.
+echo ""
+echo "=== Test L: verified PR metadata replaces issue number ==="
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_L';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,prNumber,prUrl) VALUES ('COMMENT_L','test/repo',53,'https://github.com/test/repo/issues/53#issuecomment-1012','user','test','task','completed',1,$,53,NULL);" 2>/dev/null
+if ! persist_verified_pr_metadata "COMMENT_L" "37" "https://github.com/test/repo/pull/37"; then
+    echo "FAIL: Test L - persist_verified_pr_metadata returned failure"
+    exit 1
+fi
+actual_pr="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='COMMENT_L';")"
+actual_url="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE commentId='COMMENT_L';")"
+if [ "$actual_pr" != "37" ]; then
+    echo "FAIL: Test L - expected prNumber=37, got '$actual_pr'"
+    exit 1
+fi
+if [ "$actual_url" != "https://github.com/test/repo/pull/37" ]; then
+    echo "FAIL: Test L - expected canonical PR URL, got '$actual_url'"
+    exit 1
+fi
+echo "[OK] Test L: PASSED (issue number replaced with verified PR #37)"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
