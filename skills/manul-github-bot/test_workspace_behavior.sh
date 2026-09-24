@@ -7,12 +7,10 @@ TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 export MANUL_DIR="$TEST_DIR/manul"
-export DB="$MANUL_DIR/manul.db"
 export CONFIG="$MANUL_DIR/config.json"
-export LOG="$TEST_DIR/daemon.log"
+export LOG="$MANUL_DIR/logs/daemon.log"
 
-mkdir -p "$MANUL_DIR/tasks"
-mkdir -p "$MANUL_DIR/workspaces"
+mkdir -p "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/workspace" "$MANUL_DIR/logs"
 
 # Minimal config
 cat > "$CONFIG" << 'CONFIGEOF'
@@ -28,6 +26,8 @@ CONFIGEOF
 
 # Source only workspace manager (not full poll.sh to avoid dependencies)
 _script_dir="$(cd "$(dirname "$0")" && pwd)"
+source "$_script_dir/manul-paths.sh"
+export DB="$MANUL_DB"
 source "$_script_dir/workspace-manager.sh"
 
 # Create processed_comments table for cross-repo tests
