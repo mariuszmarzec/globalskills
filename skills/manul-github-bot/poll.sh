@@ -896,7 +896,11 @@ scan_failing_ci() {
     prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}]' 2>>"$LOG" || true)"
     [ -n "$prs_json" ] || return 0
     local pr_count
-    pr_count="$(printf '%s' "$prs_json" | jq 'length')"
+    pr_count="$(printf '%s' "$prs_json" | jq -r 'length // 0' 2>/dev/null || echo 0)"
+    [[ "$pr_count" =~ ^[0-9]+$ ]] || {
+      log "WARN: invalid PR count '$pr_count'; skipping CI scan for $repo"
+      return 0
+    }
     [ "$pr_count" -gt 0 ] || return 0
     log "scanning $pr_count open manul PR(s) on $repo for failing CI"
     local i=0
