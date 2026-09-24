@@ -688,7 +688,7 @@ fi
 echo
 echo "Test 11: workspace_init failure is fatal"
 WSFAIL_DIR="$TMPROOT/ws-fail-dir"
-mkdir -p "$WSFAIL_DIR"
+mkdir -p "$WSFAIL_DIR/state"
 
 # Build a DB with conversation tables but WITHOUT the workspaces table.
 # Then make it read-only so workspace_init cannot CREATE the missing table.
