@@ -50,7 +50,14 @@ log "manul-agent-wrapper: starting"
 log "manul-agent-wrapper: openclaw=$OPENCLAW_BIN"
 log "manul-agent-wrapper: cwd=$(pwd)"
 log "manul-agent-wrapper: prompt=$PROMPT_FILE"
+OPENCLAW_AGENT_TIMEOUT="${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}"
+if ! [[ "$OPENCLAW_AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$OPENCLAW_AGENT_TIMEOUT" -lt 1 ]; then
+    log "ERROR: invalid MANUL_OPENCLAW_AGENT_TIMEOUT=$OPENCLAW_AGENT_TIMEOUT"
+    exit 2
+fi
+
 log "manul-agent-wrapper: session-key=$SESSION_KEY"
+log "manul-agent-wrapper: openclaw-timeout=${OPENCLAW_AGENT_TIMEOUT}s"
 
 # Flag to track if we're receiving a termination signal.
 TERMINATING=0
@@ -68,7 +75,7 @@ trap cleanup EXIT INT TERM
 
 # Run the orchestrator in the background. The dedicated session key is
 # intentional: do not route Manul work through an already-busy main session.
-"$OPENCLAW_BIN" agent --agent main --session-key "$SESSION_KEY" --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE" &
+"$OPENCLAW_BIN" agent --agent main --session-key "$SESSION_KEY" --timeout "$OPENCLAW_AGENT_TIMEOUT" --message-file "$PROMPT_FILE" >>"$STDOUT_FILE" 2>>"$STDERR_FILE" &
 ORCHESTRATOR_PID=$!
 log "manul-agent-wrapper: orchestrator-pid=$ORCHESTRATOR_PID"
 
