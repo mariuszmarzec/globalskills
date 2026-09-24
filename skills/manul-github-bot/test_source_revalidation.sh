@@ -137,6 +137,7 @@ case "$url" in
   */issues/comments/5000) echo '{"message":"network"}'; exit 7 ;;
   */issues/2001) echo '{"state":"open"}' ;;
   */issues/2002) echo '{"state":"closed"}' ;;
+  */issues/35) echo '{"state":"open"}' ;;
   */issues/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   */issues/5000) echo '{"message":"network"}'; exit 7 ;;
   */pulls/3001) echo '{"state":"open"}' ;;
@@ -227,6 +228,7 @@ revalidate_issue_state "issuebody:2001" "$REPO"; rc=$?; assert_rc "open issue fr
 revalidate_issue_state "issuebody:2002" "$REPO"; rc=$?; assert_rc "closed issue stale" 1 "$rc"
 revalidate_issue_state "issuebody:9999" "$REPO"; rc=$?; assert_rc "404 issue stale" 1 "$rc"
 revalidate_issue_state "issuebody:5000" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
+revalidate_issue_state "issuebody:5565498138" "$REPO" "https://github.com/$REPO/issues/35"; rc=$?; assert_rc "legacy API issue ID resolves via source URL" 0 "$rc"
 
 echo "=== pr_state (OPEN only) ==="
 revalidate_pr_state "ci_fix:owner/repo:3001:run1" "$REPO"; rc=$?; assert_rc "open PR fresh" 0 "$rc"
