@@ -434,7 +434,9 @@ CFGEOF
   # Copy production scripts
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -595,7 +597,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -713,7 +717,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -813,7 +819,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1123,7 +1131,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1250,7 +1260,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1343,7 +1355,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1433,7 +1447,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1515,7 +1531,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1614,7 +1632,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -2044,7 +2064,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -2123,7 +2145,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -2252,7 +2276,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   # Simulate crash: insert review in pending state (no task created yet)
@@ -2342,7 +2368,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2430,7 +2458,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2503,7 +2533,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2597,7 +2629,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2712,7 +2746,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2815,7 +2851,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2915,7 +2953,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -3013,8 +3053,10 @@ CFGEOF
 
    cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
-   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
-   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
    local mock_gh_dir="$test_dir/mock-gh"
    mkdir -p "$mock_gh_dir"
@@ -3198,7 +3240,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3307,7 +3351,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3409,7 +3455,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3505,7 +3553,9 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
