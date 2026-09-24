@@ -1349,9 +1349,39 @@ verify_result_comment_pr_url() {
     return 0
   fi
 
-  # Review-thread replies are returned through the same issue comments endpoint
-  # but can be useful to check explicitly for consistency with routing.
-  log "ERROR: verify_result_comment_pr_url: result comment does not contain canonical PR URL $pr_url"
+  # Self-healing: the agent may have completed the implementation and opened a
+  # verified PR but omitted the canonical URL from its result comment. Do not
+  # discard completed work for that presentation-only defect. Locate the exact
+  # result comment by deterministic task/attempt marker and append the verified
+  # canonical PR URL to it. The daemon then re-checks the comment before success.
+  local marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
+  local target_comment_id=""
+  target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$target_issue/comments" \
+    --paginate \
+    --jq --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' \
+    2>>"$LOG" | head -1 || true)"
+
+  if [ -n "$target_comment_id" ]; then
+    local repaired_body
+    repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/comments/$target_comment_id" \
+      --jq '.body // ""' 2>>"$LOG" || true)"
+    if [ -n "$repaired_body" ] && [[ "$repaired_body" != *"$pr_url"* ]]; then
+      repaired_body="${repaired_body}"$'\n\n'"PR: ${pr_url}"
+      if timeout "$GH_API_TIMEOUT" gh api --method PATCH "repos/$repo/issues/comments/$target_comment_id" \
+        -f "body=$repaired_body" >/dev/null 2>>"$LOG"; then
+        log "verify_result_comment_pr_url: repaired result comment $target_comment_id with canonical PR URL $pr_url"
+        lc_log "PR_RESULT_LINK_REPAIRED" "task=$comment_id repo=$repo branch=$branch base=$expected_base comment_id=$target_comment_id url=$pr_url"
+        # Verify the repair by re-reading the comment.
+        local verified_repaired_body
+        verified_repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/comments/$target_comment_id" --jq '.body // ""' 2>>"$LOG" || true)"
+        if [[ "$verified_repaired_body" == *"$pr_url"* ]]; then
+          return 0
+        fi
+      fi
+    fi
+  fi
+
+  log "ERROR: verify_result_comment_pr_url: result comment does not contain canonical PR URL $pr_url and self-healing failed"
   lc_log "PR_RESULT_LINK_MISSING" "task=$comment_id repo=$repo branch=$branch base=$expected_base expected_url=$pr_url"
   return 1
 }
