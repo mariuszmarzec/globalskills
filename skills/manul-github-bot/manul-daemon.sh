@@ -2566,7 +2566,7 @@ PROMPT_APPEND
      }
      # Ensure skill visibility for the OpenCode process
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
-     # Leave a 1,500s grace window between the OpenClaw inner timeout (12h)
+     # Leave a 300s grace window between the OpenClaw inner timeout (12h)
      # and the daemon hard deadline (12h 5m) so the wrapper can record failure
      # diagnostics and emit its terminal marker deterministically.
      export MANUL_OPENCLAW_AGENT_TIMEOUT="${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}"
