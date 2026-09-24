@@ -66,8 +66,6 @@ CFG_AGENT_TIMEOUT="$(jq -r '.automation.agentTimeoutSeconds // 43500' "$CONFIG" 
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-${CFG_AGENT_TIMEOUT:-43500}}"   # full Manul agent turn; keep longer than OpenClaw's explicit inner timeout
 POLL_TIMEOUT="${MANUL_POLL_TIMEOUT:-120}"      # seconds timeout for poll.sh
 GH_API_TIMEOUT="${MANUL_GH_API_TIMEOUT:-30}"   # seconds timeout for gh api calls
-OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
-export OPENCLAW_BIN
 
 # Read heartbeat configuration from config.json
 CFG_HEARTBEAT_INTERVAL="$(jq -r '.automation.heartbeatInterval // 60' "$CONFIG" 2>/dev/null)"
@@ -203,8 +201,8 @@ ensure_repo() {
   local repo="$1"
   local repo_slug
   repo_slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local repo_dir="${MANUL_DIR}/workspace/$repo_slug"
-  local lockfile="${MANUL_DIR}/repo-locks/${repo_slug}.lock"
+  local repo_dir="$MANUL_WORKSPACE/$repo_slug"
+  local lockfile="$MANUL_LOCKS_DIR/repo/${repo_slug}.lock"
 
   # Check if repo already exists and is up-to-date
   if [ -d "$repo_dir" ] && [ -d "$repo_dir/.git" ]; then
@@ -276,11 +274,6 @@ verify_repo() {
     return 1
   fi
 
-  # Verify we're not in OpenClaw's default workspace
-  if [[ "$repo_dir" == "/home/marzec/.openclaw-native/state/workspace/"* ]]; then
-    log "ERROR: repo_dir $repo_dir appears to be OpenClaw's default workspace, not task repository"
-    return 1
-  fi
 
   log "repo $repo verified at $repo_dir"
   return 0
@@ -291,7 +284,7 @@ acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="${REPO_LOCK_DIR:-${MANUL_DIR}/repo-locks}/${slug}.lock"
+  local lockfile="${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
 
   if [ -f "$lockfile" ]; then
     local age
@@ -325,7 +318,7 @@ release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -f "${REPO_LOCK_DIR:-${MANUL_DIR}/repo-locks}/${slug}.lock"
+  rm -f "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
 }
 
 # Enhanced SQLite UPDATE with verification and error handling
