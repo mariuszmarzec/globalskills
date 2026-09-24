@@ -1387,11 +1387,12 @@ revalidate_source() {
   local comment_id="$1"
   local repo="$2"
   local issue_num="${3:-}"
+  local source_url="${4:-}"
   local kind
   kind="$(detect_source_kind "$comment_id")"
   case "$kind" in
     issue_comment)      revalidate_issue_comment "$comment_id" "$repo" ;;
-    issue_state)        revalidate_issue_state "$comment_id" "$repo" ;;
+    issue_state)        revalidate_issue_state "$comment_id" "$repo" "$source_url" ;;
     pr_state)           revalidate_pr_state "$comment_id" "$repo" ;;
     pr_review_comment)  revalidate_pr_review_comment "$comment_id" "$repo" "$issue_num" ;;
     *)                  return 2 ;;
@@ -1432,8 +1433,20 @@ revalidate_issue_comment() {
 
 # ── issue_state ───────────────────────────────────────────────────────────────
 revalidate_issue_state() {
-  local comment_id="$1" repo="$2"
+  local comment_id="$1" repo="$2" source_url="${3:-}"
   local num="${comment_id#issuebody:}"
+
+  # issuebody task IDs are GitHub API object IDs, while /issues/<N> expects
+  # the human-facing issue number. The stored issue URL is authoritative for
+  # legacy queue rows created with the wrong numeric identifier.
+  if [[ "$source_url" =~ /issues/([0-9]+)(/|#|$) ]]; then
+    local source_num="${BASH_REMATCH[1]}"
+    if [ "$source_num" != "$num" ]; then
+      log "revalidate_source: correcting issuebody source id $num to issue number $source_num from $source_url"
+      num="$source_num"
+    fi
+  fi
+
   local owner name
   IFS='/' read -r owner name _ <<<"$repo"
 
@@ -2036,6 +2049,16 @@ run_once() {
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
 
+    # Self-heal legacy issuebody tasks whose issueNumber contains the GitHub
+    # API object ID instead of the human-facing issue number.
+    if [[ "$COMMENT_ID" == issuebody:* && "$COMMENT_URL" =~ /issues/([0-9]+)(/|#|$) ]]; then
+      local source_issue_num="${BASH_REMATCH[1]}"
+      if [ "$ISSUE_NUM" != "$source_issue_num" ]; then
+        log "dispatch: correcting issuebody $COMMENT_ID issueNumber $ISSUE_NUM -> $source_issue_num from source URL"
+        ISSUE_NUM="$source_issue_num"
+      fi
+    fi
+
     log "dispatch: claimed task $COMMENT_ID ($REPO#$ISSUE_NUM), attempts now $((ACTUAL_ATTEMPTS + 1))"
     lc_log "CLAIMED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$((ACTUAL_ATTEMPTS + 1))"
     local current_attempt=$((ACTUAL_ATTEMPTS + 1))
@@ -2043,7 +2066,7 @@ run_once() {
 
     # 3.5 Pre-flight source revalidation — terminal if source no longer valid
     local reval_rc=0
-    revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" || reval_rc=$?
+    revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
     if [ "$reval_rc" -eq 1 ]; then
       log "dispatch: source stale for task $COMMENT_ID, marking terminal"
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
