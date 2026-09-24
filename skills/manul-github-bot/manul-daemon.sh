@@ -2390,10 +2390,26 @@ PROMPT_EOF
     # 6. Set working directory to the repository root
     local WORKDIR="$REPO_DIR"
 
-    # 6.5. Lease workspace for exclusive task access
+    # 6.5. Lease workspace for exclusive task access. A continuation must
+    # reclaim the exact prior workspace so the runtime session and checkout
+    # remain bound to the same filesystem location.
     source "$MANUL_DIR/workspace-manager.sh"
     local WORKSPACE_ID
-    WORKSPACE_ID="$(workspace_lease "$COMMENT_ID")"
+    local EXISTING_SESSION_ID EXISTING_WORKSPACE_ID
+    EXISTING_SESSION_ID="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    EXISTING_WORKSPACE_ID="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ -n "$EXISTING_SESSION_ID" ] && [ -n "$EXISTING_WORKSPACE_ID" ]; then
+      WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
+      if [ -z "$WORKSPACE_ID" ]; then
+        log "dispatch: continuation session has no reclaimable workspace for task $COMMENT_ID"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: reclaimed workspace $WORKSPACE_ID for continuation task $COMMENT_ID"
+    else
+      WORKSPACE_ID="$(workspace_lease "$COMMENT_ID")"
+    fi
     if [ -z "$WORKSPACE_ID" ]; then
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
@@ -2657,7 +2673,10 @@ PROMPT_APPEND
      exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
      exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
      exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
-     if [ -n "$exec_session_id" ]; then
+     # Persist a session only when the runtime explicitly says it can be
+     # continued. Generic failures must not accidentally bind future retries
+     # to a stale runtime session.
+     if [ "$exec_status" = "NEEDS_CONTINUATION" ] && [ -n "$exec_session_id" ]; then
        sqlite3 "$DB" "UPDATE processed_comments SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
      fi
 
