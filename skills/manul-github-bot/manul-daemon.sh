@@ -39,23 +39,25 @@ fi
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
 DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
-CONFIG="$MANUL_CONFIG"
-POLL="$MANUL_DIR/poll.sh"
-PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
-PID_FILE="$MANUL_DIR/daemon.pid"
-LOG="$MANUL_DIR/daemon.log"
-LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
-LAST_POLL_FILE="$MANUL_DIR/last-poll"
-CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
+DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
 
 # --- Agent execution runtime abstraction ---
-# Source the runtime-neutral execution path. The daemon never invokes
-# adapter scripts directly; it goes through AgentExecutor / AgentExecutionController.
-DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+# Source the runtime-neutral execution path before consuming derived paths.
+# The daemon never invokes adapter scripts directly; it goes through
+# AgentExecutor / AgentExecutionController.
 source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
+
+CONFIG="$MANUL_CONFIG"
+POLL="$MANUL_DIR/poll.sh"
+PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
+PID_FILE="$MANUL_LOCKS_DIR/daemon.pid"
+LOG="$MANUL_LOG_DIR/daemon.log"
+LIFECYCLE_LOG="$MANUL_LOG_DIR/lifecycle.log"
+LAST_POLL_FILE="$MANUL_STATE_DIR/last-poll"
+CURRENT_ACTIVITY_FILE="$MANUL_STATE_DIR/current_activity"
 LOCK="$MANUL_LOCKS_DIR/daemon.lock"
 FLOCK_FILE="$MANUL_LOCKS_DIR/daemon.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
