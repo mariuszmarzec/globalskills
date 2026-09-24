@@ -227,7 +227,9 @@ cmd_post_done() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
+  # TASK_DONE is a task event, not a PR comment. Post it to the source issue/PR
+  # thread passed by the daemon, while PR_NUMBER remains metadata only.
+  post_comment "$REPO" "${ISSUE_NUMBER}" "$comment_body"
 
   echo "$result" | jq .
 }
