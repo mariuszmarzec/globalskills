@@ -569,7 +569,7 @@ echo
 echo "Test 9: Archive DB fallback"
 ARCHIVE_RUNTIME="$TMPROOT/archive-runtime"
 ARCHIVE_DIR="$TMPROOT/archive-runtime-archive-20260917-000000"
-mkdir -p "$ARCHIVE_DIR"
+mkdir -p "$ARCHIVE_DIR/state"
 cp "$BACKUP_DB" "$ARCHIVE_DIR/state/manul.db"
 
 set +e
