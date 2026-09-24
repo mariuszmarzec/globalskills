@@ -603,7 +603,7 @@ case "${ACTION:-}" in
     # Lightweight schema initializer — only runs CREATE IF NOT EXISTS, no business logic.
     # Used by repair-manul-runtime.sh and tests to bring a fresh DB up to schema spec.
     export MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-    export DB="${DB:-${MANUL_DIR}/manul.db}"
+    export DB="${DB:-$MANUL_DB}"
     init_schema
     ;;
   "")
