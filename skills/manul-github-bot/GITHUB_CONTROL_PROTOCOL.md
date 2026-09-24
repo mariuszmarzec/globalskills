@@ -1,112 +1,96 @@
 # Manul GitHub Control Protocol
 
-Machine-readable protocol for external orchestrators (e.g., ChatGPT) to communicate with Manul via GitHub Issues and PRs.
+Machine-readable protocol for external orchestrators and agents to communicate with Manul through GitHub Issues and Pull Requests.
 
 ## Overview
 
-This protocol enables AI agents to:
-- Create tasks via Issue comments
-- Provide PR review feedback that creates fix tasks
-- Receive structured results via HTML event markers
-- Maintain conversation context across Issue ↔ PR relationships
+The protocol provides:
 
-## Command Grammar
+- command submission through `/manul` comments;
+- review-driven fix tasks;
+- user-input continuation;
+- structured lifecycle/result events;
+- Issue ↔ PR ↔ task conversation linking.
 
-Issue/PR comments starting with `/manul` are parsed as commands:
+## Command grammar
+
+Issue/PR comments beginning with `/manul` are parsed as:
 
 | Command | Action | Description |
-|---------|--------|-------------|
-| `/manul run <task>` | `IMPLEMENT` | Create implementation task |
-| `/manul review-fix <prompt>` | `REVIEW_FIX` | Create task to address PR review comments |
-| `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input, supplying the user's answer |
-| `/manul verify <prompt>` | `VERIFY` | Create verification task |
-| `/manul status` | `STATUS` | Get current task status |
-| `/manul close` | `CLOSE` | Close conversation |
+|---|---|---|
+| `/manul run <task>` | `IMPLEMENT` | Submit an implementation task |
+| `/manul run --agent <agent> <task>` | `IMPLEMENT` | Submit with a specific configured agent |
+| `/manul review-fix <prompt>` | `REVIEW_FIX` | Create a task for PR review feedback |
+| `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input |
+| `/manul verify <prompt>` | `VERIFY` | Create a verification task |
+| `/manul status` | `STATUS` | Query conversation status |
+| `/manul close` | `CLOSE` | Close a conversation |
 
-## Event Format
+## Event format
 
-Machine-readable events are posted as HTML comments:
+Structured events are posted as HTML comments:
 
 ```html
-<!-- manul:event {"type":"TASK_DONE","timestamp":"2026-09-11T18:00:00Z","data":{"taskId":"t-1","status":"completed","prNumber":100}} -->
+<!-- manul:event {"type":"TASK_DONE","timestamp":"2026-09-11T18:00:00Z","data":{"taskId":"t-1","conversationId":"conv-1","status":"completed","prNumber":100,"attempt":1}} -->
 ```
 
-### Event Types
+### Event types
 
-| Type | Direction | Description |
-|------|-----------|-------------|
-| `TASK_STARTED` | Bot → GitHub | Task execution began |
-| `TASK_NEEDS_USER` | Bot → GitHub | Task is blocked waiting for explicit user input |
-| `TASK_DONE` | Bot → GitHub | Task completed successfully |
-| `TASK_FAILED` | Bot → GitHub | Task failed after all attempts |
-| `REVIEW_APPROVED` | Bot → GitHub | PR review approved |
+| Type | Direction | Meaning |
+|---|---|---|
+| `TASK_STARTED` | Bot → GitHub | Execution began |
+| `TASK_NEEDS_USER` | Bot → GitHub | Task is waiting for user input |
+| `TASK_DONE` | Bot → GitHub | Task completed |
+| `TASK_FAILED` | Bot → GitHub | Task failed after retry policy |
+| `REVIEW_APPROVED` | Bot → GitHub | Review approved |
 | `REVIEW_REQUESTED` | Orchestrator → Bot | Review feedback to address |
 
-### Event Schema
+The result-comment marker is a separate deterministic correlation mechanism:
 
-```json
-{
-  "type": "TASK_DONE",
-  "timestamp": "2026-09-11T18:00:00Z",
-  "data": {
-    "taskId": "string",
-    "conversationId": "string",
-    "prNumber": number,
-    "status": "completed|failed|blocked_user",
-    "attempt": number,
-    "summary": "string"
-  }
-}
-```
+`<!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->`
 
-## User interaction and blocked tasks
+The daemon requires that marker when accepting an agent `TASK_DONE`.
 
-An implementation agent may request user input when the task reaches a materially important decision that cannot be resolved from repository context, documentation, skills, or existing conventions.
+## User-input semantics
 
-The agent may:
-- propose a concrete solution or recommendation;
-- present multiple materially different options;
-- ask the user to choose when more than two materially different viable directions remain.
+An implementation agent may request user input only when a material decision cannot be resolved from repository context, documentation, skills, or established conventions.
 
-The agent must not ask for clarification merely because several equivalent implementations exist. It should decide routine details autonomously.
+When input is required:
 
-When input is required, the agent emits a `TASK_NEEDS_USER_BEGIN` / `TASK_NEEDS_USER_END` block. Manul moves the task to terminal-for-now state `blocked_user` and posts the question to the same GitHub conversation.
+1. the agent emits a `TASK_NEEDS_USER_BEGIN` / `TASK_NEEDS_USER_END` block;
+2. Manul records `blocked_user`;
+3. the question is posted to the same GitHub conversation;
+4. the original task/conversation context is retained;
+5. `/manul continue <answer>` resumes the task.
 
-A `blocked_user` task:
-- is not a failure;
-- is not retryable;
-- remains associated with its original conversation/task;
-- does not count as an incomplete queued/running task for retry/recovery;
-- resumes when the user replies with `/manul continue <answer>`.
+`blocked_user` is not a failure and does not consume another execution attempt until resumed.
 
-The continuation must reuse the blocked task's existing task/conversation context rather than create an unrelated new task.
+## Conversation lifecycle
 
-## Conversation Lifecycle
-
-### Issue-Based Workflow
+### Issue workflow
 
 ```
-User opens Issue → /manul comment → Task created → Bot works → Result posted
+Issue -> /manul command -> task -> execution -> result
 ```
 
-- Issue number ↔ `conversationId` (one-to-one)
-- Multiple comments on same Issue share conversation
-- PR created from Issue automatically linked
+An issue is associated with a conversation ID. Multiple tasks may belong to the same conversation.
 
-### PR Review Workflow
+### PR review workflow
 
 ```
-PR opened → Orchestrator reviews → /manul review-fix → Task created → Fix committed → PR updated
+PR review -> /manul review-fix -> REVIEW_FIX task -> same PR branch -> updated PR
 ```
 
-- PR ↔ `conversationId` (many-to-one)
-- Review states mapped to actions:
-  - `APPROVE` → No task created
-  - `REQUEST_CHANGES` → `REVIEW_FIX` task created on same PR
-  - `COMMENT` → Informational only
-  - `DISMISS` → No task created
+Review handling:
 
-## Database Schema
+- `APPROVE` -> record approval, no fix task;
+- `REQUEST_CHANGES` -> create `REVIEW_FIX`;
+- `COMMENT` -> informational review event;
+- `DISMISS` -> no fix task.
+
+## Database schema
+
+The following describes the effective logical schema used by the current Manul scripts. Individual schema initializers may create a subset and add columns incrementally.
 
 ### processed_comments
 
@@ -117,19 +101,41 @@ CREATE TABLE processed_comments (
   issueNumber INTEGER NOT NULL,
   commentUrl TEXT NOT NULL,
   author TEXT,
+  agent TEXT,
   prompt TEXT NOT NULL,
+  context TEXT,
   status TEXT NOT NULL DEFAULT 'queued',
   attempts INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT,
+  processedAt TEXT,
+  heartbeatAt TEXT,
+  leaseExpiresAt TEXT,
+  workerPid INTEGER,
+  claimToken TEXT,
+  nextAttemptAt TEXT,
   conversationId TEXT,
   parentTaskId TEXT,
+  workspaceId TEXT,
   action TEXT DEFAULT 'IMPLEMENT',
   prNumber INTEGER,
   prUrl TEXT,
   resultSummary TEXT,
-  resultJson TEXT
+  resultJson TEXT,
+  baseId TEXT,
+  taskId TEXT
 );
 ```
+
+Important execution fields:
+
+- `attempts` — actual claims only;
+- `heartbeatAt` / `leaseExpiresAt` — liveness;
+- `workerPid` / `claimToken` — ownership;
+- `conversationId` / `parentTaskId` — task graph/context;
+- `workspaceId` — isolated workspace assignment;
+- `resultSummary` / `resultJson` — result data;
+- `baseId` — idempotency/deduplication support;
+- `taskId` — review/orchestrator task association where present.
 
 ### conversations
 
@@ -139,6 +145,7 @@ CREATE TABLE conversations (
   repository TEXT NOT NULL,
   issueNumber INTEGER,
   issueUrl TEXT,
+  activeTaskId TEXT,
   activePrNumber INTEGER,
   activePrUrl TEXT,
   status TEXT NOT NULL DEFAULT 'OPEN',
@@ -159,54 +166,47 @@ CREATE TABLE conversation_links (
   commentId TEXT,
   taskCommentId TEXT,
   linkType TEXT NOT NULL,
-  createdAt TEXT NOT NULL
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (conversationId) REFERENCES conversations(conversationId)
 );
 ```
 
-## Security Considerations
+SQLite is the source of truth for Manul task state.
 
-- All user inputs are SQL-escaped via `sql_escape()` function
-- HTML comments use `<!-- manul:event ... -->` format to avoid code injection
-- Orchestrator commands require `/manul` prefix
-- Duplicate processing prevented via `commentId` primary key
+## Security and integrity
 
-## Scripts
+- User inputs are SQL-escaped before SQL construction.
+- Command parsing requires the `/manul` prefix.
+- `commentId` and related idempotency mechanisms prevent duplicate event processing.
+- Task/attempt markers prevent stale result comments from satisfying a later retry.
+- Worker ownership checks prevent one worker from finalizing another worker's task.
 
-| Script | Purpose |
-|--------|---------|
-| `manul-github-events.sh` | Parse comments/reviews, extract commands, post events |
-| `manul-pr-review.sh` | Handle PR review events, create fix tasks |
-| `manul-conversation-linker.sh` | Link Issues ↔ PRs ↔ Tasks |
-| `manul-result-feedback.sh` | Post task results back to GitHub |
+## Result and PR verification
+
+Repository-change tasks must:
+
+- commit on a non-base task branch;
+- push the branch;
+- create/verify a concrete PR;
+- report the verified PR URL.
+
+The daemon may create a missing PR when `autoCreatePr` is enabled, but a `TASK_DONE` is still not accepted without verified PR identity.
+
+Never treat `/compare` or `/pull/new` URLs as proof of a PR.
+
+## Current runtime boundary
+
+Current master executes the agent through OpenClaw.
+
+The filesystem location of Manul's current runtime is an implementation detail. The approved next architecture moves Manul-owned state to `~/.manul` and hides runtime-specific execution behind `AgentExecutor`.
 
 ## Testing
 
-Run the full test suite:
+Protocol tests:
 
 ```bash
 bash skills/manul-github-bot/test_github_control_protocol.sh
+bash skills/manul-github-bot/test_github_control_integration.sh
 ```
 
-Tests cover:
-- Issue command parsing
-- Conversation preservation
-- Duplicate detection
-- PR review handling
-- Event extraction/validation
-- Result feedback
-- End-to-end workflow
-
-## Integration with Existing Manul
-
-The protocol integrates with existing Manul components:
-
-1. **poll.sh** → Calls `manul-github-events.sh parse-comment` for GitHub comments
-2. **manul-daemon.sh** → Receives tasks with `conversationId`, `parentTaskId`, `prNumber`
-3. **manul-result.sh** → Calls `manul-result-feedback.sh post-done` to post results
-4. **manul-conversation.sh** → Manages conversation lifecycle
-
-## Migration Notes
-
-- Existing Issue comments without `/manul` prefix are ignored
-- New `conversationId` format: `conv-{repo}-{issue}`
-- Existing tasks continue to work; new fields are optional
+For behavioural changes, also run the relevant daemon/concurrency/review workflow tests.
