@@ -89,6 +89,7 @@ ProcessRunner.run() {
     local timeout="" cwd="" env_args=() cmd_args=()
     ProcessRunner_ExitCode=""
     ProcessRunner_Duration=""
+    ProcessRunner_Rc=""
     ProcessRunner_Interrupted="false"
     ProcessRunner_TimedOut="false"
     ProcessRunner_ManagedStdout=""
