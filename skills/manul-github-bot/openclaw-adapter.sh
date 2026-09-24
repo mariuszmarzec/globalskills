@@ -100,7 +100,7 @@ else
 fi
 
 # --- Timeout ---
-OPENCLAW_AGENT_TIMEOUT="${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}"
+OPENCLAW_AGENT_TIMEOUT="${OPT_TIMEOUT:-${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}}"
 if ! [[ "$OPENCLAW_AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$OPENCLAW_AGENT_TIMEOUT" -lt 1 ]; then
     printf '{"status":"FAILED","task_id":"%s","exit_code":2,"summary":"Invalid MANUL_OPENCLAW_AGENT_TIMEOUT=%s","session_id":"","duration_s":0}' \
         "$OPT_TASK_ID" "$OPENCLAW_AGENT_TIMEOUT"
@@ -114,8 +114,6 @@ export MANUL_TASK_ID="$OPT_TASK_ID"
 export MANUL_ATTEMPT="$OPT_ATTEMPT"
 # workspace: let the agent know where it should work
 export WORKSPACE="$OPT_WORKSPACE"
-# Keep skill visibility for the OpenCode process
-export OPENCODE_SKILLS_PATH="${OPENCODE_SKILLS_PATH:-$HOME/.agents/skills}"
 
 # --- Launch ---
 log() {
@@ -129,7 +127,7 @@ log "starting task=$OPT_TASK_ID session=$SESSION_KEY timeout=${OPENCLAW_AGENT_TI
 # testability (mock mode), and consistent result capture.
 _run_openclaw_agent() {
     "$OPENCLAW_BIN" agent \
-        --agent main \
+        --agent "${OPT_AGENT:-main}" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
         --message-file "$OPT_PROMPT"
@@ -145,7 +143,7 @@ _pr_result="$(ProcessRunner.run \
     --timeout "$OPENCLAW_AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
     -- "$OPENCLAW_BIN" agent \
-        --agent main \
+        --agent "${OPT_AGENT:-main}" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
         --message-file "$OPT_PROMPT")"
@@ -168,41 +166,42 @@ log "exit code=$rc duration=${_duration}s"
 
 # --- Map exit code to ExecutionResult ---
 _exit_code="$rc"
-_status="COMPLETED"
+_status="FAILED"
 _summary=""
 _session_id="$SESSION_KEY"
 
-if [ "$rc" -eq 0 ]; then
+if [ "$rc" -eq 0 ] && grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+    _status="BLOCKED"
+    _exit_code=0
+    _summary="OpenClaw agent needs user input"
+elif [ "$rc" -eq 0 ] && grep -qE '^TASK_FAILED([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+    _status="FAILED"
+    _summary="OpenClaw agent reported TASK_FAILED"
+elif [ "$rc" -eq 0 ] && grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     _status="COMPLETED"
-    # Verify TASK_DONE was actually emitted (not just exit 0 from a broken wrapper)
-    if [ -f "$OPT_STDOUT_FILE" ] && grep -qE '^TASK_DONE' "$OPT_STDOUT_FILE" 2>/dev/null; then
-        _summary="$(grep -oP '(?<=^TASK_DONE\s).+' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || echo "Agent completed")"
-    else
-        _summary="Agent exited 0 but no TASK_DONE marker found in stdout"
-    fi
+    _exit_code=0
+    _summary="$(grep -oP '(?<=^TASK_DONE\s).+' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || true)"
+    : "${_summary:=Agent completed}"
+elif [ "$rc" -eq 124 ]; then
+    _status="TIMEOUT"
+    _summary="OpenClaw agent execution timed out after ${OPENCLAW_AGENT_TIMEOUT}s"
 elif [ "$rc" -eq 127 ]; then
     _status="FAILED"
     _summary="OpenClaw binary not found"
-    _exit_code=127
-elif [ "$rc" -eq 124 ]; then
-    _status="TIMEOUT"
-    _summary="Agent execution timed out after ${OPENCLAW_AGENT_TIMEOUT}s"
-    _exit_code=124
 else
     _status="FAILED"
     _summary="OpenClaw agent exited with code $rc"
-    _exit_code="$rc"
 fi
 
-# Check for BLOCKED (user needs input) or NEEDS_CONTINUATION in stdout
-if [ -f "$OPT_STDOUT_FILE" ]; then
-    if grep -qE '^TASK_NEEDS_USER_BEGIN' "$OPT_STDOUT_FILE" 2>/dev/null; then
-        _status="BLOCKED"
-        _summary="Agent needs user input"
-    fi
-fi
+# Generate valid JSON even when the agent summary contains JSON-significant
+# characters such as quotes, newlines, or backslashes.
+jq -cn \
+    --arg status "$_status" \
+    --arg task_id "$OPT_TASK_ID" \
+    --arg exit_code "$_exit_code" \
+    --arg summary "$_summary" \
+    --arg session_id "$_session_id" \
+    --arg duration_s "$_duration" \
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber)}'
 
-printf '{"status":"%s","task_id":"%s","exit_code":%s,"summary":"%s","session_id":"%s","duration_s":%s}\n' \
-    "$_status" "$OPT_TASK_ID" "$_exit_code" "$_summary" "$_session_id" "$_duration"
-
-exit "$_exit_code"
+exit "$_exit_code" 
