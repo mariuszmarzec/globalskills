@@ -174,7 +174,7 @@ else
         LATEST_BAK=""
         if [ -d "$ARCHIVE_ROOT" ]; then
             while IFS= read -r -d '' archive_dir; do
-                candidate="$archive_dir/manul.db"
+                candidate="$archive_dir/state/manul.db"
                 if [ -f "$candidate" ]; then
                     LATEST_BAK="$candidate"
                     break
