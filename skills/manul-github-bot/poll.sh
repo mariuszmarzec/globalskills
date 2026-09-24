@@ -893,7 +893,7 @@ scan_failing_ci() {
     [ "$CI_FIX_ENABLED" = "true" ] || return 0
     local prs_json
     # Scan all open PRs for failing CI (not just manul PRs)
-    prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}' 2>>"$LOG" || true)"
+    prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}]' 2>>"$LOG" || true)"
     [ -n "$prs_json" ] || return 0
     local pr_count
     pr_count="$(printf '%s' "$prs_json" | jq 'length')"
