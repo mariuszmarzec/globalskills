@@ -177,10 +177,16 @@ elif grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
         _status="FAILED"
         _summary="OpenCode emitted TASK_DONE but exited with code $pr_rc"
     fi
-elif [ "$pr_rc" -ne 0 ] && [ -n "$session_id" ] && \
-     grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null; then
+elif [ -n "$session_id" ] && (
+    grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null ||
+    { [ "$pr_rc" -eq 0 ] && ! grep -qE '^TASK_(DONE|FAILED|NEEDS_USER_BEGIN)([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; }
+); then
+    # OpenCode may finish its allowed step budget with a normal process exit.
+    # Without a Manul completion marker the task is not logically complete, so
+    # retain the session for a continuation execution.
     _status="NEEDS_CONTINUATION"
-    _summary="OpenCode reached a step limit; existing session can continue"
+    _exit_code=1
+    _summary="OpenCode did not emit a completion marker; existing session can continue"
 else
     _status="FAILED"
     if [ "$pr_rc" -eq 127 ]; then
