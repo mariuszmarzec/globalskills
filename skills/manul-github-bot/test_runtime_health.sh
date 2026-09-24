@@ -353,6 +353,7 @@ done
 # The repository intentionally does not carry application state, so create a
 # real schema fixture instead of coupling this CLI test to a repository DB.
 CLI_DB="$CLI_ROOT/backup/manul.db"
+mkdir -p "$RUN/state"
 create_canonical_backup "$CLI_DB"
 cp "$CLI_DB" "$RUN/state/manul.db"
 chmod 600 "$RUN/state/manul.db"
