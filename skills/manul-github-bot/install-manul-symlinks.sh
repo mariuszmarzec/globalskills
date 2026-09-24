@@ -216,12 +216,11 @@ echo "Deployment complete. $CHANGED script(s) updated."
 echo
 echo "Runtime data preserved (not touched by this installer):"
 echo "  - $RUNTIME_DIR/config.json"
-echo "  - $RUNTIME_DIR/manul.db"
-echo "  - $RUNTIME_DIR/*.log"
-echo "  - $RUNTIME_DIR/tasks/"
-echo "  - $RUNTIME_DIR/repo-locks/"
+echo "  - $RUNTIME_DIR/state/manul.db"
+echo "  - $RUNTIME_DIR/state/tasks/"
+echo "  - $RUNTIME_DIR/state/locks/"
+echo "  - $RUNTIME_DIR/logs/"
 echo "  - $RUNTIME_DIR/workspace/"
-echo "  - $RUNTIME_DIR/workspaces/"
 
 # Exit non-zero if any declared symlink is missing, broken, or misplaced.
 if [ "$DEPLOY_FAILURES" -gt 0 ] || [ "$VERIFY_FAILURES" -gt 0 ]; then
