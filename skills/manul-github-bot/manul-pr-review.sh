@@ -25,7 +25,9 @@
 set -euo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-DB="${MANUL_DIR}/manul.db"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+DB="${DB:-$MANUL_DB}"
 CONFIG="${MANUL_DIR}/config.json"
 EVENTS_SCRIPT="${MANUL_DIR}/manul-github-events.sh"
 
