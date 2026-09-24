@@ -49,7 +49,7 @@ FLOCK_FILE="$MANUL_DIR/daemon.flock"
 DB="${MANUL_DIR}/manul.db"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
-AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-1800}"   # seconds for the agent turn
+AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-43500}"   # seconds for the full Manul agent turn; keep longer than OpenClaw's explicit inner timeout
 POLL_TIMEOUT="${MANUL_POLL_TIMEOUT:-120}"      # seconds timeout for poll.sh
 GH_API_TIMEOUT="${MANUL_GH_API_TIMEOUT:-30}"   # seconds timeout for gh api calls
 OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || echo "")"
@@ -2519,7 +2519,9 @@ PROMPT_APPEND
 
     # 5. Invoke agent with timeout to prevent daemon deadlock
     # Use timeout to kill the entire process tree if agent hangs
-    # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s
+    # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s.
+    # The wrapper also passes an explicit OpenClaw timeout so its 600s CLI default
+    # can never terminate a normal coding task before Manul's outer deadline.
      # Change to repository directory and invoke agent
      local prev_dir
      prev_dir="$(pwd)"
@@ -2534,6 +2536,10 @@ PROMPT_APPEND
      }
      # Ensure skill visibility for the OpenCode process
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
+     # Leave a 1,500s grace window between the OpenClaw inner timeout (12h)
+     # and the daemon hard deadline (12h 5m) so the wrapper can record failure
+     # diagnostics and emit its terminal marker deterministically.
+     export MANUL_OPENCLAW_AGENT_TIMEOUT="${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}"
      # Refresh heartbeat before agent to prevent timeout during long runs
      refresh_heartbeat "$COMMENT_ID"
      timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
