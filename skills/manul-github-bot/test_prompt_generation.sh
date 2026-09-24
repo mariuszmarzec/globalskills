@@ -562,7 +562,7 @@ if assert_file_contains "original review comment ID injected" "$WORK/prompt.md" 
 if assert_file_contains "review task uses pulls comments endpoint" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/pulls/42/comments"; then :; else :; fi
 if assert_file_contains "review task uses in_reply_to" "$WORK/prompt.md" "-f in_reply_to=789"; then :; else :; fi
 if assert_file_contains "top-level route remains available" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/issues/42/comments"; then :; else :; fi
-if assert_file_contains "review endpoint explains no issues in_reply_to" "$WORK/prompt.md" "Do NOT use `/issues/42/comments` with `in_reply_to`"; then :; else :; fi
+if assert_file_contains "review endpoint explains no issues in_reply_to" "$WORK/prompt.md" "Do NOT use \`/issues/42/comments\` with \`in_reply_to\`"; then :; else :; fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
