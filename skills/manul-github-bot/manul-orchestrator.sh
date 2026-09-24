@@ -36,6 +36,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+
 # Directory configuration
 ORCHESTRATOR_DIR="${ORCHESTRATOR_DIR:-${MANUL_ORCHESTRATOR_DIR:-${MANUL_DIR:-$HOME/.manul}}}"
 ORCH_DB="${ORCHESTRATOR_DIR}/orchestrator.db"
@@ -349,7 +352,7 @@ cmd_wait() {
   
   if [ -z "$conv_id" ]; then
     # Try to get from Manul DB directly
-    local db="${MANUL_DIR:-$HOME/.manul}/manul.db"
+    local db="$MANUL_DB"
     conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
   fi
   
