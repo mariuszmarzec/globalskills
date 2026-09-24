@@ -27,15 +27,19 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 _NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
 export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-# Ensure OpenClaw uses the native state directory (post-migration)
-export OPENCLAW_STATE_DIR="/home/marzec/.openclaw-native/state"
-export OPENCLAW_CONFIG_PATH="/home/marzec/.openclaw-native/openclaw.json"
-
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+# Load operator overrides before sourcing manul-paths.sh so AGENT_RUNTIME and
+# other path-independent settings are visible during canonical resolution.
+if [ -f "$MANUL_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$MANUL_DIR/.env"
+  set +a
+fi
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
 DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
-CONFIG="${MANUL_DIR}/config.json"
+CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
 PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
 PID_FILE="$MANUL_DIR/daemon.pid"
@@ -52,10 +56,10 @@ source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
-LOCK="$MANUL_DIR/lock"
-FLOCK_FILE="$MANUL_DIR/daemon.flock"
+LOCK="$MANUL_LOCKS_DIR/daemon.lock"
+FLOCK_FILE="$MANUL_LOCKS_DIR/daemon.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="${MANUL_DIR}/manul.db"
+DB="$MANUL_DB"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
 CFG_AGENT_TIMEOUT="$(jq -r '.automation.agentTimeoutSeconds // 43500' "$CONFIG" 2>/dev/null)"
@@ -2220,7 +2224,7 @@ run_once() {
     fi
 
     # 5. Create per-task prompt containing the actual task payload
-    local TASK_PROMPT_DIR="$MANUL_DIR/tasks"
+    local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
     mkdir -p "$TASK_PROMPT_DIR"
     local TASK_PROMPT_FILE="$TASK_PROMPT_DIR/task-${COMMENT_ID}.md"
 
@@ -2628,7 +2632,7 @@ PROMPT_APPEND
 
      # Persist the previous session id if this is a continuation attempt.
      local prev_session_id=""
-     prev_session_id="$(sqlite3 "$DB" "SELECT session_id FROM tasks WHERE commentId='$(sql_escape "$COMMENT_ID")' AND session_id IS NOT NULL AND session_id != '' LIMIT 1;" 2>/dev/null || echo "")"
+     prev_session_id="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' AND session_id IS NOT NULL AND session_id != '' LIMIT 1;" 2>/dev/null || echo "")"
 
      jq -n \
        --arg taskId "$COMMENT_ID" \
@@ -2654,7 +2658,7 @@ PROMPT_APPEND
      exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
      exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
      if [ -n "$exec_session_id" ]; then
-       sqlite3 "$DB" "UPDATE tasks SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
+       sqlite3 "$DB" "UPDATE processed_comments SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
      fi
 
      # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
