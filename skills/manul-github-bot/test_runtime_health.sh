@@ -167,7 +167,6 @@ RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
-[ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
@@ -592,7 +591,7 @@ fi
 echo
 echo "Test 10: init-schema failure is fatal"
 READONLY_RUNTIME="$TMPROOT/readonly-runtime"
-mkdir -p "$READONLY_RUNTIME"
+mkdir -p "$READONLY_RUNTIME/state"
 
 # Build a DB that has all tables but is missing migration columns (action, prNumber, prUrl).
 # This simulates a pre-migration DB that needs ALTER TABLE to reach current schema.
@@ -765,6 +764,7 @@ EMPTY_RUNTIME="$TMPROOT/empty-db-runtime"
 mkdir -p "$EMPTY_RUNTIME"
 
 # Create a 0-byte manul.db (simulates corrupted or freshly-created empty file)
+mkdir -p "$EMPTY_RUNTIME/state"
 touch "$EMPTY_RUNTIME/state/manul.db"
 chmod 644 "$EMPTY_RUNTIME/state/manul.db"
 # Copy config template so repair reaches step 4/5.
@@ -861,7 +861,7 @@ else
 echo
 echo "Test 14: Valid DB + no backup → repair preserves it"
 VALID_RUNTIME="$TMPROOT/valid-db-runtime"
-mkdir -p "$VALID_RUNTIME"
+mkdir -p "$VALID_RUNTIME/state"
 # Use the canonical backup as the "existing valid DB" seed.
 cp "$BACKUP_DB" "$VALID_RUNTIME/state/manul.db"
 chmod 600 "$VALID_RUNTIME/state/manul.db"
