@@ -1239,7 +1239,15 @@ pr_auto_create() {
   fi
 
   pr_url="$(printf '%s' "$pr_create_output" | tr -d '[:space:]')"
-  log "pr_auto_create: created PR for branch $branch against $base_branch -> $pr_url"
+  # gh pr create returning 0 is not sufficient: the output can be malformed,
+  # stale, or a create/compare URL. Re-query GitHub and require a real PR with
+  # the expected head and base before treating creation as successful.
+  if ! pr_check_existing "$repo" "$branch" "$base_branch"; then
+    log "ERROR: pr_auto_create: gh pr create returned success but GitHub has no verified PR for $branch -> $pr_url"
+    lc_log "PR_CREATE_ERROR" "task=$comment_id repo=$repo branch=$branch base=$base_branch reason=post_create_verification_failed"
+    return 1
+  fi
+  log "pr_auto_create: verified created PR for branch $branch against $base_branch -> $pr_url"
   lc_log "PR_CREATE_SUCCESS" "task=$comment_id repo=$repo branch=$branch base=$base_branch url=$pr_url"
   return 0
 }
@@ -1259,6 +1267,11 @@ verify_required_pr() {
   local safe_comment_id="$(sql_escape "$comment_id")"
   local action
   action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
+  # Legacy tasks may have a NULL/empty action because the action column was
+  # introduced after the task was queued. Standalone issue/comment tasks are
+  # implementation tasks by default; only an explicit non-IMPLEMENT action
+  # (e.g. REVIEW_FIX) opts out of standalone PR verification.
+  action="${action:-IMPLEMENT}"
   [ "$action" = "IMPLEMENT" ] || return 0
   local comment_url
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
@@ -1287,6 +1300,58 @@ verify_required_pr() {
   fi
   log "ERROR: verify_required_pr: no PR found for branch $branch against expected base $expected_base"
   lc_log "MISSING_PR" "task=$comment_id repo=$repo branch=$branch base=$expected_base"
+  return 1
+}
+
+# Verify that the agent's result comment contains the exact canonical URL
+# of the real PR belonging to this task branch. This prevents an issue URL,
+# an issue number masquerading as a PR number, /compare links, or stale PR links
+# from being reported as the task result.
+verify_result_comment_pr_url() {
+  local repo="$1" issue_num="$2" comment_id="$3" safe_comment_id="$4" attempt="$5" workdir="$6" expected_base="$7"
+  local branch="$8"
+
+  local pr_json
+  pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --head "$branch" --json number,url,baseRefName,headRefName --limit 10 2>>"$LOG")" || {
+    log "ERROR: verify_result_comment_pr_url: failed to query PR for $repo/$branch"
+    lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id repo=$repo branch=$branch reason=api_failure"
+    return 1
+  }
+
+  local pr_url
+  pr_url="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head and (.state == null or .state != "closed"))) | .[0].url // empty' 2>/dev/null)"
+  # The PR may be closed; for the task result we still accept the concrete PR
+  # that belongs to this branch/base, so retry without the state assumption.
+  if [ -z "$pr_url" ]; then
+    pr_url="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head)) | .[0].url // empty' 2>/dev/null)"
+  fi
+  if [ -z "$pr_url" ]; then
+    log "ERROR: verify_result_comment_pr_url: no verified PR URL for $repo/$branch base=$expected_base"
+    lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id repo=$repo branch=$branch base=$expected_base reason=no_verified_pr"
+    return 1
+  fi
+
+  local comment_url
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null)"
+  local target_issue
+  target_issue="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || echo "$issue_num")"
+
+  local bodies
+  bodies="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$target_issue/comments" --paginate --jq '.[].body // ""' 2>>"$LOG")" || {
+    log "ERROR: verify_result_comment_pr_url: failed to fetch result comments"
+    lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id repo=$repo reason=comment_api_failure"
+    return 1
+  }
+
+  if printf '%s\n' "$bodies" | grep -Fq -- "$pr_url"; then
+    log "verify_result_comment_pr_url: exact PR URL present for task $comment_id -> $pr_url"
+    return 0
+  fi
+
+  # Review-thread replies are returned through the same issue comments endpoint
+  # but can be useful to check explicitly for consistency with routing.
+  log "ERROR: verify_result_comment_pr_url: result comment does not contain canonical PR URL $pr_url"
+  lc_log "PR_RESULT_LINK_MISSING" "task=$comment_id repo=$repo branch=$branch base=$expected_base expected_url=$pr_url"
   return 1
 }
 
@@ -1638,7 +1703,15 @@ evaluate_task_completion() {
         FAIL_REASON="Implementation task did not produce a real PR against its branch base"
         log "dispatch: task $COMMENT_ID PR verification failed"
       else
-        log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR verified"
+        local verified_base
+        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        else
+          log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
+        fi
       fi
     else
       log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"

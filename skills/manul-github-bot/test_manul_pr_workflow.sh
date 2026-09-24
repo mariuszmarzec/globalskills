@@ -657,3 +657,37 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 exit 0
+
+# Regression: PR number must never be inferred from the issue number.
+if grep -q 'issue number as the PR number' "$PROMPT"; then
+  echo "[OK] issue/PR identifiers are explicitly separated"
+else
+  echo "[FAIL] prompt does not prohibit issue-number -> PR-number inference"
+  exit 1
+fi
+
+# Regression: the daemon must verify an auto-created PR through GitHub after creation.
+if grep -q 'post-create verification failed' "$DAEMON"; then
+  echo "[OK] auto-created PR is re-verified against GitHub"
+else
+  echo "[FAIL] auto-created PR is not re-verified"
+  exit 1
+fi
+
+# Regression: legacy tasks with an empty action must default to IMPLEMENT so
+# missing action metadata cannot bypass mandatory PR verification.
+if grep -q 'action="\${action:-IMPLEMENT}"' "$DAEMON"; then
+  echo "[OK] empty legacy action defaults to IMPLEMENT"
+else
+  echo "[FAIL] empty legacy action can bypass PR verification"
+  exit 1
+fi
+
+# Regression: successful implementation requires the exact canonical PR URL
+# in the agent's result comment.
+if grep -q 'verify_result_comment_pr_url' "$DAEMON"; then
+  echo "[OK] result comment PR URL is verified"
+else
+  echo "[FAIL] result comment PR URL is not verified"
+  exit 1
+fi

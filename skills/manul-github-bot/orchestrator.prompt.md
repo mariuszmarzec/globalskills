@@ -18,7 +18,7 @@ For repository change tasks, include in your result comment:
 - A brief summary of what was done
 - The task branch name
 - The commit hash
-- The PR URL (if one was created)
+- The exact canonical PR URL returned by GitHub (for every repository-change task)
 
 ## Mandatory: Open an actual GitHub PR for every repository change task
 After you commit and push your task branch, you MUST open a real, concrete
@@ -29,8 +29,16 @@ gh pr create --base <actual-base-branch> --head <your-task-branch> --title "<tit
 ```
 
 Verify the PR actually exists with `gh pr list --head <your-task-branch> --state all`
-before emitting `TASK_DONE`. The PR URL you report MUST be a concrete
-`https://github.com/<owner>/<repo>/pull/<number>` URL.
+before emitting `TASK_DONE`. The PR URL you report MUST be copied from the
+verified GitHub PR object returned by GitHub — never inferred from the issue
+number, task ID, branch name, or any other local value. The PR URL MUST be a
+concrete `https://github.com/<owner>/<repo>/pull/<number>` URL and MUST point
+to the PR whose head is your task branch and whose base is the branch you used.
+The issue number and PR number are independent identifiers; **NEVER use the
+issue number as the PR number unless GitHub explicitly confirms that PR exists.**
+After posting the result comment, re-read the PR with GitHub and ensure the exact
+canonical PR URL appears in the result comment. If it does not, fix the comment
+before emitting `TASK_DONE`.
 
 NEVER return a `/compare/...`, `/pull/new/...`, or `/pull/compare/...` URL.
 Those are "create PR" links, not actual pull requests — the daemon does not
