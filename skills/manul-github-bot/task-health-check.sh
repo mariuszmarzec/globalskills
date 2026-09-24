@@ -8,14 +8,14 @@
 #   */2 * * * * $MANUL_DIR/task-health-check.sh
 #
 # Supported env vars (set in environment or override in config):
-#   MANUL_DIR       — manul directory (default: $OPENCLAW_MANUL_DIR)
+#   MANUL_DIR       — manul directory (default: $HOME/.manul)
 #   MANUL_DB        — SQLite database path (default: $MANUL_DIR/manul.db)
 #
 # History:
 #   2026-08-25 — Initial version with health monitoring
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
 MANUL_DB="${MANUL_DIR}/manul.db"
 

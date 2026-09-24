@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 REVIEWER_TYPE="${REVIEWER_TYPE:-mock}"
 
 JSON_OUTPUT=false

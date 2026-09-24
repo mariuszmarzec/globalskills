@@ -21,14 +21,14 @@
 #   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]
 #
 # Environment overrides:
-#   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.openclaw/manul)
+#   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.manul)
 #   MANUL_CANONICAL_DIR  Canonical skill directory (default: this script's dir)
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 INIT_STATE=false
 
 fail() {
@@ -86,9 +86,11 @@ echo
 #   jq        - config.json parsing throughout the runtime
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
-#   openclaw  - the agent runtime the daemon invokes (checked when starting)
+#   openclaw  - default agent runtime (OpenClawAdapter)
+#   opencode  - alternate agent runtime (OpenCodeAdapter)
+# At least one agent runtime must be present; the daemon picks the default.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -98,7 +100,12 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git jq sqlite3 curl openclaw crontab"
+if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1; then
+    echo "ERROR: No agent runtime found (need openclaw or opencode)" >&2
+    echo "Install at least one of: openclaw, opencode" >&2
+    exit 1
+fi
+echo "Prerequisites OK: bash git jq sqlite3 curl crontab + agent runtime (openclaw or opencode)"
 echo
 
 # 2. Ensure runtime directory

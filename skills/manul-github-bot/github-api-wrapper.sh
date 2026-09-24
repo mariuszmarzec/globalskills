@@ -14,7 +14,7 @@
 #
 # All calls go through the same resilience mechanism for consistent error handling.
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 CONFIG="${MANUL_DIR}/config.json"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="${MANUL_DIR}/manul.db"

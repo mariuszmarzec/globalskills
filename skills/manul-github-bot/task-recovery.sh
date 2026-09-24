@@ -10,7 +10,7 @@
 #   --reset-all       Reset all stuck tasks (dangerous - confirm)
 #   --health-check    Run comprehensive health check
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="${MANUL_DIR}/manul.db"
 LOG="${MANUL_DIR}/task-recovery.log"

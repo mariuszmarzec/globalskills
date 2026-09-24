@@ -11,7 +11,7 @@
 # Usage by poll.sh: drains pending skip-comments.log entries after failed runs.
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 LOG="${MANUL_DIR}/poll.log"
 
 REPO="${1:-}"

@@ -46,7 +46,7 @@
 set -euo pipefail
 
 # Configuration
-MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 DB="$MANUL_DIR/manul.db"
 OUTPUT_FORMAT="text"
 LIST_MODE=false

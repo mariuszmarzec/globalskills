@@ -16,12 +16,12 @@
 # runtime archive.
 #
 # Options:
-#   --runtime-dir   Override MANUL_RUNTIME_DIR (default: ~/.openclaw/manul)
+#   --runtime-dir   Override MANUL_RUNTIME_DIR (default: ~/.manul)
 #   --source-db     Override MANUL_SOURCE_DB (explicit backup path)
 
 set -euo pipefail
 
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [--runtime-dir <path>] [--source-db <path>]"
             echo ""
             echo "Options:"
-            echo "  --runtime-dir  Runtime directory (default: ~/.openclaw/manul)"
+            echo "  --runtime-dir  Runtime directory (default: ~/.manul)"
             echo "  --source-db    Explicit backup DB path"
             echo ""
             echo "Environment overrides:"
@@ -167,7 +167,7 @@ else
         echo "  Restored DB from: $SOURCE_DB"
     else
         # Look for the newest archived runtime sibling, e.g.
-        # ~/.openclaw/manul-archive-20260916-123456/manul.db
+        # ~/.manul-archive-20260916-123456/manul.db
         ARCHIVE_ROOT="$(dirname "$RUNTIME_DIR")"
         ARCHIVE_PREFIX="$(basename "$RUNTIME_DIR")-archive-"
         LATEST_BAK=""

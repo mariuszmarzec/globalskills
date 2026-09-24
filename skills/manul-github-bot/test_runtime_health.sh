@@ -3,7 +3,7 @@
 #
 # Tests that verify:
 #  1. Shell syntax of all runtime scripts
-#  2. No hardcoded /mnt/f or /home/marzec/.openclaw/manul paths in source
+#  2. No hardcoded /mnt/f or /home/marzec/.manul paths in source
 #  3. install-manul-symlinks.sh contracts
 #  3b. installer self-healing (idempotent, safe to run repeatedly)
 #  3c. CLI entrypoints resolve in a fresh shell
@@ -109,28 +109,45 @@ done
 # ── Test 2: No old machine-specific runtime paths ─────────────────────────────
 echo
 echo "Test 2: No hardcoded runtime paths"
-HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.openclaw/manul|/mnt/f/ubuntu-workspace/\.openclaw/manul)' \
+HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.manul|/mnt/f/ubuntu-workspace/\.manul)' \
   "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v 'test_runtime_health.sh' || true)"
 if [ -z "$HARDCODED_PATHS" ]; then
-  ok "No old absolute runtime paths found"
+  ok "No hardcoded absolute runtime paths found"
 else
-  fail "Old absolute runtime paths remain:\n$HARDCODED_PATHS"
+  fail "Hardcoded absolute runtime paths remain:\n$HARDCODED_PATHS"
 fi
 
 # ── Test 3: Installer contract ────────────────────────────────────────────────
 echo
 echo "Test 3: Installer contract"
-if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.openclaw/manul}"' \
+if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.manul}"' \
      "$SCRIPT_DIR/install-manul-symlinks.sh" 2>/dev/null; then
-  ok "Installer default runtime is HOME/.openclaw/manul"
+  ok "Installer default runtime is HOME/.manul"
 else
-  fail "Installer default runtime is not HOME/.openclaw/manul"
+  fail "Installer default runtime is not HOME/.manul"
 fi
 
-if grep -q 'for cmd in bash git gh jq sqlite3 curl openclaw crontab' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer requires OpenClaw"
+# The installer no longer hard-requires OpenClaw: it accepts either the
+# OpenClaw or OpenCode agent runtime, and fails only when neither is present.
+if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab)"
 else
-  fail "Installer does not require OpenClaw"
+  fail "Installer core-tool check is missing"
+fi
+
+# The installer must accept EITHER runtime, not require OpenClaw specifically.
+# Check: the opencode binary is probed, and the failure message lists both.
+if grep -q 'command -v opencode' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'openclaw or opencode' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer accepts OpenClaw OR OpenCode as agent runtime"
+else
+  fail "Installer still hard-requires OpenClaw"
+fi
+
+if grep -q 'No agent runtime found' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer fails closed when neither runtime is present"
+else
+  fail "Installer does not fail when no runtime is present"
 fi
 
 SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' \

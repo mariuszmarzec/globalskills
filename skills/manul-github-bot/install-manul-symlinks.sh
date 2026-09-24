@@ -8,7 +8,7 @@
 #   install-manul-symlinks.sh [--runtime-dir <path>] [--canonical-dir <path>] [--dry-run]
 #
 # Options:
-#   --runtime-dir    Runtime scripts directory (default: ~/.openclaw/manul)
+#   --runtime-dir    Runtime scripts directory (default: ~/.manul)
 #   --canonical-dir  Canonical skill source directory (default: ~/.globalskills/skills/manul-github-bot)
 #   --dry-run        Show what would be done without making changes
 #
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # Defaults
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 # Self-detect canonical source from this script's own location so the installer
 # keeps working even if the skill is moved or the env var is unset. Explicit
 # MANUL_CANONICAL_DIR always wins.
@@ -64,7 +64,10 @@ CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 SCRIPTS=(
     "feedback.sh"
     "github-api-wrapper.sh"
-    "manul-agent-wrapper.sh"
+    # manul-agent-wrapper.sh is DEPRECATED and intentionally NOT installed.
+    # It is superseded by the AgentExecutor runtime abstraction
+    # (openclaw-adapter.sh / opencode-adapter.sh). Kept in source only as a
+    # historical reference for the original OpenClaw-only invocation path.
     "manul-comments-remove.sh"
     "manul-conversation-linker.sh"
     "manul-conversation.sh"
@@ -82,6 +85,13 @@ SCRIPTS=(
     "task-recovery.sh"
     "watchdog.sh"
     "workspace-manager.sh"
+    # Agent execution runtime abstraction (added in runtime isolation refactor)
+    "agent-executor.sh"
+    "agent-execution-controller.sh"
+    "manul-paths.sh"
+    "openclaw-adapter.sh"
+    "opencode-adapter.sh"
+    "process-runner.sh"
 )
 
 echo "=== Manul Symlink Installer ==="

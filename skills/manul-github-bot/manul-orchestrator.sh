@@ -37,7 +37,7 @@
 set -euo pipefail
 
 # Directory configuration
-ORCHESTRATOR_DIR="${ORCHESTRATOR_DIR:-${MANUL_ORCHESTRATOR_DIR:-${MANUL_DIR:-$HOME/.openclaw/manul}}}"
+ORCHESTRATOR_DIR="${ORCHESTRATOR_DIR:-${MANUL_ORCHESTRATOR_DIR:-${MANUL_DIR:-$HOME/.manul}}}"
 ORCH_DB="${ORCHESTRATOR_DIR}/orchestrator.db"
 MANUL_CONV="${ORCHESTRATOR_DIR}/manul-conversation.sh"
 MANUL_WAIT="${ORCHESTRATOR_DIR}/manul-wait.sh"
@@ -349,7 +349,7 @@ cmd_wait() {
   
   if [ -z "$conv_id" ]; then
     # Try to get from Manul DB directly
-    local db="${MANUL_DIR:-$HOME/.openclaw/manul}/manul.db"
+    local db="${MANUL_DIR:-$HOME/.manul}/manul.db"
     conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
   fi
   

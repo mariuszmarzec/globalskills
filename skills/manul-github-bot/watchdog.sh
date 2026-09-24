@@ -11,7 +11,7 @@
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 CONFIG="${MANUL_DIR}/config.json"
 LOCK="$MANUL_DIR/lock"
 PID_FILE="${MANUL_DIR}/daemon.pid"

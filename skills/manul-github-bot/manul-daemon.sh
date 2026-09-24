@@ -31,7 +31,7 @@ export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/
 export OPENCLAW_STATE_DIR="/home/marzec/.openclaw-native/state"
 export OPENCLAW_CONFIG_PATH="/home/marzec/.openclaw-native/openclaw.json"
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
 DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
@@ -43,6 +43,15 @@ LOG="$MANUL_DIR/daemon.log"
 LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
 LAST_POLL_FILE="$MANUL_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_DIR/current_activity"
+
+# --- Agent execution runtime abstraction ---
+# Source the runtime-neutral execution path. The daemon never invokes
+# adapter scripts directly; it goes through AgentExecutor / AgentExecutionController.
+DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
+source "$DAEMON_SCRIPT_DIR/process-runner.sh"
+source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
+source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
 LOCK="$MANUL_DIR/lock"
 FLOCK_FILE="$MANUL_DIR/daemon.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
@@ -82,7 +91,7 @@ TASK_RETENTION_DEFAULT_HISTORY_DAYS=14
 TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
 TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
 
-# Source operator overrides from ~/.openclaw/manul/.env if present.
+# Source operator overrides from ~/.manul/.env if present.
   # This is what makes MANUL_POLL_TIMEOUT / MANUL_INTERVAL / etc. actually
   # take effect — without it the daemon ignores the .env file entirely and
   # falls back to hardcoded defaults (e.g. POLL_TIMEOUT=120s), which is too
@@ -2587,20 +2596,18 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
-    # 6. Invoke implementation agent with the per-task prompt, ensuring proper working directory
-    local STDOUT_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stdout"
-    local STDERR_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stderr"
+# 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
+     # The daemon never calls adapter scripts directly; the controller owns
+     # timeout enforcement, session continuation, and result mapping.
+     local STDOUT_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stdout"
+     local STDERR_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.stderr"
+     local EXEC_CTX_FILE="$MANUL_DIR/tasks/task-${COMMENT_ID}.ctx.json"
 
-    log "dispatch: invoking agent manul for task $COMMENT_ID"
-    lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
-    set_activity "$COMMENT_ID" "working"
+     log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
+     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
+     set_activity "$COMMENT_ID" "working"
 
-    # 5. Invoke agent with timeout to prevent daemon deadlock
-    # Use timeout to kill the entire process tree if agent hangs
-    # The timeout command sends SIGTERM after AGENT_TIMEOUT, then SIGKILL after 60s.
-    # The wrapper also passes an explicit OpenClaw timeout so its 600s CLI default
-    # can never terminate a normal coding task before Manul's outer deadline.
-     # Change to repository directory and invoke agent
+     # Build the execution context JSON file consumed by AgentExecutor.
      local prev_dir
      prev_dir="$(pwd)"
      cd "$WORKDIR" || {
@@ -2612,23 +2619,49 @@ PROMPT_APPEND
        set_activity "none" "idle"
        return 0
      }
-     # Ensure skill visibility for the OpenCode process
+
+     # Ensure skill visibility for agent runtimes that read it
      export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
-     # Leave a 300s grace window between the OpenClaw inner timeout (12h)
-     # and the daemon hard deadline (12h 5m) so the wrapper can record failure
-     # diagnostics and emit its terminal marker deterministically.
-     export MANUL_OPENCLAW_AGENT_TIMEOUT="${MANUL_OPENCLAW_AGENT_TIMEOUT:-43200}"
+
      # Refresh heartbeat before agent to prevent timeout during long runs
      refresh_heartbeat "$COMMENT_ID"
-     timeout -k 60 "$AGENT_TIMEOUT" "$MANUL_DIR/manul-agent-wrapper.sh" "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+
+     # Persist the previous session id if this is a continuation attempt.
+     local prev_session_id=""
+     prev_session_id="$(sqlite3 "$DB" "SELECT session_id FROM tasks WHERE commentId='$(sql_escape "$COMMENT_ID")' AND session_id IS NOT NULL AND session_id != '' LIMIT 1;" 2>/dev/null || echo "")"
+
+     jq -n \
+       --arg taskId "$COMMENT_ID" \
+       --arg prompt "$TASK_PROMPT_FILE" \
+       --arg workspace "$WORKDIR" \
+       --arg agent "" \
+       --argjson attempt "$current_attempt" \
+       --argjson timeout "$AGENT_TIMEOUT" \
+       --arg sessionId "$prev_session_id" \
+       --arg stdoutFile "$STDOUT_FILE" \
+       --arg stderrFile "$STDERR_FILE" \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       > "$EXEC_CTX_FILE"
+
+     local executor_output
+     executor_output="$(AgentExecutionController.execute "$EXEC_CTX_FILE")"
      local rc=$?
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+
+     # Persist session id for continuation attempts
+     local exec_status exec_summary exec_session_id
+     exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
+     exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
+     exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
+     if [ -n "$exec_session_id" ]; then
+       sqlite3 "$DB" "UPDATE tasks SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
+     fi
 
      # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
      # up. This is especially important for fast launch failures where the worker
      # can exit before producing a GitHub-visible result.
      if [ "$rc" -ne 0 ]; then
-       log "dispatch: agent launcher exited rc=$rc for task $COMMENT_ID"
+       log "dispatch: agent executor exited rc=$rc for task $COMMENT_ID (status=$exec_status)"
        if [ -s "$STDERR_FILE" ]; then
          log "dispatch: agent stderr for task $COMMENT_ID (tail 80):"
          tail -n 80 "$STDERR_FILE" >>"$LOG" 2>/dev/null || true
@@ -2637,8 +2670,30 @@ PROMPT_APPEND
        fi
      fi
 
-    # Call production completion evaluation function
-    evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
+     # Map executor status onto the daemon's rc/NEEDS_USER_INPUT contract.
+     case "$exec_status" in
+       BLOCKED|TASK_NEEDS_USER_BEGIN)
+         NEEDS_USER_INPUT="true"
+         USER_QUESTION="$(grep -oP '(?<=^TASK_NEEDS_USER_BEGIN\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
+         rc=0
+         ;;
+       NEEDS_CONTINUATION)
+         # Surface as a retryable state; daemon handles via attempt counting.
+         rc=1
+         ;;
+       TIMEOUT)
+         rc=124
+         ;;
+       COMPLETED)
+         rc=0
+         ;;
+       *)
+         rc="${rc:-1}"
+         ;;
+     esac
+
+     # Call production completion evaluation function
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an

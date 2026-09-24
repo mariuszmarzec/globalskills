@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 DB="${MANUL_DIR}/manul.db"
 CONFIG="${MANUL_DIR}/config.json"
 POLL="${MANUL_DIR}/poll.sh"
@@ -602,7 +602,7 @@ case "${ACTION:-}" in
   init-schema)
     # Lightweight schema initializer — only runs CREATE IF NOT EXISTS, no business logic.
     # Used by repair-manul-runtime.sh and tests to bring a fresh DB up to schema spec.
-    export MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+    export MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
     export DB="${DB:-${MANUL_DIR}/manul.db}"
     init_schema
     ;;

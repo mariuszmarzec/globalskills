@@ -7,7 +7,7 @@
 # - Releasing workspaces back to the pool
 # - Cleaning up broken workspaces
 
-MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 DB="$MANUL_DIR/manul.db"
 WORKSPACES_DIR="${MANUL_DIR}/workspaces"
 
