@@ -31,7 +31,7 @@ REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-1800}"
 # Per-repository timeout to prevent one slow repo from blocking all others
 REPO_POLL_TIMEOUT="${MANUL_REPO_POLL_TIMEOUT:-60}"
 # Poll overlap prevention: prevents multiple poll.sh instances from running simultaneously
-POLL_LOCK_FILE="${MANUL_DIR}/poll.flock"
+POLL_LOCK_FILE="${MANUL_LOCKS_DIR}/poll.flock"
 LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
 LEASE_TIMEOUT="${LEASE_TIMEOUT:-900}"
 mkdir -p "$REPO_LOCK_DIR" 2>/dev/null || true
