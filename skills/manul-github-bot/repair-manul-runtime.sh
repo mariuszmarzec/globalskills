@@ -22,7 +22,6 @@
 set -euo pipefail
 
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
-STATE_DIR="$RUNTIME_DIR/state"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
 
@@ -51,6 +50,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+STATE_DIR="$RUNTIME_DIR/state"
 
 fail() {
     echo "ERROR: $*" >&2
