@@ -90,8 +90,9 @@ manul-status.sh [OPTIONS] [TASK_ID]
 Options:
   --task ID        Task/comment ID to query (required if no positional arg)
   --json           Output JSON format
-  --list           List all tasks (optional filter by status)
-  --status S       Filter by status (queued, running, completed, failed)
+  --list           List active tasks plus recent terminal tasks
+  --history        List terminal task history retained for the longer window
+  --status S       Filter by status (queued, running, blocked_user, completed, failed, stale)
   --log            Show daemon.log instead of task status
   --tail N         Number of log lines to show (default: 100)
   --tail=N         Same as --tail N

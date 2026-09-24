@@ -18,7 +18,7 @@ Issue/PR comments starting with `/manul` are parsed as commands:
 |---------|--------|-------------|
 | `/manul run <task>` | `IMPLEMENT` | Create implementation task |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` | Create task to address PR review comments |
-| `/manul continue` | `CONTINUE` | Continue previous task |
+| `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input, supplying the user's answer |
 | `/manul verify <prompt>` | `VERIFY` | Create verification task |
 | `/manul status` | `STATUS` | Get current task status |
 | `/manul close` | `CLOSE` | Close conversation |
@@ -36,6 +36,7 @@ Machine-readable events are posted as HTML comments:
 | Type | Direction | Description |
 |------|-----------|-------------|
 | `TASK_STARTED` | Bot → GitHub | Task execution began |
+| `TASK_NEEDS_USER` | Bot → GitHub | Task is blocked waiting for explicit user input |
 | `TASK_DONE` | Bot → GitHub | Task completed successfully |
 | `TASK_FAILED` | Bot → GitHub | Task failed after all attempts |
 | `REVIEW_APPROVED` | Bot → GitHub | PR review approved |
@@ -51,12 +52,34 @@ Machine-readable events are posted as HTML comments:
     "taskId": "string",
     "conversationId": "string",
     "prNumber": number,
-    "status": "completed|failed",
+    "status": "completed|failed|blocked_user",
     "attempt": number,
     "summary": "string"
   }
 }
 ```
+
+## User interaction and blocked tasks
+
+An implementation agent may request user input when the task reaches a materially important decision that cannot be resolved from repository context, documentation, skills, or existing conventions.
+
+The agent may:
+- propose a concrete solution or recommendation;
+- present multiple materially different options;
+- ask the user to choose when more than two materially different viable directions remain.
+
+The agent must not ask for clarification merely because several equivalent implementations exist. It should decide routine details autonomously.
+
+When input is required, the agent emits a `TASK_NEEDS_USER_BEGIN` / `TASK_NEEDS_USER_END` block. Manul moves the task to terminal-for-now state `blocked_user` and posts the question to the same GitHub conversation.
+
+A `blocked_user` task:
+- is not a failure;
+- is not retryable;
+- remains associated with its original conversation/task;
+- does not count as an incomplete queued/running task for retry/recovery;
+- resumes when the user replies with `/manul continue <answer>`.
+
+The continuation must reuse the blocked task's existing task/conversation context rather than create an unrelated new task.
 
 ## Conversation Lifecycle
 

@@ -401,6 +401,57 @@ build_conversation_context() {
   done
 }
 
+# Resume a task that is waiting for explicit user input.
+# The continuation comment is stored as conversation context but does not
+# create a second processed_comments task.
+resume_blocked_user_task() {
+  local conv_id="$1" repo="$2" issue="$3" comment_id="$4" author="$5" answer="$6" created="$7" url="$8"
+  local safe_conv_id safe_answer safe_url
+  safe_conv_id="$(sql_escape "$conv_id")"
+  safe_answer="$(sql_escape "$answer")"
+  safe_url="$(sql_escape "$url")"
+
+  local blocked_count
+  blocked_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$safe_conv_id' AND status='blocked_user';" 2>/dev/null || echo 0)"
+  [ "${blocked_count:-0}" -gt 0 ] || return 1
+
+  local blocked_task_id
+  blocked_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE conversationId='$safe_conv_id' AND status='blocked_user' ORDER BY processedAt DESC, createdAt DESC LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$blocked_task_id" ] || return 1
+
+  if [ "${blocked_count:-0}" -gt 1 ]; then
+    log "WARN: multiple blocked_user tasks in conversation $conv_id; resuming newest task $blocked_task_id"
+  fi
+
+  persist_conversation_message "$conv_id" "$repo" "$issue" "$comment_id" "$author" "$answer" "$url" "$created" "user-clarification"
+
+  local context esc_context
+  context="$(build_conversation_context "$conv_id")"
+  esc_context="$(printf '%s' "$context" | sed "s/'/''/g")"
+
+  local changed
+  changed="$(sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='queued',
+        prompt=prompt || char(10) || char(10) || '## User clarification' || char(10) || '$safe_answer',
+        context='$esc_context',
+        processedAt=NULL, nextAttemptAt=NULL,
+        heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL
+    WHERE commentId='$(sql_escape "$blocked_task_id")' AND status='blocked_user';
+    SELECT changes();
+  " 2>>"$LOG" | tail -1)"
+
+  if [ "$changed" = "1" ]; then
+    sqlite3 "$DB" "UPDATE conversations SET status='OPEN', activeTaskId='$(sql_escape "$blocked_task_id")', updatedAt='$(sql_escape "$created")' WHERE conversationId='$safe_conv_id';" 2>>"$LOG" || true
+    log "resumed blocked task $blocked_task_id in conversation $conv_id from user clarification $comment_id"
+    lc_log "TASK_RESUMED_USER" "task=$blocked_task_id conversation=$conv_id source=$comment_id"
+    return 0
+  fi
+
+  log "WARN: failed to resume blocked task $blocked_task_id from user clarification $comment_id"
+  return 1
+}
+
 refresh_queued_task_contexts_for_repo() {
   local repo="$1"
   local conv_id context esc_ctx
@@ -544,7 +595,7 @@ close_merged_pr_conversations() {
       AND NOT EXISTS (
         SELECT 1 FROM processed_comments t
         WHERE t.conversationId = c.conversationId
-          AND t.status IN ('queued', 'running')
+          AND t.status IN ('queued', 'running', 'blocked_user')
       );" 2>>"$LOG") || query_err="FAILED"
   if [ "$query_err" = "FAILED" ]; then
     log "ERROR: failed to query conversations for merged PR auto-close"
@@ -1005,6 +1056,16 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+      if resume_blocked_user_task "$conv_id" "$repo" "$issue" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
@@ -1028,6 +1089,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx
@@ -1093,6 +1155,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx
@@ -1153,6 +1216,15 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      if resume_blocked_user_task "$conv_id" "$repo" "$pr_num" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
@@ -1182,6 +1254,7 @@ process_repo_body() {
     | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
        elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
        else {action: null, prompt: $rest}
        end) as $actx

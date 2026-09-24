@@ -265,6 +265,26 @@ Follow these 11 conceptual steps:
 **DB / DATA INTEGRITY:**
 - `coder` → `tester` → `reviewer-expert`
 
+## User interaction and decision points
+
+The agent should behave like a competent human teammate rather than execute instructions mechanically.
+
+- Make straightforward, low-risk decisions autonomously.
+- The agent may proactively propose a solution, improvement, trade-off, or next step when it has a reasonable basis.
+- Do not ask the user merely because multiple implementations exist internally. Choose the simplest reasonable implementation when the difference is immaterial.
+- When multiple materially different valid approaches would change architecture, behavior, scope, data model, compatibility, UX, or another important outcome, involve the user.
+- In particular, when there are more than two materially different viable directions, present the relevant options briefly and ask what to do next.
+- A recommendation is allowed: explain which option you recommend and why, while leaving the decision to the user.
+- Before asking, search the repository, relevant skills/docs, configuration, and conversation context. Do not guess when the missing information materially affects correctness.
+- When required information is still missing, the task should explicitly enter `BLOCKED_USER` rather than `FAILED`.
+- The user-facing question should state what is missing, what was checked, and the options or decision needed.
+- Prefer resolving routine ambiguity autonomously; reserve user questions for decisions that materially affect the result or where the source of truth cannot be found.
+- To request user input from Manul, emit the exact structured block:
+  `TASK_NEEDS_USER_BEGIN`
+  followed by the question/options
+  and then `TASK_NEEDS_USER_END`.
+- The task should not make further irreversible repository changes after deciding that user input is required. If exploratory changes already exist, preserve or explicitly revert them before requesting input.
+
 ## Stop rule
 
 After every stage, ask internally:

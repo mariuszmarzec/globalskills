@@ -103,6 +103,15 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       queued|running)
         # Still waiting
         ;;
+      blocked_user)
+        if [ "$JSON_OUTPUT" = true ]; then
+          echo "{"taskId":"$TASK_ID","status":"blocked_user","message":"Waiting for user input; reply with /manul continue <answer>"}"
+        else
+          echo "Task $TASK_ID is blocked waiting for user input"
+          echo "  Reply on GitHub with: /manul continue <answer>"
+        fi
+        exit 3
+        ;;
       *)
         # Unknown status, treat as failed
         output="{\"taskId\": \"$TASK_ID\", \"status\": \"unknown\", \"error\": \"Unexpected status: $status\"}"
