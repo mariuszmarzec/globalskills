@@ -72,6 +72,8 @@ generate_prompt() {
     local timestamp="${13}"
     local CURRENT_BRANCH="${14}"
     local DEFAULT_BRANCH="${15}"
+    local PR_NUMBER="${16:-$ISSUE_NUM}"
+    local REPLY_TO="${17:-}"
 
     # Top of prompt (static text + placeholders for single-line runtime values)
     cat > "$out_file" <<'PROMPT_EOF'
@@ -85,6 +87,8 @@ You are the Manul implementation agent. Complete ONE task and then emit exactly 
 - Comment ID: __COMMENT_ID__
 - Comment URL: __COMMENT_URL__
 - Task Type: __TASK_TYPE__
+- PR Number: __PR_NUMBER__
+- Original Review Comment ID: __REPLY_TO__
 
 ## User Request
 PROMPT_EOF
@@ -118,22 +122,28 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 7. Do NOT manage Manul task state.
 
 ## GitHub Comment Posting (CRITICAL)
-You MUST post exactly one user-facing result comment to GitHub using the `run` tool:
+You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
 
+### Routing
+Use the task metadata above and choose the endpoint that matches `Task Type`:
+
+- For `pr_review_comment`: reply to the existing inline review thread. Use the PR review-comments endpoint and the original review comment ID:
+```bash
+gh api repos/__REPO__/pulls/__PR_NUMBER__/comments \
+  -f body="YOUR_REPLY" \
+  -f in_reply_to=__REPLY_TO__ \
+  --jq .id
+```
+
+- For `pr_conversation_comment` or an issue task: post a top-level conversation comment:
 ```bash
 gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
   -f body="YOUR_RESULT_COMMENT" \
   --jq .id
 ```
 
-Replace REPO, ISSUE_NUM, and YOUR_RESULT_COMMENT with actual values.
-Use the in_reply_to parameter if this is a reply:
-```bash
-gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
-  -f body="YOUR_REPLY" \
-  -f in_reply_to=ORIGINAL_COMMENT_ID \
-  --jq .id
-```
+Do NOT use `/issues/__ISSUE_NUM__/comments` with `in_reply_to`: that endpoint does not create replies to inline PR review threads.
+Replace REPO, PR_NUMBER, ISSUE_NUM, and the result body with the actual values from this prompt.
 
 Your comment MUST:
 - Start with the task summary
@@ -213,6 +223,8 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    prompt_content="${prompt_content//__PR_NUMBER__/$PR_NUMBER}"
+    prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     printf '%s' "$prompt_content" > "$out_file"
 }
 
@@ -522,6 +534,35 @@ if assert_file_contains "PR-tied prompt names the PR head branch" "$WORK/prompt.
 else
     :
 fi
+
+# Test I: PR review-comment prompt uses the review-thread endpoint and carries
+# the original comment ID explicitly.
+echo -n "Test: PR review prompt uses review-thread routing ... "
+rm -f "$WORK/prompt.md"
+generate_prompt \
+    "$WORK/prompt.md" \
+    "test-owner/test-repo" \
+    "42" \
+    "review:789" \
+    "https://github.com/test-owner/test-repo/pull/42#discussion_r789" \
+    "pr_review_comment" \
+    "Change the requested value." \
+    "Review context." \
+    "1" \
+    "/tmp/repo" \
+    "/tmp/repo" \
+    "feature-branch" \
+    "1234567890" \
+    "feature-branch" \
+    "master" \
+    "42" \
+    "789"
+if assert_file_contains "review PR number injected" "$WORK/prompt.md" "PR Number: 42"; then :; else :; fi
+if assert_file_contains "original review comment ID injected" "$WORK/prompt.md" "Original Review Comment ID: 789"; then :; else :; fi
+if assert_file_contains "review task uses pulls comments endpoint" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/pulls/42/comments"; then :; else :; fi
+if assert_file_contains "review task uses in_reply_to" "$WORK/prompt.md" "-f in_reply_to=789"; then :; else :; fi
+if assert_file_contains "top-level route remains available" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/issues/42/comments"; then :; else :; fi
+if assert_file_contains "review endpoint explains no issues in_reply_to" "$WORK/prompt.md" "Do NOT use `/issues/42/comments` with `in_reply_to`"; then :; else :; fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
