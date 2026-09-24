@@ -87,12 +87,18 @@ ProcessRunner.override() {
 
 ProcessRunner.run() {
     local timeout="" cwd="" env_args=() cmd_args=()
+    ProcessRunner_ExitCode=""
+    ProcessRunner_Duration=""
+    ProcessRunner_Interrupted="false"
+    ProcessRunner_TimedOut="false"
+    ProcessRunner_ManagedStdout=""
+    ProcessRunner_ManagedStderr=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --timeout) timeout="$2"; shift 2 ;;
             --cwd)     cwd="$2";     shift 2 ;;
-            --env)     env_args+=("$2"="$3"); shift 3 ;;
+            --env)     env_args+=("$2"); shift 2 ;;
             --)        shift; cmd_args+=("$@"); break ;;
             -*)        cmd_args+=("$1"); shift ;;
             *)
@@ -127,18 +133,17 @@ ProcessRunner.run() {
     local start_ts end_ts dur
     start_ts="$(_process_runner_now)"
 
+    local full_cmd=("${cmd_args[@]}")
+    if [ ${#full_cmd[@]} -eq 0 ]; then
+        echo "ProcessRunner: missing command" >&2
+        return 2
+    fi
+
     local env_prefix=()
     local i
     for i in "${!env_args[@]}"; do
         env_prefix+=("${env_args[$i]}")
     done
-
-    local full_cmd=("${cmd_args[@]}")
-
-    local proc_env=""
-    if [ ${#env_prefix[@]} -gt 0 ]; then
-        proc_env="$(printf ' env:'"${env_prefix[*]}"' ')"
-    fi
 
     # Resolve stdout/stderr destinations. Caller-supplied files (e.g. the
     # daemon's per-task stdout/stderr) are kept intact so the caller can
@@ -155,21 +160,36 @@ ProcessRunner.run() {
         ProcessRunner_ManagedStderr="$err_file"
     fi
 
-    if [ -n "$timeout" ] && [ "$timeout" -gt 0 ] 2>/dev/null; then
-        timeout -k 60 "$timeout" \
-            "${full_cmd[@]}" \
-            >>"$out_file" \
-            2>>"$err_file"
-        ProcessRunner_Rc=$?
-        # timeout exits 124 on timeout; a child SIGKILL after -k means exited.
-        if [ "$ProcessRunner_Rc" -eq 124 ]; then
-            ProcessRunner_TimedOut="true"
-        fi
+    local old_pwd
+    old_pwd="$(pwd)"
+    if [ -n "$cwd" ] && [ ! -d "$cwd" ]; then
+        echo "ProcessRunner: working directory does not exist: $cwd" >&2
+        ProcessRunner_Rc=66
     else
-        "${full_cmd[@]}" \
-            >>"$out_file" \
-            2>>"$err_file"
-        ProcessRunner_Rc=$?
+        if [ -n "$cwd" ]; then
+            cd "$cwd" || ProcessRunner_Rc=66
+        fi
+
+        local -a exec_cmd=()
+        if [ ${#env_prefix[@]} -gt 0 ]; then
+            exec_cmd=(env "${env_prefix[@]}" "${full_cmd[@]}")
+        else
+            exec_cmd=("${full_cmd[@]}")
+        fi
+
+        if [ -z "${ProcessRunner_Rc:-}" ]; then
+            if [ -n "$timeout" ] && [ "$timeout" -gt 0 ] 2>/dev/null; then
+                timeout -k 60 "$timeout" "${exec_cmd[@]}" >>"$out_file" 2>>"$err_file"
+                ProcessRunner_Rc=$?
+                if [ "$ProcessRunner_Rc" -eq 124 ]; then
+                    ProcessRunner_TimedOut="true"
+                fi
+            else
+                "${exec_cmd[@]}" >>"$out_file" 2>>"$err_file"
+                ProcessRunner_Rc=$?
+            fi
+        fi
+        cd "$old_pwd" 2>/dev/null || true
     fi
 
     end_ts="$(_process_runner_now)"
