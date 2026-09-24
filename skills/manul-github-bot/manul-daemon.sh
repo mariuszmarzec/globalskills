@@ -1836,6 +1836,9 @@ evaluate_task_completion() {
   
   # 7.6 Determine whether the agent actually changed repository state.
   # Informational tasks may legitimately finish without a branch or PR.
+  # Every repository change must be verified through the full PR/result pipeline,
+  # including issue-body tasks (issuebody:*). The task identifier format must
+  # never weaken the implementation PR requirement.
   if [ "$SUCCESS" = "true" ]; then
     local repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
@@ -1867,6 +1870,9 @@ evaluate_task_completion() {
         fi
       fi
     else
+      # A TASK_DONE from an IMPLEMENT task is only informational when the agent
+      # genuinely made no repository changes. Keep this explicit so issuebody:*
+      # tasks cannot accidentally bypass the repository/PR verification above.
       log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
       lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
     fi
