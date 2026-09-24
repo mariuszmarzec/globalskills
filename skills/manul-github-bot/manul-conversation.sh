@@ -16,16 +16,12 @@
 
 set -euo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-DB="${MANUL_DIR}/manul.db"
-CONFIG="${MANUL_DIR}/config.json"
-POLL="${MANUL_DIR}/poll.sh"
-FEEDBACK="${MANUL_DIR}/feedback.sh"
-
-# Ensure DB path is on native ext4
-if [[ "$DB" == /mnt/f/* ]]; then
-  DB="${MANUL_DIR}/manul.db"
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+DB="${DB:-$MANUL_DB}"
+CONFIG="$MANUL_CONFIG"
+POLL="$MANUL_DIR/poll.sh"
+FEEDBACK="$MANUL_DIR/feedback.sh"
 
 # JSON output flag
 JSON_OUTPUT=false
@@ -113,6 +109,7 @@ init_schema() {
         conversationId TEXT,
         parentTaskId TEXT,
         workspaceId TEXT,
+        session_id TEXT,
         action TEXT DEFAULT 'IMPLEMENT',
         prNumber INTEGER,
         prUrl TEXT
@@ -161,6 +158,9 @@ init_schema() {
   fi
   if ! echo "$col_check" | grep -q '|claimToken|'; then
     alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN claimToken TEXT; "
+  fi
+  if ! echo "$col_check" | grep -q '|session_id|'; then
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN session_id TEXT; "
   fi
 
   if [ -n "$alter_sql" ]; then
