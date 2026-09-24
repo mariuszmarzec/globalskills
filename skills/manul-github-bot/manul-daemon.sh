@@ -2148,6 +2148,8 @@ You are the Manul implementation agent. Complete ONE task and then emit exactly 
 - Comment URL: __COMMENT_URL__
 - Task Type: __TASK_TYPE__
 - Task Action: __TASK_ACTION__
+- PR Number: __PR_NUMBER__
+- Original Review Comment ID: __REPLY_TO__
 
 ## User Request
 PROMPT_EOF
@@ -2198,22 +2200,28 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 8. Do NOT manage Manul task state.
 
 ## GitHub Comment Posting (CRITICAL)
-You MUST post exactly one user-facing result comment to GitHub using the `run` tool:
+You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
 
+### Routing
+Use the task metadata above and choose the endpoint that matches `Task Type`:
+
+- For `pr_review_comment`: reply to the existing inline review thread. Use the PR review-comments endpoint and the original review comment ID:
+```bash
+gh api repos/__REPO__/pulls/__PR_NUMBER__/comments \
+  -f body="YOUR_REPLY" \
+  -f in_reply_to=__REPLY_TO__ \
+  --jq .id
+```
+
+- For `pr_conversation_comment` or an issue task: post a top-level conversation comment:
 ```bash
 gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
   -f body="YOUR_RESULT_COMMENT" \
   --jq .id
 ```
 
-Replace REPO, ISSUE_NUM, and YOUR_RESULT_COMMENT with actual values.
-Use the in_reply_to parameter if this is a reply:
-```bash
-gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
-  -f body="YOUR_REPLY" \
-  -f in_reply_to=ORIGINAL_COMMENT_ID \
-  --jq .id
-```
+Do NOT use `/issues/__ISSUE_NUM__/comments` with `in_reply_to`: that endpoint does not create replies to inline PR review threads.
+Replace REPO, PR_NUMBER, ISSUE_NUM, and the result body with the actual values from this prompt.
 
 Your comment MUST:
 - Start with the task summary
@@ -2467,6 +2475,8 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
     prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
     prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
+    prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
+    prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
     prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
