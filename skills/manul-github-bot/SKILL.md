@@ -62,7 +62,9 @@ Current runtime:
 
 The runtime contains Manul configuration, SQLite state, logs, locks, task
 artifacts, workspace state, and runtime script links. OpenClaw
-configuration/state remains outside that ownership boundary.
+configuration/state remains outside that ownership boundary. Provider-specific environment such as
+`OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` must be supplied by the host environment or Manul's
+operator `.env`; these paths must never be hardcoded into the daemon or shared runtime layer.
 
 ## Agent execution boundary
 
