@@ -1304,6 +1304,39 @@ verify_required_pr() {
   return 1
 }
 
+# Persist the canonical PR identity once the daemon has verified that the PR
+# belongs to this task's branch/base. Issue tasks initially use the issue number
+# in prNumber for backward-compatible queue ingestion, so this correction must
+# happen before TASK_DONE feedback is emitted.
+persist_verified_pr_metadata() {
+  local comment_id="$1" pr_number="$2" pr_url="$3"
+  local safe_comment_id safe_pr_url changes
+
+  if ! [[ "$pr_number" =~ ^[0-9]+$ ]] || [ "$pr_number" -lt 1 ]; then
+    log "ERROR: persist_verified_pr_metadata: invalid PR number '$pr_number' for task $comment_id"
+    lc_log "PR_METADATA_ERROR" "task=$comment_id reason=invalid_pr_number pr_number=$pr_number"
+    return 1
+  fi
+  if [[ "$pr_url" != https://github.com/*/pull/* ]]; then
+    log "ERROR: persist_verified_pr_metadata: invalid canonical PR URL '$pr_url' for task $comment_id"
+    lc_log "PR_METADATA_ERROR" "task=$comment_id reason=invalid_pr_url"
+    return 1
+  fi
+
+  safe_comment_id="$(sql_escape "$comment_id")"
+  safe_pr_url="$(sql_escape "$pr_url")"
+  changes="$(sqlite3 "$DB" "UPDATE processed_comments SET prNumber=$pr_number, prUrl='$safe_pr_url' WHERE commentId='$safe_comment_id'; SELECT changes();" 2>>"$LOG" | tail -n 1)"
+  if [ "${changes:-0}" -ne 1 ]; then
+    log "ERROR: persist_verified_pr_metadata: failed to persist PR #$pr_number for task $comment_id (changes=${changes:-0})"
+    lc_log "PR_METADATA_ERROR" "task=$comment_id reason=database_update_failed pr_number=$pr_number"
+    return 1
+  fi
+
+  log "persist_verified_pr_metadata: task $comment_id -> PR #$pr_number $pr_url"
+  lc_log "PR_METADATA_PERSISTED" "task=$comment_id pr_number=$pr_number url=$pr_url"
+  return 0
+}
+
 # Verify that the agent's result comment contains the exact canonical URL
 # of the real PR belonging to this task branch. This prevents an issue URL,
 # an issue number masquerading as a PR number, /compare links, or stale PR links
@@ -1319,16 +1352,25 @@ verify_result_comment_pr_url() {
     return 1
   }
 
-  local pr_url
+  local pr_url pr_number
   pr_url="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head and (.state == null or .state != "closed"))) | .[0].url // empty' 2>/dev/null)"
+  pr_number="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head and (.state == null or .state != "closed"))) | .[0].number // empty' 2>/dev/null)"
   # The PR may be closed; for the task result we still accept the concrete PR
   # that belongs to this branch/base, so retry without the state assumption.
-  if [ -z "$pr_url" ]; then
+  if [ -z "$pr_url" ] || [ -z "$pr_number" ]; then
     pr_url="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head)) | .[0].url // empty' 2>/dev/null)"
+    pr_number="$(printf '%s' "$pr_json" | jq -r --arg base "$expected_base" --arg head "$branch" 'map(select(.baseRefName == $base and .headRefName == $head)) | .[0].number // empty' 2>/dev/null)"
   fi
-  if [ -z "$pr_url" ]; then
+  if [ -z "$pr_url" ] || [ -z "$pr_number" ]; then
     log "ERROR: verify_result_comment_pr_url: no verified PR URL for $repo/$branch base=$expected_base"
     lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id repo=$repo branch=$branch base=$expected_base reason=no_verified_pr"
+    return 1
+  fi
+
+  # Keep the canonical PR identity in SQLite before emitting TASK_DONE. This
+  # prevents an issue task's initial prNumber (which may equal the issue number)
+  # from leaking into result feedback after a real PR has been verified.
+  if ! persist_verified_pr_metadata "$comment_id" "$pr_number" "$pr_url"; then
     return 1
   fi
 
