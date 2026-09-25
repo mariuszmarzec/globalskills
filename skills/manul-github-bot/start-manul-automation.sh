@@ -71,7 +71,7 @@ case "${1:-}" in
 
         if [ "$daemon_rc" -ne 0 ]; then
             log "Manul automation startup failed (daemon rc=$daemon_rc); watchdog installed for recovery"
-            return "$daemon_rc"
+            exit "$daemon_rc"
         fi
 
         log "Manul automation started"
