@@ -18,7 +18,7 @@ Do not stop at "branch pushed" — always ensure a PR exists and its description
 
 ## Prerequisites
 - `gh` CLI installed and authenticated (`gh auth status` shows logged in)
-- Repository is a GitHub repository (has a `origin` remote pointing to GitHub)
+- Repository is a GitHub repository (has an `origin` remote pointing to GitHub)
 - Feature branch follows `feature/<ISSUE_NUMBER>-<DESCRIPTION>` or `bugfix/<DESCRIPTION>` naming (per feature-branching-strategy)
 
 ## Workflow
@@ -35,18 +35,28 @@ Determine the correct base branch before creating or editing the PR:
 3. Otherwise, use the repository default branch.
 
 ### 1. Create PR with Description (First Push)
-After pushing a new feature branch for the first time, immediately create a PR:
+After pushing a new feature branch for the first time, immediately create a PR.
+
+> ⚠️ **Shell quoting pitfall:** Never pass `--body` as a double-quoted string when the description contains backticks, code spans, or shell-special characters. In bash/zsh, backticks inside double quotes trigger command substitution — the shell tries to execute the content as a command and replaces it with empty output, silently mangling the PR body. Use a **heredoc** or a **single-quoted** string instead.
 
 ```bash
 # Push the branch first
 git push -u origin <branch-name>
 
-# Create PR with description
+# Create PR with description (heredoc — safe for backticks and special chars)
 gh pr create \
   --title "<PR Title>" \
-  --body "<PR Description>" \
   --base <parent-branch> \
-  --head <branch-name>
+  --head <branch-name> \
+  --body "$(cat <<'EOF'
+<PR Description>
+EOF
+)"
+```
+
+**Verification step:** After creating the PR, always inspect the body to confirm it wasn't mangled:
+```bash
+gh pr view <PR_NUMBER> --json body --jq '.body'
 ```
 
 **PR Description Template:**
@@ -67,15 +77,18 @@ Closes #<ISSUE_NUMBER> (if applicable)
 ```
 
 ### 2. Update PR Description (Subsequent Pushes)
-After pushing additional commits to an existing PR branch, immediately update the PR description:
+After pushing additional commits to an existing PR branch, immediately update the PR description. Use the same heredoc pattern to avoid the backtick command-substitution pitfall:
 
 ```bash
 # Push changes
 git push origin <branch-name>
 
-# Update PR description to reflect new changes
+# Update PR description to reflect new changes (heredoc — safe for backticks)
 gh pr edit <PR_NUMBER> \
-  --body "<UPDATED_PR_DESCRIPTION>"
+  --body "$(cat <<'EOF'
+<UPDATED_PR_DESCRIPTION>
+EOF
+)"
 ```
 
 **Updated Description Template:**
@@ -142,6 +155,7 @@ echo "PR #$PR_NUMBER description updated"
 4. Reference related issues with `Closes #<NUMBER>` or `Refs #<NUMBER>`
 5. Keep "Changes" section in sync with actual commits
 6. Run tests/lint before pushing and note results in description
+7. **Always verify the PR body after creation or edit** — backticks and special characters in `--body` can be silently mangled by shell command substitution
 
 ## Verification
 After creating/updating PR:

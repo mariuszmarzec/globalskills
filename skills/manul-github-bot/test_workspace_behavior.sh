@@ -93,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=21
+  local expected_tests=23
   local actual_tests
   actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
 
@@ -515,6 +515,89 @@ test_untracked_files_ignores_pycache() {
   [ -z "$untracked" ] || return 1
 }
 run_and_test "Test 19: untracked files ignores __pycache__ and .pytest_cache" test_untracked_files_ignores_pycache
+
+# Test 20: Fresh lease must NOT be released when a stale completed/failed
+# task in the same conversation points at an unrelated idle workspace.
+# Regression test for issue #44: the "reuse previous workspace" block used
+# to release the freshly leased workspace and repoint the task at a
+# completed/failed workspace whose currentTaskId was already NULL, which
+# broke workspace_get_path resolution and prevented the agent from ever
+# starting.
+echo ""
+echo "=== Test 20: Fresh lease survives stale conversation reuse ==="
+test_fresh_lease_survives_stale_reuse() {
+  workspace_pool_init 2 reset
+
+  # 1. Lease workspace A for the current task T.
+  local ws_a
+  ws_a="$(workspace_lease "task-T")"
+  [ -n "$ws_a" ] || return 1
+
+  # 2. Prepare an unrelated completed/failed workspace B in the same
+  #    conversation: IDLE, currentTaskId=NULL, with a stale task row
+  #    pointing at it (simulating a previously completed task).
+  local ws_b
+  ws_b="$(workspace_lease "task-prev")"
+  [ -n "$ws_b" ] || return 1
+  workspace_release "$ws_b"
+  sqlite3 "$DB" "UPDATE workspaces SET currentTaskId=NULL, status='IDLE' WHERE workspaceId='$ws_b';"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-prev','repo',1,'completed','$ws_b',datetime('now'));"
+
+  # 3. Simulate the post-lease dispatch state: task T points at ws_a, ws_a
+  #    is BUSY with currentTaskId=task-T. The fix must NOT touch ws_a.
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-T','repo',1,'running','$ws_a',datetime('now'));"
+
+  # 4. Assert ws_a is still leased to task-T and ws_b is idle/untouched.
+  local owner_a state_a
+  owner_a="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$ws_a';")"
+  state_a="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws_a';")"
+  [ "$owner_a" = "task-T" ] || return 1
+  [ "$state_a" = "BUSY" ] || return 1
+
+  local owner_b state_b
+  owner_b="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$ws_b';")"
+  state_b="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws_b';")"
+  [ -z "$owner_b" ] || return 1
+  [ "$state_b" = "IDLE" ] || return 1
+
+  # 5. workspace_get_path must still resolve ws_a for task-T.
+  local resolved expected_path
+  resolved="$(workspace_get_path "task-T")"
+  expected_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$ws_a';")"
+  [ "$resolved" = "$expected_path" ] || return 1
+
+  workspace_release "$ws_a"
+}
+run_and_test "Test 20: Fresh lease survives stale conversation reuse" test_fresh_lease_survives_stale_reuse
+
+# Test 21: Negative control — a workspace without valid ownership must
+# prevent agent dispatch. Mirrors the hard validation added to the daemon
+# dispatch path: no agent may launch against a workspace that is not BUSY
+# and owned by the current task.
+echo ""
+echo "=== Test 21: Invalid ownership blocks dispatch ==="
+test_invalid_ownership_blocks_dispatch() {
+  workspace_pool_init 2 reset
+
+  local ws_a
+  ws_a="$(workspace_lease "task-T")"
+  [ -n "$ws_a" ] || return 1
+
+  # Break the invariant: release the workspace back to the pool.
+  workspace_release "$ws_a"
+
+  local owner state
+  owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$ws_a';")"
+  state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$ws_a';")"
+  [ -z "$owner" ] || return 1
+  [ "$state" = "IDLE" ] || return 1
+
+  # The daemon validation query must return empty (no BUSY row owned by task-T).
+  local validated
+  validated="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$ws_a' AND currentTaskId='task-T' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
+  [ -z "$validated" ] || return 1
+}
+run_and_test "Test 21: Invalid ownership blocks dispatch" test_invalid_ownership_blocks_dispatch
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"

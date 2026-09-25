@@ -2467,20 +2467,13 @@ PROMPT_EOF
     # Update task with workspace association
     sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
     
-    # If conversation has a previously used workspace, try to reuse it
-    local conversation_id
-    conversation_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
-    if [ -n "$conversation_id" ]; then
-      local prev_workspace
-      prev_workspace="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE conversationId='$conversation_id' AND status IN ('completed','failed') ORDER BY processedAt DESC LIMIT 1;" 2>/dev/null)"
-      if [ -n "$prev_workspace" ]; then
-        # Release the newly leased workspace and re-lease the previous one
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        WORKSPACE_ID="$prev_workspace"
-        sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
-        log "dispatch: reusing previous workspace $WORKSPACE_ID for conversation $conversation_id"
-      fi
-    fi
+# NOTE: The "reuse previous workspace for conversation" block has been
+     # intentionally removed. It released the freshly-leased workspace and
+     # pointed the task at an unrelated completed/failed workspace whose
+     # currentTaskId was already NULL, which broke the task→workspace
+     # ownership invariant and prevented workspace_get_path from resolving
+     # the path. The workspace leased above (workspace_lease) is the single
+     # authoritative workspace for this task for the rest of the dispatch.
 
 
     # Get workspace path from lease
@@ -2580,9 +2573,29 @@ log "dispatch: verified PR head branch $verify_branch in workspace"
          workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
      fi
-     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
+log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
-    # Capture the exact repository state we hand to the agent.
+     # Hard workspace validation before agent dispatch. The workspace lease
+     # (workspace_lease) is the single authoritative source of ownership;
+     # if the invariant is broken here, the agent must never be launched.
+     local ws_owner ws_state ws_path_check
+     ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_path_check="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
+     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ]; then
+       log "ERROR: workspace ownership invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} path=$WORKDIR)"
+       lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
+       log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
+       stop_heartbeat "$COMMENT_ID"
+       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+       release_repo_lock "$REPO"
+       release_task_lock
+       set_activity "none" "idle"
+       return 0
+     fi
+     log "dispatch: workspace validated for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=$ws_owner state=$ws_state path=$WORKDIR)"
+
+     # Capture the exact repository state we hand to the agent.
     local CURRENT_BRANCH
     CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local INITIAL_BRANCH="$CURRENT_BRANCH"
