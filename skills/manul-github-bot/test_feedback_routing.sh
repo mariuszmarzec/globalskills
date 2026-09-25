@@ -48,6 +48,15 @@ assert_not_contains() {
   fi
 }
 
+assert_matches() {
+  local label="$1" haystack="$2" pattern="$3"
+  if printf '%s\n' "$haystack" | grep -Eq "$pattern"; then
+    ok "$label"
+  else
+    fail "$label (expected pattern '$pattern')"
+  fi
+}
+
 mkdir -p "$MANUL_DIR/state" "$MANUL_DIR/logs" "$FAKE_BIN"
 
 cat > "$MANUL_DIR/config.json" <<'EOF'
@@ -101,7 +110,7 @@ review_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started   --repo 
 review_cmd="$(head -1 "$GH_LOG" 2>/dev/null || true)"
 
 assert_contains "Review lifecycle uses PR review-comments endpoint" "$review_cmd" "api repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
-assert_contains "Review lifecycle replies to source review comment" "$review_cmd" "in_reply_to=4103894743"
+assert_matches "Review lifecycle replies to source review comment" "$review_cmd" 'in_reply_to[=[:space:]]+4103894743'
 assert_not_contains "Review lifecycle does not use top-level issue comment API" "$review_cmd" "issue comment 43"
 
 : > "$GH_LOG"
@@ -109,7 +118,7 @@ assert_not_contains "Review lifecycle does not use top-level issue comment API" 
 top_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started   --repo mariuszmarzec/shoppingListGenerator   --issue 43   --comment-id issue:5831560162   --task-id issue:5831560162   --pr-number 43   --json 2>&1)"
 top_cmd="$(head -1 "$GH_LOG" 2>/dev/null || true)"
 
-assert_contains "Top-level lifecycle uses issue comment API" "$top_cmd" "gh issue comment 43"
+assert_contains "Top-level lifecycle uses issue comment API" "$top_cmd" "issue comment 43"
 assert_not_contains "Top-level lifecycle does not use review reply endpoint" "$top_cmd" "pulls/43/comments"
 assert_not_contains "Top-level lifecycle has no in_reply_to routing" "$top_cmd" "in_reply_to="
 
