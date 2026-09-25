@@ -141,9 +141,11 @@ test_openclaw_custom_binary() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/bin"
+
   cat >"$tmp/bin/custom-openclaw" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' 'TASK_DONE custom-binary'
+printf '%s
+' 'TASK_DONE custom-binary'
 exit 0
 MOCK
   chmod +x "$tmp/bin/custom-openclaw"
@@ -152,8 +154,7 @@ MOCK
   local out
   out="$(PATH="/usr/bin:/bin" OPENCLAW_BIN="$tmp/bin/custom-openclaw"     AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/openclaw-adapter.sh"       --task-id oc-custom --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenClawAdapter honors explicit binary override outside PATH"
-  grep -q '^TASK_DONE custom-binary
-test_openclaw_failure() {
+  grep -q '^TASK_DONE custom-binarytest_openclaw_failure() {
   local tmp
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
