@@ -311,6 +311,41 @@ release_repo_lock() {
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
   rm -f "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
 }
+archive_task_artifacts() {
+  local comment_id="$1"
+  local stdout_file="$2"
+  local stderr_file="$3"
+  local prompt_file="$4"
+
+  local attempt
+  attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || echo "1")"
+  attempt="${attempt:-1}"
+
+  local safe_id
+  safe_id="$(printf '%s' "$comment_id" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  local archive_dir="$MANUL_TASK_LOG_DIR/$safe_id"
+  mkdir -p "$archive_dir" 2>/dev/null || {
+    log "WARN: failed to create task log archive directory: $archive_dir"
+    return 1
+  }
+
+  if [ -f "$stdout_file" ]; then
+    cp -f "$stdout_file" "$archive_dir/attempt-${attempt}.stdout" 2>/dev/null || \
+      log "WARN: failed to archive stdout for task $comment_id attempt $attempt"
+  fi
+  if [ -f "$stderr_file" ]; then
+    cp -f "$stderr_file" "$archive_dir/attempt-${attempt}.stderr" 2>/dev/null || \
+      log "WARN: failed to archive stderr for task $comment_id attempt $attempt"
+  fi
+  if [ -f "$prompt_file" ]; then
+    cp -f "$prompt_file" "$archive_dir/attempt-${attempt}.prompt" 2>/dev/null || \
+      log "WARN: failed to archive prompt for task $comment_id attempt $attempt"
+  fi
+
+  log "dispatch: archived diagnostics for task $comment_id attempt $attempt in $archive_dir"
+  lc_log "DIAGNOSTICS_ARCHIVED" "task=$comment_id attempt=$attempt dir=$archive_dir"
+  return 0
+}
 
 # Enhanced SQLite UPDATE with verification and error handling
 update_task_completion() {
@@ -2861,6 +2896,9 @@ PROMPT_APPEND
 
     # Release repository lock
     release_repo_lock "$REPO"
+
+    # Persist task diagnostics before removing transient worker artifacts.
+    archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
 
     # Cleanup task artifacts (no separate workdir to remove)
     rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
