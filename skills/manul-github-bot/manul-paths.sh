@@ -27,6 +27,7 @@ MANUL_DB="${MANUL_DB:-$MANUL_STATE_DIR/manul.db}"
 MANUL_LOG_DIR="${MANUL_LOG_DIR:-$MANUL_DIR/logs}"
 MANUL_LOCKS_DIR="${MANUL_LOCKS_DIR:-$MANUL_STATE_DIR/locks}"
 MANUL_TASKS_DIR="${MANUL_TASKS_DIR:-$MANUL_STATE_DIR/tasks}"
+MANUL_TASK_LOG_DIR="${MANUL_TASK_LOG_DIR:-$MANUL_LOG_DIR/tasks}"
 MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 
 # Runtime selection (default: openclaw). Environment overrides config.
@@ -53,6 +54,7 @@ mkdir -p "$MANUL_STATE_DIR" \
          "$MANUL_LOG_DIR" \
          "$MANUL_LOCKS_DIR" \
          "$MANUL_TASKS_DIR" \
+         "$MANUL_TASK_LOG_DIR" \
          "$MANUL_WORKSPACE" \
          "$MANUL_DIR" \
   2>/dev/null || true
