@@ -115,6 +115,8 @@ For an agent execution:
 - the agent must post exactly one user-facing result comment;
 - the result comment must be posted before `TASK_DONE`;
 - the comment must contain the exact task/attempt marker;
+- if a comment with the exact marker already exists, the agent must update it in place instead of creating a duplicate;
+- the final GitHub state must contain exactly one matching result comment for that task/attempt;
 - lifecycle comments such as `🔄 working`, `✅ completed`, `❌ failed`, and retry notifications are separate daemon responsibilities.
 
 A `TASK_DONE` without a verified result comment is not accepted as successful completion.

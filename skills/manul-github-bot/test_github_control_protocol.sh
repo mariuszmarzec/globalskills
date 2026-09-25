@@ -462,6 +462,12 @@ test_failed_task_produces_event() {
   local output
   output="$(feedback post-failed --repo "test/repo" --issue "700" --comment-id "c2" --task-id "$task_id" --error "Something went wrong" --json 2>/dev/null)" || return 1
 
+  # Regression: failed feedback must report the configured maximum attempt count.
+  local helper_source
+  helper_source="$(cat "$FEEDBACK_SCRIPT")"
+  echo "$helper_source" | grep -q 'max_attempts=.*maxAttemptsBeforeFail' || return 1
+  echo "$helper_source" | grep -q '\*\*Attempt:\*\* \${attempt}/\${max_attempts}' || return 1
+  echo "$helper_source" | grep -q 'maxAttempts: \$maxAttempts' || return 1
   local status
   status="$(echo "$output" | jq -r '.status // empty')"
   [ "$status" = "failed" ] || return 1

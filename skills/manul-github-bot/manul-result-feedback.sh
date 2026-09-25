@@ -245,6 +245,12 @@ cmd_post_failed() {
   local attempt
   attempt="$(get_task_attempt "$TASK_ID")"
 
+  local max_attempts
+  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then
+    max_attempts=3
+  fi
+
   local conv_id
   conv_id="$(get_task_conversation "$TASK_ID")"
 
@@ -256,12 +262,14 @@ cmd_post_failed() {
     --arg error "${ERROR_MSG:0:500}" \
     --argjson prNumber "${PR_NUMBER:-null}" \
     --argjson attempt "$attempt" \
+    --argjson maxAttempts "$max_attempts" \
     '{
       taskId: $taskId,
       conversationId: $conversationId,
       error: $error,
       prNumber: $prNumber,
-      attempt: $attempt
+      attempt: $attempt,
+      maxAttempts: $maxAttempts
     }')
 
   # Build event marker
@@ -280,7 +288,7 @@ cmd_post_failed() {
     comment_body+="**Conversation:** ${conv_id}"
     comment_body+=$'\n'
   fi
-  comment_body+="**Attempt:** ${attempt}/${attempt}"
+  comment_body+="**Attempt:** ${attempt}/${max_attempts}"
   comment_body+=$'\n\n'
   if [ -n "${ERROR_MSG:-}" ]; then
     comment_body+="**Error:**\n\`\`\`\n${ERROR_MSG}\n\`\`\`"

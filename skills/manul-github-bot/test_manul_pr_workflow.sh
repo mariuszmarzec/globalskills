@@ -233,6 +233,17 @@ test_reply_routing() {
 }
 
 # ============================================================================
+# Test 6b: dynamic agent prompt requires in-place result comment repair
+test_result_comment_repair_guidance() {
+  TEST_NAME="result_comment_repair_guidance"
+  echo "=== Test 6b: Result comment repair guidance ==="
+
+  local prompt_segment
+  prompt_segment="$(sed -n '/## GitHub Comment Posting (CRITICAL)/,/## Authoritative Repository/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (existing result comment)" "$prompt_segment" "existing result comment"
+  assert_contains "$TEST_NAME (PATCH existing comment)" "$prompt_segment" "gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID>"
+  assert_contains "$TEST_NAME (single final comment)" "$prompt_segment" "The final state must contain exactly one matching result comment"
+}
 # Test 6: feedback.sh exists and is functional
 # ============================================================================
 test_feedback_script() {
@@ -464,6 +475,19 @@ test_daemon_lifecycle_comments() {
 }
 
 # ============================================================================
+# Test 14b: Result comment validation runs after PR metadata verification
+test_result_validation_order() {
+  TEST_NAME="result_validation_order"
+  echo "=== Test 14b: Result validation order ==="
+
+  local eval_body pr_url_line result_line
+  eval_body="$(sed -n '/^evaluate_task_completion()/,/^run_once()/p' "$DAEMON")"
+  pr_url_line="$(printf "%s\n" "$eval_body" | grep -n 'verify_result_comment_pr_url "$REPO"' | head -1 | cut -d: -f1)"
+  result_line="$(printf "%s\n" "$eval_body" | grep -n 'verify_result_comment "$REPO"' | head -1 | cut -d: -f1)"
+  [ -n "$pr_url_line" ] || return 1
+  [ -n "$result_line" ] || return 1
+  [ "$result_line" -gt "$pr_url_line" ] || return 1
+}
 # Test 15: Completed-task guard placement and logic
 # ============================================================================
 test_completed_task_guard() {
@@ -641,7 +665,9 @@ test_completion_markers
 test_flock_singleton
 test_agent_response_removed
 test_prompt_enforces_agent_posting
+test_result_comment_repair_guidance
 test_daemon_lifecycle_comments
+test_result_validation_order
 test_completed_task_guard
 test_retry_backoff
 test_schema_migration

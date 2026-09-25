@@ -124,6 +124,18 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 ## GitHub Comment Posting (CRITICAL)
 You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
 
+Before posting, query the source issue/PR for an existing result comment
+containing the exact marker
+`<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`.
+If a result comment with that marker already exists, do NOT create another comment.
+Update the existing comment in place with the final verified content using:
+```bash
+gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID> \
+  -f body="YOUR_RESULT_COMMENT"
+```
+Only create a new comment when no result comment with that marker exists. The final
+state must contain exactly one matching result comment for this task/attempt.
+
 ### Routing
 Use the task metadata above and choose the endpoint that matches `Task Type`:
 

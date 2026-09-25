@@ -106,6 +106,14 @@ For informational tasks:
 
 Post exactly one user-facing result comment before emitting `TASK_DONE`.
 
+Before posting, query the source issue/PR for an existing result comment
+containing the exact marker
+`<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`.
+If one exists, do NOT create another comment. Validate and update that existing
+comment in place with the final verified content using GitHub's comment PATCH API.
+Only create a new comment when no result comment with that marker exists. The final
+state must contain exactly one matching result comment for this task/attempt.
+
 Required format:
 
 ```text
