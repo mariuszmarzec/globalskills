@@ -30,7 +30,9 @@ GitHub
                  agent/tools
 ```
 
-The current daemon invokes the OpenClaw `main` agent directly. OpenClaw currently provides the agent execution environment used by Manul.
+The daemon is runtime-neutral: it reaches an agent runtime only through
+`AgentExecutionController` → `AgentExecutor` → a backend adapter. OpenClaw is
+the default adapter today; OpenCode is an independent alternate backend.
 
 ### Current source/runtime split
 
