@@ -543,7 +543,7 @@ init_db
 test_status_log() {
   echo ""
   echo "=== manul-status.sh log tests ==="
-  printf 'line-1\nline-2\nline-3\n' > "$MANUL_DIR/daemon.log"
+  mkdir -p "$MANUL_DIR/logs"\n  printf 'line-1\nline-2\nline-3\n' > "$MANUL_DIR/logs/daemon.log"
 
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --log --tail=2 2>&1)
   assert_eq "Log mode --tail=2 returns last two lines" $'line-2\nline-3' "$OUTPUT"
