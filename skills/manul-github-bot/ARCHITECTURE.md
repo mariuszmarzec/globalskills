@@ -21,13 +21,16 @@ GitHub
             |
             +--> workspace-manager.sh
             |
-            +--> agent execution
+            +--> AgentExecutionController
                     |
                     v
-              OpenClaw main agent
-                    |
-                    v
-                 agent/tools
+               AgentExecutor
+                /        \
+               v          v
+       OpenClawAdapter  OpenCodeAdapter
+               |
+               v
+          agent runtime
 ```
 
 The daemon is runtime-neutral: it reaches an agent runtime only through
