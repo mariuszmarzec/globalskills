@@ -89,6 +89,7 @@ SCRIPTS=(
     "agent-executor.sh"
     "agent-execution-controller.sh"
     "manul-paths.sh"
+    "manul-env.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
     "process-runner.sh"
