@@ -112,7 +112,7 @@ fi
 
 INVALID="$TMP/invalid"
 mkdir -p "$INVALID"
-printf 'THIS IS NOT VALID SHELL\n' > "$INVALID/.env"
+printf "OPENCLAW_STATE_DIR='unterminated\n" > "$INVALID/.env"
 
 set +e
 INVALID_RC=0
