@@ -652,6 +652,7 @@ test_completion_markers
 test_flock_singleton
 test_agent_response_removed
 test_prompt_enforces_agent_posting
+test_result_comment_repair_guidance
 test_daemon_lifecycle_comments
 test_completed_task_guard
 test_retry_backoff
