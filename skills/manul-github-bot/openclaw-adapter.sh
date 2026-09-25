@@ -2,7 +2,7 @@
 # openclaw-adapter.sh — OpenClaw runtime adapter for AgentExecutor.
 #
 # This adapter is the DEFAULT backend. It translates Manul ExecutionContext into
-# an OpenClaw `agent --agent main` invocation and maps the exit code / output
+# an OpenClaw embedded `agent --local` invocation and maps the exit code / output
 # to a runtime-neutral ExecutionResult.
 #
 # CRITICAL: this adapter does NOT depend on or import any other adapter.
@@ -127,6 +127,7 @@ log "starting task=$OPT_TASK_ID session=$SESSION_KEY timeout=${OPENCLAW_AGENT_TI
 # testability (mock mode), and consistent result capture.
 _run_openclaw_agent() {
     "$OPENCLAW_BIN" agent \
+        --local \
         --agent "${OPT_AGENT:-main}" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
@@ -134,6 +135,9 @@ _run_openclaw_agent() {
 }
 
 # --- Execute with ProcessRunner boundary ---
+# Use OpenClaw's embedded local path rather than the Gateway-backed agent.
+# Manul is a headless coding automation and needs deterministic stdout/final
+# result capture while retaining its explicit per-task session key.
 # Caller-supplied stdout/stderr files are preserved so the daemon can inspect
 # result markers (TASK_DONE / TASK_FAILED / TASK_NEEDS_USER) afterwards.
 ProcessRunner_TmpStdout="$OPT_STDOUT_FILE"
