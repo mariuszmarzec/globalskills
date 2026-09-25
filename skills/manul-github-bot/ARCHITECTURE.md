@@ -21,16 +21,21 @@ GitHub
             |
             +--> workspace-manager.sh
             |
-            +--> agent execution
+            +--> AgentExecutionController
                     |
                     v
-              OpenClaw main agent
-                    |
-                    v
-                 agent/tools
+               AgentExecutor
+                /        \
+               v          v
+       OpenClawAdapter  OpenCodeAdapter
+               |
+               v
+          agent runtime
 ```
 
-The current daemon invokes the OpenClaw `main` agent directly. OpenClaw currently provides the agent execution environment used by Manul.
+The daemon is runtime-neutral: it reaches an agent runtime only through
+`AgentExecutionController` → `AgentExecutor` → a backend adapter. OpenClaw is
+the default adapter today; OpenCode is an independent alternate backend.
 
 ### Current source/runtime split
 
@@ -138,6 +143,7 @@ The runtime-isolation refactor makes Manul independent of the OpenClaw runtime l
 ```
 ~/.manul/
 ├── config.json
+├── .env
 ├── state/
 │   ├── manul.db
 │   ├── locks/
@@ -146,13 +152,14 @@ The runtime-isolation refactor makes Manul independent of the OpenClaw runtime l
 └── workspace/
 ```
 
-OpenClaw remains provider-owned:
+OpenClaw remains provider-owned, including its state/configuration paths.
+Those paths are supplied through provider environment such as
+`OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`; Manul may persist those
+values in `~/.manul/.env` for unattended execution.
 
-```
-~/.openclaw/
-```
-
-OpenCode, Claude Code, Tabnine and other runtimes retain their native configuration/state locations unless an adapter has a concrete reason to own additional Manul-specific data.
+OpenCode, Claude Code, Tabnine and other runtimes retain their native
+configuration/state locations unless an adapter has a concrete reason to own
+additional Manul-specific data.
 
 The execution boundary becomes:
 

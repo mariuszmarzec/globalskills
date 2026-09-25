@@ -237,7 +237,10 @@ The example configuration currently defines:
 - lock TTL;
 - maximum concurrent tasks.
 
-The location of this configuration is `~/.manul/config.json`. The semantics of these controls should not change accidentally.
+The location of this configuration is `~/.manul/config.json`. Operator/provider
+environment for unattended execution is stored separately in `~/.manul/.env`;
+it is not part of the Manul JSON configuration contract. The semantics of
+these controls should not change accidentally.
 
 ## 17. Runtime boundary
 

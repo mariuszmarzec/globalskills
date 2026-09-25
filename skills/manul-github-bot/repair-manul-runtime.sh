@@ -9,7 +9,8 @@
 # 2. Deploying symlinks to canonical scripts
 # 3. Restoring config.json from template if missing
 # 4. Restoring manul.db from an existing backup
-# 5. Validating/upgrading the DB using the canonical Manul init routines
+# 5. Preparing provider environment for unattended runs
+# 6. Validating/upgrading the DB using the canonical Manul init routines
 #
 # The repair script never invents a new application schema. A missing or
 # invalid DB must be restored from an explicit backup or a previously-created
@@ -98,6 +99,13 @@ fi
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
+
+echo
+echo "  Preparing operator environment..."
+if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
+    fail "Could not prepare $RUNTIME_DIR/.env"
+fi
+echo "  Environment file: $RUNTIME_DIR/.env"
 
 DB_FILE="$STATE_DIR/manul.db"
 REPAIR_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

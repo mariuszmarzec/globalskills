@@ -52,6 +52,7 @@ Current runtime:
 ```
 ~/.manul/
 ├── config.json
+├── .env                # operator/provider environment for unattended runs
 ├── state/
 │   ├── manul.db
 │   ├── locks/
@@ -61,10 +62,13 @@ Current runtime:
 ```
 
 The runtime contains Manul configuration, SQLite state, logs, locks, task
-artifacts, workspace state, and runtime script links. OpenClaw
-configuration/state remains outside that ownership boundary. Provider-specific environment such as
-`OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` must be supplied by the host environment or Manul's
-operator `.env`; these paths must never be hardcoded into the daemon or shared runtime layer.
+artifacts, workspace state, runtime script links, and the operator environment
+file `.env`. OpenClaw configuration/state remains outside that ownership
+boundary. Provider-specific environment such as `OPENCLAW_STATE_DIR` or
+`OPENCLAW_CONFIG_PATH` is persisted in `~/.manul/.env` when present during
+installation/repair. Existing `.env` entries are preserved; arbitrary
+environment variables are never copied. Unattended daemon/watchdog processes
+load this file because cron/systemd does not load `~/.zshrc`.
 
 ## Agent execution boundary
 
@@ -251,9 +255,14 @@ The installer currently:
 - creates the runtime directory;
 - deploys runtime symlinks;
 - initializes configuration when absent;
+- prepares the operator `.env` for unattended processes;
 - prepares/validates the DB;
 - installs the watchdog cron;
 - installs the zsh shell integration.
+
+The operator `.env` is runtime-owned and mode 600. It carries only the
+provider variables explicitly supported by the installer, such as custom
+OpenClaw state/config paths.
 
 The current installer deliberately does not start the daemon automatically.
 

@@ -82,12 +82,12 @@ _resolve_openclaw_bin() {
     return 1
 }
 
-OPENCLAW_BIN=""
-OPENCLAW_BIN="$(_resolve_openclaw_bin)"
-if [ -z "$OPENCLAW_BIN" ]; then
+RESOLVED_OPENCLAW_BIN="$(_resolve_openclaw_bin)"
+if [ -z "$RESOLVED_OPENCLAW_BIN" ]; then
     printf '{"status":"FAILED","task_id":"%s","exit_code":127,"summary":"OpenClaw binary not found (openclaw not on PATH)","session_id":"","duration_s":0}' "$OPT_TASK_ID"
     exit 127
 fi
+OPENCLAW_BIN="$RESOLVED_OPENCLAW_BIN"
 export OPENCLAW_BIN
 
 # --- Session key derivation ---

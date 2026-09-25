@@ -2,16 +2,14 @@
 # install-manul.sh — Canonical Manul installer
 #
 # Idempotent one-shot bootstrap of a fresh Manul runtime:
-#   1. Self-detect canonical source
-#   2. Validate canonical source
-#   3. Ensure runtime directory
-#   4. Deploy symlinks via install-manul-symlinks.sh
-#   5. Restore config.json from example if missing
-#   6. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
+#   1. Self-detect and validate canonical source
+#   2. Ensure runtime directory
+#   3. Deploy symlinks via install-manul-symlinks.sh
+#   4. Restore config.json from example if missing and prepare operator .env
+#   5. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
 #      is created only with explicit --init-state on a first-time installation.
-#   7. Install the dormant watchdog cron (it only acts when .enabled exists)
-#   8. Install canonical zsh shell integration
-#   9. Verify and print summary
+#   6. Install the dormant watchdog cron and canonical zsh shell integration
+#   7. Verify and print summary
 #
 # This installer does NOT start the daemon and does NOT create the .enabled
 # marker. The watchdog cron may exist after installation, but it exits
@@ -67,7 +65,7 @@ if [ ! -d "$CANONICAL_DIR" ]; then
 fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 
-for required in install-manul-symlinks.sh config.json.example \
+for required in install-manul-symlinks.sh config.json.example manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh manul-daemon.sh manul-status.sh; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
@@ -141,6 +139,16 @@ fi
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
+
+# 4b. Persist provider-specific environment needed by unattended processes.
+#     Only an explicit allowlist is copied from the installer environment.
+#     Existing ~/.manul/.env content is preserved.
+echo
+echo "  Preparing operator environment..."
+if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
+    fail "Could not prepare $RUNTIME_DIR/.env"
+fi
+echo "  Environment file: $RUNTIME_DIR/.env"
 
 # 5. Bootstrap/migrate the DB
 #    - missing/empty file -> only --init-state may bootstrap a fresh schema
@@ -254,7 +262,7 @@ if $BOOTSTRAP_FRESH; then
     echo "  Fresh DB bootstrap complete"
 fi
 
-# 6. Install watchdog cron + zsh shell integration.
+# 7. Install watchdog cron + zsh shell integration.
 #    Neither operation starts the daemon. The watchdog is dormant until .enabled
 #    is created by an intentional start.
 WATCHDOG_CRON="*/5 * * * * $RUNTIME_DIR/watchdog.sh"
@@ -301,7 +309,7 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh \
     fi
 done
 
-for data_path in "$RUNTIME_DIR/config.json" "$RUNTIME_DIR/state/manul.db"; do
+for data_path in "$RUNTIME_DIR/config.json" "$RUNTIME_DIR/state/manul.db" "$RUNTIME_DIR/.env"; do
     if [ -f "$data_path" ]; then
         echo "OK $(realpath --relative-to="$RUNTIME_DIR" "$data_path") present"
     else
