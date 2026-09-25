@@ -6,6 +6,20 @@
 # Runs the OpenClaw orchestrator with a dedicated per-task session, then appends
 # TASK_DONE (if exit code 0) or TASK_FAILED (if exit code non-zero) to the stdout file.
 # The orchestrator's stdout and stderr are appended to the respective files.
+#
+# =============================================================================
+# DEPRECATED (2026-09-24) — DO NOT USE IN NEW CODE.
+# =============================================================================
+# This wrapper is superseded by the AgentExecutor runtime abstraction:
+#
+#   manul-daemon.sh → AgentExecutionController.execute()
+#     → AgentExecutor.execute()  (agent-executor.sh)
+#       → openclaw-adapter.sh / opencode-adapter.sh
+#
+# It remains in the repository only as a historical reference for the original
+# OpenClaw-only invocation path. It is NOT installed by install-manul-symlinks.sh
+# and is NOT called by the daemon. Do not add new callers here.
+# =============================================================================
 
 set -uo pipefail
 

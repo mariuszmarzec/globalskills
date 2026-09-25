@@ -11,13 +11,15 @@
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
-CONFIG="${MANUL_DIR}/config.json"
-LOCK="$MANUL_DIR/lock"
-PID_FILE="${MANUL_DIR}/daemon.pid"
-LOG="$MANUL_DIR/watchdog.log"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+CONFIG="$MANUL_CONFIG"
+LOCK="$MANUL_LOCKS_DIR/watchdog.lock"
+PID_FILE="$MANUL_LOCKS_DIR/daemon.pid"
+LOG="$MANUL_LOG_DIR/watchdog.log"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="${MANUL_DIR}/manul.db"
+DB="$MANUL_DB"
 LOCK_TTL="${MANUL_LOCK_TTL_SECONDS:-1800}"  # 30 minutes
 MAX_ATTEMPTS="${MANUL_MAX_ATTEMPTS:-3}"
 

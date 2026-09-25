@@ -14,24 +14,21 @@ For any non-trivial change, read these files first:
 
 Treat `CONTRACTS.md` as the list of behavioural invariants. Treat `ARCHITECTURE.md` as the ownership and dependency model.
 
-## Current master vs target architecture
+## Current architecture (implemented)
 
-The current master implementation still uses `~/.openclaw/manul` as its default runtime directory and invokes the OpenClaw `main` agent directly from the daemon.
+The runtime isolation refactor has landed. The current implementation:
 
-The approved next architecture intentionally changes that:
+- Uses `~/.manul/` as the single canonical runtime directory
+  (`MANUL_DIR`, resolved in `manul-paths.sh`).
+- Routes all agent execution through `AgentExecutor`, selected by
+  `AGENT_RUNTIME` (`openclaw` default, `opencode` alternate).
+- Adapters are independent backends behind a single `ProcessRunner.run()`
+  process boundary; they must not spawn subprocesses directly and must not
+  depend on each other.
+- Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
-- Manul-owned runtime/state moves to `~/.manul/`.
-- OpenClaw becomes one execution backend behind an `AgentExecutor` adapter.
-- Other agent runtimes can later be added without changing Manul task lifecycle.
-- Native provider configuration remains owned by the provider.
-
-The target architecture is **not implemented merely because it is documented here**. Keep documentation explicit about what is current and what is planned.
-
-## No backward-compatibility requirement for the runtime refactor
-
-For the upcoming runtime isolation and adapter work, do not preserve the old `~/.openclaw/manul` layout merely for compatibility.
-
-A clean replacement is preferred over:
+Do not reintroduce `~/.openclaw/manul` ownership, compatibility shims, or
+dual runtime directories. A clean replacement is preferred over:
 
 - dual runtime directories;
 - fallback from `~/.manul` to `~/.openclaw/manul`;

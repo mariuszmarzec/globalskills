@@ -4,19 +4,19 @@ Local machine-readable CLI interface for submitting, observing, and controlling 
 
 ## Runtime location
 
-Current master reads the Manul runtime from:
+The Manul runtime is read from:
 
 ```
-${MANUL_DIR:-$HOME/.openclaw/manul}
+${MANUL_DIR:-$HOME/.manul}
 ```
 
-Therefore the current default DB is:
+Therefore the default DB is:
 
 ```
-~/.openclaw/manul/manul.db
+~/.manul/state/manul.db
 ```
 
-This filesystem location is **not** a behavioural contract. The next runtime-isolation refactor intentionally moves Manul-owned state to `~/.manul` without requiring migration of old state.
+This filesystem location is **not** a behavioural contract. The runtime-isolation refactor intentionally moved Manul-owned state to `~/.manul` without requiring migration of old `~/.openclaw/manul` state.
 
 ## Submit a task
 
@@ -218,6 +218,6 @@ Shared state/concurrency changes should additionally run the relevant concurrenc
 
 ## Important boundary
 
-Do not treat the current `~/.openclaw/manul/manul.db` path as an external API contract.
+Do not treat the current `~/.manul/state/manul.db` path as an external API contract.
 
-The approved architecture moves the same logical Manul interface to a dedicated `~/.manul` runtime root. No fallback to the old OpenClaw-owned path is required for that refactor.
+The runtime-isolation refactor has moved the same logical Manul interface to a dedicated `~/.manul` runtime root. There is no fallback to the old OpenClaw-owned path.

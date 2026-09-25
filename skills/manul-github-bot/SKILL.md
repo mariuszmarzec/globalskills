@@ -27,15 +27,19 @@ Read these files before making architectural changes:
 - `ARCHITECTURE.md` — ownership/dependency model;
 - `CONTRACTS.md` — behavioural invariants.
 
-## Current master runtime
+## Current runtime
 
-The current master implementation uses:
+The current implementation uses:
 
 ```
-MANUL_DIR=${MANUL_DIR:-$HOME/.openclaw/manul}
+MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 ```
 
-The installer currently deploys the runtime scripts as symlinks.
+Path resolution and `AGENT_RUNTIME` validation are centralized in
+`manul-paths.sh`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to
+`~/.openclaw/manul`.
+
+The installer deploys the runtime scripts as symlinks.
 
 Canonical source:
 
@@ -44,18 +48,6 @@ Canonical source:
 ```
 
 Current runtime:
-
-```
-~/.openclaw/manul/
-```
-
-The current runtime contains Manul configuration, SQLite state, logs, locks, task artifacts, workspace state, and runtime script links.
-
-Some older helpers accept `OPENCLAW_MANUL_DIR` as an environment alias. That is current implementation detail, not a desired long-term dependency.
-
-## Approved next architecture
-
-The next refactor intentionally separates Manul from OpenClaw:
 
 ```
 ~/.manul/
@@ -68,21 +60,28 @@ The next refactor intentionally separates Manul from OpenClaw:
 └── workspace/
 ```
 
-OpenClaw remains in its own environment:
+The runtime contains Manul configuration, SQLite state, logs, locks, task
+artifacts, workspace state, and runtime script links. OpenClaw
+configuration/state remains outside that ownership boundary. Provider-specific environment such as
+`OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` must be supplied by the host environment or Manul's
+operator `.env`; these paths must never be hardcoded into the daemon or shared runtime layer.
+
+## Agent execution boundary
+
+The daemon never invokes an agent runtime directly. It calls
+`AgentExecutionController.execute`, which routes through `AgentExecutor` to a
+backend adapter selected by `AGENT_RUNTIME`:
 
 ```
-~/.openclaw/
-```
-
-The agent boundary will become:
-
-```
-Manul -> AgentExecutor -> OpenClawAdapter
+Manul -> AgentExecutor -> OpenClawAdapter   (default)
                          -> OpenCodeAdapter
                          -> other adapters
 ```
 
-This target is documented now so agents do not entrench the current OpenClaw coupling. It is not implemented on the current master yet.
+Adapters are independent backends behind a single `ProcessRunner.run()`
+process boundary. They must not spawn subprocesses directly and must not
+depend on each other. Runtime-specific sessions and continuation mechanics
+belong to the adapter, not to Manul task contracts.
 
 ## GitHub task workflow
 
@@ -258,7 +257,7 @@ The installer currently:
 
 The current installer deliberately does not start the daemon automatically.
 
-The upcoming runtime isolation refactor is allowed to replace this layout with a fresh `~/.manul` installation. It does not need to migrate obsolete `.openclaw/manul` state.
+The runtime isolation refactor has landed: the runtime is `~/.manul` and there is no migration path from obsolete `.openclaw/manul` state.
 
 ## Verification
 

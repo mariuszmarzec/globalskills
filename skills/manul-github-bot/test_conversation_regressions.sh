@@ -32,7 +32,8 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 test_helpers_and_persistence() {
   local dir db
   dir="$(mktemp -d /tmp/manul-conv-reg-helpers-XXXXXX)"
-  db="$dir/manul.db"
+  mkdir -p "$dir/state"
+  db="$dir/state/manul.db"
   sqlite3 "$db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
   # Source the required functions from poll.sh
@@ -81,13 +82,13 @@ test_issue_conversation_regression() {
   local test_dir
   test_dir="$(mktemp -d /tmp/conv-regression-issue-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -109,6 +110,7 @@ CFGEOF
 
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -232,13 +234,13 @@ test_review_thread_regression() {
   local test_dir
   test_dir="$(mktemp -d /tmp/conv-regression-review-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -349,13 +351,13 @@ test_baseid_dedup_no_duplicates() {
   local test_dir
   test_dir="$(mktemp -d /tmp/conv-regression-baseid-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -452,13 +454,13 @@ test_bot_comment_filtering() {
   local test_dir
   test_dir="$(mktemp -d /tmp/conv-regression-bot-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -555,8 +557,8 @@ test_installation_baseline_filtering() {
   test_dir="$(mktemp -d /tmp/manul-install-baseline-XXXXXX)"
   manul_dir="$test_dir/manul"
   mock_gh_dir="$test_dir/mock-gh"
-  poll_db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir" "$mock_gh_dir"
+  poll_db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs" "$mock_gh_dir"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"repositories":["test-org/test-repo"],"trigger":"/manul","agents":["coder"]}

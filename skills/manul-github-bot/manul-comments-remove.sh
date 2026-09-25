@@ -2,7 +2,7 @@
 # manul-comments-remove.sh — Remove all manul-signed comments from a PR or issue.
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 CONFIG="$MANUL_DIR/config.json"
 SIG="— manul 🐈"
 

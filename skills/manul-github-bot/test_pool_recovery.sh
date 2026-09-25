@@ -15,12 +15,12 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-LOG="$MANUL_DIR/daemon.log"
-LIFECYCLE_LOG="$MANUL_DIR/lifecycle.log"
+LOG="$MANUL_DIR/logs/daemon.log"
+LIFECYCLE_LOG="$MANUL_DIR/logs/lifecycle.log"
 export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG MANUL_TESTING=true
-mkdir -p "$MANUL_DIR/workspaces" "$MANUL_DIR/tasks"
+mkdir -p "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/workspace" "$MANUL_DIR/logs"
 
 cat >"$CONFIG" <<'CONFIGEOF'
 {
@@ -75,7 +75,7 @@ echo "PASS 2"
 echo "Test 3: BUSY workspace for queued task is reclaimed immediately"
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts) VALUES ('queued-task','test/repo',2,'queued',1);"
 ws_queued="ws-queued"
-ws_path="$MANUL_DIR/workspaces/$ws_queued"
+ws_path="$MANUL_DIR/workspace/$ws_queued"
 mkdir -p "$ws_path"
 sqlite3 "$DB" "INSERT INTO workspaces(workspaceId,workspacePath,status,currentTaskId,lastUsedAt) VALUES ('$ws_queued','$ws_path','BUSY','queued-task',datetime('now'));"
 workspace_cleanup_stale 3600
@@ -88,6 +88,7 @@ sqlite3 "$DB" "DELETE FROM workspaces;"
 # The production daemon sources the runtime copy/symlink of workspace-manager.sh.
 # Reproduce that runtime layout inside the isolated test directory.
 cp "$SCRIPT_DIR/workspace-manager.sh" "$MANUL_DIR/workspace-manager.sh"
+cp "$SCRIPT_DIR/manul-paths.sh" "$MANUL_DIR/manul-paths.sh"
 set +e
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 source_rc=$?

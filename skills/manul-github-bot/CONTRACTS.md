@@ -220,7 +220,7 @@ Equivalent implementation choices should be resolved by the agent without blocki
 
 ## 16. Configuration contract
 
-The runtime reads Manul configuration from `MANUL_DIR/config.json` in the current master implementation.
+The runtime reads Manul configuration from `MANUL_DIR/config.json`, where `MANUL_DIR` resolves to `~/.manul`.
 
 The example configuration currently defines:
 - polling interval;
@@ -237,20 +237,30 @@ The example configuration currently defines:
 - lock TTL;
 - maximum concurrent tasks.
 
-The location of this configuration is an implementation detail planned to move from `~/.openclaw/manul` to `~/.manul`. The semantics of these controls should not change accidentally.
+The location of this configuration is `~/.manul/config.json`. The semantics of these controls should not change accidentally.
 
 ## 17. Runtime boundary
 
-Current master uses OpenClaw as the agent runtime.
+Manul task contracts are runtime-neutral. The daemon never invokes an agent
+runtime directly; it calls `AgentExecutionController.execute`, which routes
+through `AgentExecutor` to a backend adapter.
 
-OpenClaw-specific details are implementation details, not Manul task contracts.
+Adapters are independent backends behind a single `ProcessRunner.run()`
+process boundary. OpenClaw (`openclaw-adapter.sh`) is the default runtime;
+OpenCode (`opencode-adapter.sh`) is an independent alternative. Adapters must
+not spawn subprocesses directly and must not depend on each other.
 
-The approved refactor will introduce an `AgentExecutor` boundary so future runtimes can be substituted without changing the task lifecycle contracts above.
+Runtime-specific details (sessions, continuation mechanics, tool paths) are
+implementation details of the adapter, not Manul task contracts.
 
-## 18. Clean-break policy for the upcoming refactor
+## 18. Clean-break policy
 
-The runtime isolation refactor does not need to preserve old `~/.openclaw/manul` state or paths.
+The runtime isolation refactor is a clean break from `~/.openclaw/manul`.
 
-Do not reintroduce compatibility shims just to keep obsolete runtime state working.
+- `MANUL_DIR` resolves to `~/.manul`; there is no fallback and no
+  `OPENCLAW_MANUL_DIR` alias.
+- Old `~/.openclaw/manul` state or paths are not preserved or migrated.
+- No compatibility shims keep obsolete runtime state working.
 
-Behavioural compatibility is required; obsolete filesystem layout compatibility is not.
+Behavioural compatibility is required; obsolete filesystem layout
+compatibility is not.

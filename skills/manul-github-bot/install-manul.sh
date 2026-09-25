@@ -21,14 +21,14 @@
 #   install-manul.sh [--runtime-dir <path>] [--canonical-dir <path>] [--init-state]
 #
 # Environment overrides:
-#   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.openclaw/manul)
+#   MANUL_RUNTIME_DIR    Runtime directory (default: ~/.manul)
 #   MANUL_CANONICAL_DIR  Canonical skill directory (default: this script's dir)
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
-RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 INIT_STATE=false
 
 fail() {
@@ -59,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+STATE_DIR="$RUNTIME_DIR/state"
+
 # 1. Self-detect / validate canonical source
 if [ ! -d "$CANONICAL_DIR" ]; then
     fail "Canonical Manul directory does not exist: $CANONICAL_DIR"
@@ -86,9 +88,11 @@ echo
 #   jq        - config.json parsing throughout the runtime
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
-#   openclaw  - the agent runtime the daemon invokes (checked when starting)
+#   openclaw  - default agent runtime (OpenClawAdapter)
+#   opencode  - alternate agent runtime (OpenCodeAdapter)
+# At least one agent runtime must be present; the daemon picks the default.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl openclaw crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -98,15 +102,21 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git jq sqlite3 curl openclaw crontab"
+if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1; then
+    echo "ERROR: No agent runtime found (need openclaw or opencode)" >&2
+    echo "Install at least one of: openclaw, opencode" >&2
+    exit 1
+fi
+echo "Prerequisites OK: bash git jq sqlite3 curl crontab + agent runtime (openclaw or opencode)"
 echo
 
 # 2. Ensure runtime directory
 if [ ! -d "$RUNTIME_DIR" ]; then
     echo "[1/7] Creating runtime directory: $RUNTIME_DIR"
-    mkdir -p "$RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR" "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/tasks" "$RUNTIME_DIR/logs" "$RUNTIME_DIR/workspace"
 else
     echo "[1/7] Runtime directory exists: $RUNTIME_DIR"
+    mkdir -p "$STATE_DIR" "$STATE_DIR/locks" "$STATE_DIR/tasks" "$RUNTIME_DIR/logs" "$RUNTIME_DIR/workspace"
 fi
 
 # 3. Deploy symlinks
@@ -140,7 +150,7 @@ fi
 # Explicit --init-state is the only destructive installer operation. Repair
 # paths use repair-manul-runtime.sh, which restores an existing DB/backup.
 echo
-DB_FILE="$RUNTIME_DIR/manul.db"
+DB_FILE="$STATE_DIR/manul.db"
 INSTALL_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BOOTSTRAP_FRESH=false
 
@@ -213,8 +223,8 @@ export MANUL_DIR="$RUNTIME_DIR"
 export DB="$DB_FILE"
 
 init_current_db() {
-    "$RUNTIME_DIR/manul-conversation.sh" init-schema &&
-    bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"
+    MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" "$RUNTIME_DIR/manul-conversation.sh" init-schema &&
+    MANUL_DIR="$RUNTIME_DIR" DB="$DB_FILE" bash -c 'source "$1"; workspace_init' _ "$CANONICAL_DIR/workspace-manager.sh"
 }
 
 if ! init_current_db; then
@@ -291,9 +301,9 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh \
     fi
 done
 
-for data in config.json manul.db; do
-    if [ -f "$RUNTIME_DIR/$data" ]; then
-        echo "OK $data present"
+for data_path in "$RUNTIME_DIR/config.json" "$RUNTIME_DIR/state/manul.db"; do
+    if [ -f "$data_path" ]; then
+        echo "OK $(realpath --relative-to="$RUNTIME_DIR" "$data_path") present"
     else
         echo "FAIL $data missing" >&2
         VERIFY_OK=false

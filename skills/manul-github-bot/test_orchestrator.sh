@@ -174,8 +174,8 @@ test_mock_reviewer() {
 
 # Test 11: Production safety
 test_production_safety() {
-  [ "$MANUL_DIR" != "${HOME}/.openclaw/manul" ] || return 1
-  [ "$ORCHESTRATOR_DIR" != "${HOME}/.openclaw/manul" ] || return 1
+  [ "$MANUL_DIR" != "${HOME}/.manul" ] || return 1
+  [ "$ORCHESTRATOR_DIR" != "${HOME}/.manul" ] || return 1
 }
 
 # Test 12: End-to-end mock scenario

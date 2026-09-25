@@ -50,8 +50,8 @@ setup_env() {
   local test_dir
   test_dir="$(mktemp -d /tmp/manul-integration-test-XXXXXX)"
   MANUL_DIR="$test_dir/manul"
-  TEST_DB="$MANUL_DIR/manul.db"
-  mkdir -p "$MANUL_DIR"
+  TEST_DB="$MANUL_DIR/state/manul.db"
+  mkdir -p "$MANUL_DIR/state" "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/workspace" "$MANUL_DIR/logs"
   cat > "$MANUL_DIR/config.json" <<'EOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","mock-reviewer"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 EOF
@@ -79,6 +79,7 @@ EOF
   cp "$SCRIPT_DIR/manul-conversation-linker.sh" "$MANUL_DIR/manul-conversation-linker.sh" 2>/dev/null || true
   cp "$SCRIPT_DIR/manul-result-feedback.sh" "$MANUL_DIR/manul-result-feedback.sh" 2>/dev/null || true
   cp "$SCRIPT_DIR/manul-github-events.sh" "$MANUL_DIR/manul-github-events.sh" 2>/dev/null || true
+  cp "$SCRIPT_DIR/manul-paths.sh" "$MANUL_DIR/manul-paths.sh" 2>/dev/null || true
 
   # Create mock gh for tests
   local mock_gh_dir="$test_dir/mock-gh"
@@ -405,13 +406,13 @@ test_poll_integration_with_mocked_github() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-integration-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -431,8 +432,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -566,13 +570,13 @@ test_pr_review_comment_auto_detects_review_fix() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-auto-detect-pr-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -591,8 +595,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -683,13 +690,13 @@ test_issue_comment_auto_detects_implement() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-auto-detect-issue-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -708,8 +715,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -782,13 +792,13 @@ test_issue_body_auto_detects_implement() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-auto-detect-body-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -807,8 +817,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -881,8 +894,8 @@ MOCK_EOF
 test_daemon_lifecycle_task_started_emitted() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-lifecycle-test-XXXXXX)"
-  local poll_db="$test_dir/manul.db"
-  mkdir -p "$test_dir"
+  local poll_db="$test_dir/state/manul.db"
+  mkdir -p "$test_dir/state"
 
   cat > "$test_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -907,9 +920,13 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$test_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$test_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-daemon.sh" "$test_dir/manul-daemon.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$test_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -992,8 +1009,8 @@ test_daemon_lifecycle_task_done_emitted() {
 test_review_recording_after_submission() {
   local test_dir
   test_dir="$(mktemp -d /tmp/review-recording-test-XXXXXX)"
-  local poll_db="$test_dir/manul.db"
-  mkdir -p "$test_dir"
+  local poll_db="$test_dir/state/manul.db"
+  mkdir -p "$test_dir/state"
 
   cat > "$test_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -1018,8 +1035,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
   # Copy production scripts
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$test_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$test_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$test_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$test_dir/manul-github-events.sh"
 
   # Create conversation and initial task
@@ -1091,13 +1111,13 @@ test_merged_pr_closes_conversation() {
   local test_dir
   test_dir="$(mktemp -d /tmp/merge-close-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1116,8 +1136,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1217,13 +1240,13 @@ test_repeated_poll_after_merge_no_state_change() {
   local test_dir
   test_dir="$(mktemp -d /tmp/merge-repeat-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1242,8 +1265,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1309,13 +1335,13 @@ test_queued_task_prevents_auto_close_on_merge() {
   local test_dir
   test_dir="$(mktemp -d /tmp/merge-queued-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1334,8 +1360,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1398,13 +1427,13 @@ test_running_task_prevents_auto_close_on_merge() {
   local test_dir
   test_dir="$(mktemp -d /tmp/merge-running-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1423,8 +1452,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1479,13 +1511,13 @@ test_new_pr_after_merge_attaches_to_issue_conversation() {
   local test_dir
   test_dir="$(mktemp -d /tmp/new-pr-after-merge-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1504,8 +1536,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1577,13 +1612,13 @@ test_review_fix_chain_no_premature_close() {
   local test_dir
   test_dir="$(mktemp -d /tmp/review-fix-chain-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1602,8 +1637,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -1680,13 +1718,13 @@ test_daemon_auto_closes_on_task_drain() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-drain-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1760,13 +1798,13 @@ test_daemon_does_not_close_with_queued_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-queued-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1823,13 +1861,13 @@ test_daemon_auto_closes_on_failed_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-failed-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1885,13 +1923,13 @@ test_daemon_does_not_close_with_running_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-running-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -1948,13 +1986,13 @@ test_daemon_select_failure_keeps_conversation_open() {
   local test_dir
   test_dir="$(mktemp -d /tmp/daemon-sel-fail-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2006,13 +2044,13 @@ test_poll_merge_query_failure_keeps_conversations_open() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-merge-fail-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2031,8 +2069,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -2084,13 +2125,13 @@ test_retry_after_transient_failure_closes_correctly() {
   local test_dir
   test_dir="$(mktemp -d /tmp/retry-transient-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2109,8 +2150,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -2212,8 +2256,8 @@ test_crash_before_task_creation_creates_one_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/crash-before-task-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2237,8 +2281,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   # Simulate crash: insert review in pending state (no task created yet)
@@ -2301,8 +2348,8 @@ test_concurrent_reviews_create_separate_tasks() {
   local test_dir
   test_dir="$(mktemp -d /tmp/concurrent-review-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2326,8 +2373,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2388,8 +2438,8 @@ test_approve_after_request_changes_no_duplicate_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/approve-after-rc-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2413,8 +2463,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2460,8 +2513,8 @@ test_retry_after_crash_before_creation_exact_one_task() {
   local test_dir
   test_dir="$(mktemp -d /tmp/retry-crash-before-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2485,8 +2538,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2552,8 +2608,8 @@ test_crash_during_task_creation() {
   local test_dir
   test_dir="$(mktemp -d /tmp/crash-during-task-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2578,8 +2634,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2666,8 +2725,8 @@ test_identical_concurrent_reviews_exactly_one_task() {
 local test_dir
    test_dir="$(mktemp -d /tmp/concurrent-identical-test-XXXXXX)"
    local manul_dir="$test_dir/manul"
-   local db="$manul_dir/manul.db"
-   mkdir -p "$manul_dir"
+   local db="$manul_dir/state/manul.db"
+   mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
    cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2692,8 +2751,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2769,8 +2831,8 @@ test_distinct_concurrent_reviews_create_two_tasks() {
   local test_dir
   test_dir="$(mktemp -d /tmp/concurrent-distinct-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2794,8 +2856,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2868,8 +2933,8 @@ test_repeated_retries_after_success() {
   local test_dir
   test_dir="$(mktemp -d /tmp/repeated-retry-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  local db="$manul_dir/manul.db"
-  mkdir -p "$manul_dir"
+  local db="$manul_dir/state/manul.db"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
@@ -2893,8 +2958,11 @@ CFGEOF
   sqlite3 "$db" "ALTER TABLE processed_comments ADD COLUMN taskId TEXT;"
   sqlite3 "$db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local now
@@ -2964,13 +3032,13 @@ test_persistent_conversation_behavior() {
    local test_dir
    test_dir="$(mktemp -d /tmp/poll-persistent-conv-test-XXXXXX)"
    local manul_dir="$test_dir/manul"
-   mkdir -p "$manul_dir"
+   mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
    cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-   local poll_db="$manul_dir/manul.db"
+   local poll_db="$manul_dir/state/manul.db"
    sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
    sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
    sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -2990,9 +3058,12 @@ CFGEOF
    sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
    sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
-   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
-   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
-   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
+  cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
    local mock_gh_dir="$test_dir/mock-gh"
    mkdir -p "$mock_gh_dir"
@@ -3149,13 +3220,13 @@ test_different_inline_review_threads_get_different_conversation_ids() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-thread-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -3174,8 +3245,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3257,13 +3331,13 @@ test_reply_to_same_thread_gets_same_conversation_id() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-thread-reply-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -3282,8 +3356,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3358,13 +3435,13 @@ test_pr_top_level_comment_gets_pr_conversation_id() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-top-level-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -3383,8 +3460,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"
@@ -3453,13 +3533,13 @@ test_conversation_persistence_not_dependent_on_createdAt_now() {
   local test_dir
   test_dir="$(mktemp -d /tmp/poll-persist-test-XXXXXX)"
   local manul_dir="$test_dir/manul"
-  mkdir -p "$manul_dir"
+  mkdir -p "$manul_dir/state" "$manul_dir/state/locks" "$manul_dir/state/tasks" "$manul_dir/workspace" "$manul_dir/logs"
 
   cat > "$manul_dir/config.json" <<'CFGEOF'
 {"automation":{"maxAttemptsBeforeFail":3,"leaseTimeout":900},"reviewers":["mock-reviewer"],"allowedUsers":["test-user","reviewer","author"],"triggers":{"issueCommentTrigger":"/manul","prReviewCommentTrigger":"/manul","issueBodyTrigger":"/manul","fallbackTrigger":"manul"},"signature":"— manul 🐈"}
 CFGEOF
 
-  local poll_db="$manul_dir/manul.db"
+  local poll_db="$manul_dir/state/manul.db"
   sqlite3 "$poll_db" "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
   sqlite3 "$poll_db" "INSERT INTO meta VALUES('baseline','2019-01-01T00:00:00Z');"
   sqlite3 "$poll_db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, author TEXT, agent TEXT, prompt TEXT NOT NULL, context TEXT, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT, processedAt TEXT);"
@@ -3478,8 +3558,11 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, activePrNumber INTEGER, activePrUrl TEXT, activeTaskId TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
 
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
+  cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
   cp "$SCRIPT_DIR/manul-github-events.sh" "$manul_dir/manul-github-events.sh"
 
   local mock_gh_dir="$test_dir/mock-gh"

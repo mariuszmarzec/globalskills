@@ -19,13 +19,14 @@ TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 CONFIG="$MANUL_DIR/config.json"
-LOG="$MANUL_DIR/poll.log"
-POLL_FLOCK="$MANUL_DIR/poll.flock"
-export MANUL_DIR
+LOG="$MANUL_DIR/logs/poll.log"
+POLL_FLOCK="$MANUL_DIR/state/locks/poll.flock"
+REPO_LOCK_DIR="$MANUL_DIR/state/locks/repo"
+export MANUL_DIR REPO_LOCK_DIR
 
-mkdir -p "$MANUL_DIR/repo-locks"
+mkdir -p "$MANUL_DIR/state/locks/repo" "$MANUL_DIR/logs"
 : >"$LOG"
 
 init_poll_db() {
@@ -102,19 +103,19 @@ echo "Test 1: Hanging repo is terminated after REPO_POLL_TIMEOUT"
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test1.txt" 2>&1 || true
 output1=$(cat "$TEST_DIR/test1.txt")
 
-has_timeout() { grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; }
+has_timeout() { grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; }
 no_orphans() {
   sleep 0.5
   ps -eo pid,ppid,cmd | grep "sleep 999999" | grep -v "grep" > /dev/null && return 1 || return 0
 }
-lock_cleaned() { [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; }
-log_exists() { [ -f "$MANUL_DIR/poll.log" ]; }
+lock_cleaned() { [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; }
+log_exists() { [ -f "$MANUL_DIR/logs/poll.log" ]; }
 
 if has_timeout && log_exists; then
   echo "PASS 1: Timeout detected"
 else
   echo "FAIL 1: Timeout not detected"
-  cat "$MANUL_DIR/poll.log" 2>/dev/null || true
+  cat "$MANUL_DIR/logs/poll.log" 2>/dev/null || true
   exit 1
 fi
 
@@ -130,7 +131,7 @@ if lock_cleaned; then
   echo "PASS 1: Lock cleaned up"
 else
   echo "FAIL 1: Lock not cleaned up"
-  ls -la "$MANUL_DIR/repo-locks/" 2>/dev/null || true
+  ls -la "$MANUL_DIR/state/locks/repo/" 2>/dev/null || true
   exit 1
 fi
 
@@ -140,34 +141,34 @@ echo "Test 2: Multiple repos, no starvation"
 
 rm -f "$DB"
 init_poll_db
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 bash "$POLL_SCRIPT" "hang" "fast" > "$TEST_DIR/test2.txt" 2>&1 || true
 
-if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
+if grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; then
   echo "PASS 2: Hang repo timed out"
 else
   echo "FAIL 2: Hang repo timeout missing"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ] && [ ! -f "$MANUL_DIR/repo-locks/fast.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ] && [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 2: Both locks cleaned"
 else
   echo "FAIL 2: Lock(s) still present"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 
 # Check that both repos were processed (hang timed out, fast completed)
 # The log will show "hang timed out" and poll.sh exits successfully
-if grep -q 'hang.*timed out' "$MANUL_DIR/poll.log" && [ $? -eq 0 ]; then
+if grep -q 'hang.*timed out' "$MANUL_DIR/logs/poll.log" && [ $? -eq 0 ]; then
   echo "PASS 2: Hang repo timed out, fast repo not starved"
 else
   echo "FAIL 2: Repo processing incomplete"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -178,8 +179,8 @@ echo "Test 3: poll.flock prevents concurrent instances"
 rm -f "$DB"
 init_poll_db
 rm -f "$POLL_FLOCK"
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test3a.txt" 2>&1 &
 pid1=$!
@@ -234,19 +235,19 @@ bash "$POLL_SCRIPT" "hang" "other" > "$TEST_DIR/test4a.txt" 2>&1 || true
 sleep 0.3
 bash "$POLL_SCRIPT" "fast" > "$TEST_DIR/test4b.txt" 2>&1 || true
 
-if grep -q 'timed out after 2s' "$MANUL_DIR/poll.log"; then
+if grep -q 'timed out after 2s' "$MANUL_DIR/logs/poll.log"; then
   echo "PASS 4: Hang repo still timed out despite global failure"
 else
   echo "FAIL 4: Hang repo timeout missing"
-  cat "$MANUL_DIR/poll.log" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/fast.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 4: Non-hang repo lock cleaned"
 else
   echo "FAIL 4: Non-hang repo lock still present"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 
@@ -300,7 +301,7 @@ fi
 # Simulate the outer daemon timeout interrupting poll.sh before the repo-level
 # timeout can fire. The poll process must clean the lock it acquired before
 # receiving SIGTERM.
-rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/repo-locks/hang.lock"
+rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/state/locks/repo/hang.lock"
 init_poll_db
 export MANUL_REPO_POLL_TIMEOUT=30
 if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test5.txt" 2>&1; then
@@ -309,12 +310,12 @@ if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
   echo "PASS 5: Repo lock cleaned after global SIGTERM"
 else
   echo "FAIL 5: Repo lock leaked after global SIGTERM"
-  ls -la "$MANUL_DIR/repo-locks/" || true
-  cat "$MANUL_DIR/poll.log" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
+  cat "$MANUL_DIR/logs/poll.log" || true
   exit 1
 fi
 
@@ -328,8 +329,8 @@ echo "Test 6: Partial result emitted on outer SIGTERM"
 
 rm -f "$DB" "$POLL_FLOCK"
 init_poll_db
-rm -rf "$MANUL_DIR/repo-locks"
-mkdir -p "$MANUL_DIR/repo-locks"
+rm -rf "$MANUL_DIR/state/locks/repo"
+mkdir -p "$MANUL_DIR/state/locks/repo"
 
 # Pre-seed a queued task so poll.sh has something to report even if it is
 # killed before scanning any repo.
@@ -352,15 +353,15 @@ else
   echo "--- poll.sh output ---"
   cat "$TEST_DIR/test6.txt"
   echo "--- poll.log tail ---"
-  tail -5 "$MANUL_DIR/poll.log" 2>/dev/null || true
+  tail -5 "$MANUL_DIR/logs/poll.log" 2>/dev/null || true
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/repo-locks/hang.lock" ]; then
+if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
   echo "PASS 6: Repo lock cleaned after SIGTERM"
 else
   echo "FAIL 6: Repo lock leaked after SIGTERM"
-  ls -la "$MANUL_DIR/repo-locks/" || true
+  ls -la "$MANUL_DIR/state/locks/repo/" || true
   exit 1
 fi
 

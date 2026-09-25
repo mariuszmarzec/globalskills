@@ -7,9 +7,10 @@
 # - Releasing workspaces back to the pool
 # - Cleaning up broken workspaces
 
-MANUL_DIR="${MANUL_DIR:-${OPENCLAW_MANUL_DIR:-$HOME/.openclaw/manul}}"
-DB="$MANUL_DIR/manul.db"
-WORKSPACES_DIR="${MANUL_DIR}/workspaces"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+DB="${DB:-$MANUL_DB}"
+WORKSPACES_DIR="$MANUL_WORKSPACE"
 
 : "${PID_FILE:=/dev/null}"
 get_daemon_pid() {

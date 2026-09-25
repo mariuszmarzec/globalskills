@@ -34,7 +34,7 @@ set -uo pipefail
 # Use a single test directory for all tests
 TEST_DIR="${MANUL_TEST_DIR:-$(mktemp -d)}"
 export MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 export CONFIG="$TEST_DIR/config.json"
 export RESULTS_DIR="$TEST_DIR/results"
 
@@ -50,7 +50,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$MANUL_DIR" "$RESULTS_DIR"
+mkdir -p "$MANUL_DIR/state" "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/workspace" "$MANUL_DIR/logs" "$RESULTS_DIR"
 
 # Create mock gh for tests (no real GitHub required)
 MOCK_GH_DIR="$TEST_DIR/mock-gh"

@@ -5,7 +5,7 @@
 #   source "$HOME/.globalskills/skills/manul-github-bot/manul-shell.zsh"
 #
 # All three CLI entrypoints point at the CANONICAL source scripts, never at the
-# runtime dir. This means deleting/archiving ~/.openclaw/manul can never
+# runtime dir. This means deleting/archiving ~/.manul can never
 # permanently break `manul`, `manul-status`, or `manul-comments-remove`.
 #
 # Self-healing: manul-ensure-runtime() runs the repair path when the
@@ -24,7 +24,7 @@
 #     never re-enables automation.
 
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
-MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.openclaw/manul}"
+MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_INSTALLER="$MANUL_CANONICAL_DIR/install-manul.sh"
 MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"

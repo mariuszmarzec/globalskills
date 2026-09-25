@@ -6,8 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(mktemp -d)"
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
-mkdir -p "$MANUL_DIR"
+DB="$MANUL_DIR/state/manul.db"
+mkdir -p "$MANUL_DIR/state"
 
 cleanup() {
   rm -rf "$TEST_DIR"

@@ -36,10 +36,11 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 
 # Set up MANUL_DIR with proper config
 MANUL_DIR="$TEST_DIR/manul"
-mkdir -p "$MANUL_DIR"
-DB="$MANUL_DIR/manul.db"
+mkdir -p "$MANUL_DIR/state" "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/workspace" "$MANUL_DIR/logs"
+DB="$MANUL_DIR/state/manul.db"
 
 # Create symlinks to actual scripts
+ln -s "$SCRIPT_DIR/manul-paths.sh" "$MANUL_DIR/manul-paths.sh" 2>/dev/null || true
 ln -s "$SCRIPT_DIR/manul-conversation.sh" "$MANUL_DIR/manul-conversation.sh" 2>/dev/null || true
 ln -s "$SCRIPT_DIR/manul-github-events.sh" "$MANUL_DIR/manul-github-events.sh" 2>/dev/null || true
 ln -s "$SCRIPT_DIR/manul-pr-review.sh" "$MANUL_DIR/manul-pr-review.sh" 2>/dev/null || true

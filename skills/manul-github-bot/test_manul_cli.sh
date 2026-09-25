@@ -9,7 +9,7 @@ set -euo pipefail
 # Configuration
 TEST_DIR="${1:-$(mktemp -d)}"
 MANUL_DIR="$TEST_DIR/manul"
-DB="$MANUL_DIR/manul.db"
+DB="$MANUL_DIR/state/manul.db"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Counters
@@ -72,7 +72,7 @@ assert_exit_code() {
 }
 
 init_db() {
-  mkdir -p "$MANUL_DIR"
+  mkdir -p "$MANUL_DIR/state"
   sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
     commentId TEXT PRIMARY KEY,
     repository TEXT NOT NULL,

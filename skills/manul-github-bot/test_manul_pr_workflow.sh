@@ -13,7 +13,7 @@
 # Usage: bash test_manul_pr_workflow.sh [--setup] [--teardown]
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="${MANUL_DIR}/manul.db"
 CONFIG="${MANUL_DIR}/config.json"

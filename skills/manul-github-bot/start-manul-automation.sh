@@ -16,7 +16,7 @@
 
 set -uo pipefail
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 DAEMON="$MANUL_DIR/manul-daemon.sh"
 WATCHDOG="$MANUL_DIR/watchdog.sh"
 WATCHDOG_CRON="*/5 * * * * $WATCHDOG"

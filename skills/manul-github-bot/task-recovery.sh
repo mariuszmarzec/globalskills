@@ -10,10 +10,11 @@
 #   --reset-all       Reset all stuck tasks (dangerous - confirm)
 #   --health-check    Run comprehensive health check
 
-MANUL_DIR="${MANUL_DIR:-$HOME/.openclaw/manul}"
-# DB on native ext4 (NOT on 9p /mnt/f)
-DB="${MANUL_DIR}/manul.db"
-LOG="${MANUL_DIR}/task-recovery.log"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+DB="$MANUL_DB"
+LOG="$MANUL_LOG_DIR/task-recovery.log"
 CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 

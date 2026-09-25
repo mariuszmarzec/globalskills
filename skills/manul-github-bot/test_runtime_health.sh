@@ -3,7 +3,7 @@
 #
 # Tests that verify:
 #  1. Shell syntax of all runtime scripts
-#  2. No hardcoded /mnt/f or /home/marzec/.openclaw/manul paths in source
+#  2. No hardcoded /mnt/f or /home/marzec/.manul paths in source
 #  3. install-manul-symlinks.sh contracts
 #  3b. installer self-healing (idempotent, safe to run repeatedly)
 #  3c. CLI entrypoints resolve in a fresh shell
@@ -109,28 +109,45 @@ done
 # ── Test 2: No old machine-specific runtime paths ─────────────────────────────
 echo
 echo "Test 2: No hardcoded runtime paths"
-HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.openclaw/manul|/mnt/f/ubuntu-workspace/\.openclaw/manul)' \
+HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.manul|/mnt/f/ubuntu-workspace/\.manul)' \
   "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v 'test_runtime_health.sh' || true)"
 if [ -z "$HARDCODED_PATHS" ]; then
-  ok "No old absolute runtime paths found"
+  ok "No hardcoded absolute runtime paths found"
 else
-  fail "Old absolute runtime paths remain:\n$HARDCODED_PATHS"
+  fail "Hardcoded absolute runtime paths remain:\n$HARDCODED_PATHS"
 fi
 
 # ── Test 3: Installer contract ────────────────────────────────────────────────
 echo
 echo "Test 3: Installer contract"
-if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.openclaw/manul}"' \
+if grep -q 'RUNTIME_DIR="${MANUL_RUNTIME_DIR:-\$HOME/.manul}"' \
      "$SCRIPT_DIR/install-manul-symlinks.sh" 2>/dev/null; then
-  ok "Installer default runtime is HOME/.openclaw/manul"
+  ok "Installer default runtime is HOME/.manul"
 else
-  fail "Installer default runtime is not HOME/.openclaw/manul"
+  fail "Installer default runtime is not HOME/.manul"
 fi
 
-if grep -q 'for cmd in bash git gh jq sqlite3 curl openclaw crontab' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer requires OpenClaw"
+# The installer no longer hard-requires OpenClaw: it accepts either the
+# OpenClaw or OpenCode agent runtime, and fails only when neither is present.
+if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab)"
 else
-  fail "Installer does not require OpenClaw"
+  fail "Installer core-tool check is missing"
+fi
+
+# The installer must accept EITHER runtime, not require OpenClaw specifically.
+# Check: the opencode binary is probed, and the failure message lists both.
+if grep -q 'command -v opencode' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'openclaw or opencode' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer accepts OpenClaw OR OpenCode as agent runtime"
+else
+  fail "Installer still hard-requires OpenClaw"
+fi
+
+if grep -q 'No agent runtime found' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer fails closed when neither runtime is present"
+else
+  fail "Installer does not fail when no runtime is present"
 fi
 
 SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' \
@@ -150,7 +167,6 @@ RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
-[ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
@@ -243,7 +259,7 @@ CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
-[ -f "$SCRIPT_DIR/manul.db" ] && cp "$SCRIPT_DIR/manul.db" "$CANON/" 2>/dev/null || true
+[ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # Deploy a real runtime so the CLI can actually run
 set +e
@@ -337,9 +353,10 @@ done
 # The repository intentionally does not carry application state, so create a
 # real schema fixture instead of coupling this CLI test to a repository DB.
 CLI_DB="$CLI_ROOT/backup/manul.db"
+mkdir -p "$RUN/state"
 create_canonical_backup "$CLI_DB"
-cp "$CLI_DB" "$RUN/manul.db"
-chmod 600 "$RUN/manul.db"
+cp "$CLI_DB" "$RUN/state/manul.db"
+chmod 600 "$RUN/state/manul.db"
 
 set +e
 MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list >/dev/null 2>&1
@@ -392,7 +409,7 @@ else
   fail "Recovery did not fail safely without DB backup (exit=$NO_BACKUP_EXIT)"
 fi
 
-if [ ! -f "$MISSING_DB_RUNTIME/manul.db" ]; then
+if [ ! -f "$MISSING_DB_RUNTIME/state/manul.db" ]; then
   ok "No fabricated DB was created"
 else
   fail "Recovery created a DB despite missing backup"
@@ -472,7 +489,7 @@ echo "Test 7: Recovered DB schema"
 REQUIRED_TABLES="processed_comments conversations meta workspaces"
 SCHEMA_FAILURES=0
 for table in $REQUIRED_TABLES; do
-  if ! sqlite3 "$GOOD_RUNTIME/manul.db" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
+  if ! sqlite3 "$GOOD_RUNTIME/state/manul.db" "SELECT 1 FROM $table LIMIT 1;" >/dev/null 2>&1; then
     SCHEMA_FAILURES=$((SCHEMA_FAILURES + 1))
     fail "Required table '$table' missing from recovered DB"
   fi
@@ -483,7 +500,7 @@ done
 # Avoid duplicating the full schema SQL; only assert the columns the daemon reads.
 KEY_COLUMNS="commentId repository issueNumber commentUrl prompt status attempts conversationId action prNumber prUrl"
 for col in $KEY_COLUMNS; do
-  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+  if ! sqlite3 "$GOOD_RUNTIME/state/manul.db" \
        "PRAGMA table_info(processed_comments);" 2>/dev/null \
        | grep -qw "$col"; then
     fail "Required column '$col' missing from processed_comments"
@@ -493,7 +510,7 @@ ok "Key columns present on processed_comments"
 
 # Validate key columns on conversations
 for col in conversationId repository issueNumber issueUrl status activeTaskId createdAt updatedAt; do
-  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+  if ! sqlite3 "$GOOD_RUNTIME/state/manul.db" \
        "PRAGMA table_info(conversations);" 2>/dev/null \
        | grep -qw "$col"; then
     fail "Required column '$col' missing from conversations"
@@ -503,7 +520,7 @@ ok "Key columns present on conversations"
 
 # Validate workspaces columns
 for col in workspaceId workspacePath status currentTaskId lastUsedAt; do
-  if ! sqlite3 "$GOOD_RUNTIME/manul.db" \
+  if ! sqlite3 "$GOOD_RUNTIME/state/manul.db" \
        "PRAGMA table_info(workspaces);" 2>/dev/null \
        | grep -qw "$col"; then
     fail "Required column '$col' missing from workspaces"
@@ -514,7 +531,7 @@ ok "Key columns present on workspaces"
 # ── Test 8: Second repair with same backup is idempotent ──────────────────────
 echo
 echo "Test 8: Repair idempotency"
-DB_BEFORE=$(sha256sum "$GOOD_RUNTIME/manul.db" | awk '{print $1}')
+DB_BEFORE=$(sha256sum "$GOOD_RUNTIME/state/manul.db" | awk '{print $1}')
 CONFIG_BEFORE=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
 
 set +e
@@ -534,7 +551,7 @@ else
   echo "$SECOND_OUTPUT"
 fi
 
-DB_AFTER=$(sha256sum "$GOOD_RUNTIME/manul.db" | awk '{print $1}')
+DB_AFTER=$(sha256sum "$GOOD_RUNTIME/state/manul.db" | awk '{print $1}')
 CONFIG_AFTER=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
 if [ "$DB_BEFORE" = "$DB_AFTER" ]; then
   ok "Second repair preserved existing DB"
@@ -552,8 +569,8 @@ echo
 echo "Test 9: Archive DB fallback"
 ARCHIVE_RUNTIME="$TMPROOT/archive-runtime"
 ARCHIVE_DIR="$TMPROOT/archive-runtime-archive-20260917-000000"
-mkdir -p "$ARCHIVE_DIR"
-cp "$BACKUP_DB" "$ARCHIVE_DIR/manul.db"
+mkdir -p "$ARCHIVE_DIR/state"
+cp "$BACKUP_DB" "$ARCHIVE_DIR/state/manul.db"
 
 set +e
 ARCHIVE_OUTPUT=$( \
@@ -575,11 +592,11 @@ fi
 echo
 echo "Test 10: init-schema failure is fatal"
 READONLY_RUNTIME="$TMPROOT/readonly-runtime"
-mkdir -p "$READONLY_RUNTIME"
+mkdir -p "$READONLY_RUNTIME/state"
 
 # Build a DB that has all tables but is missing migration columns (action, prNumber, prUrl).
 # This simulates a pre-migration DB that needs ALTER TABLE to reach current schema.
-sqlite3 "$READONLY_RUNTIME/manul.db" <<'SQL'
+sqlite3 "$READONLY_RUNTIME/state/manul.db" <<'SQL'
 CREATE TABLE processed_comments (
   commentId TEXT PRIMARY KEY,
   repository TEXT NOT NULL,
@@ -623,7 +640,7 @@ CREATE TABLE workspaces (
 SQL
 
 # Make DB read-only so ALTER TABLE migrations cannot apply.
-chmod 444 "$READONLY_RUNTIME/manul.db"
+chmod 444 "$READONLY_RUNTIME/state/manul.db"
 
 # Copy config template so repair reaches step 5.
 cp "$SCRIPT_DIR/config.json.example" "$READONLY_RUNTIME/config.json" 2>/dev/null || true
@@ -657,8 +674,8 @@ else
 fi
 
 # Verify the existing DB was not corrupted or replaced.
-if [ -f "$READONLY_RUNTIME/manul.db" ]; then
-  if sqlite3 "$READONLY_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
+if [ -f "$READONLY_RUNTIME/state/manul.db" ]; then
+  if sqlite3 "$READONLY_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
     ok "Existing DB preserved (not corrupted) after failed repair"
   else
     fail "Existing DB was corrupted during failed repair"
@@ -671,11 +688,11 @@ fi
 echo
 echo "Test 11: workspace_init failure is fatal"
 WSFAIL_DIR="$TMPROOT/ws-fail-dir"
-mkdir -p "$WSFAIL_DIR"
+mkdir -p "$WSFAIL_DIR/state"
 
 # Build a DB with conversation tables but WITHOUT the workspaces table.
 # Then make it read-only so workspace_init cannot CREATE the missing table.
-sqlite3 "$WSFAIL_DIR/manul.db" <<'SQL'
+sqlite3 "$WSFAIL_DIR/state/manul.db" <<'SQL'
 CREATE TABLE processed_comments (
   commentId TEXT PRIMARY KEY,
   repository TEXT NOT NULL,
@@ -713,12 +730,12 @@ CREATE TABLE conversations (
 );
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 SQL
-chmod 444 "$WSFAIL_DIR/manul.db"
+chmod 444 "$WSFAIL_DIR/state/manul.db"
 
 # Call workspace_init directly with the read-only DB missing the workspaces table.
 WS_INIT_OUTPUT=""
 WS_INIT_EXIT=0
-WS_INIT_OUTPUT="$(MANUL_DIR="$WSFAIL_DIR" DB="$WSFAIL_DIR/manul.db" \
+WS_INIT_OUTPUT="$(MANUL_DIR="$WSFAIL_DIR" DB="$WSFAIL_DIR/state/manul.db" \
   bash -c 'source "$1"; workspace_init' _ "$SCRIPT_DIR/workspace-manager.sh" 2>&1)" || WS_INIT_EXIT=$?
 
 if [ "$WS_INIT_EXIT" -ne 0 ]; then
@@ -735,7 +752,7 @@ else
 fi
 
 # Verify the existing DB is not corrupted.
-if sqlite3 "$WSFAIL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
+if sqlite3 "$WSFAIL_DIR/state/manul.db" "SELECT COUNT(*) FROM processed_comments;" >/dev/null 2>&1; then
   ok "Existing DB preserved after failed workspace_init"
 else
   fail "Existing DB was corrupted by failed workspace_init"
@@ -748,8 +765,9 @@ EMPTY_RUNTIME="$TMPROOT/empty-db-runtime"
 mkdir -p "$EMPTY_RUNTIME"
 
 # Create a 0-byte manul.db (simulates corrupted or freshly-created empty file)
-touch "$EMPTY_RUNTIME/manul.db"
-chmod 644 "$EMPTY_RUNTIME/manul.db"
+mkdir -p "$EMPTY_RUNTIME/state"
+touch "$EMPTY_RUNTIME/state/manul.db"
+chmod 644 "$EMPTY_RUNTIME/state/manul.db"
 # Copy config template so repair reaches step 4/5.
 cp "$SCRIPT_DIR/config.json.example" "$EMPTY_RUNTIME/config.json" 2>/dev/null || true
 
@@ -771,7 +789,7 @@ else
 fi
 
 # Verify the restored DB is valid and has the right tables.
-RESTORED_DB="$EMPTY_RUNTIME/manul.db"
+RESTORED_DB="$EMPTY_RUNTIME/state/manul.db"
 if db_is_valid "$RESTORED_DB" 2>/dev/null; then
   ok "Restored DB is valid SQLite after repair"
 else
@@ -794,11 +812,12 @@ ok "Restored DB has all required tables"
 echo
 echo "Test 13: Corrupt DB + no backup → repair aborts, no schema fabricated"
 CORRUPT_RUNTIME="$TMPROOT/corrupt-runtime"
+mkdir -p "$CORRUPT_RUNTIME/state"
 mkdir -p "$CORRUPT_RUNTIME"
 
 # Write an invalid file that is non-empty but NOT a SQLite DB.
-echo "not a database" > "$CORRUPT_RUNTIME/manul.db"
-chmod 644 "$CORRUPT_RUNTIME/manul.db"
+echo "not a database" > "$CORRUPT_RUNTIME/state/manul.db"
+chmod 644 "$CORRUPT_RUNTIME/state/manul.db"
 cp "$SCRIPT_DIR/config.json.example" "$CORRUPT_RUNTIME/config.json" 2>/dev/null || true
 
 set +e
@@ -830,8 +849,8 @@ else
 fi
 
 # Verify no schema was fabricated from the corrupt file.
-if [ -f "$CORRUPT_RUNTIME/manul.db" ]; then
-  if sqlite3 "$CORRUPT_RUNTIME/manul.db" "SELECT 1 FROM processed_comments LIMIT 1;" 2>/dev/null | grep -q .; then
+if [ -f "$CORRUPT_RUNTIME/state/manul.db" ]; then
+  if sqlite3 "$CORRUPT_RUNTIME/state/manul.db" "SELECT 1 FROM processed_comments LIMIT 1;" 2>/dev/null | grep -q .; then
     fail "Schema was fabricated from corrupt DB — tables exist when they should not"
   else
     ok "No schema fabricated; corrupt DB untouched"
@@ -844,15 +863,15 @@ else
 echo
 echo "Test 14: Valid DB + no backup → repair preserves it"
 VALID_RUNTIME="$TMPROOT/valid-db-runtime"
-mkdir -p "$VALID_RUNTIME"
+mkdir -p "$VALID_RUNTIME/state"
 # Use the canonical backup as the "existing valid DB" seed.
-cp "$BACKUP_DB" "$VALID_RUNTIME/manul.db"
-chmod 600 "$VALID_RUNTIME/manul.db"
+cp "$BACKUP_DB" "$VALID_RUNTIME/state/manul.db"
+chmod 600 "$VALID_RUNTIME/state/manul.db"
 cp "$SCRIPT_DIR/config.json.example" "$VALID_RUNTIME/config.json" 2>/dev/null || true
 # Seed an explicit baseline so repair has no state migration to perform in this test.
-sqlite3 "$VALID_RUNTIME/manul.db" "INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
+sqlite3 "$VALID_RUNTIME/state/manul.db" "INSERT OR REPLACE INTO meta(key,value) VALUES('baseline','2019-01-01T00:00:00Z');"
 
-DB_BEFORE=$(sha256sum "$VALID_RUNTIME/manul.db" | awk '{print $1}')
+DB_BEFORE=$(sha256sum "$VALID_RUNTIME/state/manul.db" | awk '{print $1}')
 
 set +e
 VALID_OUTPUT=$( \
@@ -870,7 +889,7 @@ else
   echo "$VALID_OUTPUT"
 fi
 
-DB_AFTER=$(sha256sum "$VALID_RUNTIME/manul.db" | awk '{print $1}')
+DB_AFTER=$(sha256sum "$VALID_RUNTIME/state/manul.db" | awk '{print $1}')
 if [ "$DB_BEFORE" = "$DB_AFTER" ]; then
   ok "Existing valid DB was preserved (not replaced) when no backup is available"
 else
@@ -878,7 +897,7 @@ else
 fi
 
 for tbl in processed_comments conversations meta workspaces; do
-  if ! sqlite3 "$VALID_RUNTIME/manul.db" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
+  if ! sqlite3 "$VALID_RUNTIME/state/manul.db" "SELECT 1 FROM $tbl LIMIT 1;" >/dev/null 2>&1; then
     fail "Preserved DB missing table '$tbl'"
   fi
 done
@@ -910,13 +929,13 @@ else
   echo "$INSTALL_OUTPUT"
 fi
 
-if [ -f "$INSTALL_ROOT/manul.db" ] && [ -f "$INSTALL_ROOT/config.json" ]; then
+if [ -f "$INSTALL_ROOT/state/manul.db" ] && [ -f "$INSTALL_ROOT/config.json" ]; then
   ok "Fresh installer creates DB and config"
 else
   fail "Fresh installer did not create DB/config"
 fi
 
-INSTALL_BASELINE_VALUE="$(sqlite3 "$INSTALL_ROOT/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+INSTALL_BASELINE_VALUE="$(sqlite3 "$INSTALL_ROOT/state/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
 if [ -n "$INSTALL_BASELINE_VALUE" ] && [[ "$INSTALL_BASELINE_VALUE" > "$INSTALL_START" || "$INSTALL_BASELINE_VALUE" == "$INSTALL_START" ]] && [[ "$INSTALL_BASELINE_VALUE" < "$INSTALL_END" || "$INSTALL_BASELINE_VALUE" == "$INSTALL_END" ]]; then
   ok "Fresh installer persists baseline at installation time"
 else
@@ -946,7 +965,7 @@ INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
-  INSTALL_BASELINE_AFTER="$(sqlite3 "$INSTALL_ROOT/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
+  INSTALL_BASELINE_AFTER="$(sqlite3 "$INSTALL_ROOT/state/manul.db" "SELECT value FROM meta WHERE key='baseline';" 2>/dev/null || true)"
   if [ "$INSTALL_BASELINE_AFTER" = "$INSTALL_BASELINE_VALUE" ]; then
     ok "Canonical installer preserves the existing installation baseline"
   else
@@ -988,7 +1007,7 @@ INIT_OUTPUT=$(
 )
 INIT_EXIT=$?
 set -e
-if [ "$INIT_EXIT" -eq 0 ] && [ -s "$INIT_RUNTIME/manul.db" ]; then
+if [ "$INIT_EXIT" -eq 0 ] && [ -s "$INIT_RUNTIME/state/manul.db" ]; then
   ok "Fresh DB creation requires explicit --init-state"
 else
   fail "Explicit --init-state did not initialize a fresh DB (exit=$INIT_EXIT)"
@@ -1000,15 +1019,15 @@ echo
 echo "Test: Self-healing never loses an existing queue"
 PERSIST_ROOT="$(mktemp -d /tmp/manul-persistence-XXXXXX)"
 PERSIST_RUNTIME="$PERSIST_ROOT/runtime"
-mkdir -p "$PERSIST_RUNTIME"
+mkdir -p "$PERSIST_RUNTIME/state"
 cp "$SCRIPT_DIR/config.json.example" "$PERSIST_RUNTIME/config.json"
-sqlite3 "$PERSIST_RUNTIME/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
-PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
+sqlite3 "$PERSIST_RUNTIME/state/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
+PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
 set +e
 PERSIST_OUTPUT="$(MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
 PERSIST_EXIT=$?
 set -e
-PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"
+PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"
 if [ "$PERSIST_EXIT" -eq 0 ] && [ "$PERSIST_BEFORE" = "$PERSIST_AFTER" ] && [ "$PERSIST_AFTER" -eq 1 ]; then
   ok "Repair preserves an existing queued task"
 else
