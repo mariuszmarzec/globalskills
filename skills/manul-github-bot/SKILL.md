@@ -52,6 +52,7 @@ Current runtime:
 ```
 ~/.manul/
 ├── config.json
+├── .env                # operator/provider environment for unattended runs
 ├── state/
 │   ├── manul.db
 │   ├── locks/
