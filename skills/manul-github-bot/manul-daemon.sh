@@ -37,7 +37,10 @@ DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
 # This is required for unattended cron/watchdog execution because ~/.zshrc is
 # not loaded there.
 source "$DAEMON_SCRIPT_DIR/manul-env.sh"
-manul_env_load "$MANUL_DIR"
+if ! manul_env_load "$MANUL_DIR"; then
+  echo "ERROR: failed to load $MANUL_DIR/.env" >&2
+  exit 1
+fi
 
 # --- Agent execution runtime abstraction ---
 # Source the runtime-neutral execution path before consuming derived paths.
