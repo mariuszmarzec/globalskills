@@ -140,6 +140,7 @@ The runtime-isolation refactor makes Manul independent of the OpenClaw runtime l
 ```
 ~/.manul/
 ├── config.json
+├── .env
 ├── state/
 │   ├── manul.db
 │   ├── locks/
