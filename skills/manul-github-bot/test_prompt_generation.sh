@@ -242,6 +242,14 @@ PROMPT_APPEND
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
+# Regression: terse issue-comment trigger must inherit the authoritative issue context.
+echo -n "Test: terse /manul trigger includes conversation context ... "
+if grep -q 'conv_context=.*build_conversation_context' "$SCRIPT_DIR/poll.sh" 2>/dev/null; then
+    ok "poll.sh appends conversation context to issue-comment task prompt"
+else
+    fail "poll.sh does not append conversation context to issue-comment task prompt"
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Prompt Generation Regression Tests"
