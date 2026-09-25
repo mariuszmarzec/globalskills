@@ -233,6 +233,17 @@ test_reply_routing() {
 }
 
 # ============================================================================
+# Test 6b: dynamic agent prompt requires in-place result comment repair
+test_result_comment_repair_guidance() {
+  TEST_NAME="result_comment_repair_guidance"
+  echo "=== Test 6b: Result comment repair guidance ==="
+
+  local prompt_segment
+  prompt_segment="$(sed -n '/## GitHub Comment Posting (CRITICAL)/,/## Authoritative Repository/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (existing result comment)" "$prompt_segment" "existing result comment"
+  assert_contains "$TEST_NAME (PATCH existing comment)" "$prompt_segment" "gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID>"
+  assert_contains "$TEST_NAME (single final comment)" "$prompt_segment" "The final state must contain exactly one matching result comment"
+}
 # Test 6: feedback.sh exists and is functional
 # ============================================================================
 test_feedback_script() {
