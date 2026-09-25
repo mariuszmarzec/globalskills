@@ -100,9 +100,9 @@ echo "=== Feedback routing regression tests ==="
 review_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started   --repo mariuszmarzec/shoppingListGenerator   --issue 43   --comment-id review:4103894743   --task-id review:4103894743   --pr-number 43   --json 2>&1)"
 review_cmd="$(head -1 "$GH_LOG" 2>/dev/null || true)"
 
-assert_contains "Review lifecycle uses PR review-comments endpoint" "$review_cmd" "gh api repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
+assert_contains "Review lifecycle uses PR review-comments endpoint" "$review_cmd" "api repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
 assert_contains "Review lifecycle replies to source review comment" "$review_cmd" "in_reply_to=4103894743"
-assert_not_contains "Review lifecycle does not use top-level issue comment API" "$review_cmd" "gh issue comment 43"
+assert_not_contains "Review lifecycle does not use top-level issue comment API" "$review_cmd" "issue comment 43"
 
 : > "$GH_LOG"
 
