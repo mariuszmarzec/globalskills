@@ -101,7 +101,7 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 echo
-echo "[3b/5] Preparing operator environment..."
+echo "  Preparing operator environment..."
 if ! "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
