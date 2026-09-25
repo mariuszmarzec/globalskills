@@ -32,6 +32,7 @@ env:
     skills/manul-github-bot/test_conversation_orchestrator.sh
     skills/manul-github-bot/test_conversation_regressions.sh
     skills/manul-github-bot/test_runtime_health.sh
+    skills/manul-github-bot/test_manul_environment.sh
     skills/manul-github-bot/test_conversation_strict.sh
     skills/manul-github-bot/test_error_observability.sh
     skills/manul-github-bot/test_verify_result_comment.sh
