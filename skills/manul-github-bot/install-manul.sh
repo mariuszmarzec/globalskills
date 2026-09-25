@@ -2,16 +2,14 @@
 # install-manul.sh — Canonical Manul installer
 #
 # Idempotent one-shot bootstrap of a fresh Manul runtime:
-#   1. Self-detect canonical source
-#   2. Validate canonical source
-#   3. Ensure runtime directory
-#   4. Deploy symlinks via install-manul-symlinks.sh
-#   5. Restore config.json from example if missing
-#   6. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
+#   1. Self-detect and validate canonical source
+#   2. Ensure runtime directory
+#   3. Deploy symlinks via install-manul-symlinks.sh
+#   4. Restore config.json from example if missing and prepare operator .env
+#   5. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
 #      is created only with explicit --init-state on a first-time installation.
-#   7. Install the dormant watchdog cron (it only acts when .enabled exists)
-#   8. Install canonical zsh shell integration
-#   9. Verify and print summary
+#   6. Install the dormant watchdog cron and canonical zsh shell integration
+#   7. Verify and print summary
 #
 # This installer does NOT start the daemon and does NOT create the .enabled
 # marker. The watchdog cron may exist after installation, but it exits
