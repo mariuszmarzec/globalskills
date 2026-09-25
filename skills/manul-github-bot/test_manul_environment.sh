@@ -36,7 +36,7 @@ echo
 # ---------------------------------------------------------------------------
 grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink installer deploys manul-env.sh"   || fail "Symlink installer does not deploy manul-env.sh"
 
-grep -q 'manul_env_bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
+grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
 
 grep -q 'manul_env_load' "$SCRIPT_DIR/manul-daemon.sh"   && ok "Daemon loads the runtime operator environment"   || fail "Daemon does not load the runtime operator environment"
 
