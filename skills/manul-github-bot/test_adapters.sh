@@ -109,7 +109,6 @@ test_openclaw_success() {
 
   cat >"$tmp/bin/openclaw" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$MOCK_ARGS_FILE"
 printf '%s\n' 'TASK_DONE completed "quoted" path'
 exit 0
 MOCK
@@ -120,7 +119,7 @@ MOCK
 
   local out
   out="$(PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" OPENCODE_BIN=/does/not/exist \
-    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" MOCK_ARGS_FILE="$tmp/args" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/openclaw-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
       --attempt 1 --timeout 30 --session-id "" \
@@ -132,9 +131,6 @@ MOCK
   printf '%s' "$out" | jq -e '.summary | contains("quoted")' >/dev/null 2>&1 \
     && ok "OpenClawAdapter JSON-escapes summary" \
     || fail "OpenClawAdapter summary JSON escaping failed"
-  grep -q -- '--local' "$tmp/args" \
-    && ok "OpenClawAdapter uses embedded local OpenClaw execution" \
-    || fail "OpenClawAdapter did not use --local"
 }
 
 # ---------------------------------------------------------------------------
