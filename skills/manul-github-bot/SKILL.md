@@ -255,9 +255,14 @@ The installer currently:
 - creates the runtime directory;
 - deploys runtime symlinks;
 - initializes configuration when absent;
+- prepares the operator `.env` for unattended processes;
 - prepares/validates the DB;
 - installs the watchdog cron;
 - installs the zsh shell integration.
+
+The operator `.env` is runtime-owned and mode 600. It carries only the
+provider variables explicitly supported by the installer, such as custom
+OpenClaw state/config paths.
 
 The current installer deliberately does not start the daemon automatically.
 
