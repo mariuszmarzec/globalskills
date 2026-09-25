@@ -144,15 +144,19 @@ test_openclaw_custom_binary() {
 
   cat >"$tmp/bin/custom-openclaw" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s
-' 'TASK_DONE custom-binary'
+printf '%s\n' 'TASK_DONE custom-binary'
 exit 0
 MOCK
   chmod +x "$tmp/bin/custom-openclaw"
   echo "Do the task" >"$tmp/prompt"
 
   local out
-  out="$(PATH="/usr/bin:/bin" OPENCLAW_BIN="$tmp/bin/custom-openclaw"     AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/openclaw-adapter.sh"       --task-id oc-custom --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  out="$(PATH="/usr/bin:/bin" OPENCLAW_BIN="$tmp/bin/custom-openclaw" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/openclaw-adapter.sh" \
+      --task-id oc-custom --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenClawAdapter honors explicit binary override outside PATH"
   grep -q '^TASK_DONE custom-binarytest_openclaw_failure() {
   local tmp
@@ -517,7 +521,9 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
- "$tmp/stdout"     && ok "OpenClawAdapter executes explicit custom binary"     || fail "OpenClawAdapter ignored explicit custom binary"
+ "$tmp/stdout" \
+    && ok "OpenClawAdapter executes explicit custom binary" \
+    || fail "OpenClawAdapter ignored explicit custom binary"
 }
 
 # ---------------------------------------------------------------------------
