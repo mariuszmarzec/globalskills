@@ -91,7 +91,7 @@ if ! [[ "$LOG_TAIL" =~ ^[0-9]+$ ]] || [ "$LOG_TAIL" -lt 1 ]; then
 fi
 
 if [ "$LOG_MODE" = true ]; then
-  LOG_FILE="$MANUL_DIR/daemon.log"
+  LOG_FILE="$MANUL_LOG_DIR/daemon.log"
   if [ ! -f "$LOG_FILE" ]; then
     echo "Error: Manul daemon log not found at $LOG_FILE" >&2
     exit 1
