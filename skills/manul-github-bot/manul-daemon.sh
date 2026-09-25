@@ -28,18 +28,16 @@ _NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
 export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-# Load operator overrides before sourcing manul-paths.sh so AGENT_RUNTIME and
-# other path-independent settings are visible during canonical resolution.
-if [ -f "$MANUL_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$MANUL_DIR/.env"
-  set +a
-fi
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
 DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
 DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+
+# Load operator/provider overrides from the runtime-owned environment file.
+# This is required for unattended cron/watchdog execution because ~/.zshrc is
+# not loaded there.
+source "$DAEMON_SCRIPT_DIR/manul-env.sh"
+manul_env_load "$MANUL_DIR"
 
 # --- Agent execution runtime abstraction ---
 # Source the runtime-neutral execution path before consuming derived paths.
@@ -94,18 +92,6 @@ TASK_RETENTION_DEFAULT_LIST_DAYS=7
 TASK_RETENTION_DEFAULT_HISTORY_DAYS=14
 TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
 TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
-
-# Source operator overrides from ~/.manul/.env if present.
-  # This is what makes MANUL_POLL_TIMEOUT / MANUL_INTERVAL / etc. actually
-  # take effect — without it the daemon ignores the .env file entirely and
-  # falls back to hardcoded defaults (e.g. POLL_TIMEOUT=120s), which is too
-  # short to cover one slow repository per poll cycle.
-  if [ -f "$MANUL_DIR/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$MANUL_DIR/.env"
-    set +a
-  fi
 
   # Per-repo timeout, mirrored from poll.sh's default so the daemon's
   # scaled global poll timeout matches what poll.sh actually enforces.
