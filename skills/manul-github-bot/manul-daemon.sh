@@ -1791,12 +1791,20 @@ evaluate_task_completion() {
   local INITIAL_HEAD="${12:-}"
   local INITIAL_BRANCH="${13:-}"
   local INITIAL_BASE_BRANCH="${14:-${INITIAL_BRANCH:-$DEFAULT_BRANCH}}"
+  local EXECUTION_SUMMARY="${15:-}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
   FINAL_COMMENT=""
   NEEDS_USER_INPUT="false"
   USER_QUESTION=""
+  
+  # Preserve the runtime/controller summary so user-facing retry/failure
+  # comments explain the actual execution failure instead of collapsing it to
+  # the generic "Task failed".
+  if [ -n "$EXECUTION_SUMMARY" ]; then
+    FAIL_REASON="$EXECUTION_SUMMARY"
+  fi
   
   local SUCCESS="false"
 
@@ -2753,7 +2761,7 @@ PROMPT_APPEND
      esac
 
      # Call production completion evaluation function
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
