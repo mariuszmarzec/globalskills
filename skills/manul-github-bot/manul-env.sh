@@ -11,8 +11,6 @@
 # provider settings that are present in the installer/repair process environment.
 # It never copies arbitrary environment variables or secrets into runtime state.
 
-set -euo pipefail
-
 manul_env_file() {
   local runtime_dir="${1:-${MANUL_DIR:-$HOME/.manul}}"
   printf '%s/.env' "$runtime_dir"
@@ -41,7 +39,7 @@ manul_env_bootstrap() {
   local env_file
   env_file="$(manul_env_file "$runtime_dir")"
 
-  mkdir -p "$runtime_dir"
+  mkdir -p "$runtime_dir" || return 1
 
   if [ -e "$env_file" ] && [ ! -f "$env_file" ]; then
     echo "ERROR: Manul environment path exists but is not a regular file: $env_file" >&2
@@ -59,7 +57,7 @@ manul_env_bootstrap() {
 # The installer only copies a small allowlist of provider variables from the
 # current process environment. Existing entries are always preserved.
 EOF
-    chmod 600 "$env_file"
+    chmod 600 "$env_file" || return 1
   fi
 
   local variable value
@@ -71,7 +69,7 @@ EOF
     fi
   done
 
-  chmod 600 "$env_file"
+  chmod 600 "$env_file" || return 1
 
   if ! bash -n "$env_file" >/dev/null 2>&1; then
     echo "ERROR: invalid shell syntax in generated Manul environment file: $env_file" >&2
