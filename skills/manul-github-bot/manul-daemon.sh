@@ -2728,6 +2728,9 @@ PROMPT_APPEND
      # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
      # up. This is especially important for fast launch failures where the worker
      # can exit before producing a GitHub-visible result.
+     if [ -n "$exec_summary" ]; then
+       log "dispatch: agent executor summary for task $COMMENT_ID: $exec_summary"
+     fi
      if [ "$rc" -ne 0 ]; then
        log "dispatch: agent executor exited rc=$rc for task $COMMENT_ID (status=$exec_status)"
        if [ -s "$STDERR_FILE" ]; then
