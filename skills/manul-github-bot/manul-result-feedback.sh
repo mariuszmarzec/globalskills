@@ -132,6 +132,38 @@ build_event_marker() {
 }
 
 # Post a comment to GitHub
+post_feedback_comment() {
+  local repo="$1"
+  local issue="$2"
+  local body="$3"
+  local task_id="${4:-}"
+  local pr_number="${5:-}"
+
+  local reply_to=""
+  if [ -n "$task_id" ]; then
+    # Review tasks are persisted as review:<numeric-comment-id>.
+    # In that case the lifecycle feedback belongs in the same review thread.
+    if [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
+      reply_to="${BASH_REMATCH[1]}"
+    fi
+  fi
+
+  if [ -n "$reply_to" ] && [ -n "$pr_number" ]; then
+    local signature="— manul 🐈"
+    local signed_body
+    if [[ "$body" == *"$signature" ]]; then
+      signed_body="$body"
+    else
+      signed_body="${body}"$'\n\n'"$signature"
+    fi
+    gh api "repos/$repo/pulls/$pr_number/comments" \
+      -F "body=$signed_body" \
+      --field "in_reply_to=$reply_to" 2>/dev/null
+  else
+    post_comment "$repo" "$issue" "$body"
+  fi
+}
+
 post_comment() {
   local repo="$1"
   local issue="$2"
@@ -231,7 +263,7 @@ cmd_post_done() {
   # Post the comment to GitHub
   # TASK_DONE is a task event, not a PR comment. Post it to the source issue/PR
   # thread passed by the daemon, while PR_NUMBER remains metadata only.
-  post_comment "$REPO" "${ISSUE_NUMBER}" "$comment_body"
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
 
   echo "$result" | jq .
 }
@@ -317,7 +349,7 @@ cmd_post_failed() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
 
   echo "$result" | jq .
 }
@@ -383,7 +415,7 @@ cmd_post_started() {
     }')
 
   # Post the comment to GitHub
-  post_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body"
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
 
   echo "$result" | jq .
 }
