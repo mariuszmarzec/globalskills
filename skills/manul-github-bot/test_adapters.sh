@@ -134,6 +134,30 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3b. OpenClaw clean exit without Manul completion marker
+# ---------------------------------------------------------------------------
+test_openclaw_no_marker() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' 'The agent finished without emitting a Manul lifecycle marker.'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/openclaw"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw"     AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/openclaw-adapter.sh"       --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "FAILED" "OpenClaw no-marker clean exit fails closed"
+  [ "$rc" -eq 0 ] && ok "OpenClaw no-marker preserves process rc=0" || fail "OpenClaw no-marker rc=$rc"
+  printf '%s' "$out" | jq -r '.summary' | grep -q 'did not emit TASK_DONE'     && ok "OpenClaw no-marker explains missing completion marker"     || fail "OpenClaw no-marker summary missing marker diagnostic"
+}
+
+# ---------------------------------------------------------------------------
 # 4. OpenClaw failure
 # ---------------------------------------------------------------------------
 test_openclaw_failure() {
@@ -481,6 +505,7 @@ echo "Canonical source: $SCRIPT_DIR"
 test_process_runner_mock
 test_process_runner_cwd_env
 test_openclaw_success
+test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
