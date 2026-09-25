@@ -13,6 +13,10 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Cron does not load ~/.zshrc, so load the runtime-owned environment before
+# resolving Manul paths or watchdog operator overrides.
+source "$SCRIPT_DIR/manul-env.sh"
+manul_env_load "$MANUL_DIR"
 source "$SCRIPT_DIR/manul-paths.sh"
 CONFIG="$MANUL_CONFIG"
 LOCK="$MANUL_LOCKS_DIR/watchdog.lock"
