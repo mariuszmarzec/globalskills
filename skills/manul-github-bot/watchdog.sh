@@ -16,7 +16,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # Cron does not load ~/.zshrc, so load the runtime-owned environment before
 # resolving Manul paths or watchdog operator overrides.
 source "$SCRIPT_DIR/manul-env.sh"
-manul_env_load "$MANUL_DIR"
+if ! manul_env_load "$MANUL_DIR"; then
+    echo "ERROR: failed to load $MANUL_DIR/.env" >&2
+    exit 1
+fi
 source "$SCRIPT_DIR/manul-paths.sh"
 CONFIG="$MANUL_CONFIG"
 LOCK="$MANUL_LOCKS_DIR/watchdog.lock"
