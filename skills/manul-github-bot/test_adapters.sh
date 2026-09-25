@@ -109,6 +109,7 @@ test_openclaw_success() {
 
   cat >"$tmp/bin/openclaw" <<'MOCK'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >"$MOCK_ARGS_FILE"
 printf '%s\n' 'TASK_DONE completed "quoted" path'
 exit 0
 MOCK
@@ -131,6 +132,9 @@ MOCK
   printf '%s' "$out" | jq -e '.summary | contains("quoted")' >/dev/null 2>&1 \
     && ok "OpenClawAdapter JSON-escapes summary" \
     || fail "OpenClawAdapter summary JSON escaping failed"
+  grep -q -- '--json' "$tmp/args" \
+    && ok "OpenClawAdapter requests machine-readable JSON output" \
+    || fail "OpenClawAdapter did not request --json"
 }
 
 # ---------------------------------------------------------------------------
