@@ -149,7 +149,8 @@ _pr_result="$(ProcessRunner.run \
         --agent "${OPT_AGENT:-main}" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-        --message-file "$OPT_PROMPT")"
+        --message-file "$OPT_PROMPT" \
+        --json)"
 _pr_header="$(printf '%s\n' "$_pr_result" | head -1)"
 _pr_rc="$(printf '%s' "$_pr_header" | cut -d'|' -f1)"
 _pr_dur="$(printf '%s' "$_pr_header" | cut -d'|' -f2)"
