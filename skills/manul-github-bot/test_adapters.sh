@@ -152,9 +152,9 @@ MOCK
   local out rc
   out="$(PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw"     AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/openclaw-adapter.sh"       --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   rc=$?
-  assert_json_status "$out" "FAILED" "OpenClaw no-marker clean exit fails closed"
-  [ "$rc" -eq 0 ] && ok "OpenClaw no-marker preserves process rc=0" || fail "OpenClaw no-marker rc=$rc"
-  printf '%s' "$out" | jq -r '.summary' | grep -q 'did not emit TASK_DONE'     && ok "OpenClaw no-marker explains missing completion marker"     || fail "OpenClaw no-marker summary missing marker diagnostic"
+  assert_json_status "$out" "COMPLETED" "OpenClaw clean exit without marker is completed by adapter"
+  [ "$rc" -eq 0 ] && ok "OpenClaw clean exit preserves process rc=0" || fail "OpenClaw clean exit rc=$rc"
+  grep -qx 'TASK_DONE' "$tmp/stdout"     && ok "OpenClaw adapter synthesizes TASK_DONE"     || fail "OpenClaw adapter did not synthesize TASK_DONE"
 }
 
 # ---------------------------------------------------------------------------
