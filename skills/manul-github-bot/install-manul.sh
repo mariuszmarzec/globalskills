@@ -145,7 +145,7 @@ fi
 #     Existing ~/.manul/.env content is preserved.
 echo
 echo "  Preparing operator environment..."
-if ! "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
+if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
