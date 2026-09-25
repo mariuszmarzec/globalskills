@@ -116,9 +116,10 @@ AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
 # - everything after the trigger on that line = rest0 (leading spaces trimmed),
 # - if rest0 is empty, the following lines become the prompt,
 # - first token of the rest: known agent name => agent; the remainder = prompt.
-PARSE='(.body | split("\n")) as $lines
-| ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
-| ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+PARSE='($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
+| (.body | split("\n")) as $lines
+| ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
+| ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
 | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
 | ($rest | split(" ")[0]) as $tok
 | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1087,10 +1088,11 @@ process_repo_body() {
       log "queued $id on $repo#$issue (agent=${agent:-default})"
     fi
   done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    ($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
+    | .[] | select(.created_at >= $base) | select((.body // "") | test("^[ \\t]*" + $trig_re + "([ \\t]|$)", "m")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
-    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
-    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1119,7 +1121,7 @@ process_repo_body() {
       agent: $agent,
       action: $action,
       prompt: $actx.prompt,
-      fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; ""))
+      fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; ""))
     }' 2>>"$LOG" || true)
 
   # 1b) Issue bodies (new OPEN issues carrying the trigger in the description)
@@ -1153,10 +1155,11 @@ process_repo_body() {
       log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
     fi
   done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    ($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
+    | .[] | select(.pull_request | not) | select(.created_at >= $base) | select((.body // "") | test("^[ \\t]*" + $trig_re + "([ \\t]|$)", "m")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
-    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
-    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1252,10 +1255,11 @@ process_repo_body() {
       log "queued $id on $repo#$pr_num (agent=${agent:-default})"
     fi
   done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
-    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    ($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
+    | .[] | select(.created_at >= $base) | select((.body // "") | test("^[ \\t]*" + $trig_re + "([ \\t]|$)", "m")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
-    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
-    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1280,7 +1284,7 @@ process_repo_body() {
       agent: $agent,
       action: $action,
       prompt: $actx.prompt,
-      fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; "")),
+      fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")),
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
       diffHunk: (.diff_hunk // ""),

@@ -102,10 +102,10 @@ parse_command() {
   local body="$1"
   local trigger="/manul"
 
-  # Find the trigger line
+  # Find the trigger line (anchored at line start, optional leading whitespace)
   local command_line=""
   while IFS= read -r line; do
-    if [[ "$line" == *"$trigger"* ]]; then
+    if [[ "$line" =~ ^[[:space:]]*$trigger([[:space:]]|$) ]]; then
       command_line="$line"
       break
     fi
@@ -116,9 +116,9 @@ parse_command() {
     return 1
   fi
 
-  # Extract command after trigger
-  local cmd="${command_line#*$trigger}"
-  cmd="$(echo "$cmd" | sed 's/^[[:space:]]*//')"
+  # Extract command after trigger (remove anchored trigger at line start)
+  local cmd
+  cmd="$(echo "$command_line" | sed -E "s#^[[:space:]]*$trigger([[:space:]]+|$)##")"
 
   # Parse command structure
   local action="IMPLEMENT"
@@ -270,10 +270,10 @@ cmd_parse_review() {
       body: $body
     }')
 
-  # Check if review contains a command
+  # Check if review contains a command (anchored at line start)
   local has_command=false
   local command
-  if [[ "$BODY" == *"/manul"* ]]; then
+  if echo "$BODY" | grep -qE '^[[:space:]]*/manul([[:space:]]|$)'; then
     has_command=true
     command="$(parse_command "$BODY")" || true
   else

@@ -857,6 +857,141 @@ test_url_parsing_pull_form() {
 }
 
 # ============================================================
+# Anchored Trigger Parser Regression Tests (GitHub issue #44)
+# ============================================================
+
+# Test 28: Standard line-start command
+test_trigger_anchors_standard() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "300" --body "/manul do that task" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid action
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  action="$(echo "$output" | jq -r '.command.action')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true"; return 1; }
+  [ "$action" = "IMPLEMENT" ] || { echo "Expected action=IMPLEMENT got=$action"; return 1; }
+}
+
+# Test 29: Leading whitespace before trigger
+test_trigger_anchors_leading_whitespace() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "301" --body "   /manul do that task" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid action
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  action="$(echo "$output" | jq -r '.command.action')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true"; return 1; }
+  [ "$action" = "IMPLEMENT" ] || { echo "Expected action=IMPLEMENT got=$action"; return 1; }
+}
+
+# Test 30: Inline quote — should NOT trigger
+test_trigger_anchors_inline_quote_no_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "302" --body 'trigger /manul do that task' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "false" ] || { echo "Expected valid=false got=$valid"; return 1; }
+}
+
+# Test 31: Previous-command line — should NOT trigger
+test_trigger_anchors_previous_command_no_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "303" --body 'previous command: /manul do that task' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "false" ] || { echo "Expected valid=false got=$valid"; return 1; }
+}
+
+# Test 32: Code-block quote — should NOT trigger
+test_trigger_anchors_code_block_quote_no_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "304" --body '\`/manul do that task\`' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "false" ] || { echo "Expected valid=false got=$valid"; return 1; }
+}
+
+# Test 33: Multiline — trigger on line 2 should be recognized
+test_trigger_anchors_multiline_line_start() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local body
+  body=$'text before\n/manul do that task'
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "305" --body "$body" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true got=$valid"; return 1; }
+}
+
+# Test 34: Filename path — should NOT trigger
+test_trigger_anchors_filename_path_no_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "306" --body 'docs/manul-2024/file.md' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "false" ] || { echo "Expected valid=false got=$valid"; return 1; }
+}
+
+# Test 35: Prefix command — should NOT trigger
+test_trigger_anchors_prefix_command_no_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "307" --body '/manulrun do that task' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "false" ] || { echo "Expected valid=false got=$valid"; return 1; }
+}
+
+# Test 36: Command with subcommand
+test_trigger_anchors_cmd_with_subcommand() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "308" --body '/manul review-fix foo' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid action
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  action="$(echo "$output" | jq -r '.command.action')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true got=$valid"; return 1; }
+  [ "$action" = "REVIEW_FIX" ] || { echo "Expected action=REVIEW_FIX got=$action"; return 1; }
+}
+
+# Test 37: Bare trigger
+test_trigger_anchors_bare_trigger() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "309" --body '/manul' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true got=$valid"; return 1; }
+}
+
+# Test 38: Continue subcommand
+test_trigger_anchors_continue_subcommand() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local output
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "310" --body '/manul continue my answer' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  local valid action
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  action="$(echo "$output" | jq -r '.command.action')"
+  [ "$valid" = "true" ] || { echo "Expected valid=true got=$valid"; return 1; }
+  [ "$action" = "CONTINUE" ] || { echo "Expected action=CONTINUE got=$action"; return 1; }
+}
+
+# ============================================================
 # Run Tests
 # ============================================================
 
@@ -900,6 +1035,19 @@ run_test "Test 24: PR conversation comment routes to REVIEW_FIX not IMPLEMENT" t
 run_test "Test 25: Issue comment routes to IMPLEMENT not REVIEW_FIX" test_issue_comment_routes_to_implement
 run_test "Test 26: URL parsing regression — issue form" test_url_parsing_issue_form
 run_test "Test 27: URL parsing regression — pull form" test_url_parsing_pull_form
+
+# Anchored trigger parser regression tests (GitHub issue #44)
+run_test "Test 28: Trigger anchor — standard command" test_trigger_anchors_standard
+run_test "Test 29: Trigger anchor — leading whitespace" test_trigger_anchors_leading_whitespace
+run_test "Test 30: Trigger anchor — inline quote no trigger" test_trigger_anchors_inline_quote_no_trigger
+run_test "Test 31: Trigger anchor — previous-command no trigger" test_trigger_anchors_previous_command_no_trigger
+run_test "Test 32: Trigger anchor — code-block-quote no trigger" test_trigger_anchors_code_block_quote_no_trigger
+run_test "Test 33: Trigger anchor — multiline line-start" test_trigger_anchors_multiline_line_start
+run_test "Test 34: Trigger anchor — filename path no trigger" test_trigger_anchors_filename_path_no_trigger
+run_test "Test 35: Trigger anchor — prefix command no trigger" test_trigger_anchors_prefix_command_no_trigger
+run_test "Test 36: Trigger anchor — command with subcommand" test_trigger_anchors_cmd_with_subcommand
+run_test "Test 37: Trigger anchor — bare trigger" test_trigger_anchors_bare_trigger
+run_test "Test 38: Trigger anchor — continue subcommand" test_trigger_anchors_continue_subcommand
 
 # End-to-end test
 echo ""
