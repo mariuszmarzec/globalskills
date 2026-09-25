@@ -47,7 +47,7 @@ manul_env_bootstrap() {
   fi
 
   if [ ! -f "$env_file" ]; then
-    cat > "$env_file" <<'EOF'
+    if ! cat > "$env_file" <<'EOF'
 # Manul operator environment.
 #
 # This file is loaded by unattended Manul processes (daemon/watchdog).
@@ -57,15 +57,24 @@ manul_env_bootstrap() {
 # The installer only copies a small allowlist of provider variables from the
 # current process environment. Existing entries are always preserved.
 EOF
+    then
+      return 1
+    fi
     chmod 600 "$env_file" || return 1
   fi
 
   local variable value
-  for variable in     OPENCLAW_STATE_DIR     OPENCLAW_CONFIG_PATH     OPENCLAW_BIN     OPENCODE_BIN; do
+  for variable in \
+    OPENCLAW_STATE_DIR \
+    OPENCLAW_CONFIG_PATH \
+    OPENCLAW_HOME \
+    OPENCLAW_GATEWAY_PORT \
+    OPENCLAW_BIN \
+    OPENCODE_BIN; do
     value="${!variable:-}"
     if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
       printf '%s=%q\n' "$variable" "$value" >> "$env_file"
-      echo "  Captured $variable for unattended Manul processes"
+      echo "  Captured $variable for unattended Manul processes" >&2
     fi
   done
 
