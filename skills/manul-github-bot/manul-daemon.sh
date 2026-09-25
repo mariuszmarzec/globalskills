@@ -1789,16 +1789,11 @@ evaluate_task_completion() {
     fi
   fi
   
-  # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
-  if [ "$SUCCESS" = "true" ]; then
-    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
-      lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-      SUCCESS="false"
-      FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
-    fi
-  fi
-  
+  # Result-comment verification runs after repository/PR verification below.
+  # This ordering is intentional: if the agent created a real PR but its result
+  # comment is malformed, the verified PR metadata is still persisted before the
+  # task is rejected for violating the exactly-one-result-comment contract.
+
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
@@ -1872,6 +1867,17 @@ evaluate_task_completion() {
       # tasks cannot accidentally bypass the repository/PR verification above.
       log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
       lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+    fi
+  fi
+
+  # Final result-comment verification is performed after PR verification so a
+  # known PR is persisted even when the agent's result comment is malformed.
+  if [ "$SUCCESS" = "true" ]; then
+    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      log "dispatch: task $COMMENT_ID attempt $current_attempt has invalid result comment state"
+      lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+      SUCCESS="false"
+      FAIL_REASON="Agent emitted TASK_DONE but the final result-comment state does not contain exactly one valid deterministic marker for attempt $current_attempt"
     fi
   fi
 
