@@ -44,6 +44,7 @@ env:
     skills/manul-github-bot/test_source_revalidation.sh
     skills/manul-github-bot/test_task_retention.sh
     skills/manul-github-bot/test_user_decision_blocking.sh
+    skills/manul-github-bot/test_feedback_routing.sh
 
 jobs:
   verify:
