@@ -161,12 +161,6 @@ cmd_post_done() {
   local attempt
   attempt="$(get_task_attempt "$TASK_ID")"
 
-  local max_attempts
-  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then
-    max_attempts=3
-  fi
-
   local conv_id
   conv_id="$(get_task_conversation "$TASK_ID")"
 
@@ -250,6 +244,12 @@ cmd_post_failed() {
 
   local attempt
   attempt="$(get_task_attempt "$TASK_ID")"
+
+  local max_attempts
+  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then
+    max_attempts=3
+  fi
 
   local conv_id
   conv_id="$(get_task_conversation "$TASK_ID")"
