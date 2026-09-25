@@ -1055,6 +1055,493 @@ process_repo_body() {
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
+    # Include the authoritative issue/PR conversation when the trigger is a terse command
+    # such as `/manul do this`. The trigger comment remains the immediate instruction,
+    # while the issue/PR root and prior conversation provide the actual task specification.
+    conv_context="$(build_conversation_context "$conv_id" 2>/dev/null || true)"
+    if [ -n "$conv_context" ]; then
+      prompt="$prompt"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # processed_comments is short-lived; conversation_messages is the durable
+    # message-identity record used to prevent old triggers from being requeued.
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    [ "$already_recorded" = "1" ] && continue
+    conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+      if resume_blocked_user_task "$conv_id" "$repo" "$issue" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
+      NEW=$((NEW + 1))
+      raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
+      raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
+      persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
+      sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+      # Task context is materialized after the poll has ingested all
+      # available GitHub messages for this repository.
+      log "queued $id on $repo#$issue (agent=${agent:-default})"
+    fi
+  done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+       else {action: null, prompt: $rest}
+       end) as $actx
+    | (.html_url | capture("(?:issues|pull)/(?<n>[0-9]+)").n | tonumber) as $issue_num
+    | (if $actx.action != null then $actx.action
+        elif ($open_prs | index($issue_num)) then "REVIEW_FIX"
+        else "IMPLEMENT"
+        end) as $action
+    | {
+      id: ("issue:" + (.id|tostring)),
+      rawId: (.id|tostring),
+      rawBody: .body,
+      repo: $repo,
+      author: .user.login,
+      created: .created_at,
+      url: .html_url,
+      issueNumber: $issue_num,
+      agent: $agent,
+      action: $action,
+      prompt: $actx.prompt,
+      fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; ""))
+    }' 2>>"$LOG" || true)
+
+  # 1b) Issue bodies (new OPEN issues carrying the trigger in the description)
+  while IFS= read -r obj; do
+    [ -n "$obj" ] || continue
+    id="$(jq -r '.id' <<<"$obj")"
+    issue="$(jq -r '.issueNumber' <<<"$obj")"
+    url="$(jq -r '.url' <<<"$obj")"
+    author="$(jq -r '.author' <<<"$obj")"
+    created="$(jq -r '.created' <<<"$obj")"
+    prompt="$(jq -r '.prompt' <<<"$obj")"
+    agent="$(jq -r '.agent // ""' <<<"$obj")"
+    action="$(jq -r '.action // ""' <<<"$obj")"
+    [ -n "$prompt" ] || continue
+    esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # See the issue-comment path above: keep processed_comments short-lived,
+    # but never rediscover an already-ingested issue as a new task.
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    [ "$already_recorded" = "1" ] && continue
+    conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
+    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    base_id="$id"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
+      NEW=$((NEW + 1))
+      sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+      # Task context is materialized after the poll has ingested all
+      # available GitHub messages for this repository.
+      log "queued $id on $repo#$issue (issue body, agent=${agent:-default}, action=${action:-IMPLEMENT})"
+    fi
+  done < <(gh api --paginate "repos/$repo/issues?state=open&since=$BASELINE&per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    .[] | select(.pull_request | not) | select(.created_at >= $base) | select(.body // "" | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+       else {action: null, prompt: $rest}
+       end) as $actx
+    | (if $actx.action != null then $actx.action else "IMPLEMENT" end) as $action
+    | {
+      id: ("issuebody:" + (.id|tostring)),
+      repo: $repo,
+      author: .user.login,
+      created: .created_at,
+      url: .html_url,
+      issueNumber: .number,
+      agent: $agent,
+      action: $action,
+      prompt: $actx.prompt
+    }' 2>>"$LOG" || true)
+
+  # 2) PR review comments
+  review_comments="$(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" || echo "[]")"
+
+  declare -A PR_COMMENT_COUNTS=()
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    pr_num="$(jq -r '.html_url | capture("pull/(?<n>[0-9]+)").n' <<<"$line")"
+    [ -n "$pr_num" ] && PR_COMMENT_COUNTS["$pr_num"]=$(( ${PR_COMMENT_COUNTS["$pr_num"]:-0} + 1 ))
+  done < <(printf '%s\n' "$review_comments" | jq -c '.[]' 2>/dev/null || true)
+
+  while IFS= read -r obj; do
+    [ -n "$obj" ] || continue
+    id="$(jq -r '.id' <<<"$obj")"
+    pr_num="$(jq -r '.issueNumber' <<<"$obj")"
+    [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+    [ -n "${MERGED_PRS[$pr_num]:-}" ] && continue
+    [ -n "${CLOSED_PRS[$pr_num]:-}" ] && continue
+    url="$(jq -r '.url' <<<"$obj")"
+    author="$(jq -r '.author' <<<"$obj")"
+    created="$(jq -r '.created' <<<"$obj")"
+    prompt="$(jq -r '.prompt' <<<"$obj")"
+    agent="$(jq -r '.agent // ""' <<<"$obj")"
+    action="$(jq -r '.action // ""' <<<"$obj")"
+    [ -n "$prompt" ] || continue
+    fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
+    [ -n "$fullBody" ] || fullBody="$prompt"
+    prompt="$fullBody"
+    cpath="$(jq -r '.path // ""' <<<"$obj")"
+    cline="$(jq -r '.line // ""' <<<"$obj")"
+    chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
+    esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
+    esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
+    raw_id="${raw_id#review:}"
+    reply_to="$(jq -r '.in_reply_to_id // empty' <<<"$obj")"
+    if [ -n "$reply_to" ]; then
+      root_id="$(get_review_thread_root_id "$review_comments" "$raw_id")"
+    else
+      root_id="$raw_id"
+    fi
+    conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
+    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+    base_id="$id"
+
+    if [ "$action" = "CONTINUE" ]; then
+      if resume_blocked_user_task "$conv_id" "$repo" "$pr_num" "$id" "$author" "$prompt" "$created" "$url"; then
+        NEW=$((NEW + 1))
+        continue
+      fi
+      action="CONTINUE"
+    fi
+
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    if [ "${ins:-0}" -gt 0 ]; then
+      NEW=$((NEW + 1))
+      raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
+      raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
+      persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
+      sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
+      # Review-thread context is materialized after the poll has ingested
+      # all available GitHub messages for this repository.
+      if [ -f "$MANUL_DIR/manul-pr-review.sh" ] && [ -n "$prompt" ]; then
+        review_id="${id#review:}"
+        if [ -n "$conv_id" ]; then
+          sqlite3 "$DB" "INSERT OR IGNORE INTO conversation_links(conversationId, repo, prNumber, commentId, linkType, createdAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$(sql_escape "$id")', 'review', '$now');" 2>>"$LOG" || true
+        fi
+      fi
+      log "queued $id on $repo#$pr_num (agent=${agent:-default})"
+    fi
+  done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
+    .[] | select(.created_at >= $base) | select(.body | contains($trig)) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    (.body | split("\n")) as $lines
+    | ([range(0; $lines|length) | select($lines[.] | contains($trig))][0]) as $idx
+    | ($lines[$idx] | split($trig) | .[1:] | join($trig) | sub("^[ \t]+"; "")) as $rest0
+    | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
+    | ($rest | split(" ")[0]) as $tok
+    | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
+    | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
+    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
+       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
+       else {action: null, prompt: $rest}
+       end) as $actx
+    | (if $actx.action != null then $actx.action else "REVIEW_FIX" end) as $action
+    | {
+      id: ("review:" + (.id|tostring)),
+      rawId: (.id|tostring),
+      rawBody: .body,
+      repo: $repo,
+      author: .user.login,
+      created: .created_at,
+      url: .html_url,
+      issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
+      agent: $agent,
+      action: $action,
+      prompt: $actx.prompt,
+      fullBody: (.body | sub($trig; "") | sub("^[ \t]+"; "")),
+      path: (.path // ""),
+      line: ((.line // .original_line // "") | tostring),
+      diffHunk: (.diff_hunk // ""),
+      in_reply_to_id: (.in_reply_to_id // null)
+    }' 2>>"$LOG" || true)
+
+  # 2b) PR review events (REQUEST_CHANGES -> REVIEW_FIX tasks)
+  if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
+    while IFS= read -r pr_obj; do
+      [ -n "$pr_obj" ] || continue
+      pr_num="$(jq -r '.number' <<<"$pr_obj")"
+      [ -n "$pr_num" ] || continue
+      [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+
+      reviews_json="$(gh api "repos/$repo/pulls/$pr_num/reviews?per_page=100" 2>>"$LOG" || echo '[]')"
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      while IFS= read -r review; do
+        [ -n "$review" ] || continue
+        review_id="$(jq -r '.id // empty' <<<"$review")"
+        [ -n "$review_id" ] || continue
+        review_state="$(jq -r '.state // empty' <<<"$review")"
+        review_body="$(jq -r '.body // ""' <<<"$review")"
+        review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
+        review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
+        [ -n "$review_created" ] || review_created="$now"
+
+        if [ "$review_state" = "CHANGES_REQUESTED" ]; then
+          log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
+          existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
+          if [ -z "$existing_conv" ]; then
+            local pr_url
+            pr_url="$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null)" || pr_url="https://github.com/$repo/pull/$pr_num"
+            [ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr_num"
+            new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+            sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, '$pr_url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
+            log "auto-created conversation $new_conv_id for $repo#$pr_num"
+          fi
+         if "$MANUL_DIR/manul-pr-review.sh" handle \
+           --repo "$repo" \
+           --pr-number "$pr_num" \
+           --review-id "$review_id" \
+           --review-state "REQUEST_CHANGES" \
+           --body "$review_body" \
+           --author "$review_author" \
+           --created "$review_created" \
+           --json >>"$LOG" 2>&1; then
+           log "review $review_id on $repo#$pr_num processed successfully"
+         else
+           log "WARN: failed to process review $review_id on $repo#$pr_num"
+         fi
+        elif [ "$review_state" = "APPROVED" ]; then
+          log "received APPROVE on $repo#$pr_num (no fix task created)"
+        else
+          log "received $review_state review on $repo#$pr_num (no action)"
+        fi
+      done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
+    done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
+  fi
+
+  # Persist all available conversation messages first, then materialize the
+  # complete conversation into every queued task. This also refreshes queued
+  # tasks when new comments arrive after their original trigger.
+  persist_conversation_messages_for_repo "$repo"
+  refresh_queued_task_contexts_for_repo "$repo"
+
+  # Retry any skipped comments from a previous poll run
+  skip_log="$MANUL_DIR/skip-comments.log"
+  if [ -f "$skip_log" ]; then
+    tmp_skip="${skip_log}.tmp"
+    > "$tmp_skip"
+    while IFS='|' read -r srepo sissue smsg stime; do
+      [ -n "$srepo" ] || continue
+      if "$MANUL_DIR/feedback.sh" "$srepo" "$sissue" "$smsg" 2>>"$LOG"; then
+        log "delivered pending skip comment for $srepo#$sissue (queued at $stime)"
+      else
+        printf '%s|%s|%s|%s\n' "$srepo" "$sissue" "$smsg" "$stime" >> "$tmp_skip"
+        log "WARN: pending skip comment for $srepo#$sissue still failing, will retry next poll"
+      fi
+    done < "$skip_log"
+    mv "$tmp_skip" "$skip_log"
+  fi
+
+  # Scan for failing CI on manul PRs
+  scan_failing_ci "$repo"
+}
+
+# === Main polling logic (runs only when executed directly) ===
+# Only run main logic when executed directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  if [ "${#REPOS[@]}" -eq 0 ]; then
+    echo 'MANUL_RESULT {"fire":false,"new":0,"pending":0,"repos":0}'
+    exit 0
+  fi
+
+  # Prevent overlapping poll instances: acquire poll-level lock
+  exec 201>"$POLL_LOCK_FILE"
+  if ! flock -n 201; then
+    log "poll already in progress (poll.flock held); skipping"
+    PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
+    echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":$PENDING,\"locked\":true}"
+    exit 0
+  fi
+
+  # Release any repo locks owned by this poll even when the shell is terminated
+  # before the normal end-of-loop cleanup can run. The cleanup trap is
+  # installed only after poll.flock is acquired, so the per-repo worker
+  # subprocesses (which cannot acquire this lock) cannot release a parent's lock.
+  ACTIVE_REPO_PID=""
+  ACTIVE_REPO_LAUNCHER_PID=""
+
+  cleanup_repo_locks() {
+    # Kill an active repo worker when poll.sh is interrupted; otherwise the
+    # detached setsid session can survive and keep CI pipes open.
+    if [ -n "${ACTIVE_REPO_PID:-}" ]; then
+      kill -TERM -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+      kill -KILL -- "-$ACTIVE_REPO_PID" 2>/dev/null || true
+    fi
+    if [ -n "${ACTIVE_REPO_LAUNCHER_PID:-}" ]; then
+      kill -TERM "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+      kill -KILL "$ACTIVE_REPO_LAUNCHER_PID" 2>/dev/null || true
+    fi
+    local cleanup_repo
+    for cleanup_repo in "${REPOS[@]}"; do
+      [ -n "$cleanup_repo" ] || continue
+      release_repo_lock "$cleanup_repo"
+    done
+  }
+  # emit_result is defined below, before the repo loop, so the signal traps can
+  # call it even when they fire mid-loop (bash resolves the name at call time).
+  trap 'cleanup_repo_locks; emit_result; exit 143' TERM
+  trap 'cleanup_repo_locks; emit_result; exit 130' INT
+  trap 'cleanup_repo_locks; emit_result; exit 129' HUP
+  trap 'cleanup_repo_locks' EXIT
+
+  emit_result() {
+    # Emit the MANUL_RESULT line. Called at the normal end of the loop AND
+    # from the signal traps above, so a poll.sh that is killed by an outer
+    # timeout (e.g. the daemon's global POLL_TIMEOUT) still reports the
+    # queued tasks it already discovered. Without this, every interrupted
+    # cycle reports fire:false and the daemon never dispatches.
+    # Idempotent: the EXIT trap also fires after a signal handler's exit, so
+    # guard against emitting the result twice.
+    if [ "${_EMITTED:-0}" = "1" ]; then
+      return 0
+    fi
+    _EMITTED=1
+    PENDING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued';" 2>/dev/null || echo 0)"
+
+    LOCKED=0
+    if [ -f "$LOCK" ]; then
+      age=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
+      [ "$age" -lt "$LOCK_TTL_SECONDS" ] && LOCKED=1
+    fi
+
+    if { [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; } && [ "$LOCKED" -eq 0 ]; then
+      echo "MANUL_RESULT {\"fire\":true,\"new\":$NEW,\"pending\":$PENDING}"
+    elif [ "$NEW" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
+      echo "MANUL_RESULT {\"fire\":false,\"new\":$NEW,\"pending\":$PENDING,\"locked\":true}"
+    else
+      echo "MANUL_RESULT {\"fire\":false,\"new\":0,\"pending\":0}"
+    fi
+  }
+
+  # Run each repo in its own session/process group so a hung gh subprocess
+  # cannot leak past the per-repository timeout. Return 124 on timeout.
+  run_repo_with_timeout() {
+    local repo="$1"
+    local script
+    local launcher_pid
+    local pid=""
+    local started
+    local result=0
+
+    script="$(readlink -f "${BASH_SOURCE[0]}")"
+    started="$SECONDS"
+
+    # --fork + --wait gives us a stable launcher we can wait on while the
+    # actual worker is guaranteed to be a session/process-group leader.
+    # Plain "setsid ... &" is racy: setsid may fork when its caller is already
+    # a process-group leader and the $! PID can then belong to the short-lived
+    # parent rather than the real worker.
+    #
+    # The poll.flock fd (201) is inherited by this child and, through it, by
+    # the whole session it creates. If the daemon's outer timeout then SIGTERMs
+    # the poll.sh parent, the flock is never released — the child session keeps
+    # it alive forever and every subsequent poll cycle is skipped. Close the
+    # inherited lock fd in the worker so a killed parent cannot strand the lock.
+    setsid --fork --wait bash -c "exec 201>&-; source '$script'; process_repo_body \"\$1\"" _ "$repo" &
+    launcher_pid=$!
+
+    # Resolve the real session leader created by setsid --fork.
+    for _ in {1..50}; do
+      pid="$(ps -o pid= --ppid "$launcher_pid" 2>/dev/null | awk 'NR==1 {gsub(/[[:space:]]/, ""); print}')"
+      [ -n "$pid" ] && break
+      kill -0 "$launcher_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    pid="${pid:-$launcher_pid}"
+    ACTIVE_REPO_PID="$pid"
+    ACTIVE_REPO_LAUNCHER_PID="$launcher_pid"
+
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ $((SECONDS - started)) -ge "$REPO_POLL_TIMEOUT" ]; then
+        log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, terminating process group"
+        kill -TERM -- "-$pid" 2>/dev/null || true
+        kill -TERM "$launcher_pid" 2>/dev/null || true
+        sleep 0.2
+        kill -KILL -- "-$pid" 2>/dev/null || true
+        kill -KILL "$launcher_pid" 2>/dev/null || true
+        wait "$launcher_pid" 2>/dev/null || true
+        ACTIVE_REPO_PID=""
+        ACTIVE_REPO_LAUNCHER_PID=""
+        return 124
+      fi
+      sleep 0.1
+    done
+
+    wait "$launcher_pid" 2>/dev/null || result=$?
+    ACTIVE_REPO_PID=""
+    ACTIVE_REPO_LAUNCHER_PID=""
+    return "$result"
+  }
+
+  for repo in "${REPOS[@]}"; do
+    [ -n "$repo" ] || continue
+
+    if ! acquire_repo_lock "$repo"; then
+      continue
+    fi
+    repo_cleanup_lock=1
+
+    # Process this repo with a per-repository timeout. If the repo times out,
+    # its lock is released and the next repo is processed immediately — no
+    # starvation.
+    _result=0
+    run_repo_with_timeout "$repo" || _result=$?
+
+    if [ "$_result" -eq 124 ]; then
+      log "WARN: repo $repo timed out after ${REPO_POLL_TIMEOUT}s, continuing to next repo"
+    elif [ "$_result" -ne 0 ]; then
+      log "WARN: repo $repo processing failed with exit code $_result"
+    fi
+
+    # Release immediately after each repo. This prevents a later global poll
+    # timeout from leaking the repo lock for a repository already processed.
+    release_repo_lock "$repo"
+  done
+
+  # Normal completion path.
+  emit_result
+  exit 0
+fi
+
+\n\n## Conversation context\n'"$conv_context"
+    fi
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
