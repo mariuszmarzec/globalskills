@@ -152,13 +152,14 @@ The runtime-isolation refactor makes Manul independent of the OpenClaw runtime l
 └── workspace/
 ```
 
-OpenClaw remains provider-owned:
+OpenClaw remains provider-owned, including its state/configuration paths.
+Those paths are supplied through provider environment such as
+`OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`; Manul may persist those
+values in `~/.manul/.env` for unattended execution.
 
-```
-~/.openclaw/
-```
-
-OpenCode, Claude Code, Tabnine and other runtimes retain their native configuration/state locations unless an adapter has a concrete reason to own additional Manul-specific data.
+OpenCode, Claude Code, Tabnine and other runtimes retain their native
+configuration/state locations unless an adapter has a concrete reason to own
+additional Manul-specific data.
 
 The execution boundary becomes:
 
