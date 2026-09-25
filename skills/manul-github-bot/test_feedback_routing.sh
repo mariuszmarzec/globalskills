@@ -97,7 +97,7 @@ SQL
 cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 set -u
-printf '%s\n' "$*" >> "$GH_LOG"
+for arg in "$@"; do printf 'ARG:%q\n' "$arg"; done >> "$GH_LOG"
 exit 0
 EOF
 chmod +x "$FAKE_BIN/gh"
@@ -107,18 +107,18 @@ export MANUL_DIR PATH="$FAKE_BIN:$PATH" GH_LOG DB
 echo "=== Feedback routing regression tests ==="
 
 review_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started   --repo mariuszmarzec/shoppingListGenerator   --issue 43   --comment-id review:4103894743   --task-id review:4103894743   --pr-number 43   --json 2>&1)"
-review_cmd="$(head -1 "$GH_LOG" 2>/dev/null || true)"
+review_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
 
-assert_contains "Review lifecycle uses PR review-comments endpoint" "$review_cmd" "api repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
+assert_contains "Review lifecycle uses PR review-comments endpoint" "$review_cmd" "ARG:api\nARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
 assert_matches "Review lifecycle replies to source review comment" "$review_cmd" 'in_reply_to[=[:space:]]+4103894743'
 assert_not_contains "Review lifecycle does not use top-level issue comment API" "$review_cmd" "issue comment 43"
 
 : > "$GH_LOG"
 
 top_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started   --repo mariuszmarzec/shoppingListGenerator   --issue 43   --comment-id issue:5831560162   --task-id issue:5831560162   --pr-number 43   --json 2>&1)"
-top_cmd="$(head -1 "$GH_LOG" 2>/dev/null || true)"
+top_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
 
-assert_contains "Top-level lifecycle uses issue comment API" "$top_cmd" "issue comment 43"
+assert_contains "Top-level lifecycle uses issue comment API" "$top_cmd" "ARG:issue\nARG:comment\nARG:43"
 assert_not_contains "Top-level lifecycle does not use review reply endpoint" "$top_cmd" "pulls/43/comments"
 assert_not_contains "Top-level lifecycle has no in_reply_to routing" "$top_cmd" "in_reply_to="
 
