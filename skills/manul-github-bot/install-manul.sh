@@ -146,7 +146,7 @@ fi
 #     Only an explicit allowlist is copied from the installer environment.
 #     Existing ~/.manul/.env content is preserved.
 echo
-echo "[3b/7] Preparing operator environment..."
+echo "  Preparing operator environment..."
 if ! "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
