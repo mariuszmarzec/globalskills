@@ -288,6 +288,28 @@ if [ "$COMPLETION_SUCCESS" = "true" ]; then
 fi
 echo "[OK] Test F: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
+# ─── Test F2: executor summary survives into FAIL_REASON ─────────────────────
+# Regression for runtime failures that previously surfaced only as generic
+# "Task failed" in GitHub feedback even though the controller returned a useful
+# execution summary.
+echo ""
+echo "=== Test F2: executor summary is preserved as FAIL_REASON ==="
+STDOUT_FILE="$TEST_TMPDIR/stdoutF2.txt"
+echo "runtime output" > "$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "47" "COMMENT_6B" "COMMENT_6B" "1" "1" "$STDOUT_FILE" "$DB" "" "" "" "" "master" "master" "OpenClaw exited with code 1: authentication failed"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test F2 - expected COMPLETION_SUCCESS=false"
+    exit 1
+fi
+if [ "$FAIL_REASON" != "OpenClaw exited with code 1: authentication failed" ]; then
+    echo "FAIL: Test F2 - expected executor summary to survive, got '$FAIL_REASON'"
+    exit 1
+fi
+echo "[OK] Test F2: PASSED (FAIL_REASON preserves executor summary)"
+
 # ─── Test G: agent pushed branch + returned /compare/... URL (no PR) ─────────
 # The exact problem case from shoppingListGenerator#28: the agent committed,
 # pushed its branch, and returned a /compare/... "create PR" link instead of an
@@ -558,6 +580,7 @@ echo "[OK] Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=fal
 echo "[OK] Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false"
 echo "[OK] Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
 echo "[OK] Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
+echo "[OK] Test F2: executor summary is preserved as FAIL_REASON"
 echo "[OK] Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> COMPLETION_SUCCESS=true"
 echo "[OK] Test H: autoCreatePr disabled + no PR -> COMPLETION_SUCCESS=false"
 echo "[OK] Test I: agent left on default branch -> verify_required_pr FAILS (regression)"
