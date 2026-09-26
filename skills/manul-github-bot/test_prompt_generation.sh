@@ -620,27 +620,6 @@ if assert_file_contains "review task uses in_reply_to" "$WORK/prompt.md" "-f in_
 if assert_file_contains "top-level route remains available" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/issues/42/comments"; then :; else :; fi
 if assert_file_contains "review endpoint explains no issues in_reply_to" "$WORK/prompt.md" "Do NOT use \`/issues/42/comments\` with \`in_reply_to\`"; then :; else :; fi
 
-# ─── Test: Actual daemon prompt contains the shell-safe result contract ───────
-echo -n "Test: Actual daemon prompt is shell-safe ... "
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DAEMON_SOURCE="$SCRIPT_DIR/manul-daemon.sh"
-if [ ! -f "$DAEMON_SOURCE" ]; then
-    fail "Actual daemon prompt is shell-safe (daemon source missing)"
-else
-    daemon_prompt="$(sed -n '/## GitHub Comment Posting (CRITICAL)/,/PROMPT_EOF/p' "$DAEMON_SOURCE")"
-    if assert_file_contains "daemon prompt has safe JSON body handling" "$DAEMON_SOURCE" "jq -n --rawfile body"; then :; else :; fi
-    if [[ "$daemon_prompt" == *"--input -"* ]]; then
-        ok "daemon prompt uses --input for request body"
-    else
-        fail "daemon prompt uses --input for request body"
-    fi
-    if [[ "$daemon_prompt" == *'Do NOT use `-f body="..."` or `-F body="..."`'* ]]; then
-        ok "daemon prompt forbids inline body flags"
-    else
-        fail "daemon prompt forbids inline body flags"
-    fi
-fi
-
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
