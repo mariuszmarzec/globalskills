@@ -53,4 +53,39 @@ else
   exit 1
 fi
 
+
+# The adapter must not convert a clean process exit without an explicit
+# TASK_DONE marker into a successful Manul completion.
+mkdir -p "$tmp/bin/plain"
+cat >"$tmp/bin/plain-openclaw" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' 'plain agent output without lifecycle marker'
+exit 0
+MOCK
+chmod +x "$tmp/bin/plain-openclaw"
+: >"$tmp/stdout-plain"
+: >"$tmp/stderr-plain"
+
+set +e
+plain_out="$(PATH="/usr/bin:/bin"   OPENCLAW_BIN="$tmp/bin/plain-openclaw"   AGENT_RUNTIME=openclaw   MANUL_DIR="$tmp/runtime"   bash "$SCRIPT_DIR/openclaw-adapter.sh"     --task-id oc-plain     --prompt "$tmp/prompt"     --workspace "$tmp"     --attempt 1     --timeout 30     --session-id ""     --stdout-file "$tmp/stdout-plain"     --stderr-file "$tmp/stderr-plain" 2>/dev/null)"
+plain_rc=$?
+set -e
+
+plain_status="$(printf '%s' "$plain_out" | jq -r '.status // empty' 2>/dev/null || true)"
+plain_exit_code="$(printf '%s' "$plain_out" | jq -r '.exit_code // empty' 2>/dev/null || true)"
+
+if [ "$plain_rc" -ne 0 ] && [ "$plain_status" = "FAILED" ] && [ "$plain_exit_code" = "1" ]; then
+  echo "PASS: clean agent exit without TASK_DONE is treated as failure"
+else
+  echo "FAIL: clean agent exit without TASK_DONE was accepted (rc=$plain_rc status=$plain_status exit_code=$plain_exit_code output=$plain_out)"
+  exit 1
+fi
+
+if grep -qE '^TASK_DONE([[:space:]]|$)' "$tmp/stdout-plain"; then
+  echo "FAIL: adapter synthesized TASK_DONE for a clean exit"
+  exit 1
+else
+  echo "PASS: adapter did not synthesize TASK_DONE"
+fi
+
 echo "All OpenClaw binary override tests passed."
