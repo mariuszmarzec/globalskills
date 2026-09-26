@@ -110,9 +110,49 @@ Before posting, query the source issue/PR for an existing result comment
 containing the exact marker
 `<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`.
 If one exists, do NOT create another comment. Validate and update that existing
-comment in place with the final verified content using GitHub's comment PATCH API.
+comment in place with the final verified content using the safe request-body method below.
 Only create a new comment when no result comment with that marker exists. The final
 state must contain exactly one matching result comment for this task/attempt.
+
+### Safe request-body handling (MANDATORY)
+
+Never put `YOUR_RESULT_COMMENT` or `YOUR_REPLY` directly inside shell quotes such as `-f body="..."`.
+Markdown backticks, `$(...)`, quotes, and other shell metacharacters in the comment body can then be interpreted by the shell.
+
+Build the complete comment body as literal file content, then send JSON through `--input`. Use a quoted heredoc (or an equivalent non-evaluating file/stdin method):
+
+```bash
+RESULT_FILE="$(mktemp)"
+cat >"$RESULT_FILE" <<'RESULT_EOF'
+<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->
+# Summary: [brief summary]
+
+[detailed result]
+
+— manul 🐈
+RESULT_EOF
+
+jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
+  gh api repos/__REPO__/issues/__ISSUE_NUM__/comments   --input - --jq .id
+
+rm -f "$RESULT_FILE"
+```
+
+For an existing top-level result comment, use the same body file and:
+
+```bash
+jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
+  gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID>   --input -
+```
+
+For a PR review-thread reply, include the numeric `in_reply_to` value in the JSON:
+
+```bash
+jq -n --rawfile body "$RESULT_FILE" --argjson reply_id __REPLY_TO__   '{body:$body, in_reply_to:$reply_id}' |
+  gh api repos/__REPO__/pulls/__PR_NUMBER__/comments   --input - --jq .id
+```
+
+Do NOT use `-f body="..."` or `-F body="..."` for a user-facing result/reply comment.
 
 Required format:
 
@@ -127,19 +167,9 @@ Required format:
 
 The exact marker values must come from the task prompt.
 
-Top-level result:
+Top-level result: use the safe request-body method above. Do not inline the comment body in shell arguments.
 
-```bash
-gh api repos/REPO/issues/ISSUE_NUM/comments \
-  -f body="YOUR_COMMENT" --jq .id
-```
-
-Reply to an existing comment:
-
-```bash
-gh api repos/REPO/issues/ISSUE_NUM/comments \
-  -f body="YOUR_REPLY" -f in_reply_to=ORIGINAL_COMMENT_ID --jq .id
-```
+Reply to an existing comment: use the safe request-body method above and include `in_reply_to` in the JSON request body.
 
 If posting fails:
 - retry when reasonable;
