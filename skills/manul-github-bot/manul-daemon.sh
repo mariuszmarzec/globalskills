@@ -2378,7 +2378,7 @@ cat >"$RESULT_FILE" <<'RESULT_EOF'
 RESULT_EOF
 
 jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
-  gh api repos/__REPO__/issues/__ISSUE_NUM__/comments   --input - --jq .id
+  gh api repos/__REPO__/issues/__ISSUE_NUM__/comments --input - --jq .id
 
 rm -f "$RESULT_FILE"
 ```
@@ -2386,13 +2386,13 @@ rm -f "$RESULT_FILE"
 For an existing top-level result comment:
 ```bash
 jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
-  gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID>   --input -
+  gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID> --input -
 ```
 
 For a PR review-thread reply:
 ```bash
-jq -n --rawfile body "$RESULT_FILE" --argjson reply_id __REPLY_TO__   '{body:$body, in_reply_to:$reply_id}' |
-  gh api repos/__REPO__/pulls/__PR_NUMBER__/comments   --input - --jq .id
+jq -n --rawfile body "$RESULT_FILE" --argjson reply_id __REPLY_TO__ '{body:$body, in_reply_to:$reply_id}' |
+  gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --input - --jq .id
 ```
 
 Do NOT use `-f body="..."` or `-F body="..."` for a user-facing result/reply comment.
@@ -2425,3 +2425,600 @@ Example informational task response:
 
 The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, ❓ needs user).
 For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_BEGIN/END, do NOT post a normal result comment; the daemon will post the question and resume the same task after the user replies.
+PROMPT_EOF
+
+    # Repository Management: Ensure target repository exists and is authoritative
+    local REPO_DIR
+    REPO_DIR="$(ensure_repo "$REPO")"
+    if [ $? -ne 0 ]; then
+      log "dispatch: FAILED to ensure repository $REPO, failing task"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
+      stop_heartbeat "$COMMENT_ID"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    # Verify repository integrity
+    if ! verify_repo "$REPO" "$REPO_DIR"; then
+      log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
+      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
+      stop_heartbeat "$COMMENT_ID"
+      release_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    # 6. Set working directory to the repository root
+    local WORKDIR="$REPO_DIR"
+
+    # 6.5. Lease workspace for exclusive task access. A continuation must
+    # reclaim the exact prior workspace so the runtime session and checkout
+    # remain bound to the same filesystem location.
+    source "$MANUL_DIR/workspace-manager.sh"
+    local WORKSPACE_ID
+    local EXISTING_SESSION_ID EXISTING_WORKSPACE_ID
+    EXISTING_SESSION_ID="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    EXISTING_WORKSPACE_ID="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ -n "$EXISTING_SESSION_ID" ] && [ -n "$EXISTING_WORKSPACE_ID" ]; then
+      WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
+      if [ -z "$WORKSPACE_ID" ]; then
+        log "dispatch: continuation session has no reclaimable workspace for task $COMMENT_ID"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      log "dispatch: reclaimed workspace $WORKSPACE_ID for continuation task $COMMENT_ID"
+    else
+      WORKSPACE_ID="$(workspace_lease "$COMMENT_ID")"
+    fi
+    if [ -z "$WORKSPACE_ID" ]; then
+      log "dispatch: no workspace available for task $COMMENT_ID, retrying"
+      lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+    
+    # Update task with workspace association
+    sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
+    
+# NOTE: The "reuse previous workspace for conversation" block has been
+     # intentionally removed. It released the freshly-leased workspace and
+     # pointed the task at an unrelated completed/failed workspace whose
+     # currentTaskId was already NULL, which broke the task→workspace
+     # ownership invariant and prevented workspace_get_path from resolving
+     # the path. The workspace leased above (workspace_lease) is the single
+     # authoritative workspace for this task for the rest of the dispatch.
+
+
+    # Get workspace path from lease
+    local workspace_path
+    workspace_path="$(workspace_get_path "$COMMENT_ID")"
+    if [ -z "$workspace_path" ]; then
+      log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
+      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+      stop_heartbeat "$COMMENT_ID"
+      release_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    # Clone repository into workspace if needed
+    if [ ! -d "$workspace_path/.git" ]; then
+      log "dispatch: cloning repository into workspace $workspace_path from $REPO_DIR"
+      git clone --local "$REPO_DIR" "$workspace_path" 2>/dev/null || {
+        log "dispatch: failed to clone repository into workspace, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      }
+      # Fix origin remote: git clone --local sets origin to the local path,
+      # but the agent needs to push to GitHub. Update origin to point to GitHub.
+      git -C "$workspace_path" remote set-url origin "https://github.com/${REPO}" 2>>"$LOG"
+      log "dispatch: updated workspace origin to https://github.com/${REPO}"
+    fi
+
+# Use the workspace as the working directory for the agent
+     WORKDIR="$workspace_path"
+
+     # Deterministic workspace preparation: ensure correct branch is checked out
+     if [ -n "$PR_HEAD_BRANCH" ]; then
+      # PR task: fetch and checkout the PR head branch explicitly
+      log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
+      if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
+        log "dispatch: failed to fetch PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      if ! git -C "$WORKDIR" checkout -B "$PR_HEAD_BRANCH" "FETCH_HEAD" 2>>"$LOG"; then
+        log "dispatch: failed to checkout PR head branch, releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+      # Verify HEAD is the expected PR head branch
+      local verify_branch
+      verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
+      if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
+        log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
+        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
+log "dispatch: verified PR head branch $verify_branch in workspace"
+     else
+       # Issue / standalone task: the workspace may have been left on a stale
+       # task branch from a previous run. Reset to the default branch so the
+       # agent starts from a clean, known state and cannot pick up leftover
+       # changes from an unrelated task. (Do NOT use clean -fdx: the workspace
+       # holds untracked helper dirs like .agents that must be preserved.)
+       local default_branch
+       default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "")"
+       local base_branch
+       base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+       log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
+       if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
+         log "ERROR: failed to fetch origin before task setup on $REPO"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+       fi
+       base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+       if ! git -C "$WORKDIR" checkout -B "$base_branch" "origin/$base_branch" 2>>"$LOG"; then
+         log "ERROR: failed to checkout base branch '$base_branch' for task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+       fi
+       if ! git -C "$WORKDIR" reset --hard "origin/$base_branch" --quiet 2>>"$LOG"; then
+         log "ERROR: failed to reset workspace to origin/$base_branch for task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+       fi
+       if ! git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG"; then
+         log "ERROR: failed to clean workspace before task $COMMENT_ID"
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+       fi
+     fi
+log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
+
+     # Hard workspace validation before agent dispatch. The workspace lease
+     # (workspace_lease) is the single authoritative source of ownership;
+     # if the invariant is broken here, the agent must never be launched.
+     local ws_owner ws_state ws_path_check
+     ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_path_check="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
+     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ]; then
+       log "ERROR: workspace ownership invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} path=$WORKDIR)"
+       lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
+       log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
+       stop_heartbeat "$COMMENT_ID"
+       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+       release_repo_lock "$REPO"
+       release_task_lock
+       set_activity "none" "idle"
+       return 0
+     fi
+     log "dispatch: workspace validated for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=$ws_owner state=$ws_state path=$WORKDIR)"
+
+     # Capture the exact repository state we hand to the agent.
+    local CURRENT_BRANCH
+    CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
+    local INITIAL_BRANCH="$CURRENT_BRANCH"
+    local INITIAL_HEAD
+    INITIAL_HEAD="$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null || echo "")"
+    local DEFAULT_BRANCH
+    DEFAULT_BRANCH="$(git -C "$WORKDIR" remote show origin 2>/dev/null | grep "HEAD" | awk '{print $3}' || echo "")"
+    local INITIAL_BASE_BRANCH="${base_branch:-$CURRENT_BRANCH}"
+    log "dispatch: task $COMMENT_ID starts on branch=$INITIAL_BRANCH head=$INITIAL_HEAD initialBase=$INITIAL_BASE_BRANCH default=$DEFAULT_BRANCH"
+
+    # Update prompt to include authoritative repository path and branch policy
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+
+## Authoritative Repository
+The target repository for this task is located at: __REPO_DIR__
+
+## Working Directory
+You will execute in the repository directory:
+__WORKDIR__
+
+## Branch Policy
+PROMPT_APPEND
+
+    if [ -n "$PR_HEAD_BRANCH" ]; then
+      # PR-tied task: operate on the PR's head branch
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This task is tied to PR #__ISSUE_NUM__
+- PR head branch: `__PR_HEAD_BRANCH__`
+- PR head branch `__PR_HEAD_BRANCH__` is already checked out and ready for work
+- Commit and push changes to the same PR head branch
+- Do NOT create a new branch for this task
+PROMPT_APPEND
+    else
+      # Standalone issue task: daemon prepares the base; the agent owns the
+      # repository-change branch decision and follows feature-branching-strategy.
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This is a standalone task (not tied to an existing PR)
+- Current branch: __CURRENT_BRANCH__
+- Repository default branch: __DEFAULT_BRANCH__
+- Initial prepared base branch: __INITIAL_BASE_BRANCH__
+- The daemon does NOT create your task branch for you
+- First determine whether this is informational or requires repository changes
+- For informational tasks: do NOT modify the repository and do NOT create a branch; post the answer to GitHub and finish
+- For repository changes: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy
+- Create the branch yourself before committing or pushing changes
+- If the task explicitly requires another branch as the base, including another feature branch, use it as the base and update it from the remote before creating your branch
+- Never commit or push repository changes directly to the prepared/base/default branch
+PROMPT_APPEND
+    fi
+
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+
+## Skills
+Your skills are available at: ~/.agents/skills
+Use relevant skills when appropriate to guide your implementation.
+PROMPT_APPEND
+
+    # Substitute all single-line placeholders with actual runtime values
+    # Using bash parameter expansion (safe: replacement is literal, no command substitution)
+    local prompt_content
+    prompt_content="$(cat "$TASK_PROMPT_FILE")"
+    prompt_content="${prompt_content//__REPO__/$REPO}"
+    prompt_content="${prompt_content//__ISSUE_NUM__/$ISSUE_NUM}"
+    prompt_content="${prompt_content//__COMMENT_ID__/$COMMENT_ID}"
+    prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
+    prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
+    prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
+    prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
+    prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
+    prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
+    prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
+    prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
+    prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
+    prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
+    prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
+    prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
+    printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
+
+# 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
+     # The daemon never calls adapter scripts directly; the controller owns
+     # timeout enforcement, session continuation, and result mapping.
+     local STDOUT_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stdout"
+     local STDERR_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stderr"
+     local EXEC_CTX_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.ctx.json"
+
+     log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
+     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
+     set_activity "$COMMENT_ID" "working"
+
+     # Build the execution context JSON file consumed by AgentExecutor.
+     local prev_dir
+     prev_dir="$(pwd)"
+     cd "$WORKDIR" || {
+       log "ERROR: cannot enter working directory $WORKDIR, failing task"
+       stop_heartbeat "$COMMENT_ID"
+       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+       release_repo_lock "$REPO"
+       release_task_lock
+       set_activity "none" "idle"
+       return 0
+     }
+
+     # Ensure skill visibility for agent runtimes that read it
+     export OPENCODE_SKILLS_PATH="$HOME/.agents/skills"
+
+     # Refresh heartbeat before agent to prevent timeout during long runs
+     refresh_heartbeat "$COMMENT_ID"
+
+     # Persist the previous session id if this is a continuation attempt.
+     local prev_session_id=""
+     prev_session_id="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' AND session_id IS NOT NULL AND session_id != '' LIMIT 1;" 2>/dev/null || echo "")"
+
+     jq -n \
+       --arg taskId "$COMMENT_ID" \
+       --arg prompt "$TASK_PROMPT_FILE" \
+       --arg workspace "$WORKDIR" \
+       --arg agent "" \
+       --argjson attempt "$current_attempt" \
+       --argjson timeout "$AGENT_TIMEOUT" \
+       --arg sessionId "$prev_session_id" \
+       --arg stdoutFile "$STDOUT_FILE" \
+       --arg stderrFile "$STDERR_FILE" \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       > "$EXEC_CTX_FILE"
+
+     local executor_output
+     executor_output="$(AgentExecutionController.execute "$EXEC_CTX_FILE")"
+     local rc=$?
+     cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
+
+     # Persist session id for continuation attempts
+     local exec_status exec_summary exec_session_id
+     exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
+     exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
+     exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
+     # Persist a session only when the runtime explicitly says it can be
+     # continued. Generic failures must not accidentally bind future retries
+     # to a stale runtime session.
+     if [ "$exec_status" = "NEEDS_CONTINUATION" ] && [ -n "$exec_session_id" ]; then
+       sqlite3 "$DB" "UPDATE processed_comments SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
+     fi
+
+     # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
+     # up. This is especially important for fast launch failures where the worker
+     # can exit before producing a GitHub-visible result.
+     if [ -n "$exec_summary" ]; then
+       log "dispatch: agent executor summary for task $COMMENT_ID: $exec_summary"
+     fi
+     if [ "$rc" -ne 0 ]; then
+       log "dispatch: agent executor exited rc=$rc for task $COMMENT_ID (status=$exec_status)"
+       if [ -s "$STDERR_FILE" ]; then
+         log "dispatch: agent stderr for task $COMMENT_ID (tail 80):"
+         tail -n 80 "$STDERR_FILE" >>"$LOG" 2>/dev/null || true
+       else
+         log "dispatch: agent stderr file is empty for task $COMMENT_ID"
+       fi
+     fi
+
+     # Map executor status onto the daemon's rc/NEEDS_USER_INPUT contract.
+     case "$exec_status" in
+       BLOCKED|TASK_NEEDS_USER_BEGIN)
+         NEEDS_USER_INPUT="true"
+         USER_QUESTION="$(grep -oP '(?<=^TASK_NEEDS_USER_BEGIN\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
+         rc=0
+         ;;
+       NEEDS_CONTINUATION)
+         # Surface as a retryable state; daemon handles via attempt counting.
+         rc=1
+         ;;
+       TIMEOUT)
+         rc=124
+         ;;
+       COMPLETED)
+         rc=0
+         ;;
+       *)
+         rc="${rc:-1}"
+         ;;
+     esac
+
+     # Call production completion evaluation function
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary"
+
+    # A structured TASK_NEEDS_USER result pauses this task without entering the
+    # worker failure/retry path. The daemon asks the user and then waits for an
+    # explicit /manul continue response.
+    if [ "${NEEDS_USER_INPUT:-false}" = "true" ]; then
+      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"; then
+        if [ -n "${WORKSPACE_ID:-}" ]; then
+          workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
+        fi
+        if ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
+          log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
+        fi
+        stop_heartbeat "$COMMENT_ID"
+        release_repo_lock "$REPO"
+        release_task_lock
+        set_activity "$COMMENT_ID" "blocked_user"
+        return 0
+      fi
+      log "ERROR: could not transition $COMMENT_ID to blocked_user; falling through to failure handling"
+      NEEDS_USER_INPUT="false"
+    fi
+
+    # Map local variables (set by evaluate_task_completion)
+    COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
+    FINAL_COMMENT="${FINAL_COMMENT:-}"
+    FAIL_REASON="${FAIL_REASON:-}"
+
+    # 9. Post lifecycle comment to the SAME GitHub thread
+    # The agent posts its own result comment; daemon posts lifecycle markers only.
+    # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
+    local COMMENT_POST_SUCCESS="false"
+    if [ -n "$FINAL_COMMENT" ]; then
+      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
+        COMMENT_POST_SUCCESS="true"
+      else
+        log "ERROR: failed to post lifecycle comment for $COMMENT_ID"
+      fi
+    fi
+
+    # Verify lifecycle comment was posted
+    if [ "$COMPLETION_SUCCESS" = "true" ] && [ "$COMMENT_POST_SUCCESS" != "true" ]; then
+      # Agent succeeded but lifecycle comment posting failed - still mark complete
+      log "WARN: Task $COMMENT_ID agent succeeded but lifecycle comment post failed"
+    elif [ "$COMPLETION_SUCCESS" = "true" ]; then
+      # Both agent succeeded AND comment posted - finalize as completed
+      # NOTE: Status was already set to 'completed' by complete_task_with_verification above
+      
+      # Save result metadata for local API access
+      local result_json=""
+      if [ -f "$STDOUT_FILE" ]; then
+        # Extract JSON from stdout if present (after TASK_DONE marker)
+        result_json="$(grep -A 100 'TASK_DONE' "$STDOUT_FILE" 2>/dev/null | tail -n +2 | head -1 | tr -d '\n' || echo "")"
+      fi
+      
+      # Escape for SQL
+      local escaped_summary escaped_result
+      escaped_summary="$(printf '%s' "$REPO#$ISSUE_NUM" | sed "s/'/''/g")"
+      escaped_result="$(printf '%s' "$result_json" | sed "s/'/''/g")"
+      
+      sqlite3 "$DB" "UPDATE processed_comments SET 
+        resultSummary='$escaped_summary', 
+        resultJson='$escaped_result'
+        WHERE commentId='$safe_comment_id';" 2>/dev/null
+      
+      set_activity "$COMMENT_ID" "completed"
+    elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+    else
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>>"$LOG"
+    fi
+
+    # Auto-close conversation when all tasks are finalized (completed or failed).
+    # Skip if the task was requeued for retry.
+    local task_final_status
+    task_final_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
+      local task_conv_id_for_close
+      task_conv_id_for_close="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ -n "$task_conv_id_for_close" ]; then
+        local remaining_tasks
+        remaining_tasks="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status IN ('queued', 'running', 'blocked_user');" 2>>"$LOG")" || remaining_tasks=""
+        if [ -z "$remaining_tasks" ]; then
+          log "ERROR: failed to count remaining tasks for conversation $task_conv_id_for_close (task drain)"
+        elif [ "$remaining_tasks" -eq 0 ]; then
+          local now_close
+          now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG"; then
+            log "auto-closed conversation $task_conv_id_for_close (all tasks finalized, status=$task_final_status)"
+          else
+            log "ERROR: failed to close conversation $task_conv_id_for_close (task drain)"
+          fi
+        fi
+      fi
+    fi
+
+    # Stop heartbeat after task completion/failure
+    stop_heartbeat "$COMMENT_ID"
+    lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
+
+    # GitHub control protocol: post structured result feedback
+    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
+      task_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "1")"
+      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ "$COMPLETION_SUCCESS" = "true" ]; then
+        # Extract summary from result
+        local result_summary=""
+        if [ -f "$STDOUT_FILE" ]; then
+          result_summary="$(grep -oP '(?<=TASK_DONE\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
+        fi
+        "$MANUL_DIR/manul-result-feedback.sh" post-done \
+          --repo "$REPO" \
+          --issue "$ISSUE_NUM" \
+          --comment-id "$COMMENT_ID" \
+          --task-id "$COMMENT_ID" \
+          --summary "${result_summary:-Task completed successfully}" \
+          --pr-number "${task_pr_num:-}" \
+          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_DONE event for $COMMENT_ID"
+      else
+        fail_reason="${FAIL_REASON:-Task failed}"
+        "$MANUL_DIR/manul-result-feedback.sh" post-failed \
+          --repo "$REPO" \
+          --issue "$ISSUE_NUM" \
+          --comment-id "$COMMENT_ID" \
+          --task-id "$COMMENT_ID" \
+          --error "${fail_reason:0:500}" \
+          --pr-number "${task_pr_num:-}" \
+          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_FAILED event for $COMMENT_ID"
+      fi
+    fi
+
+    # Release workspace back to pool
+    local task_workspace_id
+    task_workspace_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    if [ -n "$task_workspace_id" ]; then
+      workspace_release "$task_workspace_id" "$COMMENT_ID"
+      log "dispatch: released workspace $task_workspace_id for task $COMMENT_ID"
+      lc_log "WORKSPACE_RELEASE" "task=$COMMENT_ID workspace=$task_workspace_id"
+    fi
+
+    # Release repository lock
+    release_repo_lock "$REPO"
+
+    # Persist task diagnostics before removing transient worker artifacts.
+    archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+
+    # Cleanup task artifacts (no separate workdir to remove)
+    rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+
+    release_task_lock
+    set_activity "none" "idle"
+}
+
+loop() {
+  # Parse arguments for worker mode
+  local worker_id=""
+  for arg in "$@"; do
+    case "$arg" in
+      --worker=*) worker_id="${arg#--worker=}" ;;
+    esac
+  done
+
+  # Ensure nextAttemptAt column exists before any scheduler query
+  if ! ensure_nextattemptat_column; then
+    log "FATAL: schema migration failed, cannot start loop"
+    exit 1
+  fi
+
+  # Ensure task claim ownership support before any claim/recovery.
+  if ! ensure_claim_token_column; then
+    log "FATAL: claimToken schema migration failed, cannot start loop"
+    exit 1
+  fi
+
+  # Recover any stale tasks from previous crashes/deadlocks
+  recover_stale_tasks
+
+  # Source workspace manager
+  source "$MANUL_DIR/workspace-manager.sh"
+
+  # In worker mode, skip flock (each worker has its own lock)
+  if [ -n "$worker_id" ]; then
+    log "daemon loop started as worker $worker_id (interval ${INTERVAL}s)"
+    lc_log "LOOP_START" "worker=$worker_id interval=${INTERVAL}s"
+    while true; do
+      run_once
+      sleep "$INTERVAL"
+    done
+  else
+    # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
+    exec 200>"$FLOCK_FILE"
+    if ! flock -n 200; then
+      log "daemon already running (flock held); exiting"
+      exit 1
+    fi
+    # Lock held for lifetime of daemon process
+
+    log "daemon loop started (interval ${INTERVAL}s)"
+    lc_log "LOOP_START" "interval=${INTERVAL}s"
+    while true; do
+      run_once
+      sleep "$INTERVAL"
+    done
+  fi
+}
+
+# Source guard: prevent CLI execution when sourced for testing
+MANUL_TESTING="${MANUL_TESTING:-false}"
+if [[ "${MANUL_TESTING}" == "true" ]]; then
+  return 0
+fi
+
+case "${1:-}" in
+  start) start ;;
+  stop) stop ;;
+  status) status ;;
+  run-once) run_once ;;
+  loop) shift; loop "$@" ;;
+  *) echo "usage: $0 start|stop|status|run-once [loop]" >&2; exit 2 ;;
+esac
