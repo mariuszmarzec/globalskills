@@ -9,7 +9,7 @@
 # It must work correctly even when `opencode` is absent from PATH.
 #
 # Exit-code semantics (adapted from manul-agent-wrapper.sh):
-#   0  → COMPLETED      (agent returned successfully; TASK_DONE should be in stdout)
+#   0  → COMPLETED      (agent explicitly emitted TASK_DONE in stdout)
 #   127 → FAILED        (openclaw binary not found)
 #   124 → TIMEOUT       (timeout wrapper killed the process)
 #   other non-zero → FAILED
@@ -187,15 +187,13 @@ elif [ "$rc" -eq 0 ] && grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 
     _summary="$(grep -oP '(?<=^TASK_DONE\s).+' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || true)"
     : "${_summary:=Agent completed}"
 elif [ "$rc" -eq 0 ]; then
-    # OpenClaw does not own the Manul lifecycle protocol. A clean runtime exit
-    # means the agent turn finished; the adapter therefore supplies the
-    # completion marker when the runtime emitted no explicit Manul marker.
-    # The daemon still performs the authoritative result-comment/PR/worktree
-    # verification before accepting the task as completed.
-    printf '%s\n' "TASK_DONE" >>"$OPT_STDOUT_FILE"
-    _status="COMPLETED"
-    _exit_code=0
-    _summary="OpenClaw agent exited successfully; adapter emitted TASK_DONE"
+    # A clean OpenClaw process exit is NOT a successful Manul task completion.
+    # TASK_DONE is part of the agent protocol and must be emitted explicitly by
+    # the agent. Synthesizing it here masks broken/empty agent turns and can make
+    # the daemon validate a task that was never actually completed.
+    _status="FAILED"
+    _exit_code=1
+    _summary="OpenClaw agent exited successfully without explicit TASK_DONE"
 elif [ "$rc" -eq 124 ]; then
     _status="TIMEOUT"
     _summary="OpenClaw agent execution timed out after ${OPENCLAW_AGENT_TIMEOUT}s"
