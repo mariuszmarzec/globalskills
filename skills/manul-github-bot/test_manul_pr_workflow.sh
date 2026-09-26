@@ -242,6 +242,9 @@ test_result_comment_repair_guidance() {
   prompt_segment="$(sed -n '/## GitHub Comment Posting (CRITICAL)/,/## Authoritative Repository/p' "$DAEMON")"
   assert_contains "$TEST_NAME (existing result comment)" "$prompt_segment" "existing result comment"
   assert_contains "$TEST_NAME (PATCH existing comment)" "$prompt_segment" "gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID>"
+  assert_contains "$TEST_NAME (safe JSON body)" "$prompt_segment" "jq -n --rawfile body"
+  assert_contains "$TEST_NAME (safe request body)" "$prompt_segment" "--input -"
+  assert_contains "$TEST_NAME (no inline body flag)" "$prompt_segment" 'Do NOT use `-f body="..."` or `-F body="..."`'
   assert_contains "$TEST_NAME (single final comment)" "$prompt_segment" "The final state must contain exactly one matching result comment"
 }
 # Test 6: feedback.sh exists and is functional
