@@ -128,13 +128,34 @@ Before posting, query the source issue/PR for an existing result comment
 containing the exact marker
 `<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`.
 If a result comment with that marker already exists, do NOT create another comment.
-Update the existing comment in place with the final verified content using:
-```bash
-gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID> \
-  -f body="YOUR_RESULT_COMMENT"
-```
+Update the existing comment in place with the final verified content using the safe
+request-body method below.
 Only create a new comment when no result comment with that marker exists. The final
 state must contain exactly one matching result comment for this task/attempt.
+
+### Safe request-body handling (MANDATORY)
+Never put `YOUR_RESULT_COMMENT` or `YOUR_REPLY` directly inside shell quotes such as `-f body="..."`.
+Build the complete comment body as literal file content and send JSON through `--input`.
+Use a quoted heredoc or another non-evaluating file/stdin method.
+```bash
+RESULT_FILE="$(mktemp)"
+cat >"$RESULT_FILE" <<'RESULT_EOF'
+<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->
+# Summary: [brief summary]
+
+[detailed result]
+
+— manul 🐈
+RESULT_EOF
+jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
+  gh api repos/__REPO__/issues/__ISSUE_NUM__/comments --input - --jq .id
+rm -f "$RESULT_FILE"
+```
+For PATCH, use the same `jq --rawfile` pipeline with:
+```bash
+gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID> --input -
+```
+Do NOT use `-f body="..."` or `-F body="..."` for user-facing result/reply comments.
 
 ### Routing
 Use the task metadata above and choose the endpoint that matches `Task Type`:
@@ -239,6 +260,29 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     printf '%s' "$prompt_content" > "$out_file"
 }
+
+# ─── Safety contract in generated prompt ─────────────────────────────────────
+echo -n "Test: Result comment posting uses literal request body handling ... "
+rm -f "$WORK/prompt.md"
+generate_prompt \
+    "$WORK/prompt.md" \
+    "test-owner/test-repo" \
+    "42" \
+    "test-comment-safe-body" \
+    "https://github.com/test-owner/test-repo/issues/42#issuecomment-test-comment-safe-body" \
+    "issue" \
+    "Post a result." \
+    "Context." \
+    "1" \
+    "/tmp/repo" \
+    "/tmp/repo" \
+    "" \
+    "1234567890" \
+    "master" \
+    "master"
+if assert_file_contains "safe body guidance present" "$WORK/prompt.md" "jq -n --rawfile body"; then :; else :; fi
+if assert_file_contains "stdin request body present" "$WORK/prompt.md" "--input -"; then :; else :; fi
+if assert_file_contains "inline body flags forbidden" "$WORK/prompt.md" 'Do NOT use `-f body="..."` or `-F body="..."`'; then :; else :; fi
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
