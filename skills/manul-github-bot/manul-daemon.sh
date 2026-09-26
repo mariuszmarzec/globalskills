@@ -2423,5 +2423,5 @@ Example informational task response:
 — manul 🐈
 ```
 
-The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, ❓ needs user). (🔄 working, ✅ completed, ❌ failed, ❓ needs user).
+The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, ❓ needs user).
 For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_BEGIN/END, do NOT post a normal result comment; the daemon will post the question and resume the same task after the user replies.
