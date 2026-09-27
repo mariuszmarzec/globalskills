@@ -130,9 +130,13 @@ mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 
 # The startup wrapper now refreshes runtime symlinks from the canonical source.
 # Isolate that source in the test instead of relying on ~/.globalskills.
-cp "$SCRIPT_DIR/start-manul-automation.sh" "$CANONICAL_RUNTIME/start-manul-automation.sh"
-cp "$SCRIPT_DIR/install-manul-symlinks.sh" "$CANONICAL_RUNTIME/install-manul-symlinks.sh"
-chmod +x "$CANONICAL_RUNTIME/start-manul-automation.sh" "$CANONICAL_RUNTIME/install-manul-symlinks.sh"
+# The installer validates the complete canonical script set. Populate an
+# isolated canonical tree with the same files as the real skill source so this
+# test exercises startup/symlink behavior rather than a deliberately incomplete
+# fixture.
+cp "$SCRIPT_DIR"/*.sh "$CANONICAL_RUNTIME/"
+cp "$SCRIPT_DIR/orchestrator.prompt.md" "$CANONICAL_RUNTIME/orchestrator.prompt.md"
+chmod +x "$CANONICAL_RUNTIME"/*.sh
 
 cat > "$START_RUNTIME/manul-daemon.sh" <<'MOCK'
 #!/usr/bin/env bash
