@@ -43,6 +43,20 @@ remove_watchdog_cron() {
 case "${1:-}" in
     start)
         log "Starting manul automation..."
+        # Always refresh runtime symlinks from the canonical source before
+        # launching the daemon. This prevents a long-lived ~/.manul runtime
+        # from executing stale Manul scripts after globalskills/master changes.
+        CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+        SYMLINK_INSTALLER="$CANONICAL_DIR/install-manul-symlinks.sh"
+        if [ -x "$SYMLINK_INSTALLER" ]; then
+            if ! "$SYMLINK_INSTALLER" --runtime-dir "$MANUL_DIR" --canonical-dir "$CANONICAL_DIR" >/dev/null 2>&1; then
+                log "ERROR: failed to refresh Manul runtime symlinks from $CANONICAL_DIR"
+                exit 1
+            fi
+        else
+            log "ERROR: canonical Manul symlink installer not found: $SYMLINK_INSTALLER"
+            exit 1
+        fi
         # Ensure scripts are executable
         chmod +x "$DAEMON" "$WATCHDOG" 2>/dev/null || true
         # Lifecycle marker: this is an INTENTIONAL start. Touch .enabled
