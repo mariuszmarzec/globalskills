@@ -193,6 +193,8 @@ Workspaces must be isolated per active task and released after task completion/f
 
 Workspace reclamation must use the same liveness/lease semantics as task recovery.
 
+The agent execution boundary exposes only the task-owned workspace path (`WORKDIR`) to the agent as its repository working directory. Manul's internal repository preparation directory (`REPO_DIR`) is an orchestration detail and must not be included in the generated agent prompt. Git and file operations performed by the agent must stay inside `WORKDIR` unless the task explicitly requires an approved external dependency.
+
 ## 14. Watchdog contract
 
 The watchdog is a liveness/recovery mechanism, not a general task scheduler.
