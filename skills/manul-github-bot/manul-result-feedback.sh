@@ -148,6 +148,12 @@ post_feedback_comment() {
     fi
   fi
 
+  # Review-thread lifecycle/result messages must stay in the original
+  # inline review thread. For issue/PR conversation tasks, keep top-level routing.
+  if [ -z "$reply_to" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]] && [ -n "$pr_number" ]; then
+    reply_to="${BASH_REMATCH[1]}"
+  fi
+
   if [ -n "$reply_to" ] && [ -n "$pr_number" ]; then
     local signature="— manul 🐈"
     local signed_body
