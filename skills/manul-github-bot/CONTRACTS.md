@@ -269,3 +269,8 @@ The runtime isolation refactor is a clean break from `~/.openclaw/manul`.
 
 Behavioural compatibility is required; obsolete filesystem layout
 compatibility is not.
+
+
+## 19. Deployment and executable-entry-point contract
+
+Runtime entry points that Manul invokes directly must remain executable in the canonical checkout. In particular, `agent-task-runner.sh` is launched directly by `setsid` and therefore requires the Git executable mode `100755`. Sourced helper scripts do not require the execute bit. The runtime installer/startup path must preserve or restore the execute bit, and CI must fail when the canonical runner loses it.
