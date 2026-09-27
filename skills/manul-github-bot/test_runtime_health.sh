@@ -91,27 +91,49 @@ echo "=== Runtime Health Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 echo ""
 
-# ── Test 0: Executable entry-point permissions ───────────────────────────────
-echo "Test 0: Executable entry-point permissions"
-# agent-task-runner.sh is invoked directly via setsid/exec and MUST carry the
-# executable bit in the canonical checkout. Sourced libraries do not need +x.
-RUNNER_MODE="$(stat -c '%a' "$SCRIPT_DIR/agent-task-runner.sh" 2>/dev/null || true)"
+# ── Test 0: Executable entry-point permissions and installer hardening ────────
+echo "Test 0: Executable entry-point permissions and installer hardening"
+
+RUNNER_MODE=$(stat -c '%a' "$SCRIPT_DIR/agent-task-runner.sh" 2>/dev/null || true)
 if [ "$RUNNER_MODE" = "755" ]; then
   ok "agent-task-runner.sh is executable (mode 755)"
 else
   fail "agent-task-runner.sh must be executable (mode 755), got ${RUNNER_MODE:-unknown}"
 fi
 
-# The CI checkout must also preserve the executable bit in Git's tree.
-RUNNER_TREE_MODE="$(git -C "$SCRIPT_DIR/../.." ls-files -s -- 'skills/manul-github-bot/agent-task-runner.sh' 2>/dev/null | awk '{print $1}' | head -1)"
+RUNNER_TREE_MODE=$(git -C "$SCRIPT_DIR/../.." ls-files -s -- 'skills/manul-github-bot/agent-task-runner.sh' 2>/dev/null | awk '{print $1}' | head -1)
 if [ "$RUNNER_TREE_MODE" = "100755" ]; then
   ok "Git tracks agent-task-runner.sh as executable (100755)"
 else
   fail "Git must track agent-task-runner.sh as executable (100755), got ${RUNNER_TREE_MODE:-missing}"
 fi
 
+# Reproduce the production failure: canonical runner is 0644. The installer
+# must restore +x before the runtime is considered usable.
+PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
+PERM_CANON="$PERM_ROOT/canonical"
+PERM_RUN="$PERM_ROOT/runtime"
+mkdir -p "$PERM_CANON"
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
+chmod +x "$PERM_CANON"/*.sh
+chmod 644 "$PERM_CANON/agent-task-runner.sh"
+set +e
+MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
+PERM_RC=$?
+set -e
+if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/agent-task-runner.sh" ] && [ "$(stat -c "%a" "$PERM_CANON/agent-task-runner.sh" 2>/dev/null || true)" = "755" ]; then
+  ok "Installer restores execute bit on canonical task runner"
+else
+  fail "Installer did not restore canonical task runner execute bit (rc=$PERM_RC)"
+fi
 
+if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
+  ok "Installed task runner symlink is executable"
+else
+  fail "Installed task runner symlink is not executable"
+fi
 
+rm -rf "$PERM_ROOT" /tmp/manul-perm-installer.out
 # ── Test 1: Shell syntax ──────────────────────────────────────────────────────
 echo "Test 1: Shell syntax"
 for script in \
