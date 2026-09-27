@@ -132,19 +132,19 @@ if [ -f "$DB" ]; then
     # CRITICAL: Only recover tasks where the worker is dead (not alive)
     # This prevents stealing from live workers
     STUCK_TASKS="$(sqlite3 "$DB" "
-        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid, claimToken
+        SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid, claimToken,
+               CASE
+                 WHEN heartbeatAt IS NULL
+                   OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+                   OR leaseExpiresAt IS NULL
+                   OR leaseExpiresAt < datetime('now')
+                 THEN 1 ELSE 0
+               END AS lease_stale
         FROM processed_comments
-        WHERE status='running'
-        AND (
-            heartbeatAt IS NULL OR
-            heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds') OR
-            leaseExpiresAt IS NULL OR
-            leaseExpiresAt < datetime('now')
-        )
+        WHERE status='running';
     " 2>/dev/null)"
-
     if [ -n "$STUCK_TASKS" ] && [ "$STUCK_TASKS" != "" ]; then
-        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at worker_pid claim_token; do
+        while IFS='|' read -r comment_id repo issue_num attempts heartbeat_at lease_at worker_pid claim_token lease_stale; do
             [ -z "$comment_id" ] && continue
 
             # workerPid identifies the long-lived worker loop, not one task.
@@ -152,7 +152,10 @@ if [ -f "$DB" ]; then
             if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
                 worker_alive=1
             fi
-            log "RECOVERY: $comment_id ($repo#$issue_num) stale (worker=$worker_pid alive=$worker_alive heartbeat=$heartbeat_at lease=$lease_at attempts=$attempts)"
+            if [ "$lease_stale" = "0" ] && [ "$worker_alive" -eq 1 ]; then
+                continue
+            fi
+            log "RECOVERY: recovering $comment_id ($repo#$issue_num) (worker=$worker_pid alive=$worker_alive heartbeat=$heartbeat_at lease=$lease_at stale=$lease_stale attempts=$attempts)"
             terminate_task_executor "$comment_id"
 
             ownership_clause=""
