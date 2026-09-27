@@ -82,6 +82,39 @@ assert_eq() {
 
 REPO="owner/repo"
 
+# 0) Isolated executor process group can be terminated independently.
+EXECUTOR_PID_FILE="$MANUL_DIR/test-executor.pid"
+rm -f "$EXECUTOR_PID_FILE"
+setsid --wait bash -c 'printf "%s\n" "$BASHPID" > "$1"; sleep 30' _ "$EXECUTOR_PID_FILE" &
+EXECUTOR_LAUNCHER_PID=$!
+for _ in {1..20}; do
+  [ -s "$EXECUTOR_PID_FILE" ] && break
+  sleep 0.05
+done
+EXECUTOR_PID="$(cat "$EXECUTOR_PID_FILE" 2>/dev/null || true)"
+if ! [[ "$EXECUTOR_PID" =~ ^[0-9]+$ ]] || [ "$EXECUTOR_PID" -le 0 ]; then
+  echo "FAIL: isolated executor did not publish a valid PID" >&2
+  kill "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
+  wait "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
+  exit 1
+fi
+if ! kill -0 "$EXECUTOR_PID" 2>/dev/null; then
+  echo "FAIL: isolated executor exited before recovery test" >&2
+  exit 1
+fi
+terminate_task_executor "test-executor"
+wait "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
+if kill -0 "$EXECUTOR_PID" 2>/dev/null; then
+  echo "FAIL: terminate_task_executor left executor process alive" >&2
+  kill -9 "$EXECUTOR_PID" 2>/dev/null || true
+  exit 1
+fi
+if [ -f "$EXECUTOR_PID_FILE" ]; then
+  echo "FAIL: terminate_task_executor left PID file behind" >&2
+  exit 1
+fi
+echo "PASS: isolated task executor is independently recoverable"
+
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES
