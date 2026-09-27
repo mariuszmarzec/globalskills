@@ -925,7 +925,12 @@ stop() {
     [ -f "$pf" ] || continue
     local wpid
     wpid="$(cat "$pf" 2>/dev/null)"
-    [ -n "$wpid" ] && kill "$wpid" 2>/dev/null || true
+    if [ -n "$wpid" ]; then
+      # Worker is a setsid process-group leader. Terminate the whole group so
+      # an in-flight AgentExecutionController/OpenClaw process cannot survive
+      # a daemon restart and keep the singleton task lock occupied.
+      kill -- "-$wpid" 2>/dev/null || kill "$wpid" 2>/dev/null || true
+    fi
     rm -f "$pf"
   done
   kill "$pid" 2>/dev/null
