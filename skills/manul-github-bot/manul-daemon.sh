@@ -1904,6 +1904,30 @@ evaluate_task_completion() {
           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
         fi
       fi
+    elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+      # IMPLEMENT issue tasks must leave the workspace on the task branch.
+      # A clean workspace is not enough: a task that reports success on the
+      # base branch is invalid even when no repository diff remains.
+      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+      if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
+        SUCCESS="false"
+        FAIL_REASON="Implementation task completed on a base/default branch ($current_branch)"
+        log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
+      elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        SUCCESS="false"
+        FAIL_REASON="Implementation task completed without a verified PR from its task branch"
+        log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
+        lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
+      else
+        local verified_base
+        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        fi
+      fi
     else
       # A TASK_DONE from an IMPLEMENT task is only informational when the agent
       # genuinely made no repository changes. Keep this explicit so issuebody:*
