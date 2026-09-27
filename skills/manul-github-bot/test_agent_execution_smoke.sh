@@ -220,7 +220,23 @@ if grep -q 'openclaw-adapter.sh' "$SCRIPT_DIR/manul-daemon.sh"; then
   exit 1
 fi
 
-run_once
+RUN_ONCE_STDOUT="$TEST_ROOT/run-once.stdout"
+RUN_ONCE_STDERR="$TEST_ROOT/run-once.stderr"
+set +e
+run_once >"$RUN_ONCE_STDOUT" 2>"$RUN_ONCE_STDERR"
+RUN_ONCE_RC=$?
+set -e
+
+if [ "$RUN_ONCE_RC" -ne 0 ]; then
+  echo "FAIL: run_once returned rc=$RUN_ONCE_RC" >&2
+  echo "--- run_once stdout ---" >&2
+  cat "$RUN_ONCE_STDOUT" >&2 || true
+  echo "--- run_once stderr ---" >&2
+  cat "$RUN_ONCE_STDERR" >&2 || true
+  echo "--- daemon.log ---" >&2
+  cat "$LOG" >&2 || true
+  exit "$RUN_ONCE_RC"
+fi
 
 if [ ! -s "$PROOF_FILE" ]; then
   echo "FAIL: fake OpenClaw was never invoked" >&2
