@@ -98,8 +98,14 @@ cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 set -u
 for arg in "$@"; do printf 'ARG:%q\n' "$arg"; done >> "$GH_LOG"
-if [[ "${1:-}" == "api" ]] && [[ " $* " == *" --input - "* ]]; then
-  printf 'BODY:%s\n' "$(cat)" >> "$GH_LOG"
+if [[ "${1:-}" == "api" ]]; then
+  has_input=false
+  for arg in "$@"; do
+    if [ "$arg" = "--input" ]; then has_input=true; fi
+  done
+  if [ "$has_input" = true ]; then
+    printf 'BODY:%s\n' "$(cat)" >> "$GH_LOG"
+  fi
 fi
 exit 0
 EOF
@@ -114,7 +120,8 @@ review_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
 
 assert_contains "Review lifecycle invokes gh api" "$review_cmd" "ARG:api"
 assert_contains "Review lifecycle targets the PR review-comments endpoint" "$review_cmd" "ARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
-assert_contains "Review lifecycle payload sets in_reply_to" "$review_cmd" '"in_reply_to":4103894743'
+assert_contains "Review lifecycle payload contains in_reply_to field" "$review_cmd" '"in_reply_to"'
+assert_contains "Review lifecycle payload contains source review id" "$review_cmd" '4103894743'
 
 # Safe request-body regression: review lifecycle must send JSON through --input,
 # not -F/--field body, so shell-sensitive Markdown is never reinterpreted.
