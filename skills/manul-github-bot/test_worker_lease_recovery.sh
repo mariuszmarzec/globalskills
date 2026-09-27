@@ -83,7 +83,7 @@ assert_eq() {
 REPO="owner/repo"
 
 # 0) Isolated executor process group can be terminated independently.
-EXECUTOR_PID_FILE="$MANUL_DIR/test-executor.pid"
+EXECUTOR_PID_FILE="$MANUL_DIR/task-test-executor.executor.pid"
 rm -f "$EXECUTOR_PID_FILE"
 setsid --wait bash -c 'printf "%s\n" "$BASHPID" > "$1"; sleep 30' _ "$EXECUTOR_PID_FILE" &
 EXECUTOR_LAUNCHER_PID=$!
