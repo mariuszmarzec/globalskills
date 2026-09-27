@@ -138,11 +138,11 @@ cp "$SCRIPT_DIR"/*.sh "$CANONICAL_RUNTIME/"
 cp "$SCRIPT_DIR/orchestrator.prompt.md" "$CANONICAL_RUNTIME/orchestrator.prompt.md"
 chmod +x "$CANONICAL_RUNTIME"/*.sh
 
-cat > "$START_RUNTIME/manul-daemon.sh" <<'MOCK'
+cat > "$CANONICAL_RUNTIME/manul-daemon.sh" <<'MOCK'
 #!/usr/bin/env bash
 case "$1" in
   start)
-    echo "$$" > "$MANUL_FAKE_PID_FILE"
+    echo "$" > "$MANUL_FAKE_PID_FILE"
     exit 0
     ;;
   status)
@@ -157,13 +157,13 @@ case "$1" in
     ;;
 esac
 MOCK
-chmod +x "$START_RUNTIME/manul-daemon.sh"
+chmod +x "$CANONICAL_RUNTIME/manul-daemon.sh"
 
-cat > "$START_RUNTIME/watchdog.sh" <<'MOCK'
+cat > "$CANONICAL_RUNTIME/watchdog.sh" <<'MOCK'
 #!/usr/bin/env bash
 exit 0
 MOCK
-chmod +x "$START_RUNTIME/watchdog.sh"
+chmod +x "$CANONICAL_RUNTIME/watchdog.sh"
 
 cat > "$FAKE_BIN/setsid" <<'MOCK'
 #!/usr/bin/env bash
