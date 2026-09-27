@@ -161,6 +161,8 @@ OpenCode, Claude Code, Tabnine and other runtimes retain their native
 configuration/state locations unless an adapter has a concrete reason to own
 additional Manul-specific data.
 
+The hermetic `test_agent_execution_smoke.sh` suite exercises the production dispatch execution boundary from `manul-daemon.sh` through `agent-task-runner.sh`, `AgentExecutionController`, `AgentExecutor`, `OpenClawAdapter`, and `ProcessRunner` using only a fake OpenClaw executable. It is intentionally independent of GitHub and real OpenClaw gateway state, so CI can detect broken process boundaries, executable entry points, argument propagation, stdout/exit-code handling, and accidental direct adapter invocation deterministically.
+
 The execution boundary becomes:
 
 ```
