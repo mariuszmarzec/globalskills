@@ -20,6 +20,17 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*"; }
 
+terminate_task_executor() {
+    local comment_id="$1"
+    local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
+    local executor_pid=""
+    if [ -f "$pid_file" ]; then executor_pid="$(cat "$pid_file" 2>/dev/null || true)"; fi
+    if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
+        log "Terminating isolated executor for task $comment_id (pid=$executor_pid)"
+        kill -- "-$executor_pid" 2>/dev/null || kill "$executor_pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file" 2>/dev/null || true
+}
 list_stuck_tasks() {
     log "=== LISTING STUCK TASKS ==="
     if [ ! -f "$DB" ]; then
@@ -37,6 +48,7 @@ list_stuck_tasks() {
 reset_task() {
     local comment_id="$1"
     log "Resetting task $comment_id to queued"
+    terminate_task_executor "$comment_id"
     sqlite3 "$DB" "
         UPDATE processed_comments
         SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
@@ -47,6 +59,7 @@ reset_task() {
 mark_task_failed() {
     local comment_id="$1"
     log "Marking task $comment_id as failed"
+    terminate_task_executor "$comment_id"
     sqlite3 "$DB" "
         UPDATE processed_comments
         SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
@@ -57,6 +70,7 @@ mark_task_failed() {
 retry_failed_task() {
     local comment_id="$1"
     log "Retrying failed task $comment_id from scratch"
+    terminate_task_executor "$comment_id"
     sqlite3 "$DB" "
         UPDATE processed_comments
         SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
