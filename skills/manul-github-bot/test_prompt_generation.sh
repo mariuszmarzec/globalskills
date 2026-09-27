@@ -620,6 +620,49 @@ if assert_file_contains "review task uses in_reply_to" "$WORK/prompt.md" "-f in_
 if assert_file_contains "top-level route remains available" "$WORK/prompt.md" "gh api repos/test-owner/test-repo/issues/42/comments"; then :; else :; fi
 if assert_file_contains "review endpoint explains no issues in_reply_to" "$WORK/prompt.md" "Do NOT use \`/issues/42/comments\` with \`in_reply_to\`"; then :; else :; fi
 
+# Test J: agent prompt exposes only the task workspace and never exposes Manul's
+# internal repository preparation directory.
+echo -n "Test: Prompt exposes only task workspace ... "
+rm -f "$WORK/prompt.md"
+generate_prompt \
+    "$WORK/prompt.md" \
+    "test-owner/test-repo" \
+    "42" \
+    "test-comment-workspace-boundary" \
+    "https://github.com/test-owner/test-repo/issues/42#issuecomment-test-comment-workspace-boundary" \
+    "issue" \
+    "Implement the feature." \
+    "Some context here." \
+    "1" \
+    "/tmp/manul-internal-repo" \
+    "/tmp/manul-task-workspace" \
+    "" \
+    "1234567890" \
+    "master" \
+    "master"
+
+if assert_file_contains "task workspace injected" "$WORK/prompt.md" "This is the ONLY repository directory you may inspect or modify:"; then
+    :
+else
+    :
+fi
+if assert_file_contains "task workspace path injected" "$WORK/prompt.md" "/tmp/manul-task-workspace"; then
+    :
+else
+    :
+fi
+if assert_file_not_contains "internal repo path not exposed" "$WORK/prompt.md" "/tmp/manul-internal-repo"; then
+    :
+else
+    :
+fi
+if assert_file_not_contains "legacy authoritative repository section removed" "$WORK/prompt.md" "## Authoritative Repository"; then
+    :
+else
+    :
+fi
+
+
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
