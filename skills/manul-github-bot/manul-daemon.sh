@@ -1067,11 +1067,12 @@ post_github_comment() {
   fi
 
   if [ -n "$reply_to" ]; then
-    # Review-thread task: reply inside the review thread via gh api
-    # (gh pr comment --in-reply-to is not supported by gh CLI)
-    gh api "repos/$repo/pulls/$issue/comments" \
-      -F "body=$signed_body" \
-      --field "in_reply_to=$reply_to" 2>>"$LOG"
+    # Review-thread task: reply inside the review thread via gh api.
+    # Build the request as JSON on stdin so comment content is never interpreted
+    # as a form value by the gh CLI.
+    printf '%s' "$signed_body" |
+      jq -Rs --argjson reply_id "$reply_to" '{body:., in_reply_to:$reply_id}' |
+      gh api "repos/$repo/pulls/$issue/comments" --input - 2>>"$LOG"
   else
     # Top-level issue/PR-conversation task: post as a regular comment
     gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
