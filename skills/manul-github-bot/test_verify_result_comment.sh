@@ -252,13 +252,17 @@ run_test "Found: top-level comment with marker" \
     "$REPO" 1 "result-1" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 0
 
-# ── Test 2: Reply comment with matching marker ─────────────────────────────────
-cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
-[{"id": 101, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100, "body": "<!-- manul-task:result-2:attempt:1 -->\nReply with result.\n\n— manul 🐈"}]
+# ── Test 2: Review reply with matching marker ─────────────────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[{"id": 101, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100, "body": "<!-- manul-task:review:result-2:attempt:1 -->\\nReply with result.\\n\\n— manul 🐈"}]
 EOF
-run_test "Found: reply comment with marker" \
-    "$REPO" 1 "result-2" 1 \
-    "$WORK/responses/owner__repo__issues__1__comments.json" 0
+rm -f "$WORK/responses/owner__repo__issues__1__comments.json"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2" "review:result-2" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: review reply with marker" 0 "$rc"
 
 # ── Test 2b: Inline PR review comment with matching marker ─────────────────────
 cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
