@@ -491,6 +491,29 @@ test_result_validation_order() {
   [ -n "$result_line" ] || return 1
   [ "$result_line" -gt "$pr_url_line" ] || return 1
 }
+
+# Test 14a: lifecycle events are embedded in lifecycle comments, not duplicated as feedback posts
+test_lifecycle_event_embedding() {
+  TEST_NAME="lifecycle_event_embedding"
+  echo "=== Test 14a: Lifecycle event embedding ==="
+
+  local daemon_body
+  daemon_body="$(sed -n '/^run_once()/,/^loop()/p' "$DAEMON")"
+
+  # TASK_STARTED must be part of the working comment flow.
+  assert_contains "$TEST_NAME (TASK_STARTED embedded)" "$daemon_body" 'start_event_marker'
+  assert_not_contains "$TEST_NAME (no daemon post-started call)" "$daemon_body" 'manul-result-feedback.sh" post-started'
+
+  # Terminal events must be represented in the lifecycle comment flow.
+  assert_contains "$TEST_NAME (TASK_DONE embedded)" "$daemon_body" 'lifecycle_event_marker'
+  assert_not_contains "$TEST_NAME (no daemon post-done call)" "$daemon_body" 'manul-result-feedback.sh" post-done'
+  assert_not_contains "$TEST_NAME (no daemon post-failed call)" "$daemon_body" 'manul-result-feedback.sh" post-failed'
+
+  # The state transition remains authoritative inside evaluate_task_completion().
+  local eval_body
+  eval_body="$(sed -n '/^evaluate_task_completion()/,/^run_once()/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (evaluator owns terminal transition)" "$eval_body" 'complete_task_with_verification'
+}
 # ============================================================================
 # Test 14c: IMPLEMENT task with no repo diff still requires task branch and PR
 test_no_diff_implement_requires_pr() {
@@ -686,6 +709,7 @@ test_agent_response_removed
 test_prompt_enforces_agent_posting
 test_result_comment_repair_guidance
 test_daemon_lifecycle_comments
+test_lifecycle_event_embedding
 test_result_validation_order
 test_completed_task_guard
 test_retry_backoff
