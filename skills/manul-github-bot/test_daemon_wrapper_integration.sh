@@ -480,6 +480,9 @@ if [ "$COMPLETION_SUCCESS" != "true" ]; then
 fi
 echo "[OK] Test PR: PASSED (PR head branch is valid for PR-tied task)"
 
+# Include the PR-head regression in the test summary.
+# (The test body is defined above and runs during the main sequence.)
+
 # ─── Test J: agent on a real task branch with autoCreatePr -> verify_required_pr accepts ─
 # Confirms the positive half of the contract: a dedicated task branch (not the
 # default) is accepted by verify_required_pr when autoCreatePr can create the PR.
