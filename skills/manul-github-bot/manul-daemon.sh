@@ -1972,7 +1972,7 @@ evaluate_task_completion() {
   # 8. Update SQLite using enhanced finalization with verification
   if [ "$SUCCESS" = "true" ]; then
     # Enhanced task completion with verification
-    if complete_task_with_verification "$COMMENT_ID"; then
+    if complete_task_with_verification "$COMMENT_ID" "$CLAIM_TOKEN"; then
       COMPLETION_SUCCESS="true"
     else
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
