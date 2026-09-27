@@ -2695,12 +2695,13 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
-## Authoritative Repository
-The target repository for this task is located at: __REPO_DIR__
-
 ## Working Directory
-You will execute in the repository directory:
+This is the ONLY repository directory you may inspect or modify:
 __WORKDIR__
+
+All git commands and file operations for this task MUST be performed in this directory.
+
+Do NOT access or modify any other local repository/worktree path managed internally by Manul.
 
 ## Branch Policy
 PROMPT_APPEND
@@ -2752,7 +2753,6 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
-    prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
