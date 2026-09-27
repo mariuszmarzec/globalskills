@@ -2910,35 +2910,30 @@ PROMPT_APPEND
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
 
-    # GitHub control protocol: post structured result feedback
-    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
-      task_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "1")"
-      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        # Extract summary from result
-        local result_summary=""
-        if [ -f "$STDOUT_FILE" ]; then
-          result_summary="$(grep -oP '(?<=TASK_DONE\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
-        fi
-        "$MANUL_DIR/manul-result-feedback.sh" post-done \
-          --repo "$REPO" \
-          --issue "$ISSUE_NUM" \
-          --comment-id "$COMMENT_ID" \
-          --task-id "$COMMENT_ID" \
-          --summary "${result_summary:-Task completed successfully}" \
-          --pr-number "${task_pr_num:-}" \
-          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_DONE event for $COMMENT_ID"
-      else
-        fail_reason="${FAIL_REASON:-Task failed}"
-        "$MANUL_DIR/manul-result-feedback.sh" post-failed \
-          --repo "$REPO" \
-          --issue "$ISSUE_NUM" \
-          --comment-id "$COMMENT_ID" \
-          --task-id "$COMMENT_ID" \
-          --error "${fail_reason:0:500}" \
-          --pr-number "${task_pr_num:-}" \
-          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_FAILED event for $COMMENT_ID"
+    # Structured terminal events are embedded in the lifecycle comment itself.
+    # Intermediate retries intentionally emit no TASK_FAILED event.
+    local lifecycle_conv_id
+    lifecycle_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    local lifecycle_pr_num
+    lifecycle_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
+      local lifecycle_event_data
+      lifecycle_event_data="$(jq -nc         --arg taskId "$COMMENT_ID"         --arg conversationId "$lifecycle_conv_id"         --arg attempt "$current_attempt"         --arg prNumber "$lifecycle_pr_num"         '{taskId:$taskId,conversationId:$conversationId,status:"completed",attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+      local lifecycle_event_marker
+      lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_DONE" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+      FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
+    else
+      local lifecycle_task_status
+      lifecycle_task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ "$lifecycle_task_status" = "failed" ]; then
+        local lifecycle_attempt
+        lifecycle_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "$current_attempt")"
+        local lifecycle_event_data
+        lifecycle_event_data="$(jq -nc           --arg taskId "$COMMENT_ID"           --arg conversationId "$lifecycle_conv_id"           --arg error "$FAIL_REASON"           --arg attempt "$lifecycle_attempt"           --arg prNumber "$lifecycle_pr_num"           '{taskId:$taskId,conversationId:$conversationId,error:$error,attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+        local lifecycle_event_marker
+        lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_FAILED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+        FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
       fi
     fi
 
