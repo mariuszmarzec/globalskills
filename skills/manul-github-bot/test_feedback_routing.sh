@@ -112,6 +112,11 @@ review_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
 assert_contains "Review lifecycle invokes gh api" "$review_cmd" "ARG:api"
 assert_contains "Review lifecycle targets the PR review-comments endpoint" "$review_cmd" "ARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
 assert_matches "Review lifecycle replies to source review comment" "$review_cmd" 'in_reply_to[=[:space:]]+4103894743'
+
+# Safe request-body regression: review lifecycle must send JSON through --input,
+# not -F/--field body, so shell-sensitive Markdown is never reinterpreted.
+assert_contains "Review lifecycle uses JSON input" "$review_cmd" "ARG:--input"
+assert_not_contains "Review lifecycle does not use -F body" "$review_cmd" "ARG:body="
 assert_not_contains "Review lifecycle does not use top-level issue comment API" "$review_cmd" "issue comment 43"
 
 : > "$GH_LOG"
