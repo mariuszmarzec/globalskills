@@ -274,6 +274,7 @@ Relevant test entry points include:
 
 ```bash
 bash skills/manul-github-bot/test_runtime_health.sh
+bash skills/manul-github-bot/test_agent_execution_smoke.sh
 bash skills/manul-github-bot/test_manul_cli.sh
 bash skills/manul-github-bot/test_github_control_protocol.sh
 bash skills/manul-github-bot/test_orchestrator.sh
