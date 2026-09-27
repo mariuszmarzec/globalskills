@@ -123,9 +123,16 @@ set -e
 [ "$INVALID_RC" -ne 0 ] && ok "Invalid operator environment fails closed" || fail "Invalid operator environment was accepted"
 
 START_RUNTIME="$TMP/start-runtime"
+CANONICAL_RUNTIME="$TMP/canonical-runtime"
 FAKE_BIN="$TMP/fake-bin"
 CRONTAB_FILE="$TMP/crontab"
-mkdir -p "$START_RUNTIME" "$FAKE_BIN"
+mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
+
+# The startup wrapper now refreshes runtime symlinks from the canonical source.
+# Isolate that source in the test instead of relying on ~/.globalskills.
+cp "$SCRIPT_DIR/start-manul-automation.sh" "$CANONICAL_RUNTIME/start-manul-automation.sh"
+cp "$SCRIPT_DIR/install-manul-symlinks.sh" "$CANONICAL_RUNTIME/install-manul-symlinks.sh"
+chmod +x "$CANONICAL_RUNTIME/start-manul-automation.sh" "$CANONICAL_RUNTIME/install-manul-symlinks.sh"
 
 cat > "$START_RUNTIME/manul-daemon.sh" <<'MOCK'
 #!/usr/bin/env bash
