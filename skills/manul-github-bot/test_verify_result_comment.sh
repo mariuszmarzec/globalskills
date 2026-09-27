@@ -260,6 +260,22 @@ run_test "Found: reply comment with marker" \
     "$REPO" 1 "result-2" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 0
 
+# ── Test 2b: Inline PR review comment with matching marker ─────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 201, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100,
+   "body": "<!-- manul-task:review:result-2b:attempt:1 -->\\nReply result in inline review thread.\\n\\n— manul 🐈"}
+]
+EOF
+rm -f "$WORK/responses/"owner__repo__issues__1__comments.json
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2b" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+echo "Test: Found inline PR review comment with marker ..."
+verify_result_comment "$REPO" 42 "review:result-2b" "review:result-2b" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: inline PR review comment with marker" 0 "$rc"
+
 # ── Test 3: No comments with marker ────────────────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
 [{"id": 102, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Some comment without marker"}]
