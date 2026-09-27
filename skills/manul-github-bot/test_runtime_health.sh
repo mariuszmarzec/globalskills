@@ -33,6 +33,7 @@
 # 27. start-manul-automation.sh stop removes the .enabled marker
 # 28. manul-shell.zsh defines lifecycle functions + a self-healing guard
 # 29. .zshrc sources manul-shell.zsh and contains no hardcoded machine paths
+# 30. Canonical Manul scripts that are executed directly keep executable Git modes
 
 set -uo pipefail
 
@@ -93,6 +94,32 @@ echo ""
 
 # ── Test 0: Executable entry-point permissions and installer hardening ────────
 echo "Test 0: Executable entry-point permissions and installer hardening"
+
+# Directly executed runtime entry points must be executable in Git. These are
+# the scripts invoked as commands by the startup/daemon/recovery paths.
+DIRECT_ENTRYPOINTS=(
+  install-manul.sh
+  install-manul-symlinks.sh
+  repair-manul-runtime.sh
+  start-manul-automation.sh
+  manul-daemon.sh
+  watchdog.sh
+  task-recovery.sh
+  agent-task-runner.sh
+  poll.sh
+  manul-status.sh
+  manul-result.sh
+  manul-submit.sh
+  manul-wait.sh
+)
+for entry in "${DIRECT_ENTRYPOINTS[@]}"; do
+  mode="$(git -C "$SCRIPT_DIR/../.." ls-files -s -- "skills/manul-github-bot/$entry" 2>/dev/null | awk '{print $1}' | head -1)"
+  if [ "$mode" = "100755" ]; then
+    ok "$entry is tracked executable (100755)"
+  else
+    fail "$entry must be tracked executable (100755), got ${mode:-missing}"
+  fi
+done
 
 RUNNER_MODE=$(stat -c '%a' "$SCRIPT_DIR/agent-task-runner.sh" 2>/dev/null || true)
 if [ "$RUNNER_MODE" = "755" ]; then
