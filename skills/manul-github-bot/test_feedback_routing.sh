@@ -98,6 +98,9 @@ cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 set -u
 for arg in "$@"; do printf 'ARG:%q\n' "$arg"; done >> "$GH_LOG"
+if [[ "${1:-}" == "api" ]] && [[ " $* " == *" --input - "* ]]; then
+  printf 'BODY:%s\n' "$(cat)" >> "$GH_LOG"
+fi
 exit 0
 EOF
 chmod +x "$FAKE_BIN/gh"
@@ -111,7 +114,7 @@ review_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
 
 assert_contains "Review lifecycle invokes gh api" "$review_cmd" "ARG:api"
 assert_contains "Review lifecycle targets the PR review-comments endpoint" "$review_cmd" "ARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
-assert_matches "Review lifecycle replies to source review comment" "$review_cmd" 'in_reply_to[=[:space:]]+4103894743'
+assert_contains "Review lifecycle payload sets in_reply_to" "$review_cmd" '"in_reply_to":4103894743'
 
 # Safe request-body regression: review lifecycle must send JSON through --input,
 # not -F/--field body, so shell-sensitive Markdown is never reinterpreted.
