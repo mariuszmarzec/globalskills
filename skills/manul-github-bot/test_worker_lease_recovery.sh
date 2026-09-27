@@ -144,6 +144,16 @@ sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
 
+# 3b) Dead worker + fresh lease is still recovered immediately.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'https://github.com/$REPO/issues/41','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999997,'dead-fresh-token',NULL,NULL);"
+recover_stale_tasks
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead-fresh';")" "dead worker with fresh lease requeued"
+
+# 3c) Live worker + fresh lease is left alone.
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'live-fresh-token',NULL,NULL);"
+recover_stale_tasks
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
+
 # 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL);"
 recover_stale_tasks
