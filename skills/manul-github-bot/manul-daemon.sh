@@ -2876,36 +2876,10 @@ PROMPT_APPEND
       fi
     fi
 
-    # Verify lifecycle comment was posted
-    if [ "$COMPLETION_SUCCESS" = "true" ] && [ "$COMMENT_POST_SUCCESS" != "true" ]; then
-      # Agent succeeded but lifecycle comment posting failed - still mark complete
-      log "WARN: Task $COMMENT_ID agent succeeded but lifecycle comment post failed"
-    elif [ "$COMPLETION_SUCCESS" = "true" ]; then
-      # Both agent succeeded AND comment posted - finalize as completed
-      # NOTE: Status was already set to 'completed' by complete_task_with_verification above
-      
-      # Save result metadata for local API access
-      local result_json=""
-      if [ -f "$STDOUT_FILE" ]; then
-        # Extract JSON from stdout if present (after TASK_DONE marker)
-        result_json="$(grep -A 100 'TASK_DONE' "$STDOUT_FILE" 2>/dev/null | tail -n +2 | head -1 | tr -d '\n' || echo "")"
-      fi
-      
-      # Escape for SQL
-      local escaped_summary escaped_result
-      escaped_summary="$(printf '%s' "$REPO#$ISSUE_NUM" | sed "s/'/''/g")"
-      escaped_result="$(printf '%s' "$result_json" | sed "s/'/''/g")"
-      
-      sqlite3 "$DB" "UPDATE processed_comments SET 
-        resultSummary='$escaped_summary', 
-        resultJson='$escaped_result'
-        WHERE commentId='$safe_comment_id';" 2>/dev/null
-      
+    # The evaluator is the single authority for running→completed/queued/failed.
+    # Never perform a second state transition here after evaluation.
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
       set_activity "$COMMENT_ID" "completed"
-    elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-    else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>>"$LOG"
     fi
 
     # Auto-close conversation when all tasks are finalized (completed or failed).
