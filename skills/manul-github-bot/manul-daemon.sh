@@ -589,6 +589,7 @@ recover_stale_tasks() {
       worker_alive=1
     fi
     log "recover_stale_tasks: stale task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires attempts=$attempts)"
+    terminate_task_executor "$comment_id"
 
     local max_attempts
     max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
@@ -739,6 +740,23 @@ start_heartbeat() {
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
   lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
+terminate_task_executor() {
+  local comment_id="$1"
+  local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
+  local executor_pid=""
+
+  if [ -f "$pid_file" ]; then
+    executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  fi
+
+  if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
+    log "terminating isolated executor for stale task $comment_id (pid=$executor_pid)"
+    kill -- "-$executor_pid" 2>/dev/null || kill "$executor_pid" 2>/dev/null || true
+    lc_log "EXECUTOR_KILLED" "task=$comment_id pid=$executor_pid"
+  fi
+  rm -f "$pid_file" 2>/dev/null || true
+}
+
 stop_heartbeat() {
   local comment_id="$1"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
@@ -936,6 +954,7 @@ stop() {
   kill "$pid" 2>/dev/null
   wait 2>/dev/null || true
   rm -f "$PID_FILE"
+  rm -f "$MANUL_DIR"/task-*.executor.pid 2>/dev/null || true
   lc_log "DAEMON_STOP" "pid=$pid"
   echo "manul daemon stopped (pid $pid)"
 }
@@ -2782,8 +2801,19 @@ PROMPT_APPEND
        > "$EXEC_CTX_FILE"
 
      local executor_output
-     executor_output="$(AgentExecutionController.execute "$EXEC_CTX_FILE")"
-     local rc=$?
+     local executor_result_file="$MANUL_TASKS_DIR/task-${COMMENT_ID}.executor-result"
+     local executor_pid_file="$MANUL_DIR/task-${COMMENT_ID}.executor.pid"
+     rm -f "$executor_result_file" "$executor_pid_file"
+
+     # Run the controller in a dedicated process group. The task-local PID file
+     # lets watchdog/recovery terminate a hung executor without killing the worker.
+     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" >"$executor_result_file" 2>>"$STDERR_FILE" &
+     local executor_launcher_pid=$!
+     local rc=0
+     wait "$executor_launcher_pid" || rc=$?
+     executor_output="$(cat "$executor_result_file" 2>/dev/null || true)"
+     rm -f "$executor_pid_file" "$executor_result_file"
+
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
      # Persist session id for continuation attempts
