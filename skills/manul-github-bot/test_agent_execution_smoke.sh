@@ -187,11 +187,13 @@ archive_task_artifacts() { return 0; }
 
 SMOKE_EVALUATED_RC=""
 SMOKE_EVALUATED_STDOUT=""
+SMOKE_STDOUT_CAPTURE="$TEST_ROOT/evaluated.stdout"
 evaluate_task_completion() {
   local rc="$6"
   local stdout_file="$7"
   SMOKE_EVALUATED_RC="$rc"
   SMOKE_EVALUATED_STDOUT="$stdout_file"
+  cp "$stdout_file" "$SMOKE_STDOUT_CAPTURE"
 
   if [ "$rc" -eq 0 ] && [ -f "$stdout_file" ] && grep -q '^TASK_DONE' "$stdout_file"; then
     COMPLETION_SUCCESS=true
@@ -232,11 +234,29 @@ if [ "$SMOKE_EVALUATED_RC" -ne 0 ]; then
   echo "FAIL: daemon observed executor rc=$SMOKE_EVALUATED_RC" >&2
   exit 1
 fi
-if [ ! -f "$SMOKE_EVALUATED_STDOUT" ]; then
+if [ ! -f "$SMOKE_STDOUT_CAPTURE" ]; then
   echo "FAIL: daemon did not produce the task stdout artifact" >&2
   exit 1
 fi
-grep -q '^TASK_DONE smoke-agent-completed$' "$SMOKE_EVALUATED_STDOUT" || {
+grep -q '^TASK_DONE smoke-agent-completed
+  echo "FAIL: TASK_DONE did not survive runner -> controller -> executor -> adapter -> ProcessRunner" >&2
+  exit 1
+}
+
+grep -q 'agent executor summary for task smoke-execution-1: smoke-agent-completed' "$LOG" || {
+  echo "FAIL: daemon did not consume the controller/executor result" >&2
+  exit 1
+}
+
+if [ -f "$MANUL_DIR/smoke-execution-1.executor.pid" ]; then
+  echo "FAIL: daemon leaked task executor PID file" >&2
+  exit 1
+fi
+
+echo "PASS: daemon -> agent-task-runner -> controller -> executor -> OpenClawAdapter -> ProcessRunner -> fake OpenClaw"
+echo "PASS: task metadata and TASK_DONE crossed the complete execution boundary"
+echo "PASS: daemon has no direct adapter bypass"
+ "$SMOKE_STDOUT_CAPTURE" || {
   echo "FAIL: TASK_DONE did not survive runner -> controller -> executor -> adapter -> ProcessRunner" >&2
   exit 1
 }
