@@ -491,6 +491,22 @@ test_result_validation_order() {
   [ -n "$result_line" ] || return 1
   [ "$result_line" -gt "$pr_url_line" ] || return 1
 }
+# ============================================================================
+# Test 14c: IMPLEMENT task with no repo diff still requires task branch and PR
+test_no_diff_implement_requires_pr() {
+  TEST_NAME="no_diff_implement_requires_pr"
+  echo "=== Test 14c: IMPLEMENT no-diff success still requires task branch and PR ==="
+
+  local eval_body
+  eval_body="$(sed -n '/^evaluate_task_completion()/,/^run_once()/p' "$DAEMON")"
+
+  assert_contains "$TEST_NAME (no-diff IMPLEMENT branch guard)" "$eval_body" 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then'
+  assert_contains "$TEST_NAME (no-diff IMPLEMENT checks branch)" "$eval_body" 'Implementation task completed on a base/default branch'
+  assert_contains "$TEST_NAME (no-diff IMPLEMENT checks PR)" "$eval_body" 'Implementation task completed without a verified PR from its task branch'
+  assert_contains "$TEST_NAME (no-diff IMPLEMENT calls verify_required_pr)" "$eval_body" 'verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"'
+  assert_not_contains "$TEST_NAME (old no-change bypass removed)" "$eval_body" 'made no repository changes; PR/branch not required'
+}
+
 # Test 15: Completed-task guard placement and logic
 # ============================================================================
 test_completed_task_guard() {
