@@ -1398,8 +1398,9 @@ verify_result_comment_pr_url() {
   local result_comment_patch_endpoint
   if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
     result_endpoint="repos/$repo/pulls/$target_issue/comments"
-    result_comment_get_endpoint="$result_endpoint"
-    result_comment_patch_endpoint="$result_endpoint"
+    # Individual review-comment GET/PATCH endpoints are not nested under the PR number.
+    result_comment_get_endpoint="repos/$repo/pulls/comments"
+    result_comment_patch_endpoint="repos/$repo/pulls/comments"
   else
     result_endpoint="repos/$repo/issues/$target_issue/comments"
     result_comment_get_endpoint="repos/$repo/issues/comments"
