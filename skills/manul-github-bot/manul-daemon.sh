@@ -103,7 +103,7 @@ TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
   # poll timeout dynamically instead of assuming a fixed 120s.
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
-  log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+log() { echo "[$(date -Is)] $*" >>"$LOG"; }
   configure_task_retention() {
     local list_days history_days
     list_days="$(jq -r '.retention.listDays // empty' "$CONFIG" 2>/dev/null || true)"
@@ -1179,10 +1179,8 @@ verify_result_comment() {
   rm -rf "$tmpdir"
 
   log "ERROR: verify_result_comment: no result comment with marker '$marker' found for task $comment_id attempt $attempt on $repo#$url_issue_num"
-
+  return 1
 }
-
-
 
 # Check whether a concrete GitHub PR exists for the given branch against base.
 # Returns 0 if a real PR exists, 1 otherwise.
