@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-trap 'rc=$?; echo "FAIL: smoke test aborted rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2; [ -f "$LOG" ] && tail -n 80 "$LOG" >&2 || true' ERR
+trap 'rc=$?; echo "FAIL: smoke test aborted rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2; if [ -n "${LOG:-}" ] && [ -f "$LOG" ]; then tail -n 80 "$LOG" >&2; fi' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ROOT="$(mktemp -d /tmp/manul-exec-smoke-XXXXXX)"
