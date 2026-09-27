@@ -171,9 +171,12 @@ for script in "${SCRIPTS[@]}"; do
         DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
         continue
     fi
-    # Preserve canonical permissions on the symlink target. Guard against
-    # dangling symlinks (chmod on a broken link is a no-op error on some systems).
-    if [ -x "$canonical_file" ]; then
+    # Executable entry points must remain executable even if the canonical
+    # checkout lost its execute bit. agent-task-runner.sh is invoked directly
+    # by setsid and therefore cannot rely on being sourced.
+    if [ "$script" = "agent-task-runner.sh" ]; then
+        chmod +x "$canonical_file" "$runtime_path" 2>/dev/null || true
+    elif [ -x "$canonical_file" ]; then
         chmod +x "$runtime_path" 2>/dev/null || true
     fi
     CHANGED=$((CHANGED + 1))
