@@ -2259,7 +2259,17 @@ run_once() {
     local SOURCE_LINK="$COMMENT_URL"
     local TASK_SUMMARY
     TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
-    local IN_PROGRESS_BODY="🔄 Manul is working on this task...
+
+    local start_conv_id
+    start_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    local start_event_data
+    start_event_data="$(jq -nc --arg taskId "$COMMENT_ID" --arg conversationId "$start_conv_id" --arg attempt "$current_attempt" '{taskId:$taskId,conversationId:$conversationId,status:"started",attempt:($attempt|tonumber)}')"
+    local start_event_marker
+    start_event_marker="<!-- manul:event $(printf '%s' "$start_event_data" | jq -c --arg type "TASK_STARTED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+
+    local IN_PROGRESS_BODY="$start_event_marker
+
+🔄 Manul is working on this task...
 
 **Summary:** $TASK_SUMMARY
 **Triggered by:** $TRIGGERER
