@@ -43,18 +43,29 @@ remove_watchdog_cron() {
 case "${1:-}" in
     start)
         log "Starting manul automation..."
-        # Always refresh runtime symlinks from the canonical source before
-        # launching the daemon. This prevents a long-lived ~/.manul runtime
-        # from executing stale Manul scripts after globalskills/master changes.
-        CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
-        SYMLINK_INSTALLER="$CANONICAL_DIR/install-manul-symlinks.sh"
-        if [ -x "$SYMLINK_INSTALLER" ]; then
-            if ! "$SYMLINK_INSTALLER" --runtime-dir "$MANUL_DIR" --canonical-dir "$CANONICAL_DIR" >/dev/null 2>&1; then
-                log "ERROR: failed to refresh Manul runtime symlinks from $CANONICAL_DIR"
+        # The runtime is a symlinked view of the canonical source. Before
+        # starting, require that the configured canonical source is a real
+        # git checkout and fast-forward it to origin/master when possible.
+        CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.globalskills}"
+        CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$CANONICAL_ROOT/skills/manul-github-bot}"
+        if [ -d "$CANONICAL_ROOT/.git" ]; then
+            if git -C "$CANONICAL_ROOT" fetch origin master --quiet >/dev/null 2>&1; then
+                if ! git -C "$CANONICAL_ROOT" merge --ff-only origin/master >/dev/null 2>&1; then
+                    log "ERROR: canonical globalskills checkout is not fast-forwardable to origin/master"
+                    exit 1
+                fi
+            else
+                log "ERROR: failed to fetch canonical globalskills/master"
                 exit 1
             fi
-        else
+        fi
+        SYMLINK_INSTALLER="$CANONICAL_DIR/install-manul-symlinks.sh"
+        if [ ! -x "$SYMLINK_INSTALLER" ]; then
             log "ERROR: canonical Manul symlink installer not found: $SYMLINK_INSTALLER"
+            exit 1
+        fi
+        if ! "$SYMLINK_INSTALLER" --runtime-dir "$MANUL_DIR" --canonical-dir "$CANONICAL_DIR" >/dev/null 2>&1; then
+            log "ERROR: failed to refresh Manul runtime symlinks from $CANONICAL_DIR"
             exit 1
         fi
         # Ensure scripts are executable
