@@ -201,12 +201,13 @@ PROMPT_EOF
 
     cat >> "$out_file" <<'PROMPT_APPEND'
 
-## Authoritative Repository
-The target repository for this task is located at: __REPO_DIR__
-
 ## Working Directory
-You will execute in the repository directory:
+This is the ONLY repository directory you may inspect or modify:
 __WORKDIR__
+
+All git commands and file operations for this task MUST be performed in this directory.
+
+Do NOT access or modify any other local repository/worktree path managed internally by Manul.
 
 ## Branch Policy
 PROMPT_APPEND
