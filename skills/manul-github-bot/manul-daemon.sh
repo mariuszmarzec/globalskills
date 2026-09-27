@@ -1863,6 +1863,21 @@ evaluate_task_completion() {
         SUCCESS="false"
         FAIL_REASON="Repository changed but the agent is not on a named branch"
         log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
+      elif [ -n "$PR_HEAD_BRANCH" ]; then
+        # PR-tied tasks are intentionally executed on the existing PR head branch.
+        # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
+        if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
+          SUCCESS="false"
+          FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
+          log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
+        elif [ -z "$current_branch" ]; then
+          SUCCESS="false"
+          FAIL_REASON="Repository changed but the agent is not on a named branch"
+          log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
+        else
+          log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
+        fi
       elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BRANCH" ]; then
         SUCCESS="false"
         FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
