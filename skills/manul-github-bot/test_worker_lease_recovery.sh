@@ -151,7 +151,7 @@ recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead-fresh';")" "dead worker with fresh lease requeued"
 
 # 3c) Live worker + fresh lease is left alone.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$,'live-fresh-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
 
