@@ -447,6 +447,39 @@ if ! grep -q "invalid_task_branch\|MISSING_PR\|no PR found" "$LOG_FILE" 2>/dev/n
 fi
 echo "[OK] Test I: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
+# ─── Test PR: PR-tied task may modify the existing PR head branch ─────────────
+# Regression for PR review tasks: their prepared INITIAL_BRANCH is the PR head
+# branch, so changing it must not be rejected as a base/default-branch change.
+echo ""
+echo "=== Test PR: PR-tied task on expected PR head branch -> COMPLETION_SUCCESS=true ==="
+WORKDIR_PR="$TEST_TMPDIR/workdir-pr"
+mkdir -p "$WORKDIR_PR"
+git -C "$WORKDIR_PR" init -q
+git -C "$WORKDIR_PR" config user.email test@example.com
+git -C "$WORKDIR_PR" config user.name test
+printf 'test\\n' >"$WORKDIR_PR/README.md"
+git -C "$WORKDIR_PR" add README.md
+git -C "$WORKDIR_PR" commit -qm initial
+INITIAL_HEAD_PR="$(git -C "$WORKDIR_PR" rev-parse HEAD)"
+git -C "$WORKDIR_PR" checkout -qb feature/44-manul-e2e-fixture
+# The PR head branch is intentionally the same as INITIAL_BRANCH.
+echo "review change" >>"$WORKDIR_PR/README.md"
+git -C "$WORKDIR_PR" add README.md
+git -C "$WORKDIR_PR" commit -qm "review change"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_REVIEW';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_REVIEW','test/repo',60,'https://github.com/test/repo/pull/60#discussion_r1234','user','test','task','queued',1,$$,'REVIEW_FIX');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutPR.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+evaluate_task_completion "test/repo" "60" "review:PR_REVIEW" "review:PR_REVIEW" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_PR" "" "$INITIAL_HEAD_PR" "feature/44-manul-e2e-fixture" "master"
+if [ "$COMPLETION_SUCCESS" != "true" ]; then
+    echo "FAIL: PR-tied task on expected head branch was rejected: $FAIL_REASON"
+    exit 1
+fi
+echo "[OK] Test PR: PASSED (PR head branch is valid for PR-tied task)"
+
 # ─── Test J: agent on a real task branch with autoCreatePr -> verify_required_pr accepts ─
 # Confirms the positive half of the contract: a dedicated task branch (not the
 # default) is accepted by verify_required_pr when autoCreatePr can create the PR.
