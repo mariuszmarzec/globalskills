@@ -46,6 +46,21 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
+terminate_task_executor() {
+    local comment_id="$1"
+    local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
+    local executor_pid=""
+
+    if [ -f "$pid_file" ]; then
+        executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    fi
+
+    if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
+        log "RECOVERY: terminating isolated executor for stale task $comment_id (pid=$executor_pid)"
+        kill -- "-$executor_pid" 2>/dev/null || kill "$executor_pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file" 2>/dev/null || true
+}
 # --- .enabled gate --------------------------------------------------------
 # The .enabled marker is the lifecycle contract between intentional start/stop
 # and the watchdog. It is created by install-manul.sh (fresh install), the `manul`
@@ -138,6 +153,7 @@ if [ -f "$DB" ]; then
                 worker_alive=1
             fi
             log "RECOVERY: $comment_id ($repo#$issue_num) stale (worker=$worker_pid alive=$worker_alive heartbeat=$heartbeat_at lease=$lease_at attempts=$attempts)"
+            terminate_task_executor "$comment_id"
 
             ownership_clause=""
             if [ -n "$claim_token" ]; then
