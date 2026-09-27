@@ -564,31 +564,38 @@ recover_stale_tasks() {
 
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken
+    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken,
+           CASE
+             WHEN heartbeatAt IS NULL
+               OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+               OR leaseExpiresAt IS NULL
+               OR leaseExpiresAt < datetime('now')
+             THEN 1 ELSE 0
+           END AS lease_stale
     FROM processed_comments
     WHERE status='running'
-      AND (
-        heartbeatAt IS NULL
-        OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
-        OR leaseExpiresAt IS NULL
-        OR leaseExpiresAt < datetime('now')
-      )
     LIMIT 100;" 2>/dev/null)"
-
   if [ -z "$stale_tasks" ]; then
     log "recover_stale_tasks: no stale tasks found"
     return 0
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token lease_stale; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
     if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; then
       worker_alive=1
     fi
-    log "recover_stale_tasks: stale task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires attempts=$attempts)"
+
+    # A dead worker is sufficient proof that the running claim cannot progress,
+    # even when the last heartbeat/lease update was recent.
+    if [ "$lease_stale" = "0" ] && [ "$worker_alive" -eq 1 ]; then
+      continue
+    fi
+
+    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale attempts=$attempts)"
     terminate_task_executor "$comment_id"
 
     local max_attempts
