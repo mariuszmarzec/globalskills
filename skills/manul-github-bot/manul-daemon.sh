@@ -2057,7 +2057,10 @@ run_once() {
     # 1. Find next eligible task using proper SQLite query with retry backoff
     # Query only the fields we need, not the prompt (which may contain |)
     local TASK_INFO
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now')) ORDER BY nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
+    # Select the oldest task that is actually eligible now. A retry with a
+    # future nextAttemptAt must never monopolize the singleton dispatcher and
+    # starve a fresh task that is ready to run.
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY CASE WHEN attempts=0 OR nextAttemptAt IS NULL THEN 0 ELSE 1 END, nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
