@@ -152,7 +152,16 @@ post_feedback_comment() {
     if [[ "$body" == *"$signature" ]]; then
       signed_body="$body"
     else
-      signed_body="${body}"    post_comment "$repo" "$issue" "$body"
+      signed_body="${body}"$'\n\n'"$signature"
+    fi
+
+    # Send the body as literal JSON input so Markdown, quotes, and shell
+    # metacharacters cannot be reinterpreted by the shell.
+    printf '%s' "$signed_body" |
+      jq -Rs --argjson reply_id "$reply_to" '{body:., in_reply_to:$reply_id}' |
+      gh api "repos/$repo/pulls/$pr_number/comments" --input - 2>/dev/null
+  else
+    post_comment "$repo" "$issue" "$body"
   fi
 }
 
