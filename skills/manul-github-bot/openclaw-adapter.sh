@@ -125,16 +125,8 @@ log "starting task=$OPT_TASK_ID session=$SESSION_KEY timeout=${OPENCLAW_AGENT_TI
 # Run the agent through the ProcessRunner boundary. This is the ONLY way an
 # adapter may spawn a subprocess: it guarantees timeout enforcement (124),
 # testability (mock mode), and consistent result capture.
-# Request OpenClaw JSON output so headless Manul execution keeps stdout
-# machine-readable instead of mixing tool-call/event output with final text.
-_run_openclaw_agent() {
-    "$OPENCLAW_BIN" agent \
-        --agent "${OPT_AGENT:-main}" \
-        --session-key "$SESSION_KEY" \
-        --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-        --message-file "$OPT_PROMPT" \
-        --json
-}
+# Keep OpenClaw output in normal text form so TASK_DONE remains directly
+# observable in the captured stdout file.
 
 # --- Execute with ProcessRunner boundary ---
 # Caller-supplied stdout/stderr files are preserved so the daemon can inspect
@@ -149,8 +141,7 @@ _pr_result="$(ProcessRunner.run \
         --agent "${OPT_AGENT:-main}" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-        --message-file "$OPT_PROMPT" \
-        --json)"
+        --message-file "$OPT_PROMPT")"
 _pr_header="$(printf '%s\n' "$_pr_result" | head -1)"
 _pr_rc="$(printf '%s' "$_pr_header" | cut -d'|' -f1)"
 _pr_dur="$(printf '%s' "$_pr_header" | cut -d'|' -f2)"
