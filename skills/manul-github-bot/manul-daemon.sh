@@ -1444,7 +1444,6 @@ verify_result_comment_pr_url() {
       fi
     fi
   fi
-  fi
 
   log "ERROR: verify_result_comment_pr_url: result comment does not contain canonical PR URL $pr_url and self-healing failed"
   lc_log "PR_RESULT_LINK_MISSING" "task=$comment_id repo=$repo branch=$branch base=$expected_base expected_url=$pr_url"
