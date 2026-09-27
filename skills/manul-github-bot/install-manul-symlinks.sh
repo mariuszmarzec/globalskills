@@ -92,6 +92,7 @@ SCRIPTS=(
     "manul-env.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
+    "agent-task-runner.sh"
     "process-runner.sh"
 )
 
