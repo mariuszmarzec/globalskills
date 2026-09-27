@@ -78,9 +78,22 @@ if [ -f "$DB" ] && [ -f "$MANUL_DIR/workspace-manager.sh" ]; then
 fi
 
 if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
-    log "daemon not running (no pid / pid not alive) → starting"
+    log "daemon not running (no pid / pid not alive) → starting through canonical startup wrapper"
     rm -f "$PID_FILE"  # Clear stale PID file before starting
-    "$MANUL_DIR/manul-daemon.sh" start >>"$LOG" 2>&1
+
+    START_WRAPPER="$MANUL_DIR/start-manul-automation.sh"
+    if [ ! -x "$START_WRAPPER" ]; then
+        log "ERROR: canonical startup wrapper missing: $START_WRAPPER"
+        exit 1
+    fi
+
+    # The startup wrapper synchronizes ~/.globalskills to origin/master and
+    # refreshes the runtime symlinks before launching the daemon. Watchdog must
+    # use the same path so recovery cannot resurrect a stale runtime revision.
+    if ! "$START_WRAPPER" start >>"$LOG" 2>&1; then
+        log "ERROR: daemon startup via canonical wrapper failed"
+        exit 1
+    fi
 fi
 
 # --- 2) stale lock recovery ------------------------------------------------
