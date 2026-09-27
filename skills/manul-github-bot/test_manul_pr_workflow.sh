@@ -486,6 +486,14 @@ test_daemon_lifecycle_comments() {
 
 # ============================================================================
 # Test 14b: Result comment validation runs after PR metadata verification
+test_completion_claim_token_wiring() {
+  TEST_NAME="completion_claim_token_wiring"
+  echo "=== Test: Completion preserves claim ownership ==="
+
+  local eval_body
+  eval_body="$(sed -n '/^evaluate_task_completion()/,/^run_once()/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (claim token forwarded)" "$eval_body" 'complete_task_with_verification "$COMMENT_ID" "$CLAIM_TOKEN"'
+}
 test_result_validation_order() {
   TEST_NAME="result_validation_order"
   echo "=== Test 14b: Result validation order ==="
@@ -717,6 +725,7 @@ test_prompt_enforces_agent_posting
 test_result_comment_repair_guidance
 test_daemon_lifecycle_comments
 test_lifecycle_event_embedding
+test_completion_claim_token_wiring
 test_result_validation_order
 test_completed_task_guard
 test_retry_backoff
