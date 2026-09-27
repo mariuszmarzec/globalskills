@@ -208,6 +208,13 @@ test_reply_routing() {
   local has_old_reply
   has_old_reply="$(echo "$func_sig" | grep 'in-reply-to' | grep -v '^[[:space:]]*#' | wc -l)"
   assert_eq "$TEST_NAME (no --in-reply-to)" "0" "$has_old_reply"
+  # Review replies must be encoded as JSON input, not form fields.
+  local has_form_body
+  has_form_body="$(echo "$func_sig" | grep 'body=$signed_body\|body=' | grep -v '^[[:space:]]*#' | wc -l)"
+  assert_eq "$TEST_NAME (no form body)" "0" "$has_form_body"
+  local has_json_input
+  has_json_input="$(echo "$func_sig" | grep -c -- '--input -')"
+  assert_eq "$TEST_NAME (JSON input present)" "1" "$has_json_input"
 
   # Check that REPLY_TO is extracted for review comments
   local reply_to_extraction
