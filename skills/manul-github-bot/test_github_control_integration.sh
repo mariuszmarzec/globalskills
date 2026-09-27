@@ -1003,7 +1003,10 @@ MOCK_EOF
 
 test_daemon_lifecycle_task_done_emitted() {
   local daemon_file="$SCRIPT_DIR/manul-daemon.sh"
-  grep -q 'post-done' "$daemon_file" && grep -q 'TASK_DONE' "$daemon_file"
+  # TASK_DONE remains a machine-readable event, embedded in the lifecycle comment.
+  grep -q 'lifecycle_event_marker' "$daemon_file" &&
+    grep -q 'TASK_DONE' "$daemon_file" &&
+    ! grep -q 'manul-result-feedback.sh" post-done' "$daemon_file"
 }
 
 test_review_recording_after_submission() {
