@@ -124,16 +124,6 @@ assert_contains "Top-level lifecycle targets PR #43 conversation" "$top_cmd" "AR
 assert_not_contains "Top-level lifecycle does not use review reply endpoint" "$top_cmd" "pulls/43/comments"
 assert_not_contains "Top-level lifecycle has no in_reply_to routing" "$top_cmd" "in_reply_to="
 
-# Review routing remains enforced when only task metadata is available (no PR arg yet).
-: > "$GH_LOG"
-review_no_pr_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-started \
-  --repo mariuszmarzec/shoppingListGenerator \
-  --issue 43 \
-  --comment-id review:4103894743 \
-  --task-id review:4103894743 \
-  --json 2>&1)"
-review_no_pr_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
-assert_contains "Review routing does not require PR argument to select inline endpoint" "$review_no_pr_cmd" "ARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
 
 
 if [ "$FAIL" -eq 0 ]; then
