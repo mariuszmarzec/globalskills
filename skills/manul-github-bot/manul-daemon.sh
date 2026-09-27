@@ -2289,19 +2289,7 @@ run_once() {
 
     log "dispatch: posted in-progress comment for $COMMENT_ID"
 
-    # 4b. Emit TASK_STARTED event marker (GitHub control protocol)
-    lc_log "TASK_STARTED_EMITTED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
-    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
-      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      "$MANUL_DIR/manul-result-feedback.sh" post-started \
-        --repo "$REPO" \
-        --issue "$ISSUE_NUM" \
-        --comment-id "$COMMENT_ID" \
-        --task-id "$COMMENT_ID" \
-        --pr-number "${task_pr_num:-}" \
-        --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_STARTED event for $COMMENT_ID"
-    fi
+    log "dispatch: TASK_STARTED embedded in in-progress comment for $COMMENT_ID"
 
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
