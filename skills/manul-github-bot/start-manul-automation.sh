@@ -68,8 +68,10 @@ case "${1:-}" in
             log "ERROR: failed to refresh Manul runtime symlinks from $CANONICAL_DIR"
             exit 1
         fi
-        # Ensure scripts are executable
-        chmod +x "$DAEMON" "$WATCHDOG" 2>/dev/null || true
+        # Ensure direct executable entry points are executable. The task runner
+        # is launched by setsid and is not sourced, so enforce its execute bit
+        # independently of the canonical file mode.
+        chmod +x "$DAEMON" "$WATCHDOG" "$MANUL_DIR/agent-task-runner.sh" 2>/dev/null || true
         # Lifecycle marker: this is an INTENTIONAL start. Touch .enabled
         # unconditionally — even if the daemon is already running (and its
         # start() early-returns before touching the marker), the wrapper is the
