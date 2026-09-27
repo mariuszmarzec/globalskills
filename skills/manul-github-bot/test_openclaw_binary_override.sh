@@ -12,6 +12,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
 cat >"$tmp/bin/custom-openclaw" <<'MOCK'
 #!/usr/bin/env bash
+for arg in "$@"; do
+  if [ "$arg" = "--json" ]; then
+    echo "FAIL: adapter unexpectedly passed --json" >&2
+    exit 90
+  fi
+done
 printf '%s\n' 'TASK_DONE custom-binary'
 exit 0
 MOCK
