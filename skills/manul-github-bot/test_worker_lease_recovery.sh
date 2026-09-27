@@ -81,6 +81,7 @@ assert_eq() {
 }
 
 REPO="owner/repo"
+CURRENT_TEST_PID="$BASHPID"
 
 # 0) Isolated executor process group can be terminated independently.
 EXECUTOR_PID_FILE="$MANUL_DIR/task-test-executor.executor.pid"
