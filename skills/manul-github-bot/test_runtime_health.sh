@@ -91,6 +91,27 @@ echo "=== Runtime Health Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 echo ""
 
+# ── Test 0: Executable entry-point permissions ───────────────────────────────
+echo "Test 0: Executable entry-point permissions"
+# agent-task-runner.sh is invoked directly via setsid/exec and MUST carry the
+# executable bit in the canonical checkout. Sourced libraries do not need +x.
+RUNNER_MODE="$(stat -c '%a' "$SCRIPT_DIR/agent-task-runner.sh" 2>/dev/null || true)"
+if [ "$RUNNER_MODE" = "755" ]; then
+  ok "agent-task-runner.sh is executable (mode 755)"
+else
+  fail "agent-task-runner.sh must be executable (mode 755), got ${RUNNER_MODE:-unknown}"
+fi
+
+# The CI checkout must also preserve the executable bit in Git's tree.
+RUNNER_TREE_MODE="$(git -C "$SCRIPT_DIR/../.." ls-files -s -- 'skills/manul-github-bot/agent-task-runner.sh' 2>/dev/null | awk '{print $1}' | head -1)"
+if [ "$RUNNER_TREE_MODE" = "100755" ]; then
+  ok "Git tracks agent-task-runner.sh as executable (100755)"
+else
+  fail "Git must track agent-task-runner.sh as executable (100755), got ${RUNNER_TREE_MODE:-missing}"
+fi
+
+
+
 # ── Test 1: Shell syntax ──────────────────────────────────────────────────────
 echo "Test 1: Shell syntax"
 for script in \
