@@ -90,7 +90,7 @@ bugfix/fix-ci-build
    git push -u origin feature/<ISSUE_NUMBER>-<DESCRIPTION>
    ```
 
-6. If a feature branch for the work already exists, reuse it instead of creating a new one.
+6. For a new standalone task, do NOT reuse a branch left by a previous task attempt unless that branch is already tied to a live PR for this exact task. If the requested branch name already exists without such a PR, create a unique task branch (for example, append a short task/attempt suffix) and use that branch for the new work.
 
 ## Resolving PR conflicts
 
