@@ -98,6 +98,12 @@ reset_all_tasks() {
     if [ "$status_filter" = "failed" ]; then
         sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now') WHERE status='failed';" 2>/dev/null
     else
+        local running_tasks
+        running_tasks="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE status='running';" 2>/dev/null || true)"
+        while IFS= read -r comment_id; do
+            [ -n "$comment_id" ] || continue
+            terminate_task_executor "$comment_id"
+        done <<< "$running_tasks"
         sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE status='running';" 2>/dev/null
     fi
 
