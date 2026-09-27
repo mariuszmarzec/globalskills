@@ -2118,8 +2118,17 @@ run_once() {
     safe_comment_id="$(sql_escape "$COMMENT_ID")"
     local safe_repo
     safe_repo="$(sql_escape "$REPO")"
-    # Initialize REPLY_TO early to prevent unbound variable errors
+    # Derive the reply target before any lifecycle comment is posted.
+    # Review-thread tasks must keep every daemon lifecycle message in the same
+    # inline review thread; top-level PR comments are reserved for PR conversation tasks.
     local REPLY_TO=""
+    if [[ "$COMMENT_ID" =~ ^review:([0-9]+)$ ]]; then
+      REPLY_TO="${BASH_REMATCH[1]}"
+    elif [[ "$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null)" == *"/pull/"*"#discussion_r"* ]]; then
+      local source_comment_url
+      source_comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null)"
+      REPLY_TO="$(printf '%s' "$source_comment_url" | sed -n 's|.*#discussion_r\([0-9][0-9]*\).*|\1|p')"
+    fi
 
     # Read actual attempts from database (authoritative source)
     local ACTUAL_ATTEMPTS
