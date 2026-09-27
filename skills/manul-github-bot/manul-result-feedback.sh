@@ -140,17 +140,9 @@ post_feedback_comment() {
   local pr_number="${5:-}"
 
   local reply_to=""
-  if [ -n "$task_id" ]; then
-    # Review tasks are persisted as review:<numeric-comment-id>.
-    # In that case the lifecycle feedback belongs in the same review thread.
-    if [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
-      reply_to="${BASH_REMATCH[1]}"
-    fi
-  fi
-
-  # Review-thread lifecycle/result messages must stay in the original
-  # inline review thread. For issue/PR conversation tasks, keep top-level routing.
-  if [ -z "$reply_to" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]] && [ -n "$pr_number" ]; then
+  if [ -n "$task_id" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
+    # Review tasks are persisted as review:<root-comment-id>. The original
+    # inline review comment is the only valid parent for their lifecycle/result.
     reply_to="${BASH_REMATCH[1]}"
   fi
 
