@@ -24,6 +24,7 @@ Treat `CONTRACTS.md` as the behavioural source of truth and `ARCHITECTURE.md` as
    - **Informational** — answer the user; do not modify repository files.
    - **Repository Change** — implement the requested change.
 3. Before a repository change, verify the task against the authoritative GitHub issue/PR referenced by `Repository` and `Issue/PR` in the task prompt. If the supplied User Request is a fragment, fetch the full issue/PR with `gh issue view` / `gh pr view` and use the full user-authored request as authoritative.
+   - **Task Action is authoritative:** when the task prompt says `Task Action: IMPLEMENT`, treat the referenced issue/PR context as a repository-change task even when the User Request is terse (for example `do it`, `do this task`, or `retry this`). Do not downgrade an IMPLEMENT task to informational work based on the short trigger text.
 4. Run appropriate tests/validation.
 5. Post exactly one user-facing result comment to GitHub.
 6. Only after the result comment and required verification succeed, emit `TASK_DONE`.
