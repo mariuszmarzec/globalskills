@@ -1871,10 +1871,6 @@ evaluate_task_completion() {
           FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
           log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
-        elif [ -z "$current_branch" ]; then
-          SUCCESS="false"
-          FAIL_REASON="Repository changed but the agent is not on a named branch"
-          log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
         else
           log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
         fi
