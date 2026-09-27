@@ -7,9 +7,9 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
-MANUL_DIR="\${MANUL_DIR:-$HOME/.manul}"
-PID_FILE="\${2:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+PID_FILE="${2:-}"
 
 source "$SCRIPT_DIR/manul-env.sh"
 if ! manul_env_load "$MANUL_DIR"; then
@@ -21,7 +21,7 @@ source "$SCRIPT_DIR/process-runner.sh"
 source "$SCRIPT_DIR/agent-executor.sh"
 source "$SCRIPT_DIR/agent-execution-controller.sh"
 
-CTX_FILE="\${1:-}"
+CTX_FILE="${1:-}"
 if [ -z "$CTX_FILE" ] || [ ! -f "$CTX_FILE" ]; then
   echo "ERROR: missing execution context file" >&2
   exit 2
