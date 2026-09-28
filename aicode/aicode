@@ -95,12 +95,12 @@ else
     echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
 fi
 
-# Ensure manul GitHub bot daemon is running.
+# Ensure Manul GitHub bot daemon is running.
 # Never let a broken/hung daemon block OpenCode startup.
-# The canonical installer self-heals a missing/broken runtime before startup.
+# The canonical installer/repairer is authoritative for ~/.manul runtime state.
 MANUL_INSTALLER="$HOME/.globalskills/skills/manul-github-bot/install-manul.sh"
 MANUL_REPAIRER="$HOME/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh"
-MANUL_RUNTIME="$HOME/.openclaw/manul"
+MANUL_RUNTIME="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_DB="$MANUL_RUNTIME/manul.db"
 MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
