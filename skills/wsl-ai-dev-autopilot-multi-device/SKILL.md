@@ -967,7 +967,13 @@ fi
 
 # Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
 # Idempotent: start is a no-op when the daemon is already up.
-"$HOME/.openclaw/manul/manul-daemon.sh" start >/dev/null 2>&1
+MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
+MANUL_DAEMON="$MANUL_RUNTIME_DIR/manul-daemon.sh"
+if [ -x "$MANUL_DAEMON" ]; then
+    "$MANUL_DAEMON" start >/dev/null 2>&1
+else
+    echo "WARNING: Manul daemon not found at $MANUL_DAEMON; run install-manul.sh first." >&2
+fi
 
 # Launch OpenCode
 if [ -n "${OPENCODE_API_KEY:-}" ]; then
