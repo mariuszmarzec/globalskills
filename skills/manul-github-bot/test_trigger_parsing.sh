@@ -31,7 +31,7 @@ echo "=== /manul trigger newline regression tests ==="
 
 # The three production jq gates (issue comments, issue bodies, PR review comments)
 # must all allow whitespace/newline after the trigger.
-gate_count="$(grep -F '([ \t\r\n]|$)' "$POLL" | wc -l | tr -d ' ')"
+gate_count="$(grep -F '([ \\t\\r\\n]|$)' "$POLL" | wc -l | tr -d ' ')"
 assert_eq "all three trigger gates accept newline" "3" "$gate_count"
 
 run_gate() {
