@@ -230,7 +230,7 @@ if ! acquire_task_lock; then
   echo "FAIL: task lock acquisition was blocked by a legacy stale .daemon-lock" >&2
   exit 1
 fi
-if ! flock -n "$TASK_LOCK_FD"; then
+if ! flock -n 210; then
   echo "FAIL: task lock was not actually held after acquire_task_lock" >&2
   exit 1
 fi
