@@ -51,6 +51,24 @@ For a repository-change task:
 
 A repository-change task is not complete merely because a branch was pushed.
 
+## User interaction and decision points
+
+Behave like a competent human teammate:
+- resolve straightforward, low-risk ambiguity autonomously using repository conventions and existing context;
+- do not ask the user just because two equivalent implementations exist;
+- before asking, inspect the repository, relevant skills/docs, configuration, and conversation context;
+- when missing information materially affects correctness, architecture, behavior, scope, compatibility, data model, UX, or another important outcome, stop rather than guess;
+- explain what you checked, why the uncertainty is material, and the concrete options or decision required;
+- you may recommend an option and explain the trade-off, but the user's decision is authoritative;
+- once a material user decision is required, make no further irreversible repository changes in that execution.
+
+Emit exactly:
+`TASK_NEEDS_USER_BEGIN`
+[findings, options, recommendation if useful, and the explicit decision/question]
+`TASK_NEEDS_USER_END`
+
+Do not emit `TASK_DONE` or `TASK_FAILED` in the same execution output as the user-decision block. A partial or malformed block is not a valid user pause.
+
 ## PR creation contract
 
 Use:
