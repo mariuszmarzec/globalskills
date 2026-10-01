@@ -61,6 +61,10 @@ LAST_POLL_FILE="$MANUL_STATE_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_STATE_DIR/current_activity"
 LOCK="$MANUL_LOCKS_DIR/daemon.lock"
 FLOCK_FILE="$MANUL_LOCKS_DIR/daemon.flock"
+# OS-level lock for the singleton task dispatcher. Unlike the legacy .daemon-lock
+# directory, flock is automatically released when the owning worker process dies.
+TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
+TASK_LOCK_FD=210
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="$MANUL_DB"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
@@ -518,29 +522,31 @@ complete_task_with_verification() {
   return 0
 }
 
-# Acquire singleton lock BEFORE claiming a task to prevent concurrent daemon races
+# Acquire singleton lock BEFORE claiming a task to prevent concurrent daemon races.
+#
+# The task dispatcher used to coordinate ownership through $MANUL_DIR/.daemon-lock
+# plus daemon.pid. That protocol is unsafe after a restart: the old directory can
+# survive while daemon.pid is overwritten by the new daemon, making the new daemon
+# mistake itself for the old lock owner forever.
+#
+# Use an OS-level flock instead. Kernel lock ownership follows the open file
+# description/process lifetime, so a killed/crashed worker releases the lock
+# automatically and PID reuse cannot create a false owner.
 acquire_task_lock() {
-  local lock_dir="$MANUL_DIR/.daemon-lock"
-  local max_wait=30  # seconds
-  local elapsed=0
+  local max_wait=${MANUL_TASK_LOCK_TIMEOUT_SECONDS:-30}
+  local sleep_interval=0.1
+  local attempts=0
+  local max_attempts
+  max_attempts=$((max_wait * 10))
+  [ "$max_attempts" -gt 0 ] || max_attempts=1
 
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    # Check if lock holder is still alive
-    if [ -f "$PID_FILE" ]; then
-      local lock_pid
-      lock_pid="$(cat "$PID_FILE" 2>/dev/null)"
-      if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
-        # Stale lock — remove and retry
-        rm -rf "$lock_dir" 2>/dev/null
-        continue
-      fi
-    else
-      rm -rf "$lock_dir" 2>/dev/null
-      continue
-    fi
-    sleep 0.1
-    elapsed=$((elapsed + 1))
-    if [ "$elapsed" -ge "$max_wait" ]; then
+  # Open the shared lock file in this process. Re-opening the descriptor after
+  # a release is safe and keeps ownership tied to the current process.
+  eval "exec ${TASK_LOCK_FD}>\"$TASK_LOCK_FILE\""
+  while ! flock -n "$TASK_LOCK_FD"; do
+    sleep "$sleep_interval"
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge "$max_attempts" ]; then
       log "WARN: could not acquire task lock after ${max_wait}s"
       return 1
     fi
@@ -549,6 +555,9 @@ acquire_task_lock() {
 }
 
 release_task_lock() {
+  flock -u "$TASK_LOCK_FD" 2>/dev/null || true
+  # Remove the legacy directory if a previous Manul revision left it behind.
+  # It is no longer authoritative for task-lock ownership.
   rmdir "$MANUL_DIR/.daemon-lock" 2>/dev/null || true
 }
 
@@ -823,7 +832,7 @@ start() {
     rm -f "$PID_FILE"
   fi
 
-  # Clean up stale .daemon-lock if present from previous crashed/reboot session
+  # Clean up the legacy directory lock left by pre-flock Manul versions.
   if [ -d "$MANUL_DIR/.daemon-lock" ]; then
     local lock_age
     lock_age=$(( $(date +%s) - $(stat -c %Y "$MANUL_DIR/.daemon-lock" 2>/dev/null || echo 0) ))
