@@ -1861,6 +1861,7 @@ evaluate_task_completion() {
   FINAL_COMMENT=""
   NEEDS_USER_INPUT="false"
   USER_QUESTION=""
+  USER_DECISION_INVALID="false"
   
   # Preserve the runtime/controller summary so user-facing retry/failure
   # comments explain the actual execution failure instead of collapsing it to
@@ -1886,9 +1887,12 @@ evaluate_task_completion() {
     fi
     log "WARN: task $COMMENT_ID emitted a malformed user-decision block; treating as failure"
     FAIL_REASON="Malformed TASK_NEEDS_USER block"
+    USER_DECISION_INVALID="true"
   fi
-  # 7. Determine success using BOTH exit status AND explicit completion marker
-  if [ "$rc" -eq 0 ]; then
+  # 7. Determine success using BOTH exit status AND explicit completion marker.
+  # A malformed/contradictory user-decision block must not be resurrected as
+  # success merely because TASK_DONE/TASK_COMPLETED also appeared in stdout.
+  if [ "$USER_DECISION_INVALID" != "true" ] && [ "$rc" -eq 0 ]; then
     if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
       SUCCESS="true"
     elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
