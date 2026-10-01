@@ -28,18 +28,19 @@ _NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
 export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-# Load operator overrides before sourcing manul-paths.sh so AGENT_RUNTIME and
-# other path-independent settings are visible during canonical resolution.
-if [ -f "$MANUL_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$MANUL_DIR/.env"
-  set +a
-fi
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
 DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
 DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+
+# Load operator/provider overrides from the runtime-owned environment file.
+# This is required for unattended cron/watchdog execution because ~/.zshrc is
+# not loaded there.
+source "$DAEMON_SCRIPT_DIR/manul-env.sh"
+if ! manul_env_load "$MANUL_DIR"; then
+  echo "ERROR: failed to load $MANUL_DIR/.env" >&2
+  exit 1
+fi
 
 # --- Agent execution runtime abstraction ---
 # Source the runtime-neutral execution path before consuming derived paths.
@@ -95,18 +96,6 @@ TASK_RETENTION_DEFAULT_HISTORY_DAYS=14
 TASK_LIST_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_LIST_DAYS"
 TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
 
-# Source operator overrides from ~/.manul/.env if present.
-  # This is what makes MANUL_POLL_TIMEOUT / MANUL_INTERVAL / etc. actually
-  # take effect — without it the daemon ignores the .env file entirely and
-  # falls back to hardcoded defaults (e.g. POLL_TIMEOUT=120s), which is too
-  # short to cover one slow repository per poll cycle.
-  if [ -f "$MANUL_DIR/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$MANUL_DIR/.env"
-    set +a
-  fi
-
   # Per-repo timeout, mirrored from poll.sh's default so the daemon's
   # scaled global poll timeout matches what poll.sh actually enforces.
   REPO_POLL_TIMEOUT="${MANUL_REPO_POLL_TIMEOUT:-60}"
@@ -114,7 +103,7 @@ TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
   # poll timeout dynamically instead of assuming a fixed 120s.
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
-  log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+log() { echo "[$(date -Is)] $*" >>"$LOG"; }
   configure_task_retention() {
     local list_days history_days
     list_days="$(jq -r '.retention.listDays // empty' "$CONFIG" 2>/dev/null || true)"
@@ -321,6 +310,41 @@ release_repo_lock() {
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
   rm -f "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
+}
+archive_task_artifacts() {
+  local comment_id="$1"
+  local stdout_file="$2"
+  local stderr_file="$3"
+  local prompt_file="$4"
+
+  local attempt
+  attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || echo "1")"
+  attempt="${attempt:-1}"
+
+  local safe_id
+  safe_id="$(printf '%s' "$comment_id" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  local archive_dir="$MANUL_TASK_LOG_DIR/$safe_id"
+  mkdir -p "$archive_dir" 2>/dev/null || {
+    log "WARN: failed to create task log archive directory: $archive_dir"
+    return 1
+  }
+
+  if [ -f "$stdout_file" ]; then
+    cp -f "$stdout_file" "$archive_dir/attempt-${attempt}.stdout" 2>/dev/null || \
+      log "WARN: failed to archive stdout for task $comment_id attempt $attempt"
+  fi
+  if [ -f "$stderr_file" ]; then
+    cp -f "$stderr_file" "$archive_dir/attempt-${attempt}.stderr" 2>/dev/null || \
+      log "WARN: failed to archive stderr for task $comment_id attempt $attempt"
+  fi
+  if [ -f "$prompt_file" ]; then
+    cp -f "$prompt_file" "$archive_dir/attempt-${attempt}.prompt" 2>/dev/null || \
+      log "WARN: failed to archive prompt for task $comment_id attempt $attempt"
+  fi
+
+  log "dispatch: archived diagnostics for task $comment_id attempt $attempt in $archive_dir"
+  lc_log "DIAGNOSTICS_ARCHIVED" "task=$comment_id attempt=$attempt dir=$archive_dir"
+  return 0
 }
 
 # Enhanced SQLite UPDATE with verification and error handling
@@ -540,31 +564,39 @@ recover_stale_tasks() {
 
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken
+    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken,
+           CASE
+             WHEN heartbeatAt IS NULL
+               OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+               OR leaseExpiresAt IS NULL
+               OR leaseExpiresAt < datetime('now')
+             THEN 1 ELSE 0
+           END AS lease_stale
     FROM processed_comments
     WHERE status='running'
-      AND (
-        heartbeatAt IS NULL
-        OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
-        OR leaseExpiresAt IS NULL
-        OR leaseExpiresAt < datetime('now')
-      )
     LIMIT 100;" 2>/dev/null)"
-
   if [ -z "$stale_tasks" ]; then
     log "recover_stale_tasks: no stale tasks found"
     return 0
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token lease_stale; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
     if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; then
       worker_alive=1
     fi
-    log "recover_stale_tasks: stale task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires attempts=$attempts)"
+
+    # A dead worker is sufficient proof that the running claim cannot progress,
+    # even when the last heartbeat/lease update was recent.
+    if [ "$lease_stale" = "0" ] && [ "$worker_alive" -eq 1 ]; then
+      continue
+    fi
+
+    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale attempts=$attempts)"
+    terminate_task_executor "$comment_id"
 
     local max_attempts
     max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
@@ -715,6 +747,23 @@ start_heartbeat() {
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
   lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
+terminate_task_executor() {
+  local comment_id="$1"
+  local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
+  local executor_pid=""
+
+  if [ -f "$pid_file" ]; then
+    executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  fi
+
+  if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
+    log "terminating isolated executor for stale task $comment_id (pid=$executor_pid)"
+    kill -- "-$executor_pid" 2>/dev/null || kill "$executor_pid" 2>/dev/null || true
+    lc_log "EXECUTOR_KILLED" "task=$comment_id pid=$executor_pid"
+  fi
+  rm -f "$pid_file" 2>/dev/null || true
+}
+
 stop_heartbeat() {
   local comment_id="$1"
   local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
@@ -901,12 +950,18 @@ stop() {
     [ -f "$pf" ] || continue
     local wpid
     wpid="$(cat "$pf" 2>/dev/null)"
-    [ -n "$wpid" ] && kill "$wpid" 2>/dev/null || true
+    if [ -n "$wpid" ]; then
+      # Worker is a setsid process-group leader. Terminate the whole group so
+      # an in-flight AgentExecutionController/OpenClaw process cannot survive
+      # a daemon restart and keep the singleton task lock occupied.
+      kill -- "-$wpid" 2>/dev/null || kill "$wpid" 2>/dev/null || true
+    fi
     rm -f "$pf"
   done
   kill "$pid" 2>/dev/null
   wait 2>/dev/null || true
   rm -f "$PID_FILE"
+  rm -f "$MANUL_DIR"/task-*.executor.pid 2>/dev/null || true
   lc_log "DAEMON_STOP" "pid=$pid"
   echo "manul daemon stopped (pid $pid)"
 }
@@ -1038,11 +1093,12 @@ post_github_comment() {
   fi
 
   if [ -n "$reply_to" ]; then
-    # Review-thread task: reply inside the review thread via gh api
-    # (gh pr comment --in-reply-to is not supported by gh CLI)
-    gh api "repos/$repo/pulls/$issue/comments" \
-      -F "body=$signed_body" \
-      --field "in_reply_to=$reply_to" 2>>"$LOG"
+    # Review-thread task: reply inside the review thread via gh api.
+    # Build the request as JSON on stdin so comment content is never interpreted
+    # as a form value by the gh CLI.
+    printf '%s' "$signed_body" |
+      jq -Rs --argjson reply_id "$reply_to" '{body:., in_reply_to:$reply_id}' |
+      gh api "repos/$repo/pulls/$issue/comments" --input - 2>>"$LOG"
   else
     # Top-level issue/PR-conversation task: post as a regular comment
     gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
@@ -1088,37 +1144,47 @@ verify_result_comment() {
   tmpdir="$(mktemp -d)"
 
    local comments_file="$tmpdir/comments.json"
-   local bodies_file="$tmpdir/bodies.txt"
-   local reply_bodies_file="$tmpdir/reply_bodies.txt"
-   local result_count=0
-  local reply_count=0
+  local bodies_file="$tmpdir/bodies.txt"
+  local result_count=0
 
-  # Query all Manul comments; filter for author and marker
-  # Apply timeout directly to gh api to prevent hangs and avoid pipe deadlock
-  timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$url_issue_num/comments" \
+  # Result comments for inline PR review tasks live in the PR review-comments
+  # endpoint, not the Issue/PR conversation endpoint. Use the same source
+  # collection for verification that is used for posting the result.
+  local result_endpoint
+  local result_filter
+  local result_scope
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    result_endpoint="repos/$repo/pulls/$url_issue_num/comments"
+    result_filter='.[] | .body // "" | gsub("\n"; "\\n")'
+    result_scope="review-thread"
+  else
+    result_endpoint="repos/$repo/issues/$url_issue_num/comments"
+    result_filter='.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")'
+    result_scope="top-level"
+  fi
+
+  log "verify_result_comment: checking $result_scope result collection for task $comment_id"
+
+  timeout "${GH_API_TIMEOUT}" gh api "$result_endpoint" \
     --paginate \
-    --jq '.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")' \
+    --jq "$result_filter" \
     2>>"$LOG" > "$bodies_file" || {
       local api_rc=$?
       if [ "$api_rc" -eq 124 ]; then
         log "ERROR: verify_result_comment: gh api timed out after ${GH_API_TIMEOUT}s — fail-closed"
-        lc_log "API_TIMEOUT" "task=$comment_id repo=$repo issue=$url_issue_num timeout=${GH_API_TIMEOUT}s"
+        lc_log "API_TIMEOUT" "task=$comment_id repo=$repo endpoint=$result_endpoint timeout=${GH_API_TIMEOUT}s"
       else
         log "ERROR: verify_result_comment: gh api failed with exit code $api_rc — fail-closed"
-        lc_log "API_FAILURE" "task=$comment_id repo=$repo issue=$url_issue_num exit_code=$api_rc"
+        lc_log "API_FAILURE" "task=$comment_id repo=$repo endpoint=$result_endpoint exit_code=$api_rc"
       fi
+      rm -rf "$tmpdir"
       return 1
     }
 
   while IFS= read -r body; do
-    # Exclude lifecycle comments (daemon posts these with same author/signature)
-    # Reject lifecycle comments based on structural prefix (starts with emoji)
-    # A valid result may contain these emojis in its body, but lifecycle comments
-    # always start with them immediately (e.g., "✅ Manul completed...")
     if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
       continue
     fi
-    # Require exact deterministic marker
     if [[ "$body" == *"$marker"* ]]; then
       result_count=$((result_count + 1))
     fi
@@ -1126,60 +1192,22 @@ verify_result_comment() {
 
   if [ "$result_count" -gt 1 ]; then
     log "ERROR: verify_result_comment: multiple result comments with same marker for task $comment_id attempt $attempt on $repo#$url_issue_num — reject duplicates"
-    lc_log "DUPLICATE_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt count=$result_count"
+    lc_log "DUPLICATE_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt count=$result_count scope=$result_scope"
+    rm -rf "$tmpdir"
     return 1
   fi
 
   if [ "$result_count" -gt 0 ]; then
-    log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
+    log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num scope=$result_scope"
+    rm -rf "$tmpdir"
     return 0
   fi
 
-  # Also check for reply comments (in_reply_to matches a known Manul lifecycle comment)
-  # Apply timeout directly to gh api to prevent hangs
-  timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$url_issue_num/comments" \
-    --paginate \
-    --jq '.[] | select(.in_reply_to_id != null) | .body // "" | gsub("\n"; "\\n")' \
-    2>>"$LOG" > "$reply_bodies_file" || {
-      local api_rc=$?
-      if [ "$api_rc" -eq 124 ]; then
-        log "ERROR: verify_result_comment: gh api (reply) timed out after ${GH_API_TIMEOUT}s — fail-closed"
-        lc_log "API_TIMEOUT" "task=$comment_id repo=$repo issue=$url_issue_num reply_timeout=${GH_API_TIMEOUT}s"
-      else
-        log "ERROR: verify_result_comment: gh api (reply) failed with exit code $api_rc — fail-closed"
-        lc_log "API_FAILURE" "task=$comment_id repo=$repo issue=$url_issue_num reply_exit_code=$api_rc"
-      fi
-      return 1
-    }
-
-  while IFS= read -r body; do
-    # Reject lifecycle comments based on structural prefix (starts with emoji)
-    if [[ "$body" == '🔄'* ]] || [[ "$body" == '✅'* ]] || [[ "$body" == '❌'* ]] || [[ "$body" == '⚠️'* ]]; then
-      continue
-    fi
-    # Require exact deterministic marker
-    if [[ "$body" == *"$marker"* ]]; then
-      reply_count=$((reply_count + 1))
-    fi
-  done < "$reply_bodies_file"
-
-  if [ "$reply_count" -gt 1 ]; then
-    log "ERROR: verify_result_comment: multiple reply comments with same marker for task $comment_id attempt $attempt on $repo#$url_issue_num — reject duplicates"
-    lc_log "DUPLICATE_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt reply_count=$reply_count"
-    return 1
-  fi
-
-  if [ "$reply_count" -gt 0 ]; then
-    log "verify_result_comment: found reply result comment for task $comment_id attempt $attempt on $repo#$url_issue_num"
-    return 0
-  fi
+  rm -rf "$tmpdir"
 
   log "ERROR: verify_result_comment: no result comment with marker '$marker' found for task $comment_id attempt $attempt on $repo#$url_issue_num"
-  lc_log "MISSING_RESULT_COMMENT" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt"
   return 1
 }
-
-
 
 # Check whether a concrete GitHub PR exists for the given branch against base.
 # Returns 0 if a real PR exists, 1 otherwise.
@@ -1387,14 +1415,32 @@ verify_result_comment_pr_url() {
   local target_issue
   target_issue="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || echo "$issue_num")"
 
+  # Result comments for inline review tasks live on the PR review-comments
+  # endpoint; top-level issue/PR conversation results live on the issue-comments
+  # endpoint. Use the same collection for URL verification and self-healing.
+  local result_endpoint
+  local result_comment_get_endpoint
+  local result_comment_patch_endpoint
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    result_endpoint="repos/$repo/pulls/$target_issue/comments"
+    # Individual review-comment GET/PATCH endpoints are not nested under the PR number.
+    result_comment_get_endpoint="repos/$repo/pulls/comments"
+    result_comment_patch_endpoint="repos/$repo/pulls/comments"
+  else
+    result_endpoint="repos/$repo/issues/$target_issue/comments"
+    result_comment_get_endpoint="repos/$repo/issues/comments"
+    result_comment_patch_endpoint="repos/$repo/issues/comments"
+  fi
+
   local bodies
-  bodies="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$target_issue/comments" --paginate --jq '.[].body // ""' 2>>"$LOG")" || {
-    log "ERROR: verify_result_comment_pr_url: failed to fetch result comments"
-    lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id repo=$repo reason=comment_api_failure"
+  bodies="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint" --paginate --jq '.[].body // ""' 2>>"$LOG")" || {
+    log "ERROR: verify_result_comment_pr_url: failed to fetch result comments from $result_endpoint"
+    lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=${comment_id} repo=$repo reason=comment_api_failure endpoint=$result_endpoint"
     return 1
   }
 
-  if printf '%s\n' "$bodies" | grep -Fq -- "$pr_url"; then
+  if printf '%s
+' "$bodies" | grep -Fq -- "$pr_url"; then
     log "verify_result_comment_pr_url: exact PR URL present for task $comment_id -> $pr_url"
     return 0
   fi
@@ -1406,23 +1452,18 @@ verify_result_comment_pr_url() {
   # canonical PR URL to it. The daemon then re-checks the comment before success.
   local marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   local target_comment_id=""
-  target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$target_issue/comments" \
-    --paginate 2>>"$LOG" | \
-    jq -r --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
+  target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint"     --paginate 2>>"$LOG" |     jq -r --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
 
   if [ -n "$target_comment_id" ]; then
     local repaired_body
-    repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/comments/$target_comment_id" \
-      --jq '.body // ""' 2>>"$LOG" || true)"
+    repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "$result_comment_get_endpoint/$target_comment_id"       --jq '.body // ""' 2>>"$LOG" || true)"
     if [ -n "$repaired_body" ] && [[ "$repaired_body" != *"$pr_url"* ]]; then
       repaired_body="${repaired_body}"$'\n\n'"PR: ${pr_url}"
-      if timeout "$GH_API_TIMEOUT" gh api --method PATCH "repos/$repo/issues/comments/$target_comment_id" \
-        -f "body=$repaired_body" >/dev/null 2>>"$LOG"; then
+      if timeout "$GH_API_TIMEOUT" gh api --method PATCH "$result_comment_patch_endpoint/$target_comment_id"         -f "body=$repaired_body" >/dev/null 2>>"$LOG"; then
         log "verify_result_comment_pr_url: repaired result comment $target_comment_id with canonical PR URL $pr_url"
-        lc_log "PR_RESULT_LINK_REPAIRED" "task=$comment_id repo=$repo branch=$branch base=$expected_base comment_id=$target_comment_id url=$pr_url"
-        # Verify the repair by re-reading the comment.
+        lc_log "PR_RESULT_LINK_REPAIRED" "task=${comment_id} repo=$repo branch=$branch base=$expected_base comment_id=$target_comment_id url=$pr_url"
         local verified_repaired_body
-        verified_repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/comments/$target_comment_id" --jq '.body // ""' 2>>"$LOG" || true)"
+        verified_repaired_body="$(timeout "$GH_API_TIMEOUT" gh api "$result_comment_get_endpoint/$target_comment_id" --jq '.body // ""' 2>>"$LOG" || true)"
         if [[ "$verified_repaired_body" == *"$pr_url"* ]]; then
           return 0
         fi
@@ -1813,12 +1854,20 @@ evaluate_task_completion() {
   local INITIAL_HEAD="${12:-}"
   local INITIAL_BRANCH="${13:-}"
   local INITIAL_BASE_BRANCH="${14:-${INITIAL_BRANCH:-$DEFAULT_BRANCH}}"
+  local EXECUTION_SUMMARY="${15:-}"
   
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
   FINAL_COMMENT=""
   NEEDS_USER_INPUT="false"
   USER_QUESTION=""
+  
+  # Preserve the runtime/controller summary so user-facing retry/failure
+  # comments explain the actual execution failure instead of collapsing it to
+  # the generic "Task failed".
+  if [ -n "$EXECUTION_SUMMARY" ]; then
+    FAIL_REASON="$EXECUTION_SUMMARY"
+  fi
   
   local SUCCESS="false"
 
@@ -1847,16 +1896,11 @@ evaluate_task_completion() {
     fi
   fi
   
-  # 7.1 Verify agent posted result comment for THIS exact task/attempt before accepting TASK_DONE
-  if [ "$SUCCESS" = "true" ]; then
-    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      log "dispatch: task $COMMENT_ID attempt $current_attempt has no result comment — marking as failed"
-      lc_log "MISSING_RESULT_COMMENT" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-      SUCCESS="false"
-      FAIL_REASON="Agent emitted TASK_DONE but did not post a result comment with deterministic marker for attempt $current_attempt"
-    fi
-  fi
-  
+  # Result-comment verification runs after repository/PR verification below.
+  # This ordering is intentional: if the agent created a real PR but its result
+  # comment is malformed, the verified PR metadata is still persisted before the
+  # task is rejected for violating the exactly-one-result-comment contract.
+
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
@@ -1904,6 +1948,17 @@ evaluate_task_completion() {
         SUCCESS="false"
         FAIL_REASON="Repository changed but the agent is not on a named branch"
         log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
+      elif [ -n "$PR_HEAD_BRANCH" ]; then
+        # PR-tied tasks are intentionally executed on the existing PR head branch.
+        # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
+        if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
+          SUCCESS="false"
+          FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
+          log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
+        else
+          log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
+        fi
       elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BRANCH" ]; then
         SUCCESS="false"
         FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
@@ -1924,6 +1979,30 @@ evaluate_task_completion() {
           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
         fi
       fi
+    elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+      # IMPLEMENT issue tasks must leave the workspace on the task branch.
+      # A clean workspace is not enough: a task that reports success on the
+      # base branch is invalid even when no repository diff remains.
+      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+      if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
+        SUCCESS="false"
+        FAIL_REASON="Implementation task completed on a base/default branch ($current_branch)"
+        log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
+      elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        SUCCESS="false"
+        FAIL_REASON="Implementation task completed without a verified PR from its task branch"
+        log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
+        lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
+      else
+        local verified_base
+        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        fi
+      fi
     else
       # A TASK_DONE from an IMPLEMENT task is only informational when the agent
       # genuinely made no repository changes. Keep this explicit so issuebody:*
@@ -1933,10 +2012,21 @@ evaluate_task_completion() {
     fi
   fi
 
+  # Final result-comment verification is performed after PR verification so a
+  # known PR is persisted even when the agent's result comment is malformed.
+  if [ "$SUCCESS" = "true" ]; then
+    if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      log "dispatch: task $COMMENT_ID attempt $current_attempt has invalid result comment state"
+      lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+      SUCCESS="false"
+      FAIL_REASON="Agent emitted TASK_DONE but the final result-comment state does not contain exactly one valid deterministic marker for attempt $current_attempt"
+    fi
+  fi
+
   # 8. Update SQLite using enhanced finalization with verification
   if [ "$SUCCESS" = "true" ]; then
     # Enhanced task completion with verification
-    if complete_task_with_verification "$COMMENT_ID"; then
+    if complete_task_with_verification "$COMMENT_ID" "$CLAIM_TOKEN"; then
       COMPLETION_SUCCESS="true"
     else
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
@@ -2068,7 +2158,10 @@ run_once() {
     # 1. Find next eligible task using proper SQLite query with retry backoff
     # Query only the fields we need, not the prompt (which may contain |)
     local TASK_INFO
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now')) ORDER BY nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
+    # Select the oldest task that is actually eligible now. A retry with a
+    # future nextAttemptAt must never monopolize the singleton dispatcher and
+    # starve a fresh task that is ready to run.
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY CASE WHEN attempts=0 OR nextAttemptAt IS NULL THEN 0 ELSE 1 END, nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
@@ -2129,8 +2222,17 @@ run_once() {
     safe_comment_id="$(sql_escape "$COMMENT_ID")"
     local safe_repo
     safe_repo="$(sql_escape "$REPO")"
-    # Initialize REPLY_TO early to prevent unbound variable errors
+    # Derive the reply target before any lifecycle comment is posted.
+    # Review-thread tasks must keep every daemon lifecycle message in the same
+    # inline review thread; top-level PR comments are reserved for PR conversation tasks.
     local REPLY_TO=""
+    if [[ "$COMMENT_ID" =~ ^review:([0-9]+)$ ]]; then
+      REPLY_TO="${BASH_REMATCH[1]}"
+    elif [[ "$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null)" == *"/pull/"*"#discussion_r"* ]]; then
+      local source_comment_url
+      source_comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null)"
+      REPLY_TO="$(printf '%s' "$source_comment_url" | sed -n 's|.*#discussion_r\([0-9][0-9]*\).*|\1|p')"
+    fi
 
     # Read actual attempts from database (authoritative source)
     local ACTUAL_ATTEMPTS
@@ -2231,7 +2333,17 @@ run_once() {
     local SOURCE_LINK="$COMMENT_URL"
     local TASK_SUMMARY
     TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
-    local IN_PROGRESS_BODY="🔄 Manul is working on this task...
+
+    local start_conv_id
+    start_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    local start_event_data
+    start_event_data="$(jq -nc --arg taskId "$COMMENT_ID" --arg conversationId "$start_conv_id" --arg attempt "$current_attempt" '{taskId:$taskId,conversationId:$conversationId,status:"started",attempt:($attempt|tonumber)}')"
+    local start_event_marker
+    start_event_marker="<!-- manul:event $(printf '%s' "$start_event_data" | jq -c --arg type "TASK_STARTED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+
+    local IN_PROGRESS_BODY="$start_event_marker
+
+🔄 Manul is working on this task...
 
 **Summary:** $TASK_SUMMARY
 **Triggered by:** $TRIGGERER
@@ -2251,19 +2363,7 @@ run_once() {
 
     log "dispatch: posted in-progress comment for $COMMENT_ID"
 
-    # 4b. Emit TASK_STARTED event marker (GitHub control protocol)
-    lc_log "TASK_STARTED_EMITTED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
-    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
-      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      "$MANUL_DIR/manul-result-feedback.sh" post-started \
-        --repo "$REPO" \
-        --issue "$ISSUE_NUM" \
-        --comment-id "$COMMENT_ID" \
-        --task-id "$COMMENT_ID" \
-        --pr-number "${task_pr_num:-}" \
-        --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_STARTED event for $COMMENT_ID"
-    fi
+    log "dispatch: TASK_STARTED embedded in in-progress comment for $COMMENT_ID"
 
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
@@ -2358,23 +2458,59 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 ## GitHub Comment Posting (CRITICAL)
 You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
 
+Before posting, query the source issue/PR for an existing result comment
+containing the exact marker
+`<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`.
+If a result comment with that marker already exists, do NOT create another comment.
+Update the existing comment in place with the final verified content using the safe
+request-body method below. Only create a new comment when no result comment with that
+marker exists. The final state must contain exactly one matching result comment for
+this task/attempt.
+
+### Safe request-body handling (MANDATORY)
+Never put `YOUR_RESULT_COMMENT` or `YOUR_REPLY` directly inside shell quotes such as `-f body="..."`.
+Markdown backticks, `$(...)`, quotes, and other shell metacharacters in the comment body
+can then be interpreted by the shell.
+
+Build the complete comment body as literal file content, then send JSON through
+`--input`. Use a quoted heredoc (or an equivalent non-evaluating file/stdin method):
+
+```bash
+RESULT_FILE="$(mktemp)"
+cat >"$RESULT_FILE" <<'RESULT_EOF'
+<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->
+# Summary: [brief summary]
+
+[detailed result]
+
+— manul 🐈
+RESULT_EOF
+
+jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
+  gh api repos/__REPO__/issues/__ISSUE_NUM__/comments --input - --jq .id
+
+rm -f "$RESULT_FILE"
+```
+
+For an existing top-level result comment:
+```bash
+jq -n --rawfile body "$RESULT_FILE" '{body:$body}' |
+  gh api --method PATCH repos/__REPO__/issues/comments/<RESULT_COMMENT_ID> --input -
+```
+
+For a PR review-thread reply:
+```bash
+jq -n --rawfile body "$RESULT_FILE" --argjson reply_id __REPLY_TO__ '{body:$body, in_reply_to:$reply_id}' |
+  gh api repos/__REPO__/pulls/__PR_NUMBER__/comments --input - --jq .id
+```
+
+Do NOT use `-f body="..."` or `-F body="..."` for a user-facing result/reply comment.
+
 ### Routing
 Use the task metadata above and choose the endpoint that matches `Task Type`:
 
-- For `pr_review_comment`: reply to the existing inline review thread. Use the PR review-comments endpoint and the original review comment ID:
-```bash
-gh api repos/__REPO__/pulls/__PR_NUMBER__/comments \
-  -f body="YOUR_REPLY" \
-  -f in_reply_to=__REPLY_TO__ \
-  --jq .id
-```
-
-- For `pr_conversation_comment` or an issue task: post a top-level conversation comment:
-```bash
-gh api repos/__REPO__/issues/__ISSUE_NUM__/comments \
-  -f body="YOUR_RESULT_COMMENT" \
-  --jq .id
-```
+- For `pr_review_comment`: reply to the existing inline review thread using the PR review-comments endpoint and the original review comment ID.
+- For `pr_conversation_comment` or an issue task: post a top-level conversation comment.
 
 Do NOT use `/issues/__ISSUE_NUM__/comments` with `in_reply_to`: that endpoint does not create replies to inline PR review threads.
 Replace REPO, PR_NUMBER, ISSUE_NUM, and the result body with the actual values from this prompt.
@@ -2464,20 +2600,13 @@ PROMPT_EOF
     # Update task with workspace association
     sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
     
-    # If conversation has a previously used workspace, try to reuse it
-    local conversation_id
-    conversation_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
-    if [ -n "$conversation_id" ]; then
-      local prev_workspace
-      prev_workspace="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE conversationId='$conversation_id' AND status IN ('completed','failed') ORDER BY processedAt DESC LIMIT 1;" 2>/dev/null)"
-      if [ -n "$prev_workspace" ]; then
-        # Release the newly leased workspace and re-lease the previous one
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        WORKSPACE_ID="$prev_workspace"
-        sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
-        log "dispatch: reusing previous workspace $WORKSPACE_ID for conversation $conversation_id"
-      fi
-    fi
+# NOTE: The "reuse previous workspace for conversation" block has been
+     # intentionally removed. It released the freshly-leased workspace and
+     # pointed the task at an unrelated completed/failed workspace whose
+     # currentTaskId was already NULL, which broke the task→workspace
+     # ownership invariant and prevented workspace_get_path from resolving
+     # the path. The workspace leased above (workspace_lease) is the single
+     # authoritative workspace for this task for the rest of the dispatch.
 
 
     # Get workspace path from lease
@@ -2577,9 +2706,29 @@ log "dispatch: verified PR head branch $verify_branch in workspace"
          workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
      fi
-     log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
+log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
-    # Capture the exact repository state we hand to the agent.
+     # Hard workspace validation before agent dispatch. The workspace lease
+     # (workspace_lease) is the single authoritative source of ownership;
+     # if the invariant is broken here, the agent must never be launched.
+     local ws_owner ws_state ws_path_check
+     ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+     ws_path_check="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
+     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ]; then
+       log "ERROR: workspace ownership invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} path=$WORKDIR)"
+       lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
+       log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
+       stop_heartbeat "$COMMENT_ID"
+       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+       release_repo_lock "$REPO"
+       release_task_lock
+       set_activity "none" "idle"
+       return 0
+     fi
+     log "dispatch: workspace validated for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=$ws_owner state=$ws_state path=$WORKDIR)"
+
+     # Capture the exact repository state we hand to the agent.
     local CURRENT_BRANCH
     CURRENT_BRANCH="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "UNKNOWN")"
     local INITIAL_BRANCH="$CURRENT_BRANCH"
@@ -2593,12 +2742,13 @@ log "dispatch: verified PR head branch $verify_branch in workspace"
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
-## Authoritative Repository
-The target repository for this task is located at: __REPO_DIR__
-
 ## Working Directory
-You will execute in the repository directory:
+This is the ONLY repository directory you may inspect or modify:
 __WORKDIR__
+
+All git commands and file operations for this task MUST be performed in this directory.
+
+Do NOT access or modify any other local repository/worktree path managed internally by Manul.
 
 ## Branch Policy
 PROMPT_APPEND
@@ -2650,7 +2800,6 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
-    prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
@@ -2706,8 +2855,19 @@ PROMPT_APPEND
        > "$EXEC_CTX_FILE"
 
      local executor_output
-     executor_output="$(AgentExecutionController.execute "$EXEC_CTX_FILE")"
-     local rc=$?
+     local executor_result_file="$MANUL_TASKS_DIR/task-${COMMENT_ID}.executor-result"
+     local executor_pid_file="$MANUL_DIR/task-${COMMENT_ID}.executor.pid"
+     rm -f "$executor_result_file" "$executor_pid_file"
+
+     # Run the controller in a dedicated process group. The task-local PID file
+     # lets watchdog/recovery terminate a hung executor without killing the worker.
+     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" >"$executor_result_file" 2>>"$STDERR_FILE" &
+     local executor_launcher_pid=$!
+     local rc=0
+     wait "$executor_launcher_pid" || rc=$?
+     executor_output="$(cat "$executor_result_file" 2>/dev/null || true)"
+     rm -f "$executor_pid_file" "$executor_result_file"
+
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
      # Persist session id for continuation attempts
@@ -2725,6 +2885,9 @@ PROMPT_APPEND
      # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
      # up. This is especially important for fast launch failures where the worker
      # can exit before producing a GitHub-visible result.
+     if [ -n "$exec_summary" ]; then
+       log "dispatch: agent executor summary for task $COMMENT_ID: $exec_summary"
+     fi
      if [ "$rc" -ne 0 ]; then
        log "dispatch: agent executor exited rc=$rc for task $COMMENT_ID (status=$exec_status)"
        if [ -s "$STDERR_FILE" ]; then
@@ -2758,7 +2921,7 @@ PROMPT_APPEND
      esac
 
      # Call production completion evaluation function
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
@@ -2798,36 +2961,10 @@ PROMPT_APPEND
       fi
     fi
 
-    # Verify lifecycle comment was posted
-    if [ "$COMPLETION_SUCCESS" = "true" ] && [ "$COMMENT_POST_SUCCESS" != "true" ]; then
-      # Agent succeeded but lifecycle comment posting failed - still mark complete
-      log "WARN: Task $COMMENT_ID agent succeeded but lifecycle comment post failed"
-    elif [ "$COMPLETION_SUCCESS" = "true" ]; then
-      # Both agent succeeded AND comment posted - finalize as completed
-      # NOTE: Status was already set to 'completed' by complete_task_with_verification above
-      
-      # Save result metadata for local API access
-      local result_json=""
-      if [ -f "$STDOUT_FILE" ]; then
-        # Extract JSON from stdout if present (after TASK_DONE marker)
-        result_json="$(grep -A 100 'TASK_DONE' "$STDOUT_FILE" 2>/dev/null | tail -n +2 | head -1 | tr -d '\n' || echo "")"
-      fi
-      
-      # Escape for SQL
-      local escaped_summary escaped_result
-      escaped_summary="$(printf '%s' "$REPO#$ISSUE_NUM" | sed "s/'/''/g")"
-      escaped_result="$(printf '%s' "$result_json" | sed "s/'/''/g")"
-      
-      sqlite3 "$DB" "UPDATE processed_comments SET 
-        resultSummary='$escaped_summary', 
-        resultJson='$escaped_result'
-        WHERE commentId='$safe_comment_id';" 2>/dev/null
-      
+    # The evaluator is the single authority for running→completed/queued/failed.
+    # Never perform a second state transition here after evaluation.
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
       set_activity "$COMMENT_ID" "completed"
-    elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-    else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>>"$LOG"
     fi
 
     # Auto-close conversation when all tasks are finalized (completed or failed).
@@ -2858,35 +2995,30 @@ PROMPT_APPEND
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
 
-    # GitHub control protocol: post structured result feedback
-    if [ -f "${MANUL_DIR}/manul-result-feedback.sh" ]; then
-      task_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "1")"
-      task_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      task_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      if [ "$COMPLETION_SUCCESS" = "true" ]; then
-        # Extract summary from result
-        local result_summary=""
-        if [ -f "$STDOUT_FILE" ]; then
-          result_summary="$(grep -oP '(?<=TASK_DONE\s).+' "$STDOUT_FILE" 2>/dev/null | head -1 || echo "")"
-        fi
-        "$MANUL_DIR/manul-result-feedback.sh" post-done \
-          --repo "$REPO" \
-          --issue "$ISSUE_NUM" \
-          --comment-id "$COMMENT_ID" \
-          --task-id "$COMMENT_ID" \
-          --summary "${result_summary:-Task completed successfully}" \
-          --pr-number "${task_pr_num:-}" \
-          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_DONE event for $COMMENT_ID"
-      else
-        fail_reason="${FAIL_REASON:-Task failed}"
-        "$MANUL_DIR/manul-result-feedback.sh" post-failed \
-          --repo "$REPO" \
-          --issue "$ISSUE_NUM" \
-          --comment-id "$COMMENT_ID" \
-          --task-id "$COMMENT_ID" \
-          --error "${fail_reason:0:500}" \
-          --pr-number "${task_pr_num:-}" \
-          --json >>"$LOG" 2>&1 || log "WARN: failed to post TASK_FAILED event for $COMMENT_ID"
+    # Structured terminal events are embedded in the lifecycle comment itself.
+    # Intermediate retries intentionally emit no TASK_FAILED event.
+    local lifecycle_conv_id
+    lifecycle_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    local lifecycle_pr_num
+    lifecycle_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
+      local lifecycle_event_data
+      lifecycle_event_data="$(jq -nc         --arg taskId "$COMMENT_ID"         --arg conversationId "$lifecycle_conv_id"         --arg attempt "$current_attempt"         --arg prNumber "$lifecycle_pr_num"         '{taskId:$taskId,conversationId:$conversationId,status:"completed",attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+      local lifecycle_event_marker
+      lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_DONE" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+      FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
+    else
+      local lifecycle_task_status
+      lifecycle_task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ "$lifecycle_task_status" = "failed" ]; then
+        local lifecycle_attempt
+        lifecycle_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "$current_attempt")"
+        local lifecycle_event_data
+        lifecycle_event_data="$(jq -nc           --arg taskId "$COMMENT_ID"           --arg conversationId "$lifecycle_conv_id"           --arg error "$FAIL_REASON"           --arg attempt "$lifecycle_attempt"           --arg prNumber "$lifecycle_pr_num"           '{taskId:$taskId,conversationId:$conversationId,error:$error,attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+        local lifecycle_event_marker
+        lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_FAILED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+        FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
       fi
     fi
 
@@ -2901,6 +3033,9 @@ PROMPT_APPEND
 
     # Release repository lock
     release_repo_lock "$REPO"
+
+    # Persist task diagnostics before removing transient worker artifacts.
+    archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
 
     # Cleanup task artifacts (no separate workdir to remove)
     rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
