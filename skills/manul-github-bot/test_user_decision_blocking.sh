@@ -30,6 +30,9 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$FAKE_BIN/openclaw"
 chmod +x "$FAKE_BIN/openclaw"
 
 export MANUL_DIR DB CONFIG LOG LIFECYCLE_LOG PID_FILE MANUL_TESTING=true
+# Production dispatch always provides TASK_ACTION; keep the isolated evaluator fixture explicit too.
+TASK_ACTION="IMPLEMENT"
+export TASK_ACTION
 export PATH="$FAKE_BIN:$PATH"
 
 set +e
