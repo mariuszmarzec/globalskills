@@ -2439,11 +2439,13 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 7. You may recommend one option and explain why, but leave the final choice to the user.
 8. Before asking, inspect the repository, relevant skills/docs, configuration, and conversation context.
 9. Do not guess when missing information materially affects correctness.
-10. Once user input is required, avoid further irreversible repository changes and emit:
+10. The user-facing decision request must summarize what you checked, explain why the uncertainty is material, and present the concrete options or decision required.
+11. Once user input is required, avoid further irreversible repository changes and emit exactly one complete block:
 `TASK_NEEDS_USER_BEGIN`
-<question/options>
+<findings, options, recommendation if useful, and explicit question/decision>
 `TASK_NEEDS_USER_END`
-11. Do not emit `TASK_DONE` or `TASK_FAILED` in the same run as `TASK_NEEDS_USER_BEGIN/END`.
+12. Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run as `TASK_NEEDS_USER_BEGIN/END`.
+13. A partial or malformed user-decision block is not a valid pause; do not rely on it to stop execution.
 
 ## Rules
 1. Inspect the local repository and implement the requested change.
