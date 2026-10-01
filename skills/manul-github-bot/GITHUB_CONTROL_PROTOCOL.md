@@ -57,11 +57,16 @@ An implementation agent may request user input only when a material decision can
 
 When input is required:
 
-1. the agent emits a `TASK_NEEDS_USER_BEGIN` / `TASK_NEEDS_USER_END` block;
-2. Manul records `blocked_user`;
-3. the question is posted to the same GitHub conversation;
-4. the original task/conversation context is retained;
-5. `/manul continue <answer>` resumes the task.
+1. the agent inspects the repository, documentation, skills, configuration, and conversation context before asking;
+2. the agent emits exactly one `TASK_NEEDS_USER_BEGIN` / `TASK_NEEDS_USER_END` block with non-empty content between the markers;
+3. the decision block explains what was checked, why the uncertainty is material, and the concrete options or decision required; a recommendation is allowed, but the user's choice is authoritative;
+4. the agent must not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same execution output as a user-decision block;
+5. Manul records `blocked_user`;
+6. the question is posted to the same GitHub conversation;
+7. the original task/conversation context is retained;
+8. `/manul continue <answer>` resumes the same task.
+
+Malformed or partial decision blocks are execution failures, not `blocked_user`. Once the agent reaches a material user-decision point, it must not make further irreversible repository changes in that execution.
 
 `blocked_user` is not a failure and does not consume another execution attempt until resumed.
 
