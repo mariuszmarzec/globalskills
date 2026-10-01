@@ -215,5 +215,39 @@ export FAKE_PR_EXISTS=1
 verify_required_pr "$REPO" pr "$WORKTREE" master
 echo "PASS: real PR accepted"
 
+
+# 7) Task dispatcher lock is resilient to the historical self-referential stale lock.
+# Simulate the exact failure: a legacy .daemon-lock survives a stop/restart while
+# daemon.pid contains the CURRENT process PID. The flock implementation must
+# ignore the legacy directory and acquire successfully.
+TASK_LOCK_DIR="$MANUL_DIR/.daemon-lock"
+TASK_LOCK_FILE="$MANUL_DIR/task-dispatch.flock"
+mkdir -p "$TASK_LOCK_DIR"
+printf '%s\n' "$CURRENT_TEST_PID" >"$PID_FILE"
+TASK_LOCK_FD=210
+
+if ! acquire_task_lock; then
+  echo "FAIL: task lock acquisition was blocked by a legacy stale .daemon-lock" >&2
+  exit 1
+fi
+if ! flock -n "$TASK_LOCK_FD"; then
+  echo "FAIL: task lock was not actually held after acquire_task_lock" >&2
+  exit 1
+fi
+release_task_lock
+
+# Release must make the lock immediately acquirable again.
+if ! acquire_task_lock; then
+  echo "FAIL: task lock could not be reacquired after release" >&2
+  exit 1
+fi
+release_task_lock
+
+if [ -d "$TASK_LOCK_DIR" ]; then
+  echo "FAIL: legacy .daemon-lock directory was not cleaned during release" >&2
+  exit 1
+fi
+echo "PASS: stale legacy .daemon-lock cannot self-deadlock the dispatcher"
+
 echo "All focused worker lifecycle tests passed."
 exit 0
