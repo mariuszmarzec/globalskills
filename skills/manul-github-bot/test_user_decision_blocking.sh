@@ -115,6 +115,33 @@ I recommend option B because it matches the existing orchestration model.
 Please choose A, B, or C.'   "$USER_QUESTION"
 assert_eq "needs-user is not success" "false" "$COMPLETION_SUCCESS"
 
+echo "=== malformed user-decision blocks are rejected ==="
+cat >"$STDOUT_FILE" <<'EOF'
+TASK_NEEDS_USER_BEGIN
+The decision is unclear.
+EOF
+evaluate_task_completion "owner/repo" "1" "issue:malformed" "issue:malformed" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "main" "main"
+assert_eq "partial block is not user-blocked" "false" "$NEEDS_USER_INPUT"
+assert_eq "partial block has explicit failure reason" "Malformed TASK_NEEDS_USER block" "$FAIL_REASON"
+
+cat >"$STDOUT_FILE" <<'EOF'
+TASK_NEEDS_USER_BEGIN
+Choose the API shape before implementation.
+TASK_NEEDS_USER_END
+TASK_DONE
+EOF
+evaluate_task_completion "owner/repo" "1" "issue:conflict-done" "issue:conflict-done" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "main" "main"
+assert_eq "decision block plus TASK_DONE is not user-blocked" "false" "$NEEDS_USER_INPUT"
+
+cat >"$STDOUT_FILE" <<'EOF'
+TASK_NEEDS_USER_BEGIN
+Choose the API shape before implementation.
+TASK_NEEDS_USER_END
+TASK_FAILED: gave up
+EOF
+evaluate_task_completion "owner/repo" "1" "issue:conflict-failed" "issue:conflict-failed" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "main" "main"
+assert_eq "decision block plus TASK_FAILED is not user-blocked" "false" "$NEEDS_USER_INPUT"
+
 echo "=== running -> blocked_user ==="
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,attempts,claimToken,heartbeatAt,leaseExpiresAt,workerPid) VALUES('task-1','owner/repo',1,'https://github.com/owner/repo/issues/1','original prompt','running',1,'token-1',datetime('now'),datetime('now','+900 seconds'),1234);"
 mark_task_blocked_user "task-1" "task-1" "token-1"
