@@ -17,6 +17,14 @@ Supported commands parsed from a `/manul` command are:
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
+A user-decision request is valid only when the agent emits exactly one:
+`TASK_NEEDS_USER_BEGIN`
+...
+`TASK_NEEDS_USER_END`
+block, with non-empty content between the markers and no `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` marker in the same execution output. Malformed or partial blocks are treated as execution failures, not as `blocked_user`.
+
+The decision content should summarize what the agent checked, explain why the remaining uncertainty materially affects correctness or outcome, and present the concrete options or decision required. The agent may recommend an option, but the user's decision remains authoritative. Once the decision point is reached, no further irreversible repository changes are allowed in that execution.
+
 ## 2. Task state contract
 
 Core execution states are:
