@@ -99,7 +99,46 @@ for line in sys.stdin:
 
 review_ids=()
 if [ -n "$is_pr" ]; then
-  mapfile -t review_ids < <(extract_ids "repos/$repo/pulls/$issue/comments")
+  # A PR review is a thread: replies are linked through in_reply_to_id.
+  # If any Manul comment is found in a thread, remove the whole thread.
+  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null || echo "[]")"
+  matched_roots=()
+  while IFS= read -r comment; do
+    [ -n "$comment" ] || continue
+    if printf "%s" "$comment" | jq -e --arg sig "$SIG" '(.body // "") | contains($sig)' >/dev/null 2>&1; then
+      current_id="$(jq -r ".id // empty" <<<"$comment")"
+      [ -n "$current_id" ] || continue
+      guard=0
+      while [ "$guard" -lt 100 ]; do
+        parent_id="$(printf "%s" "$review_comments_json" | jq -r --arg id "$current_id" '.[] | select((.id|tostring) == $id) | (.in_reply_to_id // empty)' 2>/dev/null | head -n1)"
+        [ -n "$parent_id" ] || break
+        current_id="$parent_id"
+        guard=$((guard + 1))
+      done
+      matched_roots+=("$current_id")
+    fi
+  done < <(printf "%s" "$review_comments_json" | jq -c ".[]" 2>/dev/null || true)
+  matched_roots=($(printf "%s\n" "${matched_roots[@]}" | sed "/^$/d" | sort -u))
+  for root_id in "${matched_roots[@]}"; do
+    [ -n "$root_id" ] || continue
+    thread_ids=("$root_id")
+    changed=1
+    while [ "$changed" -eq 1 ]; do
+      changed=0
+      current_ids=($(printf "%s\n" "${thread_ids[@]}" | sed "/^$/d" | sort -u))
+      for parent_id in "${current_ids[@]}"; do
+        while IFS= read -r child_id; do
+          [ -n "$child_id" ] || continue
+          if ! printf "%s\n" "${thread_ids[@]}" | grep -qxF "$child_id"; then
+            thread_ids+=("$child_id")
+            changed=1
+          fi
+        done < <(printf "%s" "$review_comments_json" | jq -r --arg parent "$parent_id" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' 2>/dev/null || true)
+      done
+    done
+    review_ids+=("${thread_ids[@]}")
+  done
+  review_ids=($(printf "%s\n" "${review_ids[@]}" | sed "/^$/d" | sort -u))
 fi
 
 issue_ids=()
