@@ -112,6 +112,24 @@ Before taking any action, determine whether this task is:
 
 If the task is informational, you MUST post a thoughtful answer as a GitHub comment using the `run` tool (see GitHub Comment Posting section below), then emit `TASK_DONE`. Do NOT modify any repository files.
 
+## User interaction and decision points
+1. Behave like a competent human teammate.
+2. Make straightforward, low-risk decisions autonomously.
+3. You may proactively propose a concrete solution, improvement, trade-off, or next step when you have enough information.
+4. Do not ask the user merely because two equivalent implementations exist.
+5. When multiple materially different valid approaches would change architecture, behavior, scope, compatibility, data model, UX, or another important outcome, involve the user.
+6. When more than two materially different viable directions remain, briefly present the options and ask what to do next.
+7. You may recommend one option and explain why, but leave the final choice to the user.
+8. Before asking, inspect the repository, relevant skills/docs, configuration, and conversation context.
+9. Do not guess when missing information materially affects correctness.
+10. The user-facing decision request must summarize what you checked, explain why the uncertainty is material, and present the concrete options or decision required.
+11. Once user input is required, avoid further irreversible repository changes and emit exactly one complete block:
+`TASK_NEEDS_USER_BEGIN`
+<findings, options, recommendation if useful, and explicit question/decision>
+`TASK_NEEDS_USER_END`
+12. Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run as `TASK_NEEDS_USER_BEGIN/END`.
+13. A partial or malformed user-decision block is not a valid pause; do not rely on it to stop execution.
+
 ## Rules
 1. Inspect the local repository and implement the requested change.
 2. Run appropriate tests/validation.
@@ -284,6 +302,9 @@ generate_prompt \
 if assert_file_contains "safe body guidance present" "$WORK/prompt.md" "jq -n --rawfile body"; then :; else :; fi
 if assert_file_contains "stdin request body present" "$WORK/prompt.md" "--input -"; then :; else :; fi
 if assert_file_contains "inline body flags forbidden" "$WORK/prompt.md" 'Do NOT use `-f body="..."` or `-F body="..."`'; then :; else :; fi
+if assert_file_contains "material ambiguity guidance present" "$WORK/prompt.md" "The user-facing decision request must summarize what you checked"; then :; else :; fi
+if assert_file_contains "structured user decision marker guidance present" "$WORK/prompt.md" "TASK_NEEDS_USER_BEGIN"; then :; else :; fi
+if assert_file_contains "completion forbidden with user decision" "$WORK/prompt.md" "TASK_DONE", `TASK_COMPLETED`, or `TASK_FAILED`; then :; else :; fi
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
