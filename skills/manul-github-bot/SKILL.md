@@ -106,6 +106,20 @@ Reuse the PR's existing head branch. Do not create an unrelated task branch.
 
 The task must update the same PR.
 
+## User decision points
+
+Routine ambiguity is resolved autonomously from repository conventions and available context. When a missing decision materially affects correctness, architecture, behavior, scope, compatibility, data model, UX, or another important outcome, the agent must stop rather than guess.
+
+Before asking, inspect the repository, relevant skills/docs, configuration, and conversation context. The user-facing request must summarize what was checked, explain why the uncertainty is material, and present the concrete options or decision required; a recommendation is allowed, but the user's choice is authoritative.
+
+Emit exactly one complete:
+
+`TASK_NEEDS_USER_BEGIN`
+<findings, options, recommendation if useful, explicit question/decision>
+`TASK_NEEDS_USER_END`
+
+Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same execution output. After reaching the decision point, make no further irreversible repository changes. Manul records `blocked_user`, posts the request to the same GitHub conversation, and resumes the same task via `/manul continue <answer>`. Partial or malformed decision blocks are not valid pauses.
+
 ## Comment routing
 
 Review-comment tasks reply in the original review thread.
