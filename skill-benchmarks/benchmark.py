@@ -505,13 +505,22 @@ def write_report(
                 lines.append(f"- {comparison['case']}: comparison unavailable.")
                 continue
             lines.append(
-                f"- {comparison['case']}: **{comparison['overall_change']}** "
+                f"- {comparison['case']}: **{comparison['impact_signal']}** "
                 f"(without-skill={comparison['without_skill_passed']}, "
-                f"with-skill={comparison['with_skill_passed']})"
+                f"with-skill={comparison['with_skill_passed']}, "
+                f"checks={comparison['without_skill_passed_checks']}→{comparison['with_skill_passed_checks']})"
             )
+            if comparison["without_skill_failed_checks"]:
+                lines.append(
+                    f"  - Without skill failures: {', '.join(comparison['without_skill_failed_checks'])}"
+                )
+            if comparison["with_skill_failed_checks"]:
+                lines.append(
+                    f"  - Remaining with-skill failures: {', '.join(comparison['with_skill_failed_checks'])}"
+                )
             for delta in comparison["check_deltas"]:
                 lines.append(
-                    f"  - {delta['name']}: "
+                    f"  - Changed check {delta['name']}: "
                     f"{delta['without_skill']} → {delta['with_skill']}"
                 )
         lines.append("")
