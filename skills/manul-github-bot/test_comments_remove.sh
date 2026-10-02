@@ -45,6 +45,19 @@ cat > "$FAKE_BIN/curl" <<'CURL'
 #!/usr/bin/env bash
 set -e
 printf "%s\n" "$*" >> "$CURL_LOG"
+out_file=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      out_file="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[ -z "$out_file" ] || : > "$out_file"
 printf "204"
 CURL
 chmod +x "$FAKE_BIN/curl"
