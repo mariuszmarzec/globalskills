@@ -44,6 +44,7 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 - A benchmark case should contain a small deterministic fixture, a concise agent prompt, and a deterministic verifier that checks the resulting behavior/artifacts.
 - When a skill is significantly changed, review and update its benchmark so it still captures the intended behavior and prevents regressions.
 - Run benchmarks locally against the current agent backend; the current backend is OpenCode through the adapter in `skill-benchmarks/adapters.py`.
+- For useful post-run diagnosis, prefer running with `--mode both`. The resulting `skill-benchmarks/output/<run-id>/report.md` and `report.json` compare both modes and include the tested `SKILL.md` snapshot plus agent/verifier/git artifacts. These output files are local diagnostics and are ignored by git.
 - Benchmark execution is intentionally not part of CI. Unit tests for the benchmark framework and adapters should use mocks and must not require a live LLM.
 - If a skill is too complex, stateful, destructive, or environment-wide for the generic benchmark runner, add it to the explicit exclusions with a short reason instead of silently skipping it.
 - A newly created or materially changed skill is not complete until its benchmark is added/updated or an explicit exclusion is recorded.
