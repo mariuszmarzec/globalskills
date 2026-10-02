@@ -38,8 +38,18 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 - Keep the table in sync with the actual skill folders.
 - **Always update this skill list in README.md after adding or removing any skill** to keep documentation synchronized.
 
+# Skill Benchmarking
+- Every new skill must include at least one behavioral benchmark unless the skill is explicitly listed in `skill-benchmarks/config.json` as excluded.
+- The benchmark belongs under `skill-benchmarks/cases/<skill-name>/<case-name>/`.
+- A benchmark case should contain a small deterministic fixture, a concise agent prompt, and a deterministic verifier that checks the resulting behavior/artifacts.
+- When a skill is significantly changed, review and update its benchmark so it still captures the intended behavior and prevents regressions.
+- Run benchmarks locally against the current agent backend; the current backend is OpenCode through the adapter in `skill-benchmarks/adapters.py`.
+- Benchmark execution is intentionally not part of CI. Unit tests for the benchmark framework and adapters should use mocks and must not require a live LLM.
+- If a skill is too complex, stateful, destructive, or environment-wide for the generic benchmark runner, add it to the explicit exclusions with a short reason instead of silently skipping it.
+- A newly created or materially changed skill is not complete until its benchmark is added/updated or an explicit exclusion is recorded.
+
 ## Skills Index (quick reference)
 - `chatgpt-supervised-workflow` — Evidence-driven execution workflow for tasks originating from ChatGPT, activated by a ChatGPT `chatId` or explicit supervision context (`~/.globalskills/skills/chatgpt-supervised-workflow/SKILL.md`).
 - `freellmapi-environment` — Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
-- `pr-description-management` — Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update descriptions when pushing changes. Uses gh CLI for all PR operations. (`~/.globalskills/skills/pr-description-management/SKILL.md`).
+- `pr-description-management` — Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update PR descriptions when pushing changes. Uses gh CLI for all PR operations. (`~/.globalskills/skills/pr-description-management/SKILL.md`).
 - `wsl-ai-dev-autopilot-multi-device` — Automated WSL2 AI dev environment installer and validator (`~/.globalskills/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).

@@ -1,0 +1,11 @@
+{
+  "skills_root": "../skills",
+  "cases_root": "cases",
+  "default_model": null,
+  "adapter": "opencode",
+  "timeout_seconds": 600,
+  "excluded_skills": {
+    "manul-github-bot": "High-complexity operational bot with external GitHub/runtime state; benchmark separately from the generic skill runner.",
+    "setup-environment": "Legacy top-level environment setup tree without SKILL.md; performs host-wide mutations and is outside the skill benchmark scope."
+  }
+}

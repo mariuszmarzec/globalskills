@@ -35,7 +35,7 @@ git -C ~/.globalskills pull
 | `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). |
 | `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
 | `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Based on QuickMVI library patterns, testing utilities, and best practices extracted from the QuickMVI project. |
-| `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing database connection issues. |
+| `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing LiteLLM database connection issues. |
 | `manul-github-bot` | Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. |
@@ -43,12 +43,10 @@ git -C ~/.globalskills pull
 
 ## Agents (multi-agent orchestration)
 
-OpenCode agents in `agents/`. Roles define WHAT to do; model tiers define how
-much reasoning power. Full routing rules, model mapping, and escalation are in
-the `agent-orchestration` skill.
+OpenCode agents in `agents/`. Roles define WHAT to do; model tiers define how much reasoning power. Full routing rules, model mapping, and escalation are in the `agent-orchestration` skill.
 
 | Agent | Mode | Default tier | Model | Read-only |
-|-------|------|--------------|-------|-----------|
+|-------|------|-------------|-------|-----------|
 | `orchestrator` | primary | EXPERT | `litellm/big-pickle` | no |
 | `architect` | subagent | EXPERT | `litellm/big-pickle` | edit: ask |
 | `coder-cheap` | subagent | CHEAP | `litellm/groq-llama-8b` | no |
@@ -76,14 +74,35 @@ comments, implements tasks on `manul/*` branches, opens PRs, and replies
 signed `— manul 🐈`.
 
 ```text
-        /\_/\
+        /\_/\\
        ( o.o )
         > ^ <
 ```
 
 Full setup, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
 
-## Usage
+## Skill Benchmarks
 
-OpenCode automatically loads skills from `~/.agents/skills/` (symlinked to `~/.globalskills/skills/`). Skills are matched by name and invoked when a task matches their description.
-Agents are loaded from `~/.config/opencode/agents/` (the symlink above).
+Behavioral benchmarks for skills live in `skill-benchmarks/`. They run the real
+agent locally against a fresh fixture and use deterministic verifiers to check
+the resulting behavior. OpenCode is the current backend behind an adapter so
+the benchmark runner can be switched later without changing benchmark cases.
+
+Run a case:
+
+```bash
+python3 skill-benchmarks/benchmark.py run --case commit-trailer --model litellm/big-pickle
+```
+
+Compare with and without the skill:
+
+```bash
+python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both --model litellm/big-pickle
+```
+
+The benchmark suite is deliberately not wired into CI. Its framework and
+adapters have local unit tests with mocks, so those tests do not require an
+LLM. New skills should add a benchmark unless the skill is explicitly excluded
+in `skill-benchmarks/config.json`.
+
+See `skill-benchmarks/README.md` for the case format and conventions.

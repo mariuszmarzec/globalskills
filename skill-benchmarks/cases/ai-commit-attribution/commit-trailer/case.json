@@ -1,0 +1,7 @@
+{
+  "id": "commit-trailer",
+  "skill": "ai-commit-attribution",
+  "fixture": "fixture",
+  "prompt": "prompt.md",
+  "verifier": "verify.sh"
+}
