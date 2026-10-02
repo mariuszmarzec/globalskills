@@ -29,6 +29,10 @@ case "$*" in
     echo '{"body":""}'
     ;;
   *"api --paginate --slurp repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
+    if [ "${FAIL_REVIEW_API:-0}" = "1" ]; then
+      echo "simulated review API failure" >&2
+      exit 7
+    fi
     printf '%s
 ' '[
       [
@@ -79,6 +83,26 @@ run_remove() {
   CURL_LOG="$LOG" PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" "$url" > "$output"
 }
 
+run_remove_expect_failure() {
+  local url="$1"
+  local output="$2"
+  local env_name="${3:-}"
+  : > "$LOG"
+  set +e
+  if [ "$env_name" = "FAIL_REVIEW_API" ]; then
+    FAIL_REVIEW_API=1 CURL_LOG="$LOG" PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" "$url" > "$output" 2>&1
+  else
+    CURL_LOG="$LOG" PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" "$url" > "$output" 2>&1
+  fi
+  local rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || {
+    echo "FAIL: expected command to fail"
+    cat "$output"
+    exit 1
+  }
+}
+
 echo "Test 1: root #discussion_r URL removes only Manul comments in that thread"
 run_remove   "https://github.com/test-owner/test-repo/pull/34#discussion_r4098362711"   "$TMPROOT/out1"
 
@@ -123,4 +147,24 @@ if grep -qE 'pulls/comments/(4098362711|4126334268)' "$LOG"; then
 fi
 echo "PASS"
 
-echo "=== Results: 3 passed, 0 failed ==="
+echo "Test 4: missing review comment fails explicitly"
+run_remove_expect_failure   "https://github.com/test-owner/test-repo/pull/34#discussion_r99999999999"   "$TMPROOT/out4"
+cat "$TMPROOT/out4"
+grep -q "was not found" "$TMPROOT/out4"
+if grep -q "No matching Manul comments found" "$TMPROOT/out4"; then
+  echo "FAIL: missing review comment was reported as empty match"
+  exit 1
+fi
+echo "PASS"
+
+echo "Test 5: review API failure fails explicitly"
+run_remove_expect_failure   "https://github.com/test-owner/test-repo/pull/34#discussion_r4098362711"   "$TMPROOT/out5"   "FAIL_REVIEW_API"
+cat "$TMPROOT/out5"
+grep -q "Error: failed to fetch PR review comments" "$TMPROOT/out5"
+if grep -q "No matching Manul comments found" "$TMPROOT/out5"; then
+  echo "FAIL: API failure was reported as empty match"
+  exit 1
+fi
+echo "PASS"
+
+echo "=== Results: 5 passed, 0 failed ==="
