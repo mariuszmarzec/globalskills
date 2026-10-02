@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -194,7 +196,352 @@ def run_verifier(verifier: Path, workspace: Path, mode: str) -> dict[str, Any]:
     return result
 
 
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def snapshot_inputs(case: CaseInfo, skill_source: Path, artifacts_root: Path) -> None:
+    input_root = artifacts_root / "cases" / case.case_id / "input"
+    input_root.mkdir(parents=True, exist_ok=True)
+
+    case_snapshot = input_root / "case"
+    if not case_snapshot.exists():
+        shutil.copytree(case.path, case_snapshot)
+
+    skill_snapshot = input_root / "skill"
+    if not skill_snapshot.exists():
+        shutil.copytree(skill_source, skill_snapshot)
+
+    manifest = {
+        "case_id": case.case_id,
+        "skill_id": case.skill_id,
+        "prompt_sha256": sha256_file(case.prompt),
+        "verifier_sha256": sha256_file(case.verifier),
+        "skill_sha256": sha256_file(skill_source / "SKILL.md"),
+    }
+    (input_root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_mode_artifacts(
+    artifact_dir: Path,
+    run_result: Any,
+    verifier_result: dict[str, Any],
+    prompt: str,
+    workspace: Path,
+) -> None:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
+    (artifact_dir / "command.txt").write_text(
+        " ".join(run_result.command) + "\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "stdout.txt").write_text(run_result.stdout, encoding="utf-8")
+    (artifact_dir / "stderr.txt").write_text(run_result.stderr, encoding="utf-8")
+    (artifact_dir / "verifier.json").write_text(
+        json.dumps(verifier_result, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    for artifact_name, git_args in (
+        ("git-status.txt", ("git", "status", "--short", "--branch")),
+        ("git-log.txt", ("git", "log", "--oneline", "--decorate", "-5")),
+        ("git-diff.txt", ("git", "diff", "HEAD^", "HEAD")),
+        ("git-show.txt", ("git", "show", "--stat", "--format=fuller", "HEAD")),
+    ):
+        completed = subprocess.run(
+            git_args,
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        (artifact_dir / artifact_name).write_text(
+            completed.stdout + completed.stderr,
+            encoding="utf-8",
+        )
+
+
 def run_case(
+    case: CaseInfo,
+    skill_source: Path,
+    adapter: AgentAdapter,
+    *,
+    mode: str,
+    model: str | None,
+    default_timeout: int,
+    artifacts_root: Path | None = None,
+) -> dict[str, Any]:
+    if not case.fixture.is_dir():
+        raise BenchmarkError(f"{case.fixture}: fixture directory does not exist.")
+    if not skill_source.is_dir():
+        raise BenchmarkError(f"{skill_source}: skill directory does not exist.")
+    timeout = case.timeout_seconds or default_timeout
+
+    with tempfile.TemporaryDirectory(prefix=f"skill-bench-{case.case_id}-") as temp_dir:
+        workspace = Path(temp_dir) / "workspace"
+        shutil.copytree(case.fixture, workspace)
+        stage_skill(skill_source, workspace, case.skill_id, enabled=mode == "with-skill")
+        initialize_fixture(workspace)
+
+        started = time.monotonic()
+        prompt = read_prompt(case.prompt)
+        run_result = adapter.run(
+            workspace=workspace,
+            prompt=prompt,
+            model=model,
+            timeout_seconds=timeout,
+        )
+        verifier_result = run_verifier(case.verifier, workspace, mode)
+        total_duration = time.monotonic() - started
+
+        artifact_dir: Path | None = None
+        if artifacts_root is not None:
+            snapshot_inputs(case, skill_source, artifacts_root)
+            artifact_dir = artifacts_root / "cases" / case.case_id / mode
+            write_mode_artifacts(
+                artifact_dir,
+                run_result,
+                verifier_result,
+                prompt,
+                workspace,
+            )
+
+        return {
+            "case": case.case_id,
+            "skill": case.skill_id,
+            "mode": mode,
+            "adapter": adapter.name,
+            "model": model,
+            "timeout_seconds": timeout,
+            "agent_returncode": run_result.returncode,
+            "agent_duration_seconds": round(run_result.duration_seconds, 3),
+            "duration_seconds": round(total_duration, 3),
+            "passed": bool(
+                run_result.returncode == 0
+                and verifier_result.get("returncode") == 0
+                and verifier_result.get("passed")
+            ),
+            "verifier": verifier_result,
+            "command": list(run_result.command),
+            "artifact_dir": (
+                str(artifact_dir.relative_to(artifacts_root))
+                if artifact_dir is not None and artifacts_root is not None
+                else None
+            ),
+        }
+
+
+def create_run_dir(base_dir: Path, selector: str, mode: str) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_selector = "".join(
+        character if character.isalnum() or character in "-_." else "-"
+        for character in selector
+    ).strip("-")
+    run_dir = base_dir / f"{timestamp}-{safe_selector}-{mode}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def build_comparisons(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for result in results:
+        grouped.setdefault(result["case"], {})[result["mode"]] = result
+
+    comparisons: list[dict[str, Any]] = []
+    for case_id, modes in sorted(grouped.items()):
+        with_skill = modes.get("with-skill")
+        without_skill = modes.get("without-skill")
+        if not with_skill or not without_skill:
+            comparisons.append(
+                {
+                    "case": case_id,
+                    "comparison_available": False,
+                    "reason": "Run with --mode both to compare skill impact.",
+                }
+            )
+            continue
+
+        with_checks = {
+            check.get("name"): check
+            for check in with_skill.get("verifier", {}).get("checks", [])
+            if isinstance(check, dict) and check.get("name")
+        }
+        without_checks = {
+            check.get("name"): check
+            for check in without_skill.get("verifier", {}).get("checks", [])
+            if isinstance(check, dict) and check.get("name")
+        }
+
+        check_deltas: list[dict[str, Any]] = []
+        for name in sorted(set(with_checks) | set(without_checks)):
+            with_passed = with_checks.get(name, {}).get("passed")
+            without_passed = without_checks.get(name, {}).get("passed")
+            if with_passed != without_passed:
+                check_deltas.append(
+                    {
+                        "name": name,
+                        "without_skill": without_passed,
+                        "with_skill": with_passed,
+                    }
+                )
+
+        comparisons.append(
+            {
+                "case": case_id,
+                "comparison_available": True,
+                "without_skill_passed": without_skill["passed"],
+                "with_skill_passed": with_skill["passed"],
+                "overall_change": (
+                    "improved"
+                    if not without_skill["passed"] and with_skill["passed"]
+                    else "regressed"
+                    if without_skill["passed"] and not with_skill["passed"]
+                    else "unchanged"
+                ),
+                "check_deltas": check_deltas,
+            }
+        )
+    return comparisons
+
+
+def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "runs": len(results),
+        "passed_runs": sum(bool(result["passed"]) for result in results),
+        "failed_runs": sum(not bool(result["passed"]) for result in results),
+        "cases": len({result["case"] for result in results}),
+    }
+
+
+def escape_markdown_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def write_report(
+    run_dir: Path,
+    *,
+    selector: str,
+    requested_mode: str,
+    config_path: Path,
+    model: str | None,
+    results: list[dict[str, Any]],
+    started_at: str,
+    finished_at: str,
+) -> None:
+    summary = build_summary(results)
+    comparisons = build_comparisons(results)
+    report = {
+        "schema_version": 1,
+        "benchmark": {
+            "selector": selector,
+            "requested_mode": requested_mode,
+            "model": model,
+            "config": config_path.name,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        },
+        "summary": summary,
+        "comparisons": comparisons,
+        "results": results,
+    }
+    (run_dir / "report.json").write_text(
+        json.dumps(report, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    lines = [
+        "# Skill Benchmark Report",
+        "",
+        f"- Selector: {selector}",
+        f"- Requested mode: {requested_mode}",
+        f"- Model: {model or 'OpenCode default'}",
+        f"- Started: {started_at}",
+        f"- Finished: {finished_at}",
+        "",
+        "## Summary",
+        "",
+        f"- Cases: **{summary['cases']}**",
+        f"- Runs: **{summary['runs']}**",
+        f"- Passed: **{summary['passed_runs']}**",
+        f"- Failed: **{summary['failed_runs']}**",
+        "",
+    ]
+
+    if comparisons:
+        lines += ["## With-skill vs without-skill", ""]
+        for comparison in comparisons:
+            if not comparison["comparison_available"]:
+                lines.append(f"- {comparison['case']}: comparison unavailable.")
+                continue
+            lines.append(
+                f"- {comparison['case']}: **{comparison['overall_change']}** "
+                f"(without-skill={comparison['without_skill_passed']}, "
+                f"with-skill={comparison['with_skill_passed']})"
+            )
+            for delta in comparison["check_deltas"]:
+                lines.append(
+                    f"  - {delta['name']}: "
+                    f"{delta['without_skill']} → {delta['with_skill']}"
+                )
+        lines.append("")
+
+    lines += ["## Run details", ""]
+    for result in results:
+        status = "PASS" if result["passed"] else "FAIL"
+        lines += [
+            f"### {result['case']} / {result['mode']} — {status}",
+            "",
+            f"- Agent return code: {result['agent_returncode']}",
+            f"- Agent duration: {result['agent_duration_seconds']}s",
+            f"- Total duration: {result['duration_seconds']}s",
+            f"- Artifact directory: {result['artifact_dir'] or 'not saved'}",
+            "",
+        ]
+
+        checks = result.get("verifier", {}).get("checks", [])
+        if checks:
+            lines += [
+                "| Check | Result | Expected | Actual | Evidence |",
+                "|---|---|---|---|---|",
+            ]
+            for check in checks:
+                if not isinstance(check, dict):
+                    continue
+                result_text = "PASS" if check.get("passed") else "FAIL"
+                expected = escape_markdown_cell(check.get("expected", ""))
+                actual = escape_markdown_cell(check.get("actual", ""))
+                evidence = escape_markdown_cell(
+                    check.get("evidence", check.get("message", ""))
+                )
+                name = escape_markdown_cell(check.get("name", "unnamed"))
+                lines.append(
+                    f"| {name} | {result_text} | {expected} | {actual} | {evidence} |"
+                )
+            lines.append("")
+
+        verifier_error = result.get("verifier", {}).get("error")
+        if verifier_error:
+            lines += [f"Verifier error: {verifier_error}", ""]
+
+    lines += [
+        "## Files to share for skill improvement",
+        "",
+        "Send report.md or report.json together with the cases directory. It "
+        "contains the benchmark definition, tested SKILL.md snapshot, agent "
+        "output, verifier result, prompt, command, and git state for every mode.",
+        "",
+    ]
+    (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+def parse_args(
     case: CaseInfo,
     skill_source: Path,
     adapter: AgentAdapter,
@@ -278,7 +625,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("with-skill", "without-skill", "both"), default="with-skill")
     parser.add_argument("--model", default=None, help="OpenCode model, e.g. litellm/big-pickle.")
     parser.add_argument("--timeout", type=int, default=None)
-    parser.add_argument("--artifacts", type=Path, default=None)
+    parser.add_argument(
+        "--artifacts",
+        type=Path,
+        default=None,
+        help="Base directory for reports (default: skill-benchmarks/output).",
+    )
     parser.add_argument("--config", type=Path, default=None)
     return parser.parse_args()
 
@@ -354,25 +706,50 @@ def main() -> int:
     if adapter_name != "opencode":
         raise BenchmarkError(f"Unsupported configured adapter '{adapter_name}'.")
     adapter = OpenCodeAdapter()
-
     modes = ("with-skill", "without-skill") if args.mode == "both" else (args.mode,)
-    results: list[dict[str, Any]] = []
-    for case in selected:
-        skill_source = skills_root / case.skill_id
-        for mode in modes:
-            print(f"Running {case.case_id} [{mode}]...")
-            results.append(
-                run_case(
-                    case,
-                    skill_source,
-                    adapter,
-                    mode=mode,
-                    model=model,
-                    default_timeout=args.timeout or default_timeout,
-                    artifacts_root=args.artifacts,
-                )
-            )
 
+    output_base = (args.artifacts or HERE / "output").resolve()
+    run_dir = create_run_dir(output_base, selector, args.mode)
+    started_at = datetime.now(timezone.utc).isoformat()
+    results: list[dict[str, Any]] = []
+
+    try:
+        for case in selected:
+            skill_source = skills_root / case.skill_id
+            for mode in modes:
+                print(f"Running {case.case_id} [{mode}]...")
+                results.append(
+                    run_case(
+                        case,
+                        skill_source,
+                        adapter,
+                        mode=mode,
+                        model=model,
+                        default_timeout=args.timeout or default_timeout,
+                        artifacts_root=run_dir,
+                    )
+                )
+    finally:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        write_report(
+            run_dir,
+            selector=selector,
+            requested_mode=args.mode,
+            config_path=config_path,
+            model=model,
+            results=results,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    summary = build_summary(results)
+    print("\nBenchmark report:")
+    print(f"  {run_dir / 'report.md'}")
+    print(f"  {run_dir / 'report.json'}")
+    print(
+        f"  Passed: {summary['passed_runs']}/{summary['runs']} "
+        f"(failed: {summary['failed_runs']})"
+    )
     print("\nResults:")
     print(json.dumps(results, indent=2))
     return 0 if all(result["passed"] for result in results) else 1
