@@ -107,7 +107,10 @@ for line in sys.stdin:
 
 review_ids=()
 if [ -n "$is_pr" ]; then
-  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null || echo "[]")"
+  if ! review_comments_json="$(gh api --paginate --slurp "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -c 'flatten | map(select(type == "object"))' 2>/dev/null)"; then
+    echo "Error: failed to fetch PR review comments from $repo#$issue"
+    exit 1
+  fi
 
   if [ -n "$PR_REVIEW_COMMENT_ID" ]; then
     root_id="$PR_REVIEW_COMMENT_ID"
