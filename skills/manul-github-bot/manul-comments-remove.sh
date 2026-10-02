@@ -107,7 +107,7 @@ for line in sys.stdin:
 
 review_ids=()
 if [ -n "$is_pr" ]; then
-  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'map(select(type == "array")) | flatten | map(select(type == "object"))' 2>/dev/null || echo "[]")"
+  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null || echo "[]")"
 
   if [ -n "$PR_REVIEW_COMMENT_ID" ]; then
     # Validate the requested discussion comment ID and compute its root.
