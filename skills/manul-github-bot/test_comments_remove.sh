@@ -52,19 +52,6 @@ printf "204"
 CURL
 chmod +x "$FAKE_BIN/curl"
 
-cat > "$TMPROOT/comments.json" <<'JSON'
-[
-  {"id":100,"body":"Original reviewer comment","in_reply_to_id":null},
-  {"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100},
-  {"id":102,"body":"Manul reply 2\n\n— manul 🐈","in_reply_to_id":101},
-  {"id":200,"body":"Another Manul thread\n\n— manul 🐈","in_reply_to_id":null}
-]
-JSON
-
-TEST_COMMENTS_JSON="$TMPROOT/comments.json"
-CURL_LOG="$LOG"
-export TEST_COMMENTS_JSON CURL_LOG
-
 echo "Test 1: accepts #discussion_r URL and removes only target thread"
 > "$LOG"
 PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
