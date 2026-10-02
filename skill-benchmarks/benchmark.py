@@ -290,9 +290,10 @@ def resolve_path(raw: str, base: Path) -> Path:
 
 def main() -> int:
     args = parse_args()
-    config = load_config(args.config)
+    config_path = (args.config or HERE / "config.json").resolve()
+    config = load_config(config_path)
 
-    config_dir = (args.config or HERE).resolve().parent
+    config_dir = config_path.parent
     skills_root = resolve_path(config["skills_root"], config_dir)
     cases_root = resolve_path(config["cases_root"], config_dir)
     exclusions = dict(config.get("excluded_skills", {}))
