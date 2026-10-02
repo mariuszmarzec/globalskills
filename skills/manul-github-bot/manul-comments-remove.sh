@@ -126,12 +126,31 @@ if [ -n "$is_pr" ]; then
       root_id="$parent_id"
     done
 
-    while IFS= read -r comment_id; do
+    thread_ids=("$root_id")
+    queue=("$root_id")
+    while [ "${#queue[@]}" -gt 0 ]; do
+      parent="${queue[0]}"
+      queue=("${queue[@]:1}")
+      while IFS= read -r child_id; do
+        [ -n "$child_id" ] || continue
+        if ! printf "%s\n" "${thread_ids[@]}" | grep -qxF "$child_id"; then
+          thread_ids+=("$child_id")
+          queue+=("$child_id")
+        fi
+      done < <(
+        printf "%s" "$review_comments_json" |
+          jq -r --arg parent "$parent" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' 2>/dev/null || true
+      )
+    done
+
+    for comment_id in "${thread_ids[@]}"; do
       [ -n "$comment_id" ] || continue
-      review_ids+=("$comment_id")
-    done < <(
-      printf "%s" "$review_comments_json" | jq -r --arg root "$root_id" --arg sig "$SIG" '.[] | select((.id|tostring) == $root or (.in_reply_to_id // "") | tostring == $root) | select((.body // "") | contains($sig)) | .id' 2>/dev/null || true
-    )
+      if printf "%s" "$review_comments_json" |
+        jq -e --arg id "$comment_id" --arg sig "$SIG" 'any(.[]; ((.id|tostring) == $id) and ((.body // "") | contains($sig)))' >/dev/null 2>&1; then
+        review_ids+=("$comment_id")
+      fi
+    done
+    review_ids=($(printf "%s\n" "${review_ids[@]}" | sed "/^$/d" | sort -u))
   else
     matched_roots=()
     while IFS= read -r comment; do
