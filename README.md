@@ -91,14 +91,16 @@ the benchmark runner can be switched later without changing benchmark cases.
 Run a case:
 
 ```bash
-python3 skill-benchmarks/benchmark.py run --case commit-trailer --model litellm/big-pickle
+python3 skill-benchmarks/benchmark.py run --case commit-trailer
 ```
 
 Compare with and without the skill:
 
 ```bash
-python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both --model litellm/big-pickle
+python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both
 ```
+
+Each live run writes a self-contained report under `skill-benchmarks/output/<run-id>/`, including the with/without-skill comparison, tested `SKILL.md` snapshot, agent output, verifier result, and git artifacts. The output directory is ignored by git.
 
 The benchmark suite is deliberately not wired into CI. Its framework and
 adapters have local unit tests with mocks, so those tests do not require an
