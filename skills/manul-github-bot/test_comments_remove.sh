@@ -22,13 +22,16 @@ case "$*" in
   *"pr view"*"--json body"*)
     echo '{"body":""}'
     ;;
-  *"api --paginate repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
-    printf '%s\n' '[
-      {"id":4098362711,"body":"/manul original user request","in_reply_to_id":null},
-      {"id":4126334268,"body":"/manul do this","in_reply_to_id":4098362711},
-      {"id":4126396380,"body":"working\n\n— manul 🐈","in_reply_to_id":4126334268},
-      {"id":4164153672,"body":"result\n\n— manul 🐈","in_reply_to_id":4126396380},
-      {"id":500,"body":"unrelated Manul thread\n\n— manul 🐈","in_reply_to_id":null}
+  *"api --paginate --slurp repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
+    printf '%s
+' '[
+      [
+        {"id":4098362711,"body":"/manul original user request","in_reply_to_id":null},
+        {"id":4126334268,"body":"/manul do this","in_reply_to_id":4098362711},
+        {"id":4126396380,"body":"working\n\n— manul 🐈","in_reply_to_id":4126334268},
+        {"id":4164153672,"body":"result\n\n— manul 🐈","in_reply_to_id":4126396380},
+        {"id":500,"body":"unrelated Manul thread\n\n— manul 🐈","in_reply_to_id":null}
+      ]
     ]'
     ;;
   *"api --paginate repos/test-owner/test-repo/issues/34/comments"*)
@@ -63,33 +66,55 @@ printf "204"
 CURL
 chmod +x "$FAKE_BIN/curl"
 
-echo "Test 1: accepts #discussion_r URL and removes only target thread"
-> "$LOG"
-PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
-  "https://github.com/test-owner/test-repo/pull/34#discussion_r4126334268" > "$TMPROOT/out1"
+run_remove() {
+  local url="$1"
+  local output="$2"
+  : > "$LOG"
+  CURL_LOG="$LOG" PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" "$url" > "$output"
+}
+
+echo "Test 1: root #discussion_r URL removes only Manul comments in that thread"
+run_remove   "https://github.com/test-owner/test-repo/pull/34#discussion_r4098362711"   "$TMPROOT/out1"
 
 cat "$TMPROOT/out1"
 grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
-grep -q "Review thread filter: #discussion_r4126334268" "$TMPROOT/out1"
+grep -q "Review thread filter: #discussion_r4098362711" "$TMPROOT/out1"
 grep -q "Deleted:  2" "$TMPROOT/out1"
 grep -q "PR review comments: 2" "$TMPROOT/out1"
-grep -q "pulls/comments/4126334268" "$LOG"
 grep -q "pulls/comments/4126396380" "$LOG"
-if grep -q "pulls/comments/500" "$LOG"; then
-  echo "FAIL: selective cleanup touched unrelated thread"
+grep -q "pulls/comments/4164153672" "$LOG"
+if grep -qE 'pulls/comments/(4098362711|4126334268|500)' "$LOG"; then
+  echo "FAIL: root/intermediate/unrelated comment was deleted"
   exit 1
 fi
 echo "PASS"
 
-echo "Test 2: plain PR URL still removes all Manul review comments"
-> "$LOG"
-PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
-  "https://github.com/test-owner/test-repo/pull/34" > "$TMPROOT/out2"
+echo "Test 2: nested #discussion_r URL still resolves the same thread"
+run_remove   "https://github.com/test-owner/test-repo/pull/34#discussion_r4126334268"   "$TMPROOT/out2"
+
 cat "$TMPROOT/out2"
-grep -q "Deleted:  3" "$TMPROOT/out2"
-grep -q "pulls/comments/4126334268" "$LOG"
+grep -q "Review thread filter: #discussion_r4126334268" "$TMPROOT/out2"
+grep -q "Deleted:  2" "$TMPROOT/out2"
 grep -q "pulls/comments/4126396380" "$LOG"
-grep -q "pulls/comments/500" "$LOG"
+grep -q "pulls/comments/4164153672" "$LOG"
+if grep -qE 'pulls/comments/(4098362711|4126334268|500)' "$LOG"; then
+  echo "FAIL: nested selective cleanup touched non-Manul comment"
+  exit 1
+fi
 echo "PASS"
 
-echo "=== Results: 2 passed, 0 failed ==="
+echo "Test 3: plain PR URL still removes all Manul review comments"
+run_remove   "https://github.com/test-owner/test-repo/pull/34"   "$TMPROOT/out3"
+
+cat "$TMPROOT/out3"
+grep -q "Deleted:  3" "$TMPROOT/out3"
+grep -q "pulls/comments/4126396380" "$LOG"
+grep -q "pulls/comments/4164153672" "$LOG"
+grep -q "pulls/comments/500" "$LOG"
+if grep -qE 'pulls/comments/(4098362711|4126334268)' "$LOG"; then
+  echo "FAIL: plain cleanup deleted non-Manul comments"
+  exit 1
+fi
+echo "PASS"
+
+echo "=== Results: 3 passed, 0 failed ==="
