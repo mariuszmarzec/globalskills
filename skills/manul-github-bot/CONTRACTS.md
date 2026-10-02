@@ -281,6 +281,22 @@ Behavioural compatibility is required; obsolete filesystem layout
 compatibility is not.
 
 
-## 19. Deployment and executable-entry-point contract
+## 19. Unit-test contract
+
+When an implementation task adds or changes unit tests:
+- tests must prove the requested behavior, not merely object construction, helper execution, DTO conversion, or property structure;
+- the test should execute the real production entry point containing the behavior under test;
+- external dependencies may be mocked, but the system under test must remain real;
+- interaction-based behavior must be asserted through the real dependency boundary with the requested calls and arguments;
+- a test is invalid if it would still pass after the requested production behavior is removed;
+- when an existing relevant unit test or test file exists, extend or modify it rather than creating a parallel duplicate unless there is a concrete reason;
+- when a review comment names a test location, treat that location as part of the acceptance criteria;
+- test-framework or mocking difficulties must not be solved by weakening or removing the behavioral assertion;
+- if the intended behavioral test remains blocked after reasonable investigation, use `TASK_NEEDS_USER` when a material design choice is required rather than silently lowering test quality;
+- compilation alone is not evidence that the requested behavior is covered.
+
+For `REVIEW_FIX`, the review comment's requested production call, side effect, interaction, or verification is authoritative. Implementation details may differ, but the behavioral contract must remain intact.
+
+## 20. Deployment and executable-entry-point contract
 
 Runtime entry points that Manul invokes directly must remain executable in the canonical checkout. In particular, `agent-task-runner.sh` is launched directly by `setsid` and therefore requires the Git executable mode `100755`. Sourced helper scripts do not require the execute bit. The runtime installer/startup path must preserve or restore the execute bit, and CI must fail when the canonical runner loses it.
