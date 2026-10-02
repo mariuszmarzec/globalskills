@@ -6,6 +6,10 @@
   "timeout_seconds": 600,
   "excluded_skills": {
     "manul-github-bot": "High-complexity operational bot with external GitHub/runtime state; benchmark separately from the generic skill runner.",
-    "setup-environment": "Legacy top-level environment setup tree without SKILL.md; performs host-wide mutations and is outside the skill benchmark scope."
+    "setup-environment": "Legacy top-level environment setup tree without SKILL.md; performs host-wide mutations and is outside the skill benchmark scope.",
+    "wsl-ai-dev-autopilot-multi-device": "Complex multi-device environment automation with host-wide side effects; requires a dedicated, environment-aware benchmark.",
+    "android-clean-architecture": "Broad architecture guidance with project-dependent assumptions; requires a dedicated project fixture and evaluation criteria.",
+    "agent-orchestration": "Complex orchestration/routing behavior spanning multiple agents and model tiers; requires a dedicated multi-agent evaluation harness.",
+    "review-strategy": "Context-heavy review workflow with project-specific judgment; requires a dedicated review fixture and quality rubric."
   }
 }
