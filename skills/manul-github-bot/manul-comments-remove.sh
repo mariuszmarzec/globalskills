@@ -110,36 +110,34 @@ if [ -n "$is_pr" ]; then
   review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null || echo "[]")"
 
   if [ -n "$PR_REVIEW_COMMENT_ID" ]; then
-    # Validate the requested discussion comment ID and compute its root.
-    root_id="$(printf "%s" "$review_comments_json" | jq -r --arg id "$PR_REVIEW_COMMENT_ID" '[.[] | select((.id|tostring) == $id) | .id][0] // empty' 2>/dev/null)"
-    if [ -z "$root_id" ]; then
+    root_id="$PR_REVIEW_COMMENT_ID"
+    found="$(jq -r --arg id "$root_id" '[.[] | select((.id|tostring) == $id)] | length' <<<"$review_comments_json" 2>/dev/null || echo 0)"
+    if [ "$found" -ne 1 ]; then
       echo "Error: PR review comment $PR_REVIEW_COMMENT_ID was not found on $repo#$issue"
       exit 1
     fi
-
-    # Follow in_reply_to_id to the root, then walk descendants.
     for _ in $(seq 1 100); do
-      parent_id="$(printf "%s" "$review_comments_json" | jq -r --arg id "$root_id" '[.[] | select((.id|tostring) == $id) | (.in_reply_to_id // empty)][0] // empty' 2>/dev/null)"
+      parent_id="$(jq -r --arg id "$root_id" '[.[] | select((.id|tostring) == $id) | (.in_reply_to_id // empty)][0] // empty' <<<"$review_comments_json" 2>/dev/null)"
       [ -n "$parent_id" ] || break
       root_id="$parent_id"
     done
 
-    thread_ids=()
     queue=("$root_id")
+    thread_ids=()
     while [ "${#queue[@]}" -gt 0 ]; do
-      current="${queue[0]}"
+      current_id="${queue[0]}"
       queue=("${queue[@]:1}")
-      if printf "%s\n" "${thread_ids[@]}" | grep -qxF "$current"; then
+      if printf "%s\n" "${thread_ids[@]}" | grep -qxF "$current_id"; then
         continue
       fi
-      thread_ids+=("$current")
-      while IFS= read -r child; do
-        [ -n "$child" ] && queue+=("$child")
-      done < <(printf "%s" "$review_comments_json" | jq -r --arg parent "$current" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' 2>/dev/null || true)
+      thread_ids+=("$current_id")
+      while IFS= read -r child_id; do
+        [ -n "$child_id" ] && queue+=("$child_id")
+      done < <(jq -r --arg parent "$current_id" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' <<<"$review_comments_json" 2>/dev/null || true)
     done
 
     for comment_id in "${thread_ids[@]}"; do
-      if printf "%s" "$review_comments_json" | jq -e --arg id "$comment_id" --arg sig "$SIG" 'any(.[]; ((.id|tostring) == $id) and ((.body // "") | contains($sig)))' >/dev/null 2>&1; then
+      if jq -e --arg id "$comment_id" --arg sig "$SIG" 'any(.[]; ((.id|tostring) == $id) and ((.body // "") | contains($sig)))' <<<"$review_comments_json" >/dev/null 2>&1; then
         review_ids+=("$comment_id")
       fi
     done
@@ -147,35 +145,36 @@ if [ -n "$is_pr" ]; then
     matched_roots=()
     while IFS= read -r comment; do
       [ -n "$comment" ] || continue
-      if printf "%s" "$comment" | jq -e --arg sig "$SIG" '(.body // "") | contains($sig)' >/dev/null 2>&1; then
+      if jq -e --arg sig "$SIG" '(.body // "") | contains($sig)' <<<"$comment" >/dev/null 2>&1; then
         current_id="$(jq -r ".id // empty" <<<"$comment")"
         [ -n "$current_id" ] || continue
-        guard=0
-        while [ "$guard" -lt 100 ]; do
-          parent_id="$(printf "%s" "$review_comments_json" | jq -r --arg id "$current_id" '.[] | select((.id|tostring) == $id) | (.in_reply_to_id // empty)' 2>/dev/null | head -n1)"
+        for _ in $(seq 1 100); do
+          parent_id="$(jq -r --arg id "$current_id" '[.[] | select((.id|tostring) == $id) | (.in_reply_to_id // empty)][0] // empty' <<<"$review_comments_json" 2>/dev/null)"
           [ -n "$parent_id" ] || break
           current_id="$parent_id"
-          guard=$((guard + 1))
         done
         matched_roots+=("$current_id")
       fi
-    done < <(printf "%s" "$review_comments_json" | jq -c ".[]" 2>/dev/null || true)
+    done < <(jq -c ".[]" <<<"$review_comments_json" 2>/dev/null || true)
+
     matched_roots=($(printf "%s\n" "${matched_roots[@]}" | sed "/^$/d" | sort -u))
     for root_id in "${matched_roots[@]}"; do
       [ -n "$root_id" ] || continue
-      thread_ids=()
       queue=("$root_id")
+      thread_ids=()
       while [ "${#queue[@]}" -gt 0 ]; do
-        current="${queue[0]}"
+        current_id="${queue[0]}"
         queue=("${queue[@]:1}")
-        if printf "%s\n" "${thread_ids[@]}" | grep -qxF "$current"; then continue; fi
-        thread_ids+=("$current")
-        while IFS= read -r child; do
-          [ -n "$child" ] && queue+=("$child")
-        done < <(printf "%s" "$review_comments_json" | jq -r --arg parent "$current" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' 2>/dev/null || true)
+        if printf "%s\n" "${thread_ids[@]}" | grep -qxF "$current_id"; then
+          continue
+        fi
+        thread_ids+=("$current_id")
+        while IFS= read -r child_id; do
+          [ -n "$child_id" ] && queue+=("$child_id")
+        done < <(jq -r --arg parent "$current_id" '.[] | select((.in_reply_to_id // "") | tostring == $parent) | .id' <<<"$review_comments_json" 2>/dev/null || true)
       done
       for comment_id in "${thread_ids[@]}"; do
-        if printf "%s" "$review_comments_json" | jq -e --arg id "$comment_id" --arg sig "$SIG" 'any(.[]; ((.id|tostring) == $id) and ((.body // "") | contains($sig)))' >/dev/null 2>&1; then
+        if jq -e --arg id "$comment_id" --arg sig "$SIG" 'any(.[]; ((.id|tostring) == $id) and ((.body // "") | contains($sig)))' <<<"$review_comments_json" >/dev/null 2>&1; then
           review_ids+=("$comment_id")
         fi
       done
