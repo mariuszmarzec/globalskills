@@ -62,8 +62,7 @@ printf '{"name":"commit-message","passed":%s,"expected":"benchmark: update hello
 printf '{"name":"author-preserved","passed":%s,"expected":"Benchmark User <benchmark@example.invalid>","actual":"%s","evidence":"git log -1 --format=%%an <%%ae>"},' "$author_ok" "$(json_escape "$author_actual")"
 printf '{"name":"git-config-preserved","passed":%s,"expected":"Benchmark User <benchmark@example.invalid>","actual":"%s <%s>","evidence":"git config --local user.name/user.email"},' "$config_ok" "$(json_escape "$name_actual")" "$(json_escape "$email_actual")"
 printf '{"name":"opencode-trailer","passed":%s,"expected":"Co-authored-by trailer present","actual":"%s","evidence":"git log -1 --format=%%B"}]}' "$trailer_ok" "$([ "$trailer_ok" = true ] && echo present || echo missing)"
-printf '
-'
+printf '\n'
 
 if [ "$passed" = true ]; then
   exit 0
