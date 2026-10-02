@@ -54,8 +54,9 @@ echo "Test 1: accepts #discussion_r URL and removes only target thread"
 PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
   "https://github.com/test-owner/test-repo/pull/34#discussion_r101" > "$TMPROOT/out1"
 
-grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
 cat "$TMPROOT/out1"
+grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
+grep -q "Review thread filter: #discussion_r101" "$TMPROOT/out1"
 grep -q "Deleted:  2" "$TMPROOT/out1"
 grep -q "PR review comments: 2" "$TMPROOT/out1"
 grep -q "pulls/comments/101" "$LOG"
@@ -66,10 +67,11 @@ if grep -q "pulls/comments/200" "$LOG"; then
 fi
 echo "PASS"
 
-echo "Test 2: plain PR URL still removes all Manul review-thread comments"
+echo "Test 2: plain PR URL still removes all Manul review comments"
 > "$LOG"
 PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
   "https://github.com/test-owner/test-repo/pull/34" > "$TMPROOT/out2"
+cat "$TMPROOT/out2"
 grep -q "Deleted:  3" "$TMPROOT/out2"
 grep -q "pulls/comments/101" "$LOG"
 grep -q "pulls/comments/102" "$LOG"
