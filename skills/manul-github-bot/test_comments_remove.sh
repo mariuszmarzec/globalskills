@@ -24,10 +24,11 @@ case "$*" in
     ;;
   *"api --paginate repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
     printf '%s\n' '[
-      {"id":100,"body":"Original reviewer comment","in_reply_to_id":null},
-      {"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100},
-      {"id":102,"body":"Manul reply 2\n\n— manul 🐈","in_reply_to_id":101},
-      {"id":200,"body":"Another Manul thread\n\n— manul 🐈","in_reply_to_id":null}
+      {"id":4098362711,"body":"/manul original user request","in_reply_to_id":null},
+      {"id":4126334268,"body":"/manul do this","in_reply_to_id":4098362711},
+      {"id":4126396380,"body":"working\n\n— manul 🐈","in_reply_to_id":4126334268},
+      {"id":4164153672,"body":"result\n\n— manul 🐈","in_reply_to_id":4126396380},
+      {"id":500,"body":"unrelated Manul thread\n\n— manul 🐈","in_reply_to_id":null}
     ]'
     ;;
   *"api --paginate repos/test-owner/test-repo/issues/34/comments"*)
@@ -65,16 +66,16 @@ chmod +x "$FAKE_BIN/curl"
 echo "Test 1: accepts #discussion_r URL and removes only target thread"
 > "$LOG"
 PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
-  "https://github.com/test-owner/test-repo/pull/34#discussion_r101" > "$TMPROOT/out1"
+  "https://github.com/test-owner/test-repo/pull/34#discussion_r4126334268" > "$TMPROOT/out1"
 
 cat "$TMPROOT/out1"
 grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
-grep -q "Review thread filter: #discussion_r101" "$TMPROOT/out1"
+grep -q "Review thread filter: #discussion_r4126334268" "$TMPROOT/out1"
 grep -q "Deleted:  2" "$TMPROOT/out1"
 grep -q "PR review comments: 2" "$TMPROOT/out1"
-grep -q "pulls/comments/101" "$LOG"
-grep -q "pulls/comments/102" "$LOG"
-if grep -q "pulls/comments/200" "$LOG"; then
+grep -q "pulls/comments/4126334268" "$LOG"
+grep -q "pulls/comments/4126396380" "$LOG"
+if grep -q "pulls/comments/500" "$LOG"; then
   echo "FAIL: selective cleanup touched unrelated thread"
   exit 1
 fi
@@ -86,9 +87,9 @@ PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
   "https://github.com/test-owner/test-repo/pull/34" > "$TMPROOT/out2"
 cat "$TMPROOT/out2"
 grep -q "Deleted:  3" "$TMPROOT/out2"
-grep -q "pulls/comments/101" "$LOG"
-grep -q "pulls/comments/102" "$LOG"
-grep -q "pulls/comments/200" "$LOG"
+grep -q "pulls/comments/4126334268" "$LOG"
+grep -q "pulls/comments/4126396380" "$LOG"
+grep -q "pulls/comments/500" "$LOG"
 echo "PASS"
 
 echo "=== Results: 2 passed, 0 failed ==="
