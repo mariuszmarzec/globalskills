@@ -107,7 +107,7 @@ if [ -n "$is_pr" ]; then
   # A PR review is a thread: replies are linked through in_reply_to_id.
   # By default, remove every Manul-signed review comment in the PR. When a
   # #discussion_r<ID> fragment is supplied, limit deletion to that thread.
-  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null || echo "[]")"
+  review_comments_json="$(gh api --paginate "repos/$repo/pulls/$issue/comments?per_page=100" 2>/dev/null | jq -s 'map(.[]) | add // []' 2>/dev/null || echo "[]")"
 
   if [ -n "$PR_REVIEW_COMMENT_ID" ]; then
     target_exists="$(printf "%s" "$review_comments_json" | jq -r --arg id "$PR_REVIEW_COMMENT_ID" '[.[] | select((.id|tostring) == $id)] | length' 2>/dev/null || echo "0")"
