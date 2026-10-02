@@ -393,19 +393,42 @@ def build_comparisons(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     }
                 )
 
+        without_passed_checks = sum(
+            bool(check.get("passed")) for check in without_checks.values()
+        )
+        with_passed_checks = sum(
+            bool(check.get("passed")) for check in with_checks.values()
+        )
+        without_failed_checks = [
+            name for name, check in sorted(without_checks.items())
+            if not check.get("passed")
+        ]
+        with_failed_checks = [
+            name for name, check in sorted(with_checks.items())
+            if not check.get("passed")
+        ]
+
+        if not without_skill["passed"] and with_skill["passed"]:
+            impact_signal = "skill_helped"
+        elif without_skill["passed"] and not with_skill["passed"]:
+            impact_signal = "skill_harmed"
+        elif without_skill["passed"] and with_skill["passed"]:
+            impact_signal = "case_passes_without_skill"
+        else:
+            impact_signal = "case_fails_with_and_without_skill"
+
         comparisons.append(
             {
                 "case": case_id,
                 "comparison_available": True,
                 "without_skill_passed": without_skill["passed"],
                 "with_skill_passed": with_skill["passed"],
-                "overall_change": (
-                    "improved"
-                    if not without_skill["passed"] and with_skill["passed"]
-                    else "regressed"
-                    if without_skill["passed"] and not with_skill["passed"]
-                    else "unchanged"
-                ),
+                "impact_signal": impact_signal,
+                "without_skill_passed_checks": without_passed_checks,
+                "with_skill_passed_checks": with_passed_checks,
+                "passed_checks_delta": with_passed_checks - without_passed_checks,
+                "without_skill_failed_checks": without_failed_checks,
+                "with_skill_failed_checks": with_failed_checks,
                 "check_deltas": check_deltas,
             }
         )
