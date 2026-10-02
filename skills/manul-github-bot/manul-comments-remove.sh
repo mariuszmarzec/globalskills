@@ -58,9 +58,9 @@ echo
 token="$(gh auth token 2>/dev/null)"
 
 linked_issues=()
-is_pr=$(gh pr view --repo "$repo" --number "$issue" --json number 2>/dev/null | jq -r '.number // empty' 2>/dev/null || true)
+is_pr=$(gh pr view --repo "$repo" "$issue" --json number 2>/dev/null | jq -r '.number // empty' 2>/dev/null || true)
 if [ -n "$is_pr" ]; then
-  issue_body="$(gh pr view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
+  issue_body="$(gh pr view --repo "$repo" "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
 else
   issue_body="$(gh issue view --repo "$repo" --number "$issue" --json body 2>/dev/null | jq -r '.body // ""')"
 fi
