@@ -55,6 +55,7 @@ PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
   "https://github.com/test-owner/test-repo/pull/34#discussion_r101" > "$TMPROOT/out1"
 
 grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
+cat "$TMPROOT/out1"
 grep -q "Deleted:  2" "$TMPROOT/out1"
 grep -q "PR review comments: 2" "$TMPROOT/out1"
 grep -q "pulls/comments/101" "$LOG"
