@@ -15,6 +15,8 @@ SKILL.md
 
 Then inspect the actual code/tests relevant to the task.
 
+When the task involves adding or changing unit tests, also read `UNIT_TESTING.md` and follow its behavioral-test rules.
+
 Treat `CONTRACTS.md` as the behavioural source of truth and `ARCHITECTURE.md` as the dependency/ownership source of truth.
 
 ## Your job
@@ -50,6 +52,16 @@ For a repository-change task:
 - emit `TASK_DONE` only after all required checks pass.
 
 A repository-change task is not complete merely because a branch was pushed.
+
+## Review-fix and unit-test execution rules
+
+When `Task Action` is `REVIEW_FIX`, treat the review comment as acceptance criteria and preserve its requested behavioral intent. Inspect the exact file/test location named in the comment before creating new tests. If an existing relevant unit test exists, modify that scenario rather than creating a parallel duplicate unless there is a concrete repository-specific reason not to.
+
+When a review comment requests a concrete production call and dependency verification, the test must execute that call through the real system under test and assert the requested observable interaction. Do not satisfy such a request with structural, constructor, DTO, property, or helper assertions.
+
+A test that would still pass after deleting the requested production behavior does not prove the behavior and is not acceptable. Mock external dependencies, not the system under test. If mocking infrastructure becomes difficult, investigate existing project patterns and alternative mock boundaries; do not weaken the behavioral assertion merely to obtain a passing test. If correctness materially depends on an unresolved testing/design choice, use the structured `TASK_NEEDS_USER` flow instead of silently reducing coverage.
+
+Do not claim unit-test success based only on compilation. Run the focused test and the relevant broader suite when practical, and report what was actually executed.
 
 ## User interaction and decision points
 
