@@ -5,13 +5,14 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 from adapters import AgentRunResult
-from benchmark import discover_cases, discover_skills, run_case
+from benchmark import build_comparisons, discover_cases, discover_skills, run_case, write_report
 
 
 class MockAdapter:
@@ -25,8 +26,7 @@ class MockAdapter:
         model: str | None,
         timeout_seconds: int,
     ) -> AgentRunResult:
-        (workspace / "hello.txt").write_text("hello benchmark
-", encoding="utf-8")
+        (workspace / "hello.txt").write_text("hello benchmark\n", encoding="utf-8")
         with_trailer = (workspace / ".opencode" / "skills" / "ai-commit-attribution").exists()
         commit_body = "Co-authored-by: OpenCode <opencode@ai.local>" if with_trailer else ""
         subprocess.run(
@@ -109,6 +109,124 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.assertFalse(result["passed"])
         self.assertFalse(result["verifier"]["passed"])
+
+
+    def test_comparison_reports_changed_checks(self) -> None:
+        with_skill = {
+            "case": "commit-trailer",
+            "mode": "with-skill",
+            "passed": True,
+            "verifier": {
+                "checks": [
+                    {"name": "content", "passed": True},
+                    {"name": "trailer", "passed": True},
+                ]
+            },
+        }
+        without_skill = {
+            "case": "commit-trailer",
+            "mode": "without-skill",
+            "passed": False,
+            "verifier": {
+                "checks": [
+                    {"name": "content", "passed": True},
+                    {"name": "trailer", "passed": False},
+                ]
+            },
+        }
+
+        comparison = build_comparisons([without_skill, with_skill])[0]
+        self.assertEqual(comparison["overall_change"], "improved")
+        self.assertEqual(
+            comparison["check_deltas"],
+            [{"name": "trailer", "without_skill": False, "with_skill": True}],
+        )
+
+    def test_run_artifacts_include_diagnostic_files_and_skill_snapshot(self) -> None:
+        config = self.config()
+        case = next(
+            case
+            for case in discover_cases((HERE / str(config["cases_root"])).resolve())
+            if case.case_id == "commit-trailer"
+        )
+        skill_source = (HERE / ".." / "skills" / case.skill_id).resolve()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "run"
+            result = run_case(
+                case,
+                skill_source,
+                MockAdapter(),
+                mode="with-skill",
+                model=None,
+                default_timeout=30,
+                artifacts_root=output,
+            )
+            artifact_dir = output / "cases" / "commit-trailer" / "with-skill"
+            self.assertTrue(result["passed"], result)
+            for filename in (
+                "prompt.txt",
+                "command.txt",
+                "stdout.txt",
+                "stderr.txt",
+                "verifier.json",
+                "git-status.txt",
+                "git-log.txt",
+                "git-diff.txt",
+                "git-show.txt",
+            ):
+                self.assertTrue((artifact_dir / filename).exists(), filename)
+            self.assertTrue(
+                (
+                    output / "cases" / "commit-trailer" / "input" / "skill" / "SKILL.md"
+                ).exists()
+            )
+
+    def test_report_json_and_markdown_are_written(self) -> None:
+        result = {
+            "case": "commit-trailer",
+            "skill": "ai-commit-attribution",
+            "mode": "with-skill",
+            "passed": False,
+            "agent_returncode": 0,
+            "agent_duration_seconds": 1.2,
+            "duration_seconds": 1.3,
+            "artifact_dir": "cases/commit-trailer/with-skill",
+            "verifier": {
+                "passed": False,
+                "returncode": 1,
+                "checks": [
+                    {
+                        "name": "commit-message",
+                        "passed": False,
+                        "expected": "benchmark: update hello",
+                        "actual": "wrong message",
+                        "evidence": "git log -1 --pretty=%s",
+                    }
+                ],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_dir = Path(temp_dir)
+            write_report(
+                report_dir,
+                selector="commit-trailer",
+                requested_mode="both",
+                config_path=HERE / "config.json",
+                model=None,
+                results=[result],
+                started_at="2026-10-02T10:00:00+00:00",
+                finished_at="2026-10-02T10:00:02+00:00",
+            )
+            report_json = json.loads(
+                (report_dir / "report.json").read_text(encoding="utf-8")
+            )
+            report_md = (report_dir / "report.md").read_text(encoding="utf-8")
+            self.assertEqual(report_json["schema_version"], 1)
+            self.assertEqual(report_json["summary"]["failed_runs"], 1)
+            self.assertIn("wrong message", report_md)
+            self.assertIn("Expected", report_md)
 
 
 if __name__ == "__main__":
