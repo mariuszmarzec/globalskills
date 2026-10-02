@@ -23,10 +23,15 @@ case "$*" in
     echo '{"body":""}'
     ;;
   *"api --paginate repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
-    # Simulate gh --paginate: each page is emitted as a separate JSON array.
-    printf '%s
-%s
-' '[{"id":100,"body":"Original reviewer comment","in_reply_to_id":null},{"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100}]' '[{"id":102,"body":"Manul reply 2\n\n— manul 🐈","in_reply_to_id":101},{"id":200,"body":"Another Manul thread\n\n— manul 🐈","in_reply_to_id":null}]'
+    # gh --paginate emits one JSON array per API page.
+    printf '%s\n' '[
+      {"id":100,"body":"Original reviewer comment","in_reply_to_id":null},
+      {"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100}
+    ]'
+    printf '%s\n' '[
+      {"id":102,"body":"Manul reply 2\n\n— manul 🐈","in_reply_to_id":101},
+      {"id":200,"body":"Another Manul thread\n\n— manul 🐈","in_reply_to_id":null}
+    ]'
     ;;
   *"api --paginate repos/test-owner/test-repo/issues/34/comments"*)
     echo '[]'
