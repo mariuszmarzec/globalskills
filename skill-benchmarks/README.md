@@ -19,13 +19,13 @@ python3 skill-benchmarks/benchmark.py list
 Run a case with OpenCode:
 
 ```bash
-python3 skill-benchmarks/benchmark.py run --case commit-trailer --model litellm/big-pickle
+python3 skill-benchmarks/benchmark.py run --case commit-trailer
 ```
 
 Compare the same case with and without the skill:
 
 ```bash
-python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both --model litellm/big-pickle
+python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both
 ```
 
 Save stdout/stderr/verifier artifacts:
@@ -64,6 +64,10 @@ Exclusions should be reviewed when the excluded skill changes.
 Current exclusions:
 - `manul-github-bot`
 - `setup-environment`
+- `wsl-ai-dev-autopilot-multi-device`
+- `android-clean-architecture`
+- `agent-orchestration`
+- `review-strategy`
 
 The runner does not add benchmarks to CI. The benchmark suite is intentionally
 a developer-facing evaluation tool. Unit tests for the runner and adapters can
@@ -79,6 +83,7 @@ Before merging a new skill locally:
 
 ```bash
 python3 skill-benchmarks/benchmark.py run --skill <skill-name> --mode both
+# Optional: --model litellm/big-pickle
 python3 -m unittest discover -s skill-benchmarks/tests
 ```
 
