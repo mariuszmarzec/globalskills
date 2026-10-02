@@ -201,14 +201,15 @@ issue_ids=()
 if [ -z "$PR_REVIEW_COMMENT_ID" ]; then
   mapfile -t issue_ids < <(extract_ids "repos/$repo/issues/$issue/comments")
 
-for linked_issue in "${linked_issues[@]}"; do
-  [ -n "$linked_issue" ] || continue
-  mapfile -t more_ids < <(extract_ids "repos/$repo/issues/$linked_issue/comments")
-  issue_ids+=("${more_ids[@]}")
-  if [ ${#more_ids[@]} -gt 0 ]; then
-    echo "  Found ${#more_ids[@]} matching comment(s) on linked issue #$linked_issue"
-  fi
-done
+  for linked_issue in "${linked_issues[@]}"; do
+    [ -n "$linked_issue" ] || continue
+    mapfile -t more_ids < <(extract_ids "repos/$repo/issues/$linked_issue/comments")
+    issue_ids+=("${more_ids[@]}")
+    if [ ${#more_ids[@]} -gt 0 ]; then
+      echo "  Found ${#more_ids[@]} matching comment(s) on linked issue #$linked_issue"
+    fi
+  done
+fi
 
 review_ids=($(printf '%s\n' "${review_ids[@]}" | sort -u))
 issue_ids=($(printf '%s\n' "${issue_ids[@]}" | sort -u))
