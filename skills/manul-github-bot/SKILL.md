@@ -106,6 +106,10 @@ Reuse the PR's existing head branch. Do not create an unrelated task branch.
 
 The task must update the same PR.
 
+## Unit test guidance
+
+When a repository task adds or changes unit tests, read `UNIT_TESTING.md` before implementing the test. Treat it as the unit-testing methodology for Manul tasks, especially `REVIEW_FIX` work.
+
 ## User decision points
 
 Routine ambiguity is resolved autonomously from repository conventions and available context. When a missing decision materially affects correctness, architecture, behavior, scope, compatibility, data model, UX, or another important outcome, the agent must stop rather than guess.
