@@ -17,9 +17,15 @@ case "$*" in
     echo token
     ;;
   *"pr view"*"--json number"*)
+    case "$*" in
+      *" --number "*) echo "unexpected legacy --number flag" >&2; exit 9 ;;
+    esac
     echo '{"number":34}'
     ;;
   *"pr view"*"--json body"*)
+    case "$*" in
+      *" --number "*) echo "unexpected legacy --number flag" >&2; exit 9 ;;
+    esac
     echo '{"body":""}'
     ;;
   *"api --paginate --slurp repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
