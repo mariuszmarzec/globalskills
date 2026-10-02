@@ -28,7 +28,32 @@ Compare the same case with and without the skill:
 python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both
 ```
 
-Save stdout/stderr/verifier artifacts:
+Every live run writes a self-contained diagnostic report under
+`skill-benchmarks/output/<run-id>/`:
+
+```text
+output/<run-id>/
+├── report.md
+├── report.json
+└── cases/
+    └── <case>/
+        ├── input/
+        │   ├── case/       # benchmark definition + fixture
+        │   ├── skill/      # exact tested skill snapshot
+        │   └── manifest.json
+        ├── with-skill/
+        │   └── agent/verifier/git artifacts
+        └── without-skill/
+            └── agent/verifier/git artifacts
+```
+
+`report.json` is intended for automated analysis; `report.md` is the human
+summary. The run also stores the prompt, command, raw agent stdout/stderr,
+verifier JSON, git status/log/diff/show, and exact skill/case snapshots. Run
+benchmarks with `--mode both` when you want the report to show what the skill
+changed relative to the same task without it.
+
+To use a different output directory:
 
 ```bash
 python3 skill-benchmarks/benchmark.py run --case commit-trailer \
@@ -55,6 +80,23 @@ skill-benchmarks/cases/<skill>/<case>/
 Individual checks should be deterministic and inspect the resulting workspace,
 not the model's self-reported answer.
 
+For useful diagnosis, checks should preferably include `expected`, `actual`, and
+`evidence` fields in addition to `name` and `passed`. The report renders
+these fields and the JSON preserves them for later analysis.
+
+Example:
+
+```json
+{
+  "name": "commit-message",
+  "passed": false,
+  "expected": "benchmark: update hello",
+  "actual": "wrong message",
+  "evidence": "git log -1 --pretty=%s"
+}
+```
+
+
 ## Exclusions
 
 Benchmark exclusions are explicit in `config.json`. They are for skills whose
@@ -79,11 +121,11 @@ Every new skill should ship with at least one benchmark case unless it is
 explicitly excluded. When a skill changes materially, update its benchmark so
 the benchmark continues to express the intended behavior.
 
-Before merging a new skill locally:
+Before considering a new or materially changed skill complete:
 
 ```bash
+python3 skill-benchmarks/benchmark.py validate
 python3 skill-benchmarks/benchmark.py run --skill <skill-name> --mode both
-# Optional: --model litellm/big-pickle
 python3 -m unittest discover -s skill-benchmarks/tests
 ```
 
