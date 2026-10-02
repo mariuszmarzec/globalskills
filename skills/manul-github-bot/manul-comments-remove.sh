@@ -198,7 +198,8 @@ if [ -n "$is_pr" ]; then
 fi
 
 issue_ids=()
-mapfile -t issue_ids < <(extract_ids "repos/$repo/issues/$issue/comments")
+if [ -z "$PR_REVIEW_COMMENT_ID" ]; then
+  mapfile -t issue_ids < <(extract_ids "repos/$repo/issues/$issue/comments")
 
 for linked_issue in "${linked_issues[@]}"; do
   [ -n "$linked_issue" ] || continue
@@ -214,7 +215,11 @@ issue_ids=($(printf '%s\n' "${issue_ids[@]}" | sort -u))
 
 total=$(( ${#review_ids[@]} + ${#issue_ids[@]} ))
 if [ "$total" -eq 0 ]; then
-  echo "No matching comments found. Nothing to do."
+  if [ -n "$PR_REVIEW_COMMENT_ID" ]; then
+    echo "No matching Manul comments found in review thread #discussion_r$PR_REVIEW_COMMENT_ID."
+  else
+    echo "No matching comments found. Nothing to do."
+  fi
   exit 0
 fi
 
