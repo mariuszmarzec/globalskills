@@ -541,88 +541,16 @@ def write_report(
     ]
     (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-def parse_args(
-    case: CaseInfo,
-    skill_source: Path,
-    adapter: AgentAdapter,
-    *,
-    mode: str,
-    model: str | None,
-    default_timeout: int,
-    artifacts_root: Path | None = None,
-) -> dict[str, Any]:
-    if not case.fixture.is_dir():
-        raise BenchmarkError(f"{case.fixture}: fixture directory does not exist.")
-    if not skill_source.is_dir():
-        raise BenchmarkError(f"{skill_source}: skill directory does not exist.")
-    timeout = case.timeout_seconds or default_timeout
-
-    with tempfile.TemporaryDirectory(prefix=f"skill-bench-{case.case_id}-") as temp_dir:
-        workspace = Path(temp_dir) / "workspace"
-        shutil.copytree(case.fixture, workspace)
-        stage_skill(skill_source, workspace, case.skill_id, enabled=mode == "with-skill")
-        initialize_fixture(workspace)
-
-        started = time.monotonic()
-        run_result = adapter.run(
-            workspace=workspace,
-            prompt=read_prompt(case.prompt),
-            model=model,
-            timeout_seconds=timeout,
-        )
-        verifier_result = run_verifier(case.verifier, workspace, mode)
-        total_duration = time.monotonic() - started
-
-        if artifacts_root is not None:
-            artifact_dir = artifacts_root / case.case_id / mode
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            (artifact_dir / "stdout.txt").write_text(run_result.stdout, encoding="utf-8")
-            (artifact_dir / "stderr.txt").write_text(run_result.stderr, encoding="utf-8")
-            (artifact_dir / "verifier.json").write_text(
-                json.dumps(verifier_result, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            for artifact_name, git_args in (
-                ("git-log.txt", ("git", "log", "--oneline", "--decorate")),
-                ("git-diff.txt", ("git", "diff", "HEAD^", "HEAD")),
-            ):
-                completed = subprocess.run(
-                    git_args,
-                    cwd=workspace,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-                (artifact_dir / artifact_name).write_text(
-                    completed.stdout + completed.stderr,
-                    encoding="utf-8",
-                )
-
-        return {
-            "case": case.case_id,
-            "skill": case.skill_id,
-            "mode": mode,
-            "adapter": adapter.name,
-            "model": model,
-            "agent_returncode": run_result.returncode,
-            "agent_duration_seconds": round(run_result.duration_seconds, 3),
-            "duration_seconds": round(total_duration, 3),
-            "passed": bool(
-                run_result.returncode == 0
-                and verifier_result.get("returncode") == 0
-                and verifier_result.get("passed")
-            ),
-            "verifier": verifier_result,
-            "command": list(run_result.command),
-        }
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run behavioral benchmarks for Global Skills.")
     parser.add_argument("command", choices=("list", "run", "validate"))
     parser.add_argument("--skill", help="Skill id or benchmark case id.")
     parser.add_argument("--case", dest="case_id", help="Exact benchmark case id.")
-    parser.add_argument("--mode", choices=("with-skill", "without-skill", "both"), default="with-skill")
+    parser.add_argument(
+        "--mode",
+        choices=("with-skill", "without-skill", "both"),
+        default="with-skill",
+    )
     parser.add_argument("--model", default=None, help="OpenCode model, e.g. litellm/big-pickle.")
     parser.add_argument("--timeout", type=int, default=None)
     parser.add_argument(
@@ -661,7 +589,11 @@ def main() -> int:
         print("Skills:")
         for skill in skills:
             cases_for_skill = benchmark_by_skill.get(skill.skill_id, [])
-            suffix = f" ({len(cases_for_skill)} case(s))" if cases_for_skill else " (no benchmark yet)"
+            suffix = (
+                f" ({len(cases_for_skill)} case(s))"
+                if cases_for_skill
+                else " (no benchmark yet)"
+            )
             print(f"  ✓ {skill.skill_id}{suffix}")
         print("Excluded:")
         for skill_id, reason in sorted(exclusions.items()):
@@ -705,6 +637,7 @@ def main() -> int:
     adapter_name = config.get("adapter", "opencode")
     if adapter_name != "opencode":
         raise BenchmarkError(f"Unsupported configured adapter '{adapter_name}'.")
+
     adapter = OpenCodeAdapter()
     modes = ("with-skill", "without-skill") if args.mode == "both" else (args.mode,)
 
