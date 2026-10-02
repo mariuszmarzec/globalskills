@@ -129,5 +129,5 @@ python3 skill-benchmarks/benchmark.py run --skill <skill-name> --mode both
 python3 -m unittest discover -s skill-benchmarks/tests
 ```
 
-The second command tests the benchmark framework itself; it does not require an
+The third command tests the benchmark framework itself; it does not require an
 LLM.
