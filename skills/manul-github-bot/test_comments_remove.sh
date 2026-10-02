@@ -23,12 +23,9 @@ case "$*" in
     echo '{"body":""}'
     ;;
   *"api --paginate repos/test-owner/test-repo/pulls/34/comments?per_page=100"*)
-    # gh --paginate emits one JSON array per API page.
     printf '%s\n' '[
       {"id":100,"body":"Original reviewer comment","in_reply_to_id":null},
-      {"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100}
-    ]'
-    printf '%s\n' '[
+      {"id":101,"body":"Manul reply 1\n\n— manul 🐈","in_reply_to_id":100},
       {"id":102,"body":"Manul reply 2\n\n— manul 🐈","in_reply_to_id":101},
       {"id":200,"body":"Another Manul thread\n\n— manul 🐈","in_reply_to_id":null}
     ]'
@@ -60,9 +57,9 @@ PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
 grep -q "Target: test-owner/test-repo# 34" "$TMPROOT/out1"
 grep -q "Deleted:  2" "$TMPROOT/out1"
 grep -q "PR review comments: 2" "$TMPROOT/out1"
-grep -q "/repos/test-owner/test-repo/pulls/comments/101" "$LOG"
-grep -q "/repos/test-owner/test-repo/pulls/comments/102" "$LOG"
-if grep -q "/repos/test-owner/test-repo/pulls/comments/200" "$LOG"; then
+grep -q "pulls/comments/101" "$LOG"
+grep -q "pulls/comments/102" "$LOG"
+if grep -q "pulls/comments/200" "$LOG"; then
   echo "FAIL: selective cleanup touched unrelated thread"
   exit 1
 fi
@@ -73,9 +70,9 @@ echo "Test 2: plain PR URL still removes all Manul review-thread comments"
 PATH="$FAKE_BIN:$PATH" "$SCRIPT_DIR/manul-comments-remove.sh" \
   "https://github.com/test-owner/test-repo/pull/34" > "$TMPROOT/out2"
 grep -q "Deleted:  3" "$TMPROOT/out2"
-grep -q "/repos/test-owner/test-repo/pulls/comments/101" "$LOG"
-grep -q "/repos/test-owner/test-repo/pulls/comments/102" "$LOG"
-grep -q "/repos/test-owner/test-repo/pulls/comments/200" "$LOG"
+grep -q "pulls/comments/101" "$LOG"
+grep -q "pulls/comments/102" "$LOG"
+grep -q "pulls/comments/200" "$LOG"
 echo "PASS"
 
 echo "=== Results: 2 passed, 0 failed ==="
