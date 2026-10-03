@@ -300,3 +300,25 @@ For `REVIEW_FIX`, the review comment's requested production call, side effect, i
 ## 20. Deployment and executable-entry-point contract
 
 Runtime entry points that Manul invokes directly must remain executable in the canonical checkout. In particular, `agent-task-runner.sh` is launched directly by `setsid` and therefore requires the Git executable mode `100755`. Sourced helper scripts do not require the execute bit. The runtime installer/startup path must preserve or restore the execute bit, and CI must fail when the canonical runner loses it.
+## 21. Progress checkpoint contract
+
+For non-trivial repository-change tasks, the agent should not accumulate all work as an uncommitted workspace state until the end. After each logically complete and meaningful milestone, it should create a checkpoint commit and push it to the task branch/PR branch, together with a concise status comment when useful.
+
+A milestone may include, for example:
+- a reproducible regression test that captures the original failure;
+- a proven root-cause fix with focused tests passing;
+- a separately verified corrective change;
+- a regenerated artifact/snapshot after its inputs are known to be correct.
+
+Checkpoint commits are valid even when the overall task is not complete. A checkpoint must not be presented as final completion unless all task acceptance criteria are satisfied.
+
+For existing PR tasks, checkpoint commits must be pushed to the PR's existing head branch. For standalone repository-change tasks, checkpoint commits must be pushed to the task branch.
+
+Workspace-only changes are not considered delivered progress. The agent should distinguish explicitly between:
+- local/uncommitted progress;
+- committed but unpushed progress;
+- pushed progress visible on the GitHub PR.
+
+When a meaningful milestone has been reached, prefer committing and pushing it before starting a new high-risk investigation step. This makes agent execution recoverable across runtime failures, retries, timeouts, and workspace loss.
+
+A failed or blocked execution must preserve already-pushed checkpoints and continue from the latest verified checkpoint when safely possible.
