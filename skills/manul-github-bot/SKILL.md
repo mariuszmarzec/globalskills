@@ -106,6 +106,16 @@ Reuse the PR's existing head branch. Do not create an unrelated task branch.
 
 The task must update the same PR.
 
+## Progress checkpoints
+
+For non-trivial repository tasks, do not keep all meaningful work uncommitted until the end. After each logically complete and valuable milestone, prefer a checkpoint commit and push before starting the next high-risk investigation step.
+
+A checkpoint can be a proven regression test, a verified root-cause fix, a separately validated corrective change, or another meaningful recoverable state. Checkpoints do not imply task completion.
+
+For existing PR tasks, push checkpoints to the PR's existing head branch. Always distinguish local/uncommitted changes from committed-but-unpushed changes and from changes actually visible on the GitHub PR.
+
+When useful, leave a concise PR comment describing what the checkpoint establishes and whether the overall task remains in progress. Preserve already-pushed checkpoints across retries and runtime failures.
+
 ## Unit test guidance
 
 When a repository task adds or changes unit tests, read `UNIT_TESTING.md` before implementing the test. Treat it as the unit-testing methodology for Manul tasks, especially `REVIEW_FIX` work.
