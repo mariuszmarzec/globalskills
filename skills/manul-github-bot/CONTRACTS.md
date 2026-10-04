@@ -302,7 +302,11 @@ For `REVIEW_FIX`, the review comment's requested production call, side effect, i
 Runtime entry points that Manul invokes directly must remain executable in the canonical checkout. In particular, `agent-task-runner.sh` is launched directly by `setsid` and therefore requires the Git executable mode `100755`. Sourced helper scripts do not require the execute bit. The runtime installer/startup path must preserve or restore the execute bit, and CI must fail when the canonical runner loses it.
 ## 21. Progress checkpoint contract
 
-For non-trivial repository-change tasks, the agent should not accumulate all work as an uncommitted workspace state until the end. After each logically complete and meaningful milestone, it should create a checkpoint commit and push it to the task branch/PR branch, together with a concise status comment when useful.
+For non-trivial repository-change tasks, the agent MUST NOT accumulate all
+meaningful work as uncommitted workspace state until the end. After each
+logically complete and meaningful milestone, it MUST create a checkpoint commit
+and push it to the task branch/PR branch, together with a concise status comment
+when useful.
 
 A milestone may include, for example:
 - a reproducible regression test that captures the original failure;
@@ -319,6 +323,12 @@ Workspace-only changes are not considered delivered progress. The agent should d
 - committed but unpushed progress;
 - pushed progress visible on the GitHub PR.
 
-When a meaningful milestone has been reached, prefer committing and pushing it before starting a new high-risk investigation step. This makes agent execution recoverable across runtime failures, retries, timeouts, and workspace loss.
+When a meaningful milestone has been reached, the agent MUST commit and
+push it before starting a new high-risk investigation or implementation step.
+After the push, the agent MUST verify that the remote branch (and existing PR,
+when applicable) points at the pushed commit.
 
-A failed or blocked execution must preserve already-pushed checkpoints and continue from the latest verified checkpoint when safely possible.
+A failed or blocked execution MUST preserve already-pushed checkpoints and,
+when safely possible, continue from the latest verified checkpoint rather than
+restarting from the original task state. Runtime/LLM failure is not evidence
+that repository work made no progress.
