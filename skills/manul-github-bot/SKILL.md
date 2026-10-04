@@ -108,13 +108,25 @@ The task must update the same PR.
 
 ## Progress checkpoints
 
-For non-trivial repository tasks, do not keep all meaningful work uncommitted until the end. After each logically complete and valuable milestone, prefer a checkpoint commit and push before starting the next high-risk investigation step.
+For non-trivial repository tasks, do not keep all meaningful work uncommitted
+until the end. After each logically complete and valuable milestone, the agent
+MUST create a checkpoint commit and push it before starting the next high-risk
+investigation or implementation step.
 
-A checkpoint can be a proven regression test, a verified root-cause fix, a separately validated corrective change, or another meaningful recoverable state. Checkpoints do not imply task completion.
+A checkpoint can be a proven regression test, a verified root-cause fix, a
+separately validated corrective change, or another meaningful recoverable state.
+Checkpoints do not imply task completion.
 
-For existing PR tasks, push checkpoints to the PR's existing head branch. Always distinguish local/uncommitted changes from committed-but-unpushed changes and from changes actually visible on the GitHub PR.
+For existing PR tasks, checkpoints MUST be pushed to the PR's existing head
+branch. Always distinguish local/uncommitted changes from committed-but-
+unpushed changes and from changes actually visible on the GitHub PR. After each
+checkpoint push, verify the remote/PR head SHA.
 
-When useful, leave a concise PR comment describing what the checkpoint establishes and whether the overall task remains in progress. Preserve already-pushed checkpoints across retries and runtime failures.
+When useful, leave a concise PR comment describing what the checkpoint
+establishes and whether the overall task remains in progress. Preserve
+already-pushed checkpoints across retries, timeouts, workspace loss, and
+runtime failures. A runtime failure must not be treated as proof that no
+progress was made.
 
 ## Unit test guidance
 
