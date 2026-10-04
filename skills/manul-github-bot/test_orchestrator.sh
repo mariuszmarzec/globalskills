@@ -52,6 +52,9 @@ export PATH="$MOCK_GH_DIR:$PATH"
 
 ORCHESTRATOR="$SCRIPT_DIR/manul-orchestrator.sh"
 REVIEWER="$SCRIPT_DIR/orchestrator-reviewer.sh"
+PROMPT="$SCRIPT_DIR/orchestrator.prompt.md"
+CONTRACTS="$SCRIPT_DIR/CONTRACTS.md"
+SKILL="$SCRIPT_DIR/SKILL.md"
 
 PASSED=0
 FAILED=0
@@ -244,6 +247,25 @@ test_wait_script_exists() {
   [ -x "$SCRIPT_DIR/manul-wait.sh" ]
 }
 
+
+# Test 16: Non-trivial task checkpoint/delivery protocol
+test_checkpoint_protocol() {
+  grep -q 'Mandatory progress checkpoint protocol' "$PROMPT" || return 1
+  grep -q 'create a checkpoint.*commit and push' "$PROMPT" || return 1
+  grep -q 'verify the remote branch/PR head SHA' "$PROMPT" || return 1
+  grep -q 'On a retry or resumed execution' "$PROMPT" || return 1
+  grep -q 'stop making further repository changes' "$PROMPT" || return 1
+  grep -q "existing PR review/fix task" "$PROMPT" || return 1
+
+  grep -q 'agent MUST NOT accumulate all' "$CONTRACTS" || return 1
+  grep -q 'the agent MUST commit and' "$CONTRACTS" || return 1
+  grep -q 'Runtime/LLM failure is not evidence' "$CONTRACTS" || return 1
+
+  grep -q 'agent MUST create a checkpoint commit' "$SKILL" || return 1
+  grep -q 'checkpoints MUST be pushed to the PR' "$SKILL" || return 1
+  grep -q 'verify the remote/PR head SHA' "$SKILL" || return 1
+}
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Orchestrator Tests"
 echo "═══════════════════════════════════════════════════════════════"
@@ -263,6 +285,7 @@ run_test "full end-to-end mock scenario" test_end_to_end
 run_test "wait handles missing DB" test_wait_missing_db
 run_test "max review cycles enforced" test_max_review_cycles
 run_test "wait script exists" test_wait_script_exists
+run_test "checkpoint and delivery protocol" test_checkpoint_protocol
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
