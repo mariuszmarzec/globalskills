@@ -251,7 +251,8 @@ test_wait_script_exists() {
 # Test 16: Non-trivial task checkpoint/delivery protocol
 test_checkpoint_protocol() {
   grep -q 'Mandatory progress checkpoint protocol' "$PROMPT" || return 1
-  grep -q 'create a checkpoint.*commit and push' "$PROMPT" || return 1
+  grep -q 'create a checkpoint' "$PROMPT" || return 1
+  grep -q 'commit and push it before starting the next high-risk' "$PROMPT" || return 1
   grep -q 'verify the remote branch/PR head SHA' "$PROMPT" || return 1
   grep -q 'On a retry or resumed execution' "$PROMPT" || return 1
   grep -q 'stop making further repository changes' "$PROMPT" || return 1
@@ -261,7 +262,7 @@ test_checkpoint_protocol() {
   grep -q 'the agent MUST commit and' "$CONTRACTS" || return 1
   grep -q 'Runtime/LLM failure is not evidence' "$CONTRACTS" || return 1
 
-  grep -q 'agent MUST create a checkpoint commit' "$SKILL" || return 1
+  grep -q 'MUST create a checkpoint commit and push it' "$SKILL" || return 1
   grep -q 'checkpoints MUST be pushed to the PR' "$SKILL" || return 1
   grep -q 'verify the remote/PR head SHA' "$SKILL" || return 1
 }
