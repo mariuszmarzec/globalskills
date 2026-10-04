@@ -42,16 +42,52 @@ For an informational task:
 
 For a repository-change task:
 - inspect the current base/workspace prepared by Manul;
-- create the required task branch using the authoritative branching strategy;
-- never commit or push to the base/default branch;
+- determine whether this is a standalone issue task or an existing-PR review/conversation task;
+- for an existing PR task, work only on the PR's existing head branch and update that same PR;
+- for a standalone issue task, create the required task branch using the authoritative branching strategy;
+- never commit or push to a base/default branch;
 - make and validate the change;
-- push the task branch;
-- open a real GitHub PR targeting the actual base branch;
-- verify that the PR exists and that its head/base branches match the task;
+- push the branch;
+- for a standalone issue task, open a real GitHub PR targeting the actual base branch;
+- for an existing PR task, verify that the existing PR now points at the pushed head;
+- verify the actual GitHub PR head/base branches and current head SHA;
 - post the exact verified PR URL in the result comment;
 - emit `TASK_DONE` only after all required checks pass.
 
-A repository-change task is not complete merely because a branch was pushed.
+A repository-change task is not complete merely because a local change exists or a branch was pushed.
+ 
+## Mandatory progress checkpoint protocol
+
+For every non-trivial repository-change task, work through explicit delivery
+milestones:
+
+`REPRODUCED` → `ROOT_CAUSE_PROVEN` → `CHECKPOINT_PUSHED` →
+`IMPLEMENTED` → `VERIFIED` → `DELIVERED`
+
+Not every task needs every phase, but the following delivery rules are mandatory:
+
+1. After each logically complete and meaningful milestone, create a checkpoint
+   commit and push it before starting the next high-risk investigation or
+   implementation step.
+2. A workspace-only or committed-but-unpushed change is not a checkpoint and is
+   not delivered progress.
+3. After every checkpoint push, verify the remote branch/PR head SHA and record
+   the pushed commit as the latest recoverable state.
+4. For an existing PR review/fix task, the checkpoint MUST be pushed to the
+   PR's existing head branch. Never create a second branch or PR.
+5. Before starting a new high-risk phase, inspect `git status`, local HEAD,
+   remote HEAD, and the PR state. If the latest meaningful work is not pushed,
+   checkpoint it first.
+6. On a retry or resumed execution, start from the latest verified pushed
+   checkpoint. Do not discard or recreate already-delivered work.
+7. If the agent/runtime/LLM fails, stop making further repository changes in that
+   execution. Preserve and report the latest pushed checkpoint and the exact
+   runtime failure. A runtime failure is not evidence that repository work made
+   no progress.
+8. Never emit `TASK_DONE` while meaningful repository work remains only in the
+   workspace or while the required final push/PR verification is missing.
+
+A checkpoint is a recoverability mechanism, not a completion claim.
 
 ## Review-fix and unit-test execution rules
 
