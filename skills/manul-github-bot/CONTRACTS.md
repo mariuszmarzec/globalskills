@@ -266,7 +266,7 @@ environment for unattended execution is stored separately in `~/.manul/.env`;
 it is not part of the Manul JSON configuration contract. The semantics of
 these controls should not change accidentally.
 
-## 17. Runtime boundary
+## 18. Runtime boundary
 
 Manul task contracts are runtime-neutral. The daemon never invokes an agent
 runtime directly; it calls `AgentExecutionController.execute`, which routes
@@ -290,7 +290,7 @@ Per-attempt runtime logs are diagnostic artifacts, not task state. They should
 be retained under the Manul task-log directory and cleaned by the normal task
 retention policy.
 
-## 18. Clean-break policy
+## 19. Clean-break policy
 
 The runtime isolation refactor is a clean break from `~/.openclaw/manul`.
 
@@ -303,7 +303,7 @@ Behavioural compatibility is required; obsolete filesystem layout
 compatibility is not.
 
 
-## 19. Unit-test contract
+## 20. Unit-test contract
 
 When an implementation task adds or changes unit tests:
 - tests must prove the requested behavior, not merely object construction, helper execution, DTO conversion, or property structure;
@@ -319,10 +319,10 @@ When an implementation task adds or changes unit tests:
 
 For `REVIEW_FIX`, the review comment's requested production call, side effect, interaction, or verification is authoritative. Implementation details may differ, but the behavioral contract must remain intact.
 
-## 20. Deployment and executable-entry-point contract
+## 21. Deployment and executable-entry-point contract
 
 Runtime entry points that Manul invokes directly must remain executable in the canonical checkout. In particular, `agent-task-runner.sh` is launched directly by `setsid` and therefore requires the Git executable mode `100755`. Sourced helper scripts do not require the execute bit. The runtime installer/startup path must preserve or restore the execute bit, and CI must fail when the canonical runner loses it.
-## 21. Progress checkpoint contract
+## 22. Progress checkpoint contract
 
 For non-trivial repository-change tasks, the agent MUST NOT accumulate all
 meaningful work as uncommitted workspace state until the end. After each
