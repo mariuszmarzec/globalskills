@@ -1016,6 +1016,18 @@ cleanup_expired_tasks() {
   elif [ -n "$deleted" ] && ! [[ "$deleted" =~ ^[0-9]+$ ]]; then
     log "WARN: task retention cleanup returned unexpected result: $deleted"
   fi
+
+  # Runtime adapters may retain per-attempt diagnostic artifacts (for example
+  # OpenCode JSONL event streams) so execution failures remain debuggable after
+  # the process exits. Keep them for the same retention window as terminal task
+  # history instead of leaking unbounded task logs.
+  if [ -d "$MANUL_TASK_LOG_DIR" ]; then
+    local deleted_task_logs
+    deleted_task_logs="$(find "$MANUL_TASK_LOG_DIR" -type f -name 'task-*' -mtime "+${TASK_HISTORY_RETENTION_DAYS}" -print -delete 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$deleted_task_logs" =~ ^[0-9]+$ ]] && [ "$deleted_task_logs" -gt 0 ]; then
+      log "task retention cleanup: removed $deleted_task_logs task diagnostic artifact(s) older than ${TASK_HISTORY_RETENTION_DAYS} days"
+    fi
+  fi
 }
 
 
