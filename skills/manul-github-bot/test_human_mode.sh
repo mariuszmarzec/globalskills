@@ -20,6 +20,7 @@ cat > "$MANUL_DIR/config.json" <<'JSON'
 JSON
 
 GH_LOG="$TMP_ROOT/gh.log"
+export GH_LOG
 cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
