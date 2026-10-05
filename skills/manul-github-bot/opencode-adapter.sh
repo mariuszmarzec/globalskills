@@ -98,8 +98,9 @@ log() {
 }
 log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN workspace=$OPT_WORKSPACE"
 
-# ProcessRunner is the only process boundary. The raw JSONL is temporary;
-# OPT_STDOUT_FILE is rewritten below into plain agent text/control markers.
+# ProcessRunner is the only process boundary. The raw JSONL is retained as a
+# per-attempt diagnostic artifact; OPT_STDOUT_FILE is rewritten below into plain
+# agent text/control markers.
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"
 ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
 
@@ -231,7 +232,7 @@ else
     fi
 fi
 
-rm -f "$RAW_STDOUT_FILE" 2>/dev/null || true
+# Keep RAW_STDOUT_FILE; Manul task retention is responsible for cleanup.
 
 jq -cn \
     --arg status "$_status" \
