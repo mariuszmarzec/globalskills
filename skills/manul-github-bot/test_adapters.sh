@@ -326,6 +326,15 @@ MOCK
       --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "FAILED" "OpenCodeAdapter maps non-step-limit failure"
+  printf '%s' "$out" | jq -r '.summary' | grep -q 'error=provider failed' \
+    && ok "OpenCodeAdapter surfaces structured runtime error in summary" \
+    || fail "OpenCodeAdapter did not surface runtime error message"
+  printf '%s' "$out" | jq -r '.diagnostics.error_type' | grep -qx 'ProviderError' \
+    && ok "OpenCodeAdapter preserves runtime error type" \
+    || fail "OpenCodeAdapter did not preserve runtime error type"
+  [ -f "$tmp/runtime/logs/tasks/task-oc-2.attempt-1.opencode.jsonl" ] \
+    && ok "OpenCodeAdapter retains raw JSONL diagnostic artifact" \
+    || fail "OpenCodeAdapter deleted raw JSONL diagnostic artifact"
 }
 
 # ---------------------------------------------------------------------------
