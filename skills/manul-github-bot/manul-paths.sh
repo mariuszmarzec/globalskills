@@ -37,6 +37,7 @@ if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
     _CONFIG_MODE="$(jq -r '.mode // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
 fi
 MANUL_MODE="${MANUL_MODE:-${_CONFIG_MODE:-bot}}"
+export MANUL_MODE
 
 case "$MANUL_MODE" in
     bot|human) ;;
