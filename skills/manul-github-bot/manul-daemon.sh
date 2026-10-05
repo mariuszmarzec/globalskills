@@ -3020,10 +3020,13 @@ PROMPT_APPEND
     # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
     local COMMENT_POST_SUCCESS="false"
     if [ -n "$FINAL_COMMENT" ]; then
-      if post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
+      # FINAL_COMMENT is the agent's actual user-facing result. It must remain
+      # visible in human mode; only daemon orchestration/status/error comments
+      # are suppressed there.
+      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
         COMMENT_POST_SUCCESS="true"
       else
-        log "ERROR: failed to post lifecycle comment for $COMMENT_ID"
+        log "ERROR: failed to post result comment for $COMMENT_ID"
       fi
     fi
 
