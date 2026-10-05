@@ -107,6 +107,12 @@ if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
+echo
+echo "  Preparing OpenCode provider permissions..."
+if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
+    fail "Could not prepare required OpenCode permissions"
+fi
+
 DB_FILE="$STATE_DIR/manul.db"
 REPAIR_BASELINE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
