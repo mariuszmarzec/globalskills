@@ -1106,15 +1106,17 @@ post_github_comment() {
   local body="$3"
   local reply_to="${4:-}"
 
-  # Append Manul signature to automated comments (deterministic)
-  # Format: body\n\n— manul 🐈
-  # Prevent duplicate signature if body already ends with it
-  local signature="— manul 🐈"
+  # Bot mode identifies automated comments; human mode deliberately does not.
   local signed_body
-  if [[ "$body" == *"$signature" ]]; then
+  if [ "$MANUL_MODE" = "human" ]; then
     signed_body="$body"
   else
-    signed_body="${body}"$'\n\n'"$signature"
+    local signature="— manul 🐈"
+    if [[ "$body" == *"$signature" ]]; then
+      signed_body="$body"
+    else
+      signed_body="${body}"$'\n\n'"$signature"
+    fi
   fi
 
   if [ -n "$reply_to" ]; then
@@ -1128,6 +1130,16 @@ post_github_comment() {
     # Top-level issue/PR-conversation task: post as a regular comment
     gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>>"$LOG"
   fi
+}
+
+# Lifecycle/status/error comments are bot-only. Human mode remains silent
+# about orchestration state on GitHub; the agent result comment is verified
+# separately via the deterministic task/attempt marker.
+post_lifecycle_comment() {
+  if [ "$MANUL_MODE" = "human" ]; then
+    return 0
+  fi
+  post_github_comment "$@"
 }
 
 # Verify the agent posted a result comment to GitHub for THIS exact task/attempt.
@@ -1796,7 +1808,20 @@ post_task_needs_user_comment() {
   event_json="$(jq -nc --arg taskId "$comment_id" --arg conversationId "$conversation_id" --arg question "$question" --argjson attempt "$task_attempt" '{type:"TASK_NEEDS_USER",timestamp:(now|strftime("%Y-%m-%dT%H:%M:%SZ")),data:{taskId:$taskId,conversationId:$conversationId,attempt:$attempt,question:$question}}')"
 
   local body
-  body="<!-- manul:event $event_json -->
+  if [ "$MANUL_MODE" = "human" ]; then
+    body="<!-- manul:event $event_json -->
+
+I need your input to continue.
+
+$question
+
+Reply with:
+
+\`/manul continue <your answer>\`
+
+This will resume the same task and conversation."
+  else
+    body="<!-- manul:event $event_json -->
 
 ❓ **Manul needs your input to continue**
 
@@ -1809,6 +1834,7 @@ Reply with:
 The answer will resume this same task and conversation.
 
 — manul 🐈"
+  fi
 
   # The task is already marked blocked_user when this notification runs.
   # Retry transient GitHub API failures so a user decision is not silently lost.
@@ -2275,7 +2301,7 @@ run_once() {
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='queued' AND attempts >= $MAX_ATTEMPTS;" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to complete the task after $ACTUAL_ATTEMPTS attempts (max reached)."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -2378,7 +2404,7 @@ run_once() {
 **Triggered by:** $TRIGGERER
 **Source:** $SOURCE_LINK"
 
-    if ! post_github_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
+    if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
@@ -2435,6 +2461,7 @@ You are the Manul implementation agent. Complete ONE task and then emit exactly 
 - Task Action: __TASK_ACTION__
 - PR Number: __PR_NUMBER__
 - Original Review Comment ID: __REPLY_TO__
+- Manul Mode: __MANUL_MODE__
 
 ## User Request
 PROMPT_EOF
@@ -2475,6 +2502,12 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 `TASK_NEEDS_USER_END`
 12. Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run as `TASK_NEEDS_USER_BEGIN/END`.
 13. A partial or malformed user-decision block is not a valid pause; do not rely on it to stop execution.
+
+## Operating mode
+- `__MANUL_MODE__` is the configured Manul mode.
+- In `bot` mode, follow the normal Manul attribution rules below.
+- In `human` mode, behave like a human developer using GitHub: do not sign comments with "— manul 🐈", do not add any `Co-authored-by` trailer to commits, and do not post orchestration/status/error comments. Only post the actual user-facing result when the task requires a comment.
+- In `human` mode, do not add Manul/OpenCode attribution merely because an AI skill normally asks for it. The human developer remains the sole visible author of commits.
 
 ## Rules
 1. Inspect the local repository and implement the requested change.
@@ -2550,7 +2583,8 @@ Your comment MUST:
 - Start with the task summary
 - Include the deterministic task/attempt marker: `<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->`
 - Include your actual work/output
-- End with: "— manul 🐈"
+- In `bot` mode, end with: "— manul 🐈".
+- In `human` mode, do NOT add a Manul signature or AI attribution.
 - Be posted BEFORE emitting TASK_DONE
 
 Example informational task response:
@@ -2575,7 +2609,7 @@ PROMPT_EOF
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_task_lock
       set_activity "none" "idle"
@@ -2588,7 +2622,7 @@ PROMPT_EOF
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
-      post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post final comment for $COMMENT_ID"
+      post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
@@ -2828,6 +2862,7 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
     prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
     prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
+    prompt_content="${prompt_content//__MANUL_MODE__/$MANUL_MODE}"
     prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
@@ -2985,7 +3020,7 @@ PROMPT_APPEND
     # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
     local COMMENT_POST_SUCCESS="false"
     if [ -n "$FINAL_COMMENT" ]; then
-      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
+      if post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
         COMMENT_POST_SUCCESS="true"
       else
         log "ERROR: failed to post lifecycle comment for $COMMENT_ID"
