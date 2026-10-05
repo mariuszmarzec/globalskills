@@ -313,7 +313,7 @@ test_opencode_failure() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"message":"provider failed"}}'
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
