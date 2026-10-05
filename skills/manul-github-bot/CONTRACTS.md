@@ -230,7 +230,19 @@ When the agent materially needs user input it must:
 
 Equivalent implementation choices should be resolved by the agent without blocking the user.
 
-## 16. Configuration contract
+## 16. Human and bot modes
+
+The top-level configuration key `mode` selects Manul's GitHub presentation/attribution behavior:
+
+- `bot` is the default and preserves the existing Manul signature, lifecycle/status/error comments, and AI commit attribution.
+- `human` suppresses Manul signatures and orchestration lifecycle/status/error comments on GitHub.
+- In `human`, the agent's actual result comment remains user-facing and is verified using the invisible deterministic task/attempt marker.
+- In `human`, commits must not contain an AI `Co-authored-by` trailer.
+- Task state, recovery, leases, and local diagnostics remain unchanged; human mode is not a weaker execution or verification mode.
+
+The mode is resolved from `MANUL_MODE` when explicitly provided, otherwise from `.mode`, defaulting to `bot`. Invalid values are rejected.
+
+## 17. Configuration contract
 
 The runtime reads Manul configuration from `MANUL_DIR/config.json`, where `MANUL_DIR` resolves to `~/.manul`.
 
