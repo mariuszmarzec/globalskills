@@ -30,6 +30,22 @@ MANUL_TASKS_DIR="${MANUL_TASKS_DIR:-$MANUL_STATE_DIR/tasks}"
 MANUL_TASK_LOG_DIR="${MANUL_TASK_LOG_DIR:-$MANUL_LOG_DIR/tasks}"
 MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 
+# Manul operating mode (default: bot). Environment overrides config.
+# Config key: .mode
+_CONFIG_MODE=""
+if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+    _CONFIG_MODE="$(jq -r '.mode // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
+fi
+MANUL_MODE="${MANUL_MODE:-${_CONFIG_MODE:-bot}}"
+
+case "$MANUL_MODE" in
+    bot|human) ;;
+    "") MANUL_MODE="bot" ;;
+    *)
+        echo "ERROR: Unknown Manul mode '$MANUL_MODE'. Must be 'bot' or 'human'." >&2
+        exit 1
+        ;;
+esac
 # Runtime selection (default: openclaw). Environment overrides config.
 # Config key: .automation.agentRuntime
 _CONFIG_AGENT_RUNTIME=""
