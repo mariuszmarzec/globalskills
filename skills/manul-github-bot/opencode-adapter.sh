@@ -90,7 +90,7 @@ if [ -n "$OPT_AGENT" ]; then
 fi
 
 RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
-rm -f "$RAW_STDOUT_FILE" 2>/dev/null || true
+# Keep RAW_STDOUT_FILE as the canonical per-attempt runtime diagnostic artifact.
 mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/null || true
 
 log() {
@@ -103,7 +103,10 @@ log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=${OPT_SESSION_ID:-<
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"
 ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
 
-ProcessRunner.run \
+# Capture ProcessRunner output so its protocol line cannot leak into the
+# adapter stdout. AgentExecutor/AgentExecutionController expect stdout to
+# contain exactly one final ExecutionResult JSON document.
+local_runner_result="$(ProcessRunner.run \
     --timeout "$AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
     -- "$OPENCODE_BIN" run \
@@ -111,8 +114,9 @@ ProcessRunner.run \
         "${AGENT_ARGS[@]}" \
         --format json \
         --dir "$OPT_WORKSPACE" \
-        "$PROMPT_CONTENT"
+        "$PROMPT_CONTENT")"
 pr_rc=$?
+: "$local_runner_result"
 
 session_id=""
 if [ -f "$RAW_STDOUT_FILE" ]; then
@@ -162,11 +166,24 @@ _summary=""
 # in GitHub lifecycle comments.
 error_message=""
 error_type=""
+error_source=""
 last_event_type=""
 if [ -s "$RAW_STDOUT_FILE" ]; then
     error_message="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.message // .message // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
     error_type="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.name // .error.type // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
     last_event_type="$(jq -Rr 'try fromjson catch empty | .type // empty' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { value=$0 } END { print value }')"
+    if [ -n "$error_message" ]; then
+        error_source="runtime_jsonl"
+    fi
+fi
+if [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
+    error_message="$(grep -Eio '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$OPT_STDERR_FILE" 2>/dev/null | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
+    if [ -n "$error_message" ]; then
+        error_source="stderr"
+        if printf "%s" "$error_message" | grep -Eqi 'permission requested|auto-rejecting|permission denied|denied'; then
+            error_type="PermissionError"
+        fi
+    fi
 fi
 
 if [ "$pr_rc" -eq 124 ]; then
@@ -205,6 +222,12 @@ else
         _summary="OpenCode binary not found"
     else
         _summary="OpenCode agent exited with code $pr_rc"
+        [ -n "$error_type" ] && _summary+="; error_type=$error_type"
+        [ -n "$error_message" ] && _summary+="; error=$error_message"
+        [ -n "$error_source" ] && _summary+="; error_source=$error_source"
+        _summary+="; duration_s=$duration"
+        [ -n "$session_id" ] && _summary+="; session=$session_id"
+        [ -n "$last_event_type" ] && _summary+="; last_event=$last_event_type"
     fi
 fi
 
@@ -220,9 +243,10 @@ jq -cn \
     --arg runtime "opencode" \
     --arg error_type "$error_type" \
     --arg error_message "$error_message" \
+    --arg error_source "$error_source" \
     --arg last_event_type "$last_event_type" \
     --arg raw_log "$RAW_STDOUT_FILE" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, diagnostics:{error_type:$error_type,error_message:$error_message,last_event_type:$last_event_type,raw_log:$raw_log}}'
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,raw_log:$raw_log}}'
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
