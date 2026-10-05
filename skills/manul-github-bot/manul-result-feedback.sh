@@ -43,6 +43,8 @@ SUMMARY=""
 ERROR_MSG=""
 PR_NUMBER=""
 EXPECTED_ATTEMPT=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
 SIGNATURE="— manul 🐈"
 
 while [[ $# -gt 0 ]]; do
@@ -138,6 +140,11 @@ post_feedback_comment() {
   local body="$3"
   local task_id="${4:-}"
   local pr_number="${5:-}"
+
+  if [ "$MANUL_MODE" = "human" ]; then
+    # Human mode does not publish orchestration lifecycle/status/error comments.
+    return 0
+  fi
 
   local reply_to=""
   if [ -n "$task_id" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
