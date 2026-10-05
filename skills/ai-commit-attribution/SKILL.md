@@ -11,7 +11,7 @@ license: MIT
 Whenever creating a Git commit, preserve the human developer as the commit author.
 The AI agent must never replace or modify the Git author identity.
 
-Every commit created by an AI agent must clearly indicate that it was AI-assisted by adding a `Co-authored-by` trailer.
+Every commit created by an AI agent must clearly indicate that it was AI-assisted by adding a `Co-authored-by` trailer, except when the active Manul task explicitly runs in `human` mode.
 
 ## Rules
 
@@ -22,6 +22,10 @@ Every commit created by an AI agent must clearly indicate that it was AI-assiste
 - Always use the currently configured Git identity as the commit author.
 - Always append a `Co-authored-by` trailer to commits created by the AI.
 - Preserve any existing commit trailers (such as `Signed-off-by`, `Reviewed-by`, etc.) and append the AI trailer after them.
+
+## Human Mode Override
+
+When Manul runs with `mode: "human"`, the task is intentionally presented as human work. In that mode the configured Git author remains the only commit author and no AI `Co-authored-by` trailer is added. This exception is scoped to Manul human mode; normal OpenCode/AI work remains attributed as below.
 
 ## OpenCode Identity
 
