@@ -48,6 +48,7 @@ env:
     skills/manul-github-bot/test_comments_remove.sh
     skills/manul-github-bot/test_user_decision_blocking.sh
     skills/manul-github-bot/test_feedback_routing.sh
+    skills/manul-github-bot/test_human_mode.sh
 
 jobs:
   verify:
