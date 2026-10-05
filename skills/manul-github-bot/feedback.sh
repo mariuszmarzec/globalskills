@@ -13,6 +13,8 @@ set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 LOG="${MANUL_DIR}/poll.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
 
 REPO="${1:-}"
 ISSUE="${2:-}"
@@ -20,6 +22,11 @@ MSG="${3:-}"
 
 [ -n "$REPO" ] || { echo "usage: feedback.sh <repo> <issue> [<msg>]" >&2; exit 1; }
 [ -n "$ISSUE" ] || { echo "usage: feedback.sh <repo> <issue> [<msg>]" >&2; exit 1; }
+
+if [ "$MANUL_MODE" = "human" ]; then
+  # Human mode deliberately does not publish bot skip/status comments.
+  exit 0
+fi
 
 SIG="— manul 🐈"
 if [[ "$MSG" == *"$SIG" ]]; then
