@@ -1050,6 +1050,109 @@ fi
 
 # ── Test: repair must fail closed when DB is missing ─────────────────────────
 echo
+
+# ── Test: OpenCode provider permission setup ─────────────────────────────────
+echo
+echo "Test: OpenCode provider permission setup"
+OC_ROOT="$TMPROOT/opencode-permissions"
+OC_HOME="$OC_ROOT/home"
+OC_CONFIG="$OC_HOME/.config/opencode/opencode.json"
+OC_BIN="$OC_ROOT/bin/opencode"
+mkdir -p "$(dirname "$OC_CONFIG")" "$(dirname "$OC_BIN")"
+
+cat >"$OC_CONFIG" <<'JSON'
+{
+  "theme": "test",
+  "permission": {
+    "external_directory": {
+      "~/litellm/**": "allow",
+      "~/.npm/**": "allow"
+    },
+    "bash": "ask"
+  }
+}
+JSON
+
+cat >"$OC_BIN" <<'MOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
+  cat "$OPENCODE_CONFIG"
+  exit 0
+fi
+exit 2
+MOCK
+chmod +x "$OC_BIN"
+
+set +e
+OC_OUTPUT="$(HOME="$OC_HOME" OPENCODE_CONFIG="$OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
+OC_RC=$?
+set -e
+
+if [ "$OC_RC" -eq 0 ] && jq -e '.permission.external_directory["/tmp/**"] == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup adds /tmp/** allow rule"
+else
+  fail "OpenCode setup did not add /tmp/** allow rule (rc=$OC_RC)"
+  echo "$OC_OUTPUT"
+fi
+
+if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask"' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup preserves unrelated provider configuration"
+else
+  fail "OpenCode setup changed unrelated provider configuration"
+fi
+
+OC_HASH_BEFORE="$(sha256sum "$OC_CONFIG" | awk '{print $1}')"
+set +e
+HOME="$OC_HOME" OPENCODE_CONFIG="$OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
+OC_RC_2=$?
+set -e
+OC_HASH_AFTER="$(sha256sum "$OC_CONFIG" | awk '{print $1}')"
+if [ "$OC_RC_2" -eq 0 ] && [ "$OC_HASH_BEFORE" = "$OC_HASH_AFTER" ]; then
+  ok "OpenCode setup is idempotent"
+else
+  fail "OpenCode setup is not idempotent (rc=$OC_RC_2)"
+fi
+
+OC_MISSING_ROOT="$OC_ROOT/missing"
+OC_MISSING_CONFIG="$OC_MISSING_ROOT/.config/opencode/opencode.json"
+set +e
+HOME="$OC_MISSING_ROOT" OPENCODE_CONFIG="$OC_MISSING_CONFIG" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
+OC_MISSING_RC=$?
+set -e
+if [ "$OC_MISSING_RC" -eq 0 ] && [ ! -f "$OC_MISSING_CONFIG" ]; then
+  ok "OpenCode setup safely handles missing provider configuration"
+else
+  fail "OpenCode setup should safely skip a missing provider configuration"
+fi
+
+OC_INVALID="$OC_ROOT/invalid.json"
+printf '{ invalid json\n' >"$OC_INVALID"
+set +e
+HOME="$OC_HOME" OPENCODE_CONFIG="$OC_INVALID" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
+OC_INVALID_RC=$?
+set -e
+if [ "$OC_INVALID_RC" -ne 0 ] && grep -qxF '{ invalid json' "$OC_INVALID"; then
+  ok "OpenCode setup fails closed on invalid configuration"
+else
+  fail "OpenCode setup did not fail closed on invalid configuration"
+fi
+
+NO_OPENCODE_ROOT="$OC_ROOT/no-opencode"
+mkdir -p "$NO_OPENCODE_ROOT"
+set +e
+HOME="$NO_OPENCODE_ROOT" OPENCODE_CONFIG="$NO_OPENCODE_ROOT/opencode.json" OPENCODE_BIN="$NO_OPENCODE_ROOT/missing-opencode" \
+  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
+NO_OC_RC=$?
+set -e
+if [ "$NO_OC_RC" -eq 0 ]; then
+  ok "OpenCode setup safely no-ops when provider is absent"
+else
+  fail "OpenCode setup fails when OpenCode provider is absent"
+fi
 echo "Test: Repair refuses implicit fresh DB creation"
 FAIL_CLOSED_ROOT="$(mktemp -d /tmp/manul-fail-closed-XXXXXX)"
 FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"
