@@ -17,9 +17,11 @@ It watches configured repositories, reacts to `/manul` in issue bodies, issue/PR
 - pushes repository changes and verifies a real PR when required;
 - posts lifecycle and result feedback on the original GitHub conversation.
 
-Every Manul-authored comment ends with:
+In `bot` mode, every Manul-authored comment ends with:
 
 `— manul 🐈`
+
+The top-level configuration key `mode` controls attribution behavior. It defaults to `bot`. In `human` mode, Manul does not append its signature, does not publish lifecycle/status/error comments, and AI-created commits must not contain a `Co-authored-by` trailer. The agent still posts its actual user-facing result comment.
 
 Read these files before making architectural changes:
 
@@ -249,6 +251,10 @@ config.json.example
 ```
 
 Current automation controls include:
+
+- `mode`: `bot` (default) or `human`;
+
+Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed).
 
 ```
 agentTimeoutSeconds
