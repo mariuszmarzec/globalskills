@@ -296,9 +296,16 @@ The installer currently:
 - deploys runtime symlinks;
 - initializes configuration when absent;
 - prepares the operator `.env` for unattended processes;
+- configures required provider-owned OpenCode permissions when OpenCode is installed;
 - prepares/validates the DB;
 - installs the watchdog cron;
 - installs the zsh shell integration.
+
+For OpenCode, the installer/repair path ensures the provider-owned global configuration
+contains `permission.external_directory["/tmp/**"] = "allow"` when an OpenCode
+configuration is available. Existing OpenCode settings are preserved and no broad
+permission bypass such as `--auto` is enabled. The provider configuration remains
+outside `~/.manul`.
 
 The operator `.env` is runtime-owned and mode 600. It carries only the
 provider variables explicitly supported by the installer, such as custom
