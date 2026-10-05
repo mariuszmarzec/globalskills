@@ -1,4 +1,5 @@
 {
+  "mode": "bot",
   "trigger": "/manul",
   "allowedUsers": ["mariuszmarzec"],
   "autoCreatePr": true,
