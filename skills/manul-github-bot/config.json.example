@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "mode": "bot",
   "pollInterval": 60,
   "trigger": "/manul",
   "agents": [
