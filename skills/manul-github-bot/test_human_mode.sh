@@ -28,6 +28,14 @@ exit 0
 EOF
 chmod +x "$FAKE_BIN/gh"
 
+# Use a shell-function mock for the production comment helper. This avoids
+# coupling the regression test to executable lookup while still exercising the
+# real post_github_comment implementation.
+gh() {
+  printf '%s\n' "$*" >> "$GH_LOG"
+  return 0
+}
+
 export HOME="$TMP_ROOT"
 export PATH="$FAKE_BIN:$PATH"
 export MANUL_DIR
