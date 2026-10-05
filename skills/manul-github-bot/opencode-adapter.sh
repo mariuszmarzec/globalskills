@@ -89,7 +89,7 @@ if [ -n "$OPT_AGENT" ]; then
     AGENT_ARGS=(--agent "$OPT_AGENT")
 fi
 
-RAW_STDOUT_FILE="${OPT_STDOUT_FILE}.opencode.jsonl"
+RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
 rm -f "$RAW_STDOUT_FILE" 2>/dev/null || true
 mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/null || true
 
@@ -157,6 +157,18 @@ _status="FAILED"
 _exit_code="$pr_rc"
 _summary=""
 
+# Extract the most useful structured runtime diagnostics before interpreting the
+# result. Keep the full JSONL file on disk; only a compact summary is surfaced
+# in GitHub lifecycle comments.
+error_message=""
+error_type=""
+last_event_type=""
+if [ -s "$RAW_STDOUT_FILE" ]; then
+    error_message="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.message // .message // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
+    error_type="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.name // .error.type // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
+    last_event_type="$(jq -Rr 'try fromjson catch empty | .type // empty' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { value=$0 } END { print value }')"
+fi
+
 if [ "$pr_rc" -eq 124 ]; then
     _status="TIMEOUT"
     _summary="OpenCode execution timed out after ${AGENT_TIMEOUT}s"
@@ -205,7 +217,12 @@ jq -cn \
     --arg summary "$_summary" \
     --arg session_id "$session_id" \
     --arg duration_s "$duration" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber)}'
+    --arg runtime "opencode" \
+    --arg error_type "$error_type" \
+    --arg error_message "$error_message" \
+    --arg last_event_type "$last_event_type" \
+    --arg raw_log "$RAW_STDOUT_FILE" \
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, diagnostics:{error_type:$error_type,error_message:$error_message,last_event_type:$last_event_type,raw_log:$raw_log}}'
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
