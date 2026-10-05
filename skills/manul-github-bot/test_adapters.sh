@@ -314,6 +314,7 @@ test_opencode_failure() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
+printf '%s\n' '! permission requested: external_directory (/tmp/*); auto-rejecting.' >&2
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -332,9 +333,15 @@ MOCK
   printf '%s' "$out" | jq -r '.diagnostics.error_type' | grep -qx 'ProviderError' \
     && ok "OpenCodeAdapter preserves runtime error type" \
     || fail "OpenCodeAdapter did not preserve runtime error type"
+  printf '%s' "$out" | jq -r '.diagnostics.error_source' | grep -qx 'runtime_jsonl' \
+    && ok "OpenCodeAdapter identifies runtime JSONL as error source" \
+    || fail "OpenCodeAdapter reported wrong error source"
   [ -f "$tmp/runtime/logs/tasks/task-oc-2.attempt-1.opencode.jsonl" ] \
     && ok "OpenCodeAdapter retains raw JSONL diagnostic artifact" \
     || fail "OpenCodeAdapter deleted raw JSONL diagnostic artifact"
+  grep -q 'permission requested: external_directory (/tmp/*); auto-rejecting\\.' "$tmp/stderr" \
+    && ok "OpenCodeAdapter preserves stderr permission diagnostics" \
+    || fail "OpenCodeAdapter lost stderr permission diagnostics"
 }
 
 # ---------------------------------------------------------------------------
