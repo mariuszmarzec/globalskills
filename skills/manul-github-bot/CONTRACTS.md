@@ -268,6 +268,16 @@ not spawn subprocesses directly and must not depend on each other.
 Runtime-specific details (sessions, continuation mechanics, tool paths) are
 implementation details of the adapter, not Manul task contracts.
 
+Every adapter failure result should preserve actionable diagnostics in its
+`ExecutionResult` when the runtime provides them, including the runtime,
+exit code, session ID, duration, error type/message, and the location of any
+retained raw runtime log. A generic summary such as "agent exited with code 1"
+is not sufficient when the runtime exposes a more specific error.
+
+Per-attempt runtime logs are diagnostic artifacts, not task state. They should
+be retained under the Manul task-log directory and cleaned by the normal task
+retention policy.
+
 ## 18. Clean-break policy
 
 The runtime isolation refactor is a clean break from `~/.openclaw/manul`.
