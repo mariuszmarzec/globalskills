@@ -67,7 +67,7 @@ CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 
 for required in install-manul-symlinks.sh config.json.example manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
-             manul-shell.zsh manul-daemon.sh manul-status.sh; do
+             manul-shell.zsh opencode-permissions.sh manul-daemon.sh manul-status.sh; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
         fail "Missing required canonical file: $CANONICAL_DIR/$required"
     fi
@@ -149,6 +149,13 @@ if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
+
+# 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.
+echo
+echo "  Preparing OpenCode provider permissions..."
+if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
+    fail "Could not prepare required OpenCode permissions"
+fi
 
 # 5. Bootstrap/migrate the DB
 #    - missing/empty file -> only --init-state may bootstrap a fresh schema
