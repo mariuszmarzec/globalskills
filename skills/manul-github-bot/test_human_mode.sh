@@ -7,7 +7,7 @@ TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 MANUL_DIR="$TMP_ROOT/manul"
-FAKE_BIN="$TMP_ROOT/bin"
+FAKE_BIN="$TMP_ROOT/.local/bin"
 mkdir -p "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/logs" "$MANUL_DIR/workspace" "$FAKE_BIN"
 
 cat > "$MANUL_DIR/config.json" <<'JSON'
