@@ -29,38 +29,33 @@ OPENCODE_BIN_RESOLVED="$(resolve_opencode_bin || true)"
 [ -n "$OPENCODE_BIN_RESOLVED" ] || exit 0
 
 OPENCODE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
-CONFIG_DIR="$(dirname "$OPENCODE_CONFIG")"
-mkdir -p "$CONFIG_DIR"
 
-CONFIG_EXISTS=false
-if [ -f "$OPENCODE_CONFIG" ]; then
-  CONFIG_EXISTS=true
-  if ! jq empty "$OPENCODE_CONFIG" >/dev/null 2>&1; then
-    echo "ERROR: invalid OpenCode configuration: $OPENCODE_CONFIG" >&2
-    exit 1
-  fi
+# Provider configuration is owned by OpenCode/the operator. Manul must not
+# invent a new provider config just to add its permission rule; a missing
+# provider config is a safe no-op.
+[ -f "$OPENCODE_CONFIG" ] || exit 0
+
+CONFIG_DIR="$(dirname "$OPENCODE_CONFIG")"
+if ! jq empty "$OPENCODE_CONFIG" >/dev/null 2>&1; then
+  echo "ERROR: invalid OpenCode configuration: $OPENCODE_CONFIG" >&2
+  exit 1
 fi
 
 TMP_FILE="$(mktemp "$CONFIG_DIR/.opencode.manul.XXXXXX")"
 cleanup() { rm -f "$TMP_FILE"; }
 trap cleanup EXIT
 
-if [ "$CONFIG_EXISTS" = true ]; then
-  jq '.permission.external_directory["/tmp/**"] = "allow"' \
-    "$OPENCODE_CONFIG" >"$TMP_FILE"
-  MODE="$(stat -c '%a' "$OPENCODE_CONFIG" 2>/dev/null || true)"
-  [ -n "$MODE" ] && chmod "$MODE" "$TMP_FILE" 2>/dev/null || true
-else
-  jq -n '{permission:{external_directory:{"/tmp/**":"allow"}}}' >"$TMP_FILE"
-  chmod 600 "$TMP_FILE"
-fi
+jq '.permission.external_directory["/tmp/**"] = "allow"' \
+  "$OPENCODE_CONFIG" >"$TMP_FILE"
+MODE="$(stat -c '%a' "$OPENCODE_CONFIG" 2>/dev/null || true)"
+[ -n "$MODE" ] && chmod "$MODE" "$TMP_FILE" 2>/dev/null || true
 
 if ! jq empty "$TMP_FILE" >/dev/null 2>&1; then
   echo "ERROR: generated OpenCode configuration is invalid" >&2
   exit 1
 fi
 
-if [ "$CONFIG_EXISTS" = false ] || ! cmp -s "$OPENCODE_CONFIG" "$TMP_FILE"; then
+if ! cmp -s "$OPENCODE_CONFIG" "$TMP_FILE"; then
   mv -f "$TMP_FILE" "$OPENCODE_CONFIG"
 fi
 
