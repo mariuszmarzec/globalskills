@@ -28,6 +28,17 @@ Compare the same case with and without the skill:
 python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both
 ```
 
+Run every non-excluded benchmark and produce one aggregate report:
+
+```bash
+python3 skill-benchmarks/benchmark.py run-all --mode both
+```
+
+The `run-all` command runs every discovered case belonging to a non-excluded
+skill in one run directory. The resulting report aggregates all runs and
+classifies each case as `skill_helped`, `skill_harmed`,
+`case_passes_without_skill`, or `case_fails_with_and_without_skill`.
+
 Every live run writes a self-contained diagnostic report under
 `skill-benchmarks/output/<run-id>/`:
 
