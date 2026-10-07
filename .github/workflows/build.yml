@@ -61,6 +61,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq sqlite3
+      - name: Run benchmark framework unit tests
+        run: python3 -m unittest discover -s skill-benchmarks/tests -v
+
       - name: Validate shell syntax
         shell: bash
         run: |
