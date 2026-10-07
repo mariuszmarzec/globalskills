@@ -447,12 +447,7 @@ MOCK
   echo "Do the task" >"$tmp/prompt"
 
   local first rc1 sid
-  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
-    MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
-    bash "$SCRIPT_DIR/opencode-adapter.sh" \
-      --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp" \
-      --attempt 1 --timeout 30 --session-id "" \
-      --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
+  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
   rc1=$?
   sid="$(printf '%s' "$first" | jq -r '.session_id')"
   assert_json_status "$first" "NEEDS_CONTINUATION" "OpenCodeAdapter detects step-limit continuation"
@@ -460,24 +455,12 @@ MOCK
   [ "$sid" = "ses_cont" ] && ok "OpenCodeAdapter exposes continuation session ID" || fail "Continuation session ID=$sid"
 
   local second
-  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
-    MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
-    bash "$SCRIPT_DIR/opencode-adapter.sh" \
-      --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp" \
-      --attempt 2 --timeout 30 --session-id "$sid" \
-      --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
+  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 2 --timeout 30 --session-id "$sid"       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
   assert_json_status "$second" "COMPLETED" "OpenCodeAdapter resumes the same session"
-  grep -q -- "--session $sid" "$tmp/args" \
-    && ok "OpenCode continuation sends the persisted session ID" \
-    || fail "OpenCode continuation did not reuse session ID"
-  grep -q 'Continue exactly where you left off' "$tmp/args" \
-    && ok "OpenCode continuation uses a compact continuation prompt" \
-    || fail "OpenCode continuation replayed the full task prompt"
-  grep -q '^TASK_DONE continued successfully \
-    && ok "OpenCode continuation produces the completion marker" \
-    || fail "OpenCode continuation lost TASK_DONE"
+  grep -q -- "--session $sid" "$tmp/args"     && ok "OpenCode continuation sends the persisted session ID"     || fail "OpenCode continuation did not reuse session ID"
+  grep -q 'Continue exactly where you left off' "$tmp/args"     && ok "OpenCode continuation uses a compact continuation prompt"     || fail "OpenCode continuation replayed the full task prompt"
+  grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2"     && ok "OpenCode continuation produces the completion marker"     || fail "OpenCode continuation lost TASK_DONE"
 }
-
 # ---------------------------------------------------------------------------
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
