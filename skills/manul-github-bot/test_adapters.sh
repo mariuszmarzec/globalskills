@@ -131,9 +131,11 @@ MOCK
     || fail "OpenClawAdapter emitted invalid JSON"
   printf '%s' "$out" | jq -e '.summary | contains("quoted")' >/dev/null 2>&1 \
     && ok "OpenClawAdapter JSON-escapes summary" \
-    || fail "OpenClawAdapter summary JSON escaping failed"
-  grep -q -- '--json' "$tmp/args" \
-    && ok "OpenClawAdapter requests machine-readable JSON output" \
+   # OpenClaw intentionally uses its text protocol; verify the concrete
+   # invocation instead of requiring the obsolete --json flag.
+   grep -q -- "--agent main" "$tmp/stdout" \
+     && ok "OpenClawAdapter selects the main agent" \
+     || fail "OpenClawAdapter did not select the main agent"
     || fail "OpenClawAdapter did not request --json"
 }
 
@@ -155,11 +157,11 @@ MOCK
 
   local out rc
   out="$(PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw"     AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/openclaw-adapter.sh"       --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  rc=$?
-  assert_json_status "$out" "COMPLETED" "OpenClaw clean exit without marker is completed by adapter"
-  [ "$rc" -eq 0 ] && ok "OpenClaw clean exit preserves process rc=0" || fail "OpenClaw clean exit rc=$rc"
-  grep -qx 'TASK_DONE' "$tmp/stdout"     && ok "OpenClaw adapter synthesizes TASK_DONE"     || fail "OpenClaw adapter did not synthesize TASK_DONE"
-}
+  assert_json_status "$out" "FAILED" "OpenClaw clean exit without marker is rejected"
+  [ "$rc" -eq 1 ] && ok "OpenClaw clean exit is converted to adapter failure rc=1" || fail "OpenClaw clean exit rc=$rc"
+  ! grep -qE "^TASK_DONE([[:space:]]|$)" "$tmp/stdout" \
+    && ok "OpenClaw adapter does not synthesize TASK_DONE" \
+    || fail "OpenClaw adapter synthesized TASK_DONE unexpectedly"
 
 # ---------------------------------------------------------------------------
 # 4. OpenClaw failure
@@ -339,7 +341,7 @@ MOCK
   [ -f "$tmp/runtime/logs/tasks/task-oc-2.attempt-1.opencode.jsonl" ] \
     && ok "OpenCodeAdapter retains raw JSONL diagnostic artifact" \
     || fail "OpenCodeAdapter deleted raw JSONL diagnostic artifact"
-  grep -q 'permission requested: external_directory (/tmp/*); auto-rejecting\\.' "$tmp/stderr" \
+   grep -Fq '! permission requested: external_directory (/tmp/*); auto-rejecting.' "$tmp/stderr" \
     && ok "OpenCodeAdapter preserves stderr permission diagnostics" \
     || fail "OpenCodeAdapter lost stderr permission diagnostics"
 }
