@@ -354,3 +354,32 @@ A failed or blocked execution MUST preserve already-pushed checkpoints and,
 when safely possible, continue from the latest verified checkpoint rather than
 restarting from the original task state. Runtime/LLM failure is not evidence
 that repository work made no progress.
+
+
+## 23. Delivery verification and failure classification
+
+For repository-changing tasks, `TASK_DONE` is not sufficient evidence of delivery. The daemon must distinguish implementation completion from delivery completion and verify the repository/PR state before marking the task `completed`.
+
+For a changed repository the delivery checks are:
+
+1. The agent is on the expected task/PR branch.
+2. The working tree has no staged, unstaged, or relevant untracked changes.
+3. The changes are committed.
+4. When an `origin` remote is available, the task branch exists on `origin` and its SHA matches the local `HEAD`.
+5. For an existing PR task, the GitHub PR head branch and head SHA match the expected branch and delivered commit.
+
+Failure codes must be stable and actionable:
+
+- `RUNTIME_PERMISSION_BLOCKED` — runtime rejected a tool call because of a permission boundary.
+- `PROVIDER_ERROR` — provider returned a structured runtime/provider error.
+- `RUNTIME_FAILURE` — generic runtime execution failure.
+- `RUNTIME_TIMEOUT` — runtime execution timed out.
+- `TASK_NEEDS_USER` — structured user decision is required.
+- `NEEDS_CONTINUATION` — runtime can continue an existing session.
+- `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion.
+- `DELIVERY_NOT_PUSHED` — committed work is not present on the remote/PR head.
+- `WORKSPACE_DIRTY` — workspace contains unexpected residue that is not the agent's intended repository change.
+- `VERIFICATION_FAILED` — branch, PR identity, or another required invariant could not be verified.
+- `CONTROLLER_ERROR` — execution controller could not construct/return a valid execution result.
+
+A final `completed` state requires the applicable verification checks to pass; a failure classification must not be overwritten by a later generic workspace check.
