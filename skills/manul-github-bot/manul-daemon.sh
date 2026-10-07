@@ -1265,11 +1265,11 @@ pr_check_existing() {
     return 1
   fi
   if [ -n "$expected_base" ]; then
-    if printf '%s' "$pr_json" | jq -e --arg expected "$expected_base" 'any(.[]; .baseRefName == $expected)' >/dev/null 2>&1; then return 0; fi
+    if [ -n "$pr_json" ] && printf '%s' "$pr_json" | jq -e --arg expected "$expected_base" 'type == "array" and length > 0 and any(.[]; .baseRefName == $expected)' >/dev/null 2>&1; then return 0; fi
     log "WARN: pr_check_existing: PR found for $repo/$branch but none targets expected base '$expected_base'"
     return 1
   fi
-  jq -e 'length > 0' <<<"$pr_json" >/dev/null 2>&1
+  [ -n "$pr_json" ] && jq -e 'type == "array" and length > 0' <<<"$pr_json" >/dev/null 2>&1
 }
 
 # Auto-create a GitHub PR for the given branch against the default branch.
@@ -1906,19 +1906,32 @@ evaluate_task_completion() {
   local INITIAL_BRANCH="${13:-}"
   local INITIAL_BASE_BRANCH="${14:-${INITIAL_BRANCH:-$DEFAULT_BRANCH}}"
   local EXECUTION_SUMMARY="${15:-}"
-  
+  local EXECUTION_FAILURE_CODE="${16:-}"
+  local PR_HEAD_BRANCH=""
+
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
   FINAL_COMMENT=""
   NEEDS_USER_INPUT="false"
   USER_QUESTION=""
   USER_DECISION_INVALID="false"
+  FAILURE_CODE=""
+
+  # Preserve the adapter's machine-readable failure code so retry/failure
+  # comments and lifecycle logs distinguish e.g. a runtime permission block
+  # from a generic provider error.
+  if [ -n "$EXECUTION_FAILURE_CODE" ]; then
+    FAILURE_CODE="$EXECUTION_FAILURE_CODE"
+  fi
   
   # Preserve the runtime/controller summary so user-facing retry/failure
   # comments explain the actual execution failure instead of collapsing it to
   # the generic "Task failed".
   if [ -n "$EXECUTION_SUMMARY" ]; then
     FAIL_REASON="$EXECUTION_SUMMARY"
+  fi
+  if [ -n "$FAILURE_CODE" ]; then
+    FAIL_REASON="${FAILURE_CODE}: ${FAIL_REASON}"
   fi
   
   local SUCCESS="false"
@@ -1983,8 +1996,9 @@ evaluate_task_completion() {
 
     if [ "$repo_state_clean" = "false" ]; then
       SUCCESS="false"
-      FAIL_REASON="Repository has incomplete state: ${repo_state_issues% }"
-      log "dispatch: task $COMMENT_ID repository verification failed (${repo_state_issues% })"
+      FAILURE_CODE="WORKSPACE_DIRTY"
+      FAIL_REASON="Delivery rejected: workspace is dirty (${repo_state_issues% }) — staged, unstaged, or untracked changes remain after TASK_DONE"
+      log "dispatch: task $COMMENT_ID delivery verification failed: workspace dirty (${repo_state_issues% })"
     fi
   fi
   
@@ -2001,6 +2015,7 @@ evaluate_task_completion() {
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
         SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Repository changed but the agent is not on a named branch"
         log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
       elif [ -n "$PR_HEAD_BRANCH" ]; then
@@ -2008,44 +2023,85 @@ evaluate_task_completion() {
         # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
         if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
           SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
           log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
         else
           log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
         fi
-      elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BRANCH" ]; then
+      elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ]; then
         SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
         log "dispatch: task $COMMENT_ID changed repository on forbidden base branch $current_branch"
         lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Implementation task did not produce a real PR against its branch base"
         log "dispatch: task $COMMENT_ID PR verification failed"
-      else
-        local verified_base
-        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
-        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
-          SUCCESS="false"
-          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
-          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
-        else
-          log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
-        fi
-      fi
-    elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+else
+         local verified_base
+         verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+           SUCCESS="false"
+           FAILURE_CODE="VERIFICATION_FAILED"
+           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+         else
+           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
+         fi
+       fi
+
+       # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
+       # repository change must have committed AND pushed its work. Distinguish the
+       # concrete delivery states so retry/failure comments explain exactly what is
+       # missing instead of collapsing everything to a generic verification failure.
+       # Only runs when the repository actually changed; informational tasks with no
+       # diff have nothing to deliver and must not be rejected here.
+       if [ "$SUCCESS" = "true" ]; then
+         local has_origin_remote="false"
+         local remote_branch_sha=""
+         if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
+           has_origin_remote="true"
+           remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
+         fi
+
+         if ! git -C "$WORKDIR" diff --quiet 2>/dev/null || ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
+           SUCCESS="false"
+           FAILURE_CODE="DELIVERY_NOT_COMMITTED"
+           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch"
+           log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch"
+         elif [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
+           SUCCESS="false"
+           FAILURE_CODE="DELIVERY_NOT_PUSHED"
+           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
+           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
+         elif [ "$has_origin_remote" = "true" ] && [ -n "$remote_branch_sha" ] \
+           && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
+           SUCCESS="false"
+           FAILURE_CODE="DELIVERY_NOT_PUSHED"
+           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
+           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
+         else
+           log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
+         fi
+       fi
+     elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
       # IMPLEMENT issue tasks must leave the workspace on the task branch.
       # A clean workspace is not enough: a task that reports success on the
       # base branch is invalid even when no repository diff remains.
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
         SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Implementation task completed on a base/default branch ($current_branch)"
         log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch"
         lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Implementation task completed without a verified PR from its task branch"
         log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
         lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
@@ -2054,6 +2110,7 @@ evaluate_task_completion() {
         verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
         fi
@@ -2074,6 +2131,7 @@ evaluate_task_completion() {
       log "dispatch: task $COMMENT_ID attempt $current_attempt has invalid result comment state"
       lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
       SUCCESS="false"
+      FAILURE_CODE="VERIFICATION_FAILED"
       FAIL_REASON="Agent emitted TASK_DONE but the final result-comment state does not contain exactly one valid deterministic marker for attempt $current_attempt"
     fi
   fi
@@ -2127,11 +2185,11 @@ evaluate_task_completion() {
     if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
       log "dispatch: task $COMMENT_ID failed (max attempts reached)"
-      lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+      lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}${FAILURE_CODE:+ failure_code=$FAILURE_CODE}"
     else
       FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
       log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
-      lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}"
+      lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}${FAILURE_CODE:+ failure_code=$FAILURE_CODE}"
     fi
   fi
 }
@@ -2936,11 +2994,12 @@ PROMPT_APPEND
 
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
-     # Persist session id for continuation attempts
-     local exec_status exec_summary exec_session_id
-     exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
-     exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
-     exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
+# Persist session id for continuation attempts
+      local exec_status exec_summary exec_session_id exec_failure_code
+      exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
+      exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
+      exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
+      exec_failure_code="$(printf '%s' "$executor_output" | jq -r '.failure_code // ""' 2>/dev/null)"
      # Persist a session only when the runtime explicitly says it can be
      # continued. Generic failures must not accidentally bind future retries
      # to a stale runtime session.
@@ -2987,7 +3046,7 @@ PROMPT_APPEND
      esac
 
      # Call production completion evaluation function
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an

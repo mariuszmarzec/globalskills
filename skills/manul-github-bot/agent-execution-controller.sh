@@ -37,7 +37,7 @@ AgentExecutionController_SessionId=""
 AgentExecutionController.execute() {
     local ctx_file="$1"
     if [ -z "$ctx_file" ] || [ ! -f "$ctx_file" ]; then
-        printf '{"status":"FAILED","task_id":"","exit_code":1,"summary":"Missing or unreadable execution context file","session_id":"","duration_s":0}\n'
+        printf '{"status":"FAILED","task_id":"","exit_code":1,"summary":"Missing or unreadable execution context file","session_id":"","duration_s":0,"failure_code":"CONTROLLER_ERROR"}\n'
         AgentExecutionController_ExitCode=1
         AgentExecutionController_SessionId=""
         return 1
@@ -68,6 +68,8 @@ AgentExecutionController.execute() {
     exit_code="$(printf '%s' "$result" | jq -r '.exit_code // 1' 2>/dev/null)"
     local session_id
     session_id="$(printf '%s' "$result" | jq -r '.session_id // ""' 2>/dev/null)"
+    local failure_code
+    failure_code="$(printf '%s' "$result" | jq -r '.failure_code // ""' 2>/dev/null)"
 
     if [ "$status" = "TIMEOUT" ] || { [ "$exit_code" -eq 124 ] 2>/dev/null && [ "$status" != "COMPLETED" ]; }; then
         # Check if TASK_DONE was already emitted before the timeout killed us.
@@ -88,6 +90,12 @@ AgentExecutionController.execute() {
         fi
     else
         AgentExecutionController_SessionId="$session_id"
+    fi
+
+    # Preserve the adapter's machine-readable failure code so the daemon can
+    # distinguish e.g. a runtime permission block from a generic provider error.
+    if [ -n "$failure_code" ]; then
+        result="$(printf '%s' "$result" | jq -c --arg fc "$failure_code" '. + {failure_code: $fc}')"
     fi
 
     printf '%s\n' "$result"

@@ -18,11 +18,55 @@ mkdir -p "$FAKE_BIN"
 
 # Fake gh executable for GitHub API mocking
 FAKE_GH="$FAKE_BIN/gh"
+# State file the fake gh uses to remember PRs it auto-created, so that the
+# daemon's post-creation verification (gh pr list with --base) can see them.
+export FAKE_GH_STATE="$FAKE_BIN/pr_state"
+: > "$FAKE_GH_STATE"
 cat > "$FAKE_GH" << 'GH_EOF'
 #!/bin/bash
 # Fake gh: handles api (result-comment verification), pr list (PR existence),
 # and pr create (auto-PR creation). No real PRs exist in tests, so the daemon
 # must auto-create one for the autoCreatePr path to succeed.
+if [[ "$1" == "pr" && "$2" == "create" ]]; then
+    # gh pr create --repo R --base B --head H --title T --body B
+    base=""
+    head=""
+    for ((i=1; i<=$#; i++)); do
+        case "${!i}" in
+            --base) i=$((i+1)); base="${!i}" ;;
+            --head) i=$((i+1)); head="${!i}" ;;
+        esac
+    done
+    if [ -n "$head" ] && [ -n "$base" ]; then
+        printf '%s %s\n' "$head" "$base" >> "$FAKE_GH_STATE"
+    fi
+    echo "https://github.com/test/repo/pull/999"
+    exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+    # gh pr list --repo R --state all --head H --json ... --limit 10
+    head=""
+    for ((i=1; i<=$#; i++)); do
+        case "${!i}" in
+            --head) i=$((i+1)); head="${!i}" ;;
+        esac
+    done
+    if [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
+        printf '['
+        first=1
+        while read -r h b; do
+            if [ "$h" = "$head" ]; then
+                [ "$first" = 1 ] || printf ','
+                first=0
+                printf '{"number":999,"url":"https://github.com/test/repo/pull/999","state":"OPEN","baseRefName":"%s","headRefName":"%s"}' "$b" "$h"
+            fi
+        done < "$FAKE_GH_STATE"
+        printf ']\n'
+    else
+        echo '[]'
+    fi
+    exit 0
+fi
 if [[ "$1" == "api" ]]; then
     has_jq=false
     for arg in "$@"; do

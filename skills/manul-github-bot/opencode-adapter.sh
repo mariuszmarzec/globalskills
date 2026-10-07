@@ -177,6 +177,33 @@ if [ -s "$RAW_STDOUT_FILE" ]; then
         error_source="runtime_jsonl"
     fi
 fi
+
+# A tool call that the runtime itself rejected is not a recoverable continuation:
+# the agent hit a hard permission boundary mid-run and exited without a completion
+# marker. Surface it as an explicit recoverable failure so the daemon retries with
+# a different approach instead of silently treating it as "session can continue".
+permission_blocked=0
+if [ -s "$RAW_STDOUT_FILE" ]; then
+    if jq -e 'select(.type == "tool_use") | select(.part.state.status == "error") | select(.part.state.error | test("permission|rejected|auto-reject"; "i"))' "$RAW_STDOUT_FILE" >/dev/null 2>&1; then
+        permission_blocked=1
+    fi
+fi
+# Stderr permission detection is a fallback only. When the runtime already
+# emitted a structured JSONL error event (e.g. ProviderError), that takes
+# precedence so incidental permission text in stderr does not override the
+# stronger structured diagnostic.
+if [ "$permission_blocked" -eq 0 ] && [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
+    if grep -Eqi 'permission requested: [^;]+; auto-rejecting' "$OPT_STDERR_FILE" 2>/dev/null; then
+        permission_blocked=1
+    fi
+fi
+if [ "$permission_blocked" -eq 1 ]; then
+    error_type="RUNTIME_PERMISSION_BLOCKED"
+    error_source="runtime_jsonl"
+    if [ -z "$error_message" ]; then
+        error_message="OpenCode tool call rejected by runtime permission policy"
+    fi
+fi
 if [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
     error_message="$(grep -Eio '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$OPT_STDERR_FILE" 2>/dev/null | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
     if [ -n "$error_message" ]; then
@@ -207,6 +234,10 @@ elif grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
         _status="FAILED"
         _summary="OpenCode emitted TASK_DONE but exited with code $pr_rc"
     fi
+elif [ "$permission_blocked" -eq 1 ]; then
+    _status="FAILED"
+    _exit_code=1
+    _summary="OpenCode tool call was rejected by the runtime permission policy; the agent could not complete the task as instructed"
 elif [ -n "$session_id" ] && (
     grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null ||
     { [ "$pr_rc" -eq 0 ] && ! grep -qE '^TASK_(DONE|FAILED|NEEDS_USER_BEGIN)([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; }
@@ -234,6 +265,25 @@ fi
 
 # Keep RAW_STDOUT_FILE; Manul task retention is responsible for cleanup.
 
+# Derive a stable, machine-readable failure code from the classified status so
+# the daemon and controller can act on the specific failure mode instead of only
+# on the generic FAILED status.
+failure_code=""
+case "$_status" in
+    FAILED)
+        case "$error_type" in
+            RUNTIME_PERMISSION_BLOCKED) failure_code="RUNTIME_PERMISSION_BLOCKED" ;;
+            PermissionError)           failure_code="RUNTIME_PERMISSION_BLOCKED" ;;
+            ProviderError)             failure_code="PROVIDER_ERROR" ;;
+            *)                         failure_code="RUNTIME_FAILURE" ;;
+        esac
+        ;;
+    TIMEOUT)            failure_code="RUNTIME_TIMEOUT" ;;
+    BLOCKED)            failure_code="TASK_NEEDS_USER" ;;
+    NEEDS_CONTINUATION) failure_code="NEEDS_CONTINUATION" ;;
+    COMPLETED)          failure_code="" ;;
+esac
+
 jq -cn \
     --arg status "$_status" \
     --arg task_id "$OPT_TASK_ID" \
@@ -246,8 +296,9 @@ jq -cn \
     --arg error_message "$error_message" \
     --arg error_source "$error_source" \
     --arg last_event_type "$last_event_type" \
+    --arg failure_code "$failure_code" \
     --arg raw_log "$RAW_STDOUT_FILE" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,raw_log:$raw_log}}'
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,raw_log:$raw_log}}'
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
