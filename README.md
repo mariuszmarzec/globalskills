@@ -100,6 +100,15 @@ Compare with and without the skill:
 python3 skill-benchmarks/benchmark.py run --case commit-trailer --mode both
 ```
 
+Run all non-excluded benchmarks in one diagnostic run:
+
+```bash
+python3 skill-benchmarks/benchmark.py run-all --mode both
+```
+
+This produces one aggregate report under `skill-benchmarks/output/<run-id>/`
+with per-case failures and skill impact signals.
+
 Each live run writes a self-contained report under `skill-benchmarks/output/<run-id>/`, including the with/without-skill comparison, tested `SKILL.md` snapshot, agent output, verifier result, and git artifacts. The output directory is ignored by git.
 
 The benchmark suite is deliberately not wired into CI. Its framework and
