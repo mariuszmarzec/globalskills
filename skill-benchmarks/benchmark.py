@@ -88,6 +88,34 @@ def case_by_selector(cases: list[CaseInfo], selector: str) -> list[CaseInfo]:
     return matches
 
 
+def select_run_cases(
+    command: str,
+    cases: list[CaseInfo],
+    skills: list[SkillInfo],
+    exclusions: dict[str, str],
+    selector: str | None = None,
+) -> tuple[str, list[CaseInfo]]:
+    if command == "run-all":
+        if selector:
+            raise BenchmarkError("run-all does not accept --skill or --case.")
+        skill_ids = {skill.skill_id for skill in skills}
+        selected = [
+            case
+            for case in cases
+            if case.skill_id in skill_ids and case.skill_id not in exclusions
+        ]
+        if not selected:
+            raise BenchmarkError("No benchmark cases found for enabled skills.")
+        return "all-skills", selected
+
+    if not selector:
+        raise BenchmarkError("run requires --skill or --case.")
+    selected = case_by_selector(cases, selector)
+    if command == "run" and selector and len(selected) != 1 and False:
+        raise AssertionError("unreachable")
+    return selector, selected
+
+
 def stage_skill(skill_source: Path, workspace: Path, skill_id: str, enabled: bool) -> None:
     opencode_dir = workspace / ".opencode"
     skills_dir = opencode_dir / "skills"
@@ -441,7 +469,28 @@ def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "passed_runs": sum(bool(result["passed"]) for result in results),
         "failed_runs": sum(not bool(result["passed"]) for result in results),
         "cases": len({result["case"] for result in results}),
+        "skills": len({result["skill"] for result in results}),
     }
+
+
+def build_impact_summary(comparisons: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {
+        "cases_compared": 0,
+        "skill_helped": 0,
+        "skill_harmed": 0,
+        "case_passes_without_skill": 0,
+        "case_fails_with_and_without_skill": 0,
+        "comparison_unavailable": 0,
+    }
+    for comparison in comparisons:
+        if not comparison.get("comparison_available"):
+            summary["comparison_unavailable"] += 1
+            continue
+        summary["cases_compared"] += 1
+        signal = comparison.get("impact_signal")
+        if signal in summary:
+            summary[signal] += 1
+    return summary
 
 
 def escape_markdown_cell(value: Any) -> str:
@@ -461,6 +510,7 @@ def write_report(
 ) -> None:
     summary = build_summary(results)
     comparisons = build_comparisons(results)
+    impact = build_impact_summary(comparisons)
     report = {
         "schema_version": 1,
         "benchmark": {
@@ -472,6 +522,7 @@ def write_report(
             "finished_at": finished_at,
         },
         "summary": summary,
+        "impact": impact,
         "comparisons": comparisons,
         "results": results,
     }
@@ -495,6 +546,15 @@ def write_report(
         f"- Runs: **{summary['runs']}**",
         f"- Passed: **{summary['passed_runs']}**",
         f"- Failed: **{summary['failed_runs']}**",
+        f"- Skills: **{summary['skills']}**",
+        "",
+        "## Impact",
+        "",
+        f"- Cases compared: **{impact['cases_compared']}**",
+        f"- Skill helped: **{impact['skill_helped']}**",
+        f"- Skill harmed: **{impact['skill_harmed']}**",
+        f"- Already passes without skill: **{impact['case_passes_without_skill']}**",
+        f"- Fails with and without skill: **{impact['case_fails_with_and_without_skill']}**",
         "",
     ]
 
@@ -575,7 +635,7 @@ def write_report(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run behavioral benchmarks for Global Skills.")
-    parser.add_argument("command", choices=("list", "run", "validate"))
+    parser.add_argument("command", choices=("list", "run", "run-all", "validate"))
     parser.add_argument("--skill", help="Skill id or benchmark case id.")
     parser.add_argument("--case", dest="case_id", help="Exact benchmark case id.")
     parser.add_argument(
@@ -654,11 +714,17 @@ def main() -> int:
         return 0
 
     selector = args.case_id or args.skill
-    if not selector:
-        raise BenchmarkError("run requires --skill or --case.")
+    if args.command == "run-all" and selector:
+        raise BenchmarkError("run-all does not accept --skill or --case.")
 
-    selected = case_by_selector(cases, selector)
-    if args.case_id and len(selected) != 1:
+    selector, selected = select_run_cases(
+        args.command,
+        cases,
+        skills,
+        exclusions,
+        selector,
+    )
+    if args.command == "run" and args.case_id and len(selected) != 1:
         raise BenchmarkError(f"--case '{args.case_id}' matched {len(selected)} cases.")
 
     selected_skill_ids = {case.skill_id for case in selected}
