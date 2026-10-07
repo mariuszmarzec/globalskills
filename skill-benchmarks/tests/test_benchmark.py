@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE))
 
 from adapters import AgentRunResult
 from benchmark import (
+    BenchmarkError,
     build_comparisons,
     build_impact_summary,
     discover_cases,
@@ -111,7 +112,7 @@ class BenchmarkTests(unittest.TestCase):
         cases = discover_cases((HERE / str(config["cases_root"])).resolve())
 
         with self.assertRaisesRegex(
-            Exception,
+            BenchmarkError,
             "run-all does not accept --skill or --case",
         ):
             select_run_cases(
@@ -206,7 +207,7 @@ class BenchmarkTests(unittest.TestCase):
         }
 
         comparison = build_comparisons([without_skill, with_skill])[0]
-        self.assertEqual(comparison["overall_change"], "improved")
+        self.assertEqual(comparison["impact_signal"], "skill_helped")
         self.assertEqual(
             comparison["check_deltas"],
             [{"name": "trailer", "without_skill": False, "with_skill": True}],
