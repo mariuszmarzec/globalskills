@@ -706,6 +706,7 @@ test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
 test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
 test_opencode_failure
 test_opencode_permission_blocked
 test_opencode_missing
