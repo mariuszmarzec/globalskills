@@ -364,6 +364,35 @@ test_opencode_missing() {
 }
 
 # ---------------------------------------------------------------------------
+# 10. OpenCode permission-blocked tool call
+# ---------------------------------------------------------------------------
+test_opencode_permission_blocked() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s
+' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc failure_code error_type
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-perm --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode permission rejection is a failed execution"
+  failure_code="$(printf '%s' "$out" | jq -r '.failure_code // empty')"
+  error_type="$(printf '%s' "$out" | jq -r '.diagnostics.error_type // empty')"
+  [ "$failure_code" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection gets RUNTIME_PERMISSION_BLOCKED"     || fail "Permission rejection failure_code=$failure_code"
+  [ "$error_type" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection preserves classified diagnostic"     || fail "Permission rejection error_type=$error_type"
+  [ "$rc" -eq 1 ] && ok "OpenCode permission rejection remains retryable"     || fail "Permission rejection rc=$rc"
+}
+
+# ---------------------------------------------------------------------------
 # 10. OpenCode continuation reuses the exact same session
 # ---------------------------------------------------------------------------
 test_opencode_continuation() {
@@ -532,6 +561,7 @@ test_openclaw_timeout
 test_opencode_success
 test_opencode_no_marker_continuation
 test_opencode_failure
+test_opencode_permission_blocked
 test_opencode_missing
 test_opencode_continuation
 test_agent_executor_dispatch
