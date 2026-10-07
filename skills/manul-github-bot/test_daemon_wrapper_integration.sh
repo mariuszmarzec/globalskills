@@ -680,7 +680,9 @@ git -C "$WORKDIR_O" checkout -qb manul-task-COMMENT_O
 echo "committed implementation" >>"$WORKDIR_O/README.md"
 git -C "$WORKDIR_O" add README.md
 git -C "$WORKDIR_O" commit -qm "implementation change"
-git -C "$WORKDIR_O" remote add origin "https://example.invalid/test/repo.git"
+ORIGIN_O="$TEST_TMPDIR/origin-o.git"
+git init --bare -q "$ORIGIN_O"
+git -C "$WORKDIR_O" remote add origin "$ORIGIN_O"
 printf '%s %s
 ' "manul-task-COMMENT_O" "master" >>"$FAKE_GH_STATE"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_O';" 2>/dev/null
