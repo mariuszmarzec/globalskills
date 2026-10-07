@@ -1907,7 +1907,7 @@ evaluate_task_completion() {
   local INITIAL_BASE_BRANCH="${14:-${INITIAL_BRANCH:-$DEFAULT_BRANCH}}"
   local EXECUTION_SUMMARY="${15:-}"
   local EXECUTION_FAILURE_CODE="${16:-}"
-  local PR_HEAD_BRANCH=""
+  local PR_HEAD_BRANCH="${17:-}"
 
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -1995,10 +1995,9 @@ evaluate_task_completion() {
     fi
 
     if [ "$repo_state_clean" = "false" ]; then
-      SUCCESS="false"
-      FAILURE_CODE="WORKSPACE_DIRTY"
-      FAIL_REASON="Delivery rejected: workspace is dirty (${repo_state_issues% }) — staged, unstaged, or untracked changes remain after TASK_DONE"
-      log "dispatch: task $COMMENT_ID delivery verification failed: workspace dirty (${repo_state_issues% })"
+      # Keep SUCCESS intact so the delivery classifier below can distinguish
+      # uncommitted work from a generic workspace validation failure.
+      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
     fi
   fi
   
@@ -2036,6 +2035,12 @@ evaluate_task_completion() {
         FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
         log "dispatch: task $COMMENT_ID changed repository on forbidden base branch $current_branch"
         lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
+      elif [ "$repo_state_clean" != "true" ]; then
+        SUCCESS="false"
+        FAILURE_CODE="DELIVERY_NOT_COMMITTED"
+        FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
@@ -2068,12 +2073,7 @@ else
            remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
          fi
 
-         if ! git -C "$WORKDIR" diff --quiet 2>/dev/null || ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
-           SUCCESS="false"
-           FAILURE_CODE="DELIVERY_NOT_COMMITTED"
-           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch"
-           log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch"
-         elif [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
+         if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
            SUCCESS="false"
            FAILURE_CODE="DELIVERY_NOT_PUSHED"
            FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
@@ -3046,7 +3046,7 @@ PROMPT_APPEND
      esac
 
      # Call production completion evaluation function
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
