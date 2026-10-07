@@ -80,6 +80,14 @@ if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then
 fi
 
 PROMPT_CONTENT="$(cat "$OPT_PROMPT")"
+if [ -n "$OPT_SESSION_ID" ]; then
+    # A continuation already has the complete task history in the OpenCode
+    # session. Replaying the large original prompt can make the model reopen
+    # the plan instead of finishing the pending work.
+    RUN_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
+else
+    RUN_PROMPT="$PROMPT_CONTENT"
+fi
 SESSION_ARGS=()
 if [ -n "$OPT_SESSION_ID" ]; then
     SESSION_ARGS=(--session "$OPT_SESSION_ID")
@@ -115,7 +123,7 @@ local_runner_result="$(ProcessRunner.run \
         "${AGENT_ARGS[@]}" \
         --format json \
         --dir "$OPT_WORKSPACE" \
-        "$PROMPT_CONTENT")"
+        "$RUN_PROMPT")"
 pr_rc=$?
 : "$local_runner_result"
 
@@ -238,17 +246,28 @@ elif [ "$permission_blocked" -eq 1 ]; then
     _status="FAILED"
     _exit_code=1
     _summary="OpenCode tool call was rejected by the runtime permission policy; the agent could not complete the task as instructed"
-elif [ -n "$session_id" ] && (
-    grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null ||
-    { [ "$pr_rc" -eq 0 ] && ! grep -qE '^TASK_(DONE|FAILED|NEEDS_USER_BEGIN)([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; }
-); then
-    # OpenCode may finish its allowed step budget with a normal process exit.
-    # Without a Manul completion marker the task is not logically complete, so
-    # retain the session for a continuation execution.
-    _status="NEEDS_CONTINUATION"
-    _exit_code=1
-    _summary="OpenCode did not emit a completion marker; existing session can continue"
 else
+    local step_limit_detected="false"
+    if [ -s "$RAW_STDOUT_FILE" ]; then
+        if grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null; then
+            step_limit_detected="true"
+        fi
+    fi
+
+    if [ -n "$session_id" ] && [ "$step_limit_detected" = "true" ]; then
+        # Only an explicit runtime step-limit condition is a continuation.
+        # A normal step_finish(reason=stop) without TASK_DONE is a real protocol
+        # failure and must not consume the same session three times.
+        _status="NEEDS_CONTINUATION"
+        _exit_code=1
+        _summary="OpenCode reached its step limit without a completion marker; existing session can continue"
+    elif [ "$pr_rc" -eq 0 ] && [ -n "$session_id" ]; then
+        _status="FAILED"
+        _exit_code=1
+        _summary="OpenCode stopped without a completion marker; starting a fresh retry is required"
+        error_type="RUNTIME_FAILURE"
+    else
+        _status="FAILED"
     _status="FAILED"
     if [ "$pr_rc" -eq 127 ]; then
         _summary="OpenCode binary not found"
