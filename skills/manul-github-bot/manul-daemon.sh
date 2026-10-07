@@ -749,7 +749,15 @@ start_heartbeat() {
       local changed
       changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>/dev/null | tail -n 1)"
       if [ "${changed:-0}" -ne 1 ]; then
-        exit 0
+        # A transient SQLite lock/error must not permanently kill the heartbeat.
+        # Exit only when ownership was actually lost or the task became terminal.
+        local db_state
+        db_state="$(sqlite3 -cmd '.timeout 5000' "$DB" "SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+        if [ -n "$db_state" ] && [ "$db_state" != "running|${worker_pid}|${claim_token}" ]; then
+          exit 0
+        fi
+        sleep "$HEARTBEAT_INTERVAL"
+        continue
       fi
       sleep "$HEARTBEAT_INTERVAL"
     done
@@ -2183,6 +2191,14 @@ else
     MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     
     if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+      # Persist the terminal state before posting the final lifecycle comment.
+      # A max-attempt failure is terminal; leaving the row as running causes
+      # watchdog/recovery churn and can make a failed workspace look active.
+      if update_task_completion "$COMMENT_ID" "failed" "$FAIL_REASON" "$CLAIM_TOKEN"; then
+        log "dispatch: task $COMMENT_ID transitioned to failed after max attempts"
+      else
+        log "ERROR: task $COMMENT_ID could not transition to failed after max attempts"
+      fi
       FINAL_COMMENT="❌ Manul failed to complete the task after $NEW_ATTEMPTS attempts.${FAIL_REASON:+ Reason: $FAIL_REASON}"
       log "dispatch: task $COMMENT_ID failed (max attempts reached)"
       lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}${FAILURE_CODE:+ failure_code=$FAILURE_CODE}"
