@@ -159,6 +159,10 @@ if [[ "$1" == "api" ]]; then
                         # Test K: informational task makes no repository changes; PR/branch is not required
                         json_output='[{"id":1011,"body":"<!-- manul-task:COMMENT_K:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
                         ;;
+                    55)
+                        # Test O: existing PR is verified but the task branch was never pushed.
+                        json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
+                        ;;
                     *)
                         json_output='[]'
                         ;;
@@ -623,6 +627,116 @@ if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
     exit 1
 fi
 echo "[OK] Test K: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+
+# ─── Test N: TASK_DONE with uncommitted repository changes is rejected as delivery failure
+echo ""
+echo "=== Test N: TASK_DONE + dirty workspace -> DELIVERY_NOT_COMMITTED ==="
+WORKDIR_N="$TEST_TMPDIR/workdir-n"
+mkdir -p "$WORKDIR_N"
+git -C "$WORKDIR_N" init -q
+git -C "$WORKDIR_N" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_N" config user.email test@example.com
+git -C "$WORKDIR_N" config user.name test
+printf "test
+" >"$WORKDIR_N/README.md"
+git -C "$WORKDIR_N" add README.md
+git -C "$WORKDIR_N" commit -qm initial
+INITIAL_HEAD_N="$(git -C "$WORKDIR_N" rev-parse HEAD)"
+git -C "$WORKDIR_N" checkout -qb manul-task-COMMENT_N
+echo "uncommitted implementation" >>"$WORKDIR_N/README.md"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_N';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_N','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1013','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutN.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+evaluate_task_completion "test/repo" "55" "COMMENT_N" "COMMENT_N" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_N" "" "$INITIAL_HEAD_N" "manul-task-COMMENT_N" "master"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test N - dirty workspace must not be accepted"
+    exit 1
+fi
+if [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
+    echo "FAIL: Test N - expected FAILURE_CODE=DELIVERY_NOT_COMMITTED, got '$FAILURE_CODE' ($FAIL_REASON)"
+    exit 1
+fi
+echo "[OK] Test N: PASSED (FAILURE_CODE=$FAILURE_CODE)"
+
+# ─── Test O: clean local commit with origin but no remote branch is not delivered
+echo ""
+echo "=== Test O: local commit + unpushed origin -> DELIVERY_NOT_PUSHED ==="
+WORKDIR_O="$TEST_TMPDIR/workdir-o"
+mkdir -p "$WORKDIR_O"
+git -C "$WORKDIR_O" init -q
+git -C "$WORKDIR_O" config user.email test@example.com
+git -C "$WORKDIR_O" config user.name test
+printf "test
+" >"$WORKDIR_O/README.md"
+git -C "$WORKDIR_O" add README.md
+git -C "$WORKDIR_O" commit -qm initial
+INITIAL_HEAD_O="$(git -C "$WORKDIR_O" rev-parse HEAD)"
+git -C "$WORKDIR_O" checkout -qb manul-task-COMMENT_O
+echo "committed implementation" >>"$WORKDIR_O/README.md"
+git -C "$WORKDIR_O" add README.md
+git -C "$WORKDIR_O" commit -qm "implementation change"
+git -C "$WORKDIR_O" remote add origin "https://example.invalid/test/repo.git"
+printf '%s %s
+' "manul-task-COMMENT_O" "master" >>"$FAKE_GH_STATE"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_O';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_O','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1014','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutO.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+evaluate_task_completion "test/repo" "55" "COMMENT_O" "COMMENT_O" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_O" "" "$INITIAL_HEAD_O" "manul-task-COMMENT_O" "master"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test O - unpushed branch must not be accepted"
+    exit 1
+fi
+if [ "$FAILURE_CODE" != "DELIVERY_NOT_PUSHED" ]; then
+    echo "FAIL: Test O - expected FAILURE_CODE=DELIVERY_NOT_PUSHED, got '$FAILURE_CODE' ($FAIL_REASON)"
+    exit 1
+fi
+echo "[OK] Test O: PASSED (FAILURE_CODE=$FAILURE_CODE)"
+
+# ─── Test P: PR-tied task on the wrong branch is rejected
+echo ""
+echo "=== Test P: PR-tied task + unexpected branch -> VERIFICATION_FAILED ==="
+WORKDIR_P="$TEST_TMPDIR/workdir-p"
+mkdir -p "$WORKDIR_P"
+git -C "$WORKDIR_P" init -q
+git -C "$WORKDIR_P" config user.email test@example.com
+git -C "$WORKDIR_P" config user.name test
+printf "test
+" >"$WORKDIR_P/README.md"
+git -C "$WORKDIR_P" add README.md
+git -C "$WORKDIR_P" commit -qm initial
+INITIAL_HEAD_P="$(git -C "$WORKDIR_P" rev-parse HEAD)"
+git -C "$WORKDIR_P" checkout -qb unexpected-branch
+echo "wrong branch change" >>"$WORKDIR_P/README.md"
+git -C "$WORKDIR_P" add README.md
+git -C "$WORKDIR_P" commit -qm "wrong branch change"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_WRONG';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_WRONG','test/repo',61,'https://github.com/test/repo/pull/61#discussion_r5678','user','test','task','queued',1,$,'REVIEW_FIX');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutP.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+evaluate_task_completion "test/repo" "61" "review:PR_WRONG" "review:PR_WRONG" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_P" "" "$INITIAL_HEAD_P" "unexpected-branch" "master" "" "" "feature/expected-pr"
+if [ "$COMPLETION_SUCCESS" = "true" ]; then
+    echo "FAIL: Test P - unexpected PR branch must not be accepted"
+    exit 1
+fi
+if [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then
+    echo "FAIL: Test P - expected FAILURE_CODE=VERIFICATION_FAILED, got '$FAILURE_CODE' ($FAIL_REASON)"
+    exit 1
+fi
+echo "[OK] Test P: PASSED (FAILURE_CODE=$FAILURE_CODE)"
 
 # ─── Test L: verified PR metadata must replace the issue number ───────────────
 # Regression for issue-task feedback: queue ingestion may initialize prNumber
