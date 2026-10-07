@@ -471,6 +471,34 @@ def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_evaluation(
+    results: list[dict[str, Any]],
+    requested_mode: str,
+) -> dict[str, Any]:
+    if requested_mode == "both":
+        target_mode = "with-skill"
+    else:
+        target_mode = requested_mode
+
+    target_results = [result for result in results if result["mode"] == target_mode]
+    passed = sum(bool(result["passed"]) for result in target_results)
+    failed = len(target_results) - passed
+
+    return {
+        "target_mode": target_mode,
+        "runs": len(target_results),
+        "passed_runs": passed,
+        "failed_runs": failed,
+        "passed": failed == 0 and bool(target_results),
+        "note": (
+            "In both mode, without-skill is a diagnostic baseline and does not "
+            "determine the command exit status."
+            if requested_mode == "both"
+            else None
+        ),
+    }
+
+
 def build_impact_summary(comparisons: list[dict[str, Any]]) -> dict[str, int]:
     summary = {
         "cases_compared": 0,
@@ -509,6 +537,7 @@ def write_report(
     summary = build_summary(results)
     comparisons = build_comparisons(results)
     impact = build_impact_summary(comparisons)
+    evaluation = build_evaluation(results, requested_mode)
     report = {
         "schema_version": 1,
         "benchmark": {
@@ -520,6 +549,7 @@ def write_report(
             "finished_at": finished_at,
         },
         "summary": summary,
+        "evaluation": evaluation,
         "impact": impact,
         "comparisons": comparisons,
         "results": results,
@@ -545,6 +575,12 @@ def write_report(
         f"- Passed: **{summary['passed_runs']}**",
         f"- Failed: **{summary['failed_runs']}**",
         f"- Skills: **{summary['skills']}**",
+        "",
+        "## Evaluation",
+        "",
+        f"- Target mode: **{evaluation['target_mode']}**",
+        f"- Passed: **{evaluation['passed_runs']}/{evaluation['runs']}**",
+        f"- Status: **{'PASS' if evaluation['passed'] else 'FAIL'}**",
         "",
         "## Impact",
         "",
@@ -772,16 +808,21 @@ def main() -> int:
         )
 
     summary = build_summary(results)
+    evaluation = build_evaluation(results, args.mode)
     print("\nBenchmark report:")
     print(f"  {run_dir / 'report.md'}")
     print(f"  {run_dir / 'report.json'}")
     print(
-        f"  Passed: {summary['passed_runs']}/{summary['runs']} "
-        f"(failed: {summary['failed_runs']})"
+        f"  Evaluation ({evaluation['target_mode']}): "
+        f"{evaluation['passed_runs']}/{evaluation['runs']} passed"
+    )
+    print(
+        f"  All observed runs: {summary['passed_runs']}/{summary['runs']} passed "
+        f"(baseline failures are expected when --mode both)"
     )
     print("\nResults:")
     print(json.dumps(results, indent=2))
-    return 0 if all(result["passed"] for result in results) else 1
+    return 0 if evaluation["passed"] else 1
 
 
 if __name__ == "__main__":
