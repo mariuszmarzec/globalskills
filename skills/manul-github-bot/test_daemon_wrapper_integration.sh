@@ -18,10 +18,12 @@ mkdir -p "$FAKE_BIN"
 
 # Fake gh executable for GitHub API mocking
 FAKE_GH="$FAKE_BIN/gh"
-# State file the fake gh uses to remember PRs it auto-created, so that the
-# daemon's post-creation verification (gh pr list with --base) can see them.
+# State files for the fake gh to persist auto-created PRs and PATCHed comment
+# bodies across separate gh invocations.
 export FAKE_GH_STATE="$FAKE_BIN/pr_state"
+export FAKE_GH_COMMENT_STATE="$FAKE_BIN/comment_state"
 : > "$FAKE_GH_STATE"
+mkdir -p "$FAKE_GH_COMMENT_STATE"
 cat > "$FAKE_GH" << 'GH_EOF'
 #!/bin/bash
 # Fake gh: handles api (result-comment verification), pr list (PR existence),
@@ -69,6 +71,15 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
 fi
 if [[ "$1" == "api" ]]; then
     has_jq=false
+    method_patch=false
+    body_value=""
+    for arg in "$@"; do
+        if [[ "$arg" == "--method" ]]; then
+            method_patch=true
+        elif [[ "$arg" == body=* ]]; then
+            body_value="${arg#body=}"
+        fi
+    done
     for arg in "$@"; do
         if [[ "$arg" == "--jq" ]]; then
             has_jq=true
@@ -81,6 +92,28 @@ if [[ "$1" == "api" ]]; then
             path="${path#repos/}"
             remainder="${path#*/issues/}"
             remainder="${remainder#*/}"
+            if [[ "$path" =~ ^[^/]+/[^/]+/(issues|pulls)/comments/[0-9]+$ ]]; then
+                target_comment_id="${path##*/}"
+                comment_state_file="$FAKE_GH_COMMENT_STATE/$target_comment_id"
+                if [ "$method_patch" = "true" ]; then
+                    printf '%s' "$body_value" >"$comment_state_file"
+                    printf '{}\\n'
+                elif [ -f "$comment_state_file" ]; then
+                    if [ "$has_jq" = "true" ]; then
+                        cat "$comment_state_file"
+                        printf '\\n'
+                    else
+                        jq -cn --arg body "$(cat "$comment_state_file")" '{body:$body}'
+                    fi
+                else
+                    if [ "$has_jq" = "true" ]; then
+                        printf '\\n'
+                    else
+                        printf '{"body":""}\\n'
+                    fi
+                fi
+                exit 0
+            fi
             if [[ "$remainder" == "comments" ]]; then
                 # Extract issue number from path like test/repo/issues/42/comments
                 issue_num="${path#*/issues/}"
