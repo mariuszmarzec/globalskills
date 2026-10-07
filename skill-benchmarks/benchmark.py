@@ -111,8 +111,6 @@ def select_run_cases(
     if not selector:
         raise BenchmarkError("run requires --skill or --case.")
     selected = case_by_selector(cases, selector)
-    if command == "run" and selector and len(selected) != 1 and False:
-        raise AssertionError("unreachable")
     return selector, selected
 
 
