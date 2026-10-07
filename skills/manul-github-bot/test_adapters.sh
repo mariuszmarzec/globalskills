@@ -284,8 +284,8 @@ test_opencode_no_marker_continuation() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_no_marker","part":{"type":"text","text":"I reached the end of this step budget."}}'
-exit 0
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_no_marker","error":{"message":"maximum steps reached"}}'
+exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do the task" >"$tmp/prompt"
@@ -306,7 +306,33 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# 8. OpenCode failure
+# 8. OpenCode normal stop without TASK_DONE
+# ---------------------------------------------------------------------------
+test_opencode_stop_without_marker() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_stop","part":{"type":"text","text":"The file is inconsistent. Let me rewrite it cleanly:"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1100,"sessionID":"ses_stop","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-stop --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode normal stop without TASK_DONE is a real failure"
+  [ "$rc" -eq 1 ] && ok "OpenCode marker-missing stop returns rc=1" || fail "OpenCode marker-missing stop rc=$rc"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE'     && ok "OpenCode marker-missing stop gets RUNTIME_FAILURE"     || fail "OpenCode marker-missing stop failure_code was not RUNTIME_FAILURE"
+}
+
+# ---------------------------------------------------------------------------
+# 9. OpenCode failure
 # ---------------------------------------------------------------------------
 test_opencode_failure() {
   local tmp
@@ -444,7 +470,142 @@ MOCK
   grep -q -- "--session $sid" "$tmp/args" \
     && ok "OpenCode continuation sends the persisted session ID" \
     || fail "OpenCode continuation did not reuse session ID"
-  grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2" \
+  grep -q 'Continue exactly where you left off' "$tmp/args" \
+    && ok "OpenCode continuation uses a compact continuation prompt" \
+    || fail "OpenCode continuation replayed the full task prompt"
+  grep -q '^TASK_DONE continued successfully \
+    && ok "OpenCode continuation produces the completion marker" \
+    || fail "OpenCode continuation lost TASK_DONE"
+}
+
+# ---------------------------------------------------------------------------
+# 11. AgentExecutor dispatch
+# ---------------------------------------------------------------------------
+test_agent_executor_dispatch() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+}
+
+# ---------------------------------------------------------------------------
+# 12. Default/config runtime selection
+# ---------------------------------------------------------------------------
+test_runtime_selection() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode"}}' >"$tmp/runtime/config.json"
+
+  local runtime
+  runtime="$(MANUL_DIR="$tmp/runtime" unset AGENT_RUNTIME MANUL_AGENT_RUNTIME; \
+    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "manul-paths reads automation.agentRuntime from config" \
+    || fail "manul-paths ignored automation.agentRuntime (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw" ] \
+    && ok "OpenClaw remains the default runtime" \
+    || fail "Default runtime changed unexpectedly: $runtime"
+}
+
+# ---------------------------------------------------------------------------
+# 13. Unknown runtime fails closed
+# ---------------------------------------------------------------------------
+test_unknown_runtime() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local rc err
+  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
+  rc=$?
+  err="$(cat "$tmp/err" 2>/dev/null || true)"
+  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
+    && ok "Unknown runtime is rejected before dispatch" \
+    || fail "Unknown runtime guard rc=$rc err=$err"
+}
+
+# ---------------------------------------------------------------------------
+# 14. Controller honors caller-supplied stdout path
+# ---------------------------------------------------------------------------
+test_controller_stdout_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+sleep 5
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
+  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
+    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
+    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
+
+  # Mock AgentExecutor at the shell-function boundary so the controller test
+  # isolates the output-path logic.
+  local out
+  out="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/agent-execution-controller.sh"
+    AgentExecutor.execute() {
+      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
+      return 124
+    }
+    AgentExecutionController.execute "$2"
+  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
+}
+
+echo "=== Adapter Unit Tests ==="
+echo "Canonical source: $SCRIPT_DIR"
+
+test_process_runner_mock
+test_process_runner_cwd_env
+test_openclaw_success
+test_openclaw_no_marker
+test_openclaw_failure
+test_openclaw_missing
+test_openclaw_timeout
+test_opencode_success
+test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
+test_opencode_failure
+test_opencode_permission_blocked
+test_opencode_missing
+test_opencode_continuation
+test_agent_executor_dispatch
+test_runtime_selection
+test_unknown_runtime
+test_controller_stdout_path
+
+echo
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0
+ "$tmp/stdout2" \
     && ok "OpenCode continuation produces the completion marker" \
     || fail "OpenCode continuation lost TASK_DONE"
 }
