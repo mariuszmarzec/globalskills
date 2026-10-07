@@ -15,6 +15,7 @@ from adapters import AgentRunResult
 from benchmark import (
     BenchmarkError,
     build_comparisons,
+    build_evaluation,
     build_impact_summary,
     discover_cases,
     discover_skills,
@@ -122,6 +123,17 @@ class BenchmarkTests(unittest.TestCase):
                 dict(config["excluded_skills"]),
                 selector="commit-trailer",
             )
+
+    def test_both_mode_evaluates_only_with_skill_results(self) -> None:
+        results = [
+            {"mode": "with-skill", "passed": True},
+            {"mode": "without-skill", "passed": False},
+        ]
+        evaluation = build_evaluation(results, "both")
+        self.assertEqual(evaluation["target_mode"], "with-skill")
+        self.assertTrue(evaluation["passed"])
+        self.assertEqual(evaluation["passed_runs"], 1)
+        self.assertEqual(evaluation["failed_runs"], 0)
 
     def test_impact_summary_aggregates_case_signals(self) -> None:
         comparisons = [
