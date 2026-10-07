@@ -12,7 +12,15 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 from adapters import AgentRunResult
-from benchmark import build_comparisons, discover_cases, discover_skills, run_case, write_report
+from benchmark import (
+    build_comparisons,
+    build_impact_summary,
+    discover_cases,
+    discover_skills,
+    run_case,
+    select_run_cases,
+    write_report,
+)
 
 
 class MockAdapter:
@@ -71,6 +79,68 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("manul-github-bot", skill_ids)
         cases = discover_cases((HERE / str(config["cases_root"])).resolve())
         self.assertIn("commit-trailer", {case.case_id for case in cases})
+
+    def test_run_all_selects_only_non_excluded_case_skills(self) -> None:
+        config = self.config()
+        skills = discover_skills(
+            (HERE / str(config["skills_root"])).resolve(),
+            dict(config["excluded_skills"]),
+        )
+        cases = discover_cases((HERE / str(config["cases_root"])).resolve())
+
+        selector, selected = select_run_cases(
+            "run-all",
+            cases,
+            skills,
+            dict(config["excluded_skills"]),
+        )
+
+        self.assertEqual(selector, "all-skills")
+        self.assertGreaterEqual(len(selected), 1)
+        enabled_skill_ids = {skill.skill_id for skill in skills}
+        self.assertTrue(
+            all(case.skill_id in enabled_skill_ids for case in selected)
+        )
+
+    def test_run_all_rejects_explicit_selector(self) -> None:
+        config = self.config()
+        skills = discover_skills(
+            (HERE / str(config["skills_root"])).resolve(),
+            dict(config["excluded_skills"]),
+        )
+        cases = discover_cases((HERE / str(config["cases_root"])).resolve())
+
+        with self.assertRaisesRegex(
+            Exception,
+            "run-all does not accept --skill or --case",
+        ):
+            select_run_cases(
+                "run-all",
+                cases,
+                skills,
+                dict(config["excluded_skills"]),
+                selector="commit-trailer",
+            )
+
+    def test_impact_summary_aggregates_case_signals(self) -> None:
+        comparisons = [
+            {"comparison_available": True, "impact_signal": "skill_helped"},
+            {"comparison_available": True, "impact_signal": "skill_harmed"},
+            {"comparison_available": True, "impact_signal": "case_passes_without_skill"},
+            {"comparison_available": True, "impact_signal": "case_fails_with_and_without_skill"},
+            {"comparison_available": False},
+        ]
+        self.assertEqual(
+            build_impact_summary(comparisons),
+            {
+                "cases_compared": 4,
+                "skill_helped": 1,
+                "skill_harmed": 1,
+                "case_passes_without_skill": 1,
+                "case_fails_with_and_without_skill": 1,
+                "comparison_unavailable": 1,
+            },
+        )
 
     def test_mock_adapter_passes_when_skill_is_present(self) -> None:
         config = self.config()
