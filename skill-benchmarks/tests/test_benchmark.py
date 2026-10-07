@@ -207,7 +207,7 @@ class BenchmarkTests(unittest.TestCase):
         }
 
         comparison = build_comparisons([without_skill, with_skill])[0]
-        self.assertEqual(comparison["overall_change"], "improved")
+        self.assertEqual(comparison["impact_signal"], "skill_helped")
         self.assertEqual(
             comparison["check_deltas"],
             [{"name": "trailer", "without_skill": False, "with_skill": True}],
