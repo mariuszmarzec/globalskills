@@ -67,6 +67,16 @@ TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="$MANUL_DB"
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
+# Human-mode result comment presentation is configurable but intentionally
+# defaults to concise, teammate-like comments.
+CFG_HUMAN_COMMENT_CONCISE="$(jq -r '.commentStyle.human.concise // true' "$CONFIG" 2>/dev/null || echo true)"
+CFG_HUMAN_COMMENT_MAX_LINES="$(jq -r '.commentStyle.human.maxLines // 6' "$CONFIG" 2>/dev/null || echo 6)"
+if [ "$CFG_HUMAN_COMMENT_CONCISE" != "true" ] && [ "$CFG_HUMAN_COMMENT_CONCISE" != "false" ]; then
+  CFG_HUMAN_COMMENT_CONCISE=true
+fi
+if ! [[ "$CFG_HUMAN_COMMENT_MAX_LINES" =~ ^[0-9]+$ ]] || [ "$CFG_HUMAN_COMMENT_MAX_LINES" -lt 1 ] || [ "$CFG_HUMAN_COMMENT_MAX_LINES" -gt 20 ]; then
+  CFG_HUMAN_COMMENT_MAX_LINES=6
+fi
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
 CFG_AGENT_TIMEOUT="$(jq -r '.automation.agentTimeoutSeconds // 43500' "$CONFIG" 2>/dev/null)"
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-${CFG_AGENT_TIMEOUT:-43500}}"   # full Manul agent turn; keep longer than OpenClaw's explicit inner timeout
@@ -2634,6 +2644,20 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 - In `human` mode, behave like a human developer using GitHub: do not sign comments with "— manul 🐈", do not add any `Co-authored-by` trailer to commits, and do not post orchestration/status/error comments. Only post the actual user-facing result when the task requires a comment.
 - In `human` mode, do not add Manul/OpenCode attribution merely because an AI skill normally asks for it. The human developer remains the sole visible author of commits.
 
+## Result comment style
+- The visible result comment is a GitHub teammate reply, not an automation report.
+- The deterministic `<!-- manul-task:__COMMENT_ID__:attempt:__CURRENT_ATTEMPT__ -->` marker is required, but it must remain invisible metadata.
+- In `human` mode, keep the visible result concise and natural when `Human concise comments` is enabled:
+  - lead with what was done or found;
+  - normally keep it to at most `__HUMAN_COMMENT_MAX_LINES__` visible lines;
+  - use roughly 1–3 short sentences when that is enough;
+  - mention the PR/commit/test only when useful;
+  - do not repeat the user's request;
+  - do not use automation headings or fields such as `Task Completed`, `Task`, `Conversation`, `Attempt`, or `Summary`;
+  - avoid boilerplate, tables, and unnecessary markdown;
+  - write like a developer replying directly to a teammate.
+- In `bot` mode, preserve the normal structured result-comment format and attribution rules.
+
 ## Rules
 1. Inspect the local repository and implement the requested change.
 2. Run appropriate tests/validation.
@@ -2993,6 +3017,16 @@ PROMPT_APPEND
 PROMPT_APPEND
     fi
 
+    if [ "$MANUL_MODE" = "human" ] && [ "$CFG_HUMAN_COMMENT_CONCISE" = "true" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- Human concise comments: enabled (`__HUMAN_COMMENT_MAX_LINES__` visible lines maximum).
+PROMPT_APPEND
+    elif [ "$MANUL_MODE" = "human" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- Human concise comments: disabled; use a natural human tone but do not enforce the concise line limit.
+PROMPT_APPEND
+    fi
+
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
 ## Skills
@@ -3011,6 +3045,7 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__TASK_TYPE__/$TASK_TYPE}"
     prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
     prompt_content="${prompt_content//__MANUL_MODE__/$MANUL_MODE}"
+    prompt_content="${prompt_content//__HUMAN_COMMENT_MAX_LINES__/$CFG_HUMAN_COMMENT_MAX_LINES}"
     prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
