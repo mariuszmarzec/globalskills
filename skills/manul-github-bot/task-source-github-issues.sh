@@ -7,6 +7,14 @@ task_source_github_issues_poll() {
   baseline="$(jq -r '.baseline // ""' <<<"$source_json")"
   trigger="$(jq -r '.trigger // "/manul"' <<<"$source_json")"
   allowed_json="$(jq -c '.allowedUsers // []' <<<"$source_json")"
+  # Preserve the existing GitHub default when config still contains the
+  # unresolved example placeholder. Real configured users are kept.
+  if printf '%s' "$allowed_json" | jq -e 'any(.[]; test("[<>]"))' >/dev/null 2>&1; then
+    allowed_json="$(printf '%s' "$allowed_json" | jq -c '[.[] | select(test("[<>]") | not)]')"
+    if [ "$(printf '%s' "$allowed_json" | jq 'length')" -eq 0 ]; then
+      allowed_json="$(jq -nc --arg repo_owner "$(printf '%s' "$repo" | cut -d/ -f1)" '[$repo_owner]')"
+    fi
+  fi
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     gh api --paginate "repos/$repo/issues?state=open&since=${baseline}&per_page=100" 2>/dev/null |
