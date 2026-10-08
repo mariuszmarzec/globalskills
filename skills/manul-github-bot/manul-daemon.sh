@@ -2761,6 +2761,7 @@ PROMPT_EOF
       WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
       if [ -z "$WORKSPACE_ID" ]; then
         log "dispatch: continuation session has no reclaimable workspace for task $COMMENT_ID"
+        release_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2772,6 +2773,7 @@ PROMPT_EOF
         log "dispatch: logical workspace context is busy for task $COMMENT_ID; requeueing"
         lc_log "WORKSPACE_CONTEXT_BUSY" "task=$COMMENT_ID context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
         sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+        release_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
