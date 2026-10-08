@@ -99,9 +99,9 @@ PRs, review comments and CI checks are related development context, not task sou
 Current provider types:
 
 - `github_issues` — default, backed by GitHub repositories.
-- `todo_api` — initial Todo REST provider, disabled by default until PAT/authentication is ready.
+- `jira_tasks` — initial Jira REST provider, disabled by default until PAT/authentication is ready.
 
-See `task-source.sh` and `task-source-todo-api.sh` for the provider contract.
+See `task-source.sh` and `task-source-jira-tasks.sh` for the provider contract.
 ## GitHub task workflow
 
 ### Issue task
