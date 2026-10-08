@@ -46,6 +46,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 RUNTIME="$TMP/runtime"
+mkdir -p "$RUNTIME"
 OPENCLAW_STATE_DIR="$TMP/openclaw state"
 OPENCLAW_CONFIG_PATH="$TMP/openclaw/config with spaces.json"
 OPENCLAW_BIN="$TMP/bin/openclaw-custom"
