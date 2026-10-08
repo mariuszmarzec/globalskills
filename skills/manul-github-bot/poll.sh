@@ -1076,7 +1076,7 @@ scan_failing_ci() {
 NEW=0
 
 queue_normalized_source_task() {
-  local task_json="$1" source_type source_id source_url title body created updated state
+  local task_json="$1" source_type source_id source_url title body created updated state execution_kind
   source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
   source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
   source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
@@ -1085,8 +1085,13 @@ queue_normalized_source_task() {
   created="$(jq -r ".createdAt // \"\"" <<<"$task_json")"
   updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
   state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
+  execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] || return 0
   [ "$state" = "OPEN" ] || return 0
+  [ "$execution_kind" = "repository" ] || {
+    log "task source $source_type:$source_id discovered but execution target kind=$execution_kind is not implemented yet"
+    return 0
+  }
   local task_id="source:${source_type}:${source_id}" now lease
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
