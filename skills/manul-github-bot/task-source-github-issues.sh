@@ -3,14 +3,17 @@
 set -uo pipefail
 
 task_source_github_issues_poll() {
-  local source_json="$1" repo baseline trigger
+  local source_json="$1" repo baseline trigger allowed_json
   baseline="$(jq -r '.baseline // ""' <<<"$source_json")"
   trigger="$(jq -r '.trigger // "/manul"' <<<"$source_json")"
+  allowed_json="$(jq -c '.allowedUsers // []' <<<"$source_json")"
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     gh api --paginate "repos/$repo/issues?state=open&since=${baseline}&per_page=100" 2>/dev/null |
-      jq -c --arg repo "$repo" --arg trigger "$trigger" '
+      jq -c --arg repo "$repo" --arg trigger "$trigger" --arg baseline "$baseline" --argjson allowed "$allowed_json" '
         .[] | select(.pull_request | not)
+        | select(.created_at >= $baseline)
+        | select(($allowed | length == 0) or (($allowed | index(.user.login)) != null))
         | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + ($trigger | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) + "([ \\t\\r\\n]|$)"))
         | {taskSourceType:"github_issues", taskSourceId:($repo + "#" + (.number|tostring)), taskSourceUrl:.html_url,
            title:(.title // ""), body:(.body // ""), prompt:((.body // "") | sub("^[ \\t]*" + $trigger + "[ \\t]*"; "")), createdAt:(.created_at // ""),
