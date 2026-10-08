@@ -190,53 +190,66 @@ get_daemon_pid() {
 
 # Repository management functions for manul-daemon.sh
 
-# Ensure target repository exists in Manul workspace
+# Ensure target repository exists in Manul workspace. The shared repo cache is
+# protected for the whole task: the lock is acquired before any fetch/reset
+# and is released by the task finalization/error paths.
 ensure_repo() {
   local repo="$1"
   local repo_slug
   repo_slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
   local repo_dir="$MANUL_WORKSPACE/$repo_slug"
-  local lockfile="$MANUL_LOCKS_DIR/repo/${repo_slug}.lock"
 
-  # Check if repo already exists and is up-to-date
-  if [ -d "$repo_dir" ] && [ -d "$repo_dir/.git" ]; then
-    # Verify this is the correct repository
-    local actual_repo
-    actual_repo="$(cd "$repo_dir" && git remote get-url origin)"
-    if [[ "$actual_repo" == "https://github.com/${repo}" ]]; then
-      # Synchronize with remote
-      cd "$repo_dir" && git fetch origin --quiet
-      local head
-      local remote_head
-      head=$(git rev-parse HEAD)
-      remote_head=$(git rev-parse "origin/$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current)" 2>/dev/null || git rev-parse "origin/master" 2>/dev/null)
-      if [ "$head" != "$remote_head" ]; then
-        log "repo $repo needs update, pulling"
-        cd "$repo_dir" && git reset --hard "origin/$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current)" --quiet 2>/dev/null || git reset --hard origin/master --quiet 2>/dev/null
-      fi
-      log "repo $repo is ready at $repo_dir"
-      echo "$repo_dir"
-      return 0
-    else
-      log "repo $repo origin mismatch, expected https://github.com/${repo}, got $actual_repo"
-      rm -rf "$repo_dir"
-    fi
-  fi
-
-  # Acquire repo lock to prevent concurrent access
+  # Acquire before touching the shared checkout. This closes the race where
+  # two workers fetched/reset the same repo cache concurrently.
   if ! acquire_repo_lock "$repo"; then
     log "repo $repo is locked or stale, skipping"
     return 1
   fi
 
-  # Clone fresh repository
+  # Check if repo already exists and is up-to-date
+  if [ -d "$repo_dir" ] && [ -d "$repo_dir/.git" ]; then
+    # Verify this is the correct repository
+    local actual_repo
+    actual_repo="$(cd "$repo_dir" && git remote get-url origin 2>/dev/null || true)"
+    if [[ "$actual_repo" == "https://github.com/mariuszmarzec/globalskills" ]]; then
+      # Synchronize with remote while holding the repo lock.
+      if ! (cd "$repo_dir" && git fetch origin --quiet); then
+        log "FAILED to fetch repo $repo"
+        release_repo_lock "$repo"
+        return 1
+      fi
+
+      local head
+      local remote_head
+      head="$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)"
+      remote_head="$(git -C "$repo_dir" rev-parse "origin/$(git -C "$repo_dir" symbolic-ref --short HEAD 2>/dev/null || git -C "$repo_dir" branch --show-current)" 2>/dev/null || git -C "$repo_dir" rev-parse "origin/master" 2>/dev/null || true)"
+
+      if [ -n "$remote_head" ] && [ "$head" != "$remote_head" ]; then
+        log "repo $repo needs update, pulling"
+        if ! (cd "$repo_dir" && { git reset --hard "origin/$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current)" --quiet 2>/dev/null || git reset --hard origin/master --quiet 2>/dev/null; }); then
+          log "FAILED to update repo $repo"
+          release_repo_lock "$repo"
+          return 1
+        fi
+      fi
+
+      log "repo $repo is ready at $repo_dir"
+      echo "$repo_dir"
+      return 0
+    else
+      log "repo $repo origin mismatch, expected https://github.com/mariuszmarzec/globalskills, got $actual_repo"
+      rm -rf "$repo_dir"
+    fi
+  fi
+
+  # Lock is already held from the start of ensure_repo().
   log "cloning repo $repo to $repo_dir"
   rm -rf "$repo_dir"
   mkdir -p "$repo_dir"
   cd "$repo_dir"
 
   # Clone with minimal fetch
-  if ! git clone --depth 1 "https://github.com/${repo}" . 2>/dev/null; then
+  if ! git clone --depth 1 "https://github.com/mariuszmarzec/globalskills" . 2>/dev/null; then
     log "FAILED to clone repo $repo"
     rm -rf "$repo_dir"
     release_repo_lock "$repo"
@@ -273,47 +286,66 @@ verify_repo() {
   return 0
 }
 
-# Acquire repository lock (same function as in poll.sh)
+# Acquire repository lock (same atomic implementation as in poll.sh)
 acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
+  local lockfile="\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"
+  local reclaim_lock="\${lockfile}.reclaim"
+  local lock_dir="\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}"
 
-  if [ -f "$lockfile" ]; then
-    local age
-    age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
-    if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
-      log "repo $repo is locked by another task (age=${age}s, ttl=${REPO_LOCK_TTL}s); skipping"
-      return 1
-    fi
+  mkdir -p "$lock_dir"
 
-    # Lock is stale — but only remove it if no task is currently running for
-    # this repo in DB.
-    local running_count
-    local safe_repo
-    safe_repo="$(sql_escape "$repo")"
-    running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
-
-    if [ "${running_count:-0}" -gt 0 ]; then
-      log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
-      return 1
-    fi
-
-    log "stale repo lock for $repo removed (age=${age}s, no running tasks)"
-    rm -f "$lockfile"
+  if mkdir "$lockfile" 2>/dev/null; then
+    date +%s >"$lockfile/acquiredAt"
+    printf '%s\n' "$$" >"$lockfile/pid"
+    return 0
   fi
 
-  date +%s >"$lockfile"
-  return 0
+  local age
+  age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
+  if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
+    log "repo $repo is locked by another task (age=\${age}s, ttl=\${REPO_LOCK_TTL}s); skipping"
+    return 1
+  fi
+
+  if ! mkdir "$reclaim_lock" 2>/dev/null; then
+    log "repo $repo stale-lock recovery is already in progress; skipping"
+    return 1
+  fi
+
+  local safe_repo
+  safe_repo="$(sql_escape "$repo")"
+  local running_count
+  running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
+
+  age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
+  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "\${running_count:-0}" -eq 0 ]; then
+    log "stale repo lock for $repo removed (age=\${age}s, no running tasks)"
+    rm -rf "$lockfile"
+  elif [ "\${running_count:-0}" -gt 0 ]; then
+    log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
+  fi
+
+  rmdir "$reclaim_lock" 2>/dev/null || true
+
+  if [ ! -e "$lockfile" ] && mkdir "$lockfile" 2>/dev/null; then
+    date +%s >"$lockfile/acquiredAt"
+    printf '%s\n' "$$" >"$lockfile/pid"
+    return 0
+  fi
+
+  return 1
 }
 
 release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -f "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
+  rm -rf "\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"
 }
+
 archive_task_artifacts() {
   local comment_id="$1"
   local stdout_file="$2"
