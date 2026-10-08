@@ -12,8 +12,8 @@ task_source_github_issues_poll() {
       jq -c --arg repo "$repo" --arg trigger "$trigger" '
         .[] | select(.pull_request | not)
         | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + ($trigger | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) + "([ \\t\\r\\n]|$)"))
-        | {taskSourceType:"github_issue", taskSourceId:($repo + "#" + (.number|tostring)), taskSourceUrl:.html_url,
-           title:(.title // ""), body:(.body // ""), createdAt:(.created_at // ""),
+        | {taskSourceType:"github_issues", taskSourceId:($repo + "#" + (.number|tostring)), taskSourceUrl:.html_url,
+           title:(.title // ""), body:(.body // ""), prompt:((.body // "") | sub("^[ \\t]*" + $trigger + "[ \\t]*"; "")), createdAt:(.created_at // ""),
            updatedAt:(.updated_at // .created_at // ""), state:"OPEN",
            metadata:{repository:$repo, issueNumber:.number}}'
   done
