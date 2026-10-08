@@ -563,13 +563,17 @@ MOCK
 }
 
 test_opencode_adapter_syntax() {
-  local rc
-  bash -n "$SCRIPT_DIR/opencode-adapter.sh" 2>"$MANUL_DIR/opencode-adapter-syntax.err"
+  local tmp rc err
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  bash -n "$SCRIPT_DIR/opencode-adapter.sh" 2>"$tmp/opencode-adapter-syntax.err"
   rc=$?
+  err="$(cat "$tmp/opencode-adapter-syntax.err" 2>/dev/null || true)"
   if [ "$rc" -eq 0 ]; then
     ok "OpenCode adapter passes bash syntax validation"
   else
-    fail "OpenCode adapter has shell syntax errors: $(cat "$MANUL_DIR/opencode-adapter-syntax.err" 2>/dev/null || true)"
+    fail "OpenCode adapter has shell syntax errors: $err"
   fi
 }
 
