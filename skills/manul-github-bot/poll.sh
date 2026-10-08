@@ -61,8 +61,8 @@ acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="\${REPO_LOCK_DIR}/\${slug}.lock"
-  local reclaim_lock="\${lockfile}.reclaim"
+  local lockfile="${REPO_LOCK_DIR}/${slug}.lock"
+  local reclaim_lock="${lockfile}.reclaim"
 
   mkdir -p "$REPO_LOCK_DIR"
 
@@ -76,7 +76,7 @@ acquire_repo_lock() {
   local age
   age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
   if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
-    log "repo $repo is locked by another task (age=\${age}s, ttl=\${REPO_LOCK_TTL}s); skipping"
+    log "repo $repo is locked by another task (age=${age}s, ttl=${REPO_LOCK_TTL}s); skipping"
     return 1
   fi
 
@@ -94,10 +94,10 @@ acquire_repo_lock() {
 
   # Re-check the lock after taking the reclaim mutex.
   age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
-  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "\${running_count:-0}" -eq 0 ]; then
-    log "stale repo lock for $repo removed (age=\${age}s, no running tasks)"
+  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "${running_count:-0}" -eq 0 ]; then
+    log "stale repo lock for $repo removed (age=${age}s, no running tasks)"
     rm -rf "$lockfile"
-  elif [ "\${running_count:-0}" -gt 0 ]; then
+  elif [ "${running_count:-0}" -gt 0 ]; then
     log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
   fi
 
@@ -120,7 +120,7 @@ release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -rf "\${REPO_LOCK_DIR}/\${slug}.lock"
+  rm -rf "${REPO_LOCK_DIR}/${slug}.lock"
 }
 
 [ -f "$CONFIG" ] || fail "no config at $CONFIG"
