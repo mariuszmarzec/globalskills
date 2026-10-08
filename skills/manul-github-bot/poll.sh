@@ -1122,15 +1122,18 @@ queue_normalized_source_task() {
     log "queued task source $source_type:$source_id"
   fi
 }
-poll_non_github_task_sources() {
+poll_all_task_sources() {
   local source_json type task_json
   for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
     type="$(task_source_name "$source_json")"
-    [ "$type" = "github_issues" ] && continue
+    [ -n "$type" ] || continue
     while IFS= read -r task_json; do
       [ -n "$task_json" ] || continue
       queue_normalized_source_task "$task_json"
-    done < <(task_source_poll "$source_json" 2>>"$LOG" || true)
+    done < <(task_source_poll "$source_json" 2>>"$LOG" || {
+      log "WARN: task source provider failed (type=$type), continuing with other sources"
+      true
+    })
   done
 }
 
@@ -1657,7 +1660,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     return "$result"
   }
 
-  poll_non_github_task_sources
+  poll_all_task_sources
 
   for repo in "${REPOS[@]}"; do
     [ -n "$repo" ] || continue
