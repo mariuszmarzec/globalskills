@@ -605,10 +605,6 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
- "$tmp/stdout2" \
-    && ok "OpenCode continuation produces the completion marker" \
-    || fail "OpenCode continuation lost TASK_DONE"
-}
 
 # ---------------------------------------------------------------------------
 # 11. AgentExecutor dispatch
