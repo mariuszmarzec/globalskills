@@ -247,7 +247,7 @@ elif [ "$permission_blocked" -eq 1 ]; then
     _exit_code=1
     _summary="OpenCode tool call was rejected by the runtime permission policy; the agent could not complete the task as instructed"
 else
-    local step_limit_detected="false"
+    step_limit_detected="false"
     if [ -s "$RAW_STDOUT_FILE" ]; then
         if grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null; then
             step_limit_detected="true"
