@@ -1076,7 +1076,7 @@ scan_failing_ci() {
 NEW=0
 
 queue_normalized_source_task() {
-  local task_json="$1" source_type source_id source_url title body created updated state execution_kind
+  local task_json="$1" source_type source_id source_url title body created updated state
   source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
   source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
   source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
@@ -1085,24 +1085,18 @@ queue_normalized_source_task() {
   created="$(jq -r ".createdAt // \"\"" <<<"$task_json")"
   updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
   state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
-  execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] || return 0
   [ "$state" = "OPEN" ] || return 0
-  [ "$execution_kind" = "repository" ] || {
-    log "task source $source_type:$source_id discovered but execution target kind=$execution_kind is not implemented yet"
-    return 0
-  }
-  local task_id="source:${source_type}:${source_id}" now lease
+  local task_id="source:${source_type}:${source_id}" now lease repo source_context
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-  local repo="${REPO_OVERRIDE:-}"
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",NULL,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",NULL,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
 }
-
 poll_non_github_task_sources() {
   local source_json type task_json
   for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
