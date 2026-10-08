@@ -8,6 +8,7 @@
 # 4. poll.flock prevents concurrent instances
 # 5. Normal repo completes, gh doesn't starve later repos
 # 6. Global POLL_TIMEOUT remains safety net
+# 7. Repository lock acquisition is atomic
 #
 # Usage: bash test_poll_timeout.sh
 
@@ -96,6 +97,50 @@ cat > "$CONFIG" << 'CONFIGEOF'
 CONFIGEOF
 
 touch "$MANUL_DIR/skip-comments.log"
+
+# ===== Test 0: Repository lock acquisition is atomic =====
+echo "Test 0: Repository lock acquisition is atomic"
+
+atomic_lock="$TEST_DIR/atomic.lock"
+(
+  if mkdir "$atomic_lock" 2>/dev/null; then
+    echo "winner" > "$TEST_DIR/atomic-winner"
+    sleep 1
+    exit 0
+  fi
+  exit 1
+) &
+atomic_pid1=$!
+(
+  if mkdir "$atomic_lock" 2>/dev/null; then
+    echo "winner" > "$TEST_DIR/atomic-winner-2"
+    sleep 1
+    exit 0
+  fi
+  exit 1
+) &
+atomic_pid2=$!
+
+atomic_rcs=0
+wait "$atomic_pid1" || atomic_rcs=$((atomic_rcs + 1))
+wait "$atomic_pid2" || atomic_rcs=$((atomic_rcs + 1))
+
+if [ "$atomic_rcs" -eq 1 ] && [ -d "$atomic_lock" ]; then
+  echo "PASS 0: Exactly one concurrent contender acquired the repo lock"
+else
+  echo "FAIL 0: Repository lock acquisition was not exclusive (failed_contenders=$atomic_rcs)"
+  exit 1
+fi
+
+rm -rf "$atomic_lock" "$TEST_DIR/atomic-winner" "$TEST_DIR/atomic-winner-2"
+
+# Verify the production lock implementation uses the same atomic primitive.
+if grep -q 'if mkdir "\$lockfile" 2>/dev/null; then' "$POLL_SCRIPT"; then
+  echo "PASS 0b: poll.sh uses atomic mkdir for repo locks"
+else
+  echo "FAIL 0b: poll.sh does not use atomic mkdir for repo locks"
+  exit 1
+fi
 
 # ===== Test 1: Hanging repo is terminated =====
 echo "Test 1: Hanging repo is terminated after REPO_POLL_TIMEOUT"
