@@ -722,6 +722,27 @@ test_pr_branch_preparation_preserves_dirty_work() {
 }
 run_and_test "Test 26: PR branch preparation preserves dirty work" test_pr_branch_preparation_preserves_dirty_work
 
+
+# Test 27: a new context can get a fresh workspace even when the configured
+# pool is fully occupied by idle persistent contexts.
+echo ""
+echo "=== Test 27: New context gets fresh workspace after context pool is full ==="
+test_new_context_gets_fresh_workspace() {
+  MAX_CONCURRENT_TASKS=1
+  workspace_pool_init 1 reset
+
+  local ws_pr ws_new
+  ws_pr="$(workspace_context_acquire "task-pr" "conv-repo-issue-36" "" "repo" 36)"
+  [ -n "$ws_pr" ] || return 1
+  workspace_release "$ws_pr" "task-pr"
+
+  ws_new="$(workspace_context_acquire "task-new" "conv-repo-issue-99" "" "repo" 99)"
+  [ -n "$ws_new" ] || return 1
+  [ "$ws_new" != "$ws_pr" ] || return 1
+  sqlite3 "$DB" "SELECT workspaceId FROM workspace_contexts WHERE contextId='conv-repo-issue-99';" | grep -qx "$ws_new" || return 1
+  workspace_release "$ws_new" "task-new"
+}
+run_and_test "Test 27: New context gets fresh workspace after context pool is full" test_new_context_gets_fresh_workspace
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"
