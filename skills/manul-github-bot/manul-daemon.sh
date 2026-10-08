@@ -310,6 +310,13 @@ acquire_repo_lock() {
     return 1
   fi
 
+  if [ -d "$reclaim_lock" ]; then
+    local reclaim_age
+    reclaim_age=$(( $(date +%s) - $(stat -c %Y "$reclaim_lock" 2>/dev/null || echo 0) ))
+    if [ "$reclaim_age" -ge "$REPO_LOCK_TTL" ]; then
+      rm -rf "$reclaim_lock"
+    fi
+  fi
   if ! mkdir "$reclaim_lock" 2>/dev/null; then
     log "repo $repo stale-lock recovery is already in progress; skipping"
     return 1
@@ -321,7 +328,7 @@ acquire_repo_lock() {
   running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
 
   age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
-  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "${running_count:-0}" -eq 0 ]; then
+  if [ -e "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "${running_count:-0}" -eq 0 ]; then
     log "stale repo lock for $repo removed (age=${age}s, no running tasks)"
     rm -rf "$lockfile"
   elif [ "${running_count:-0}" -gt 0 ]; then
