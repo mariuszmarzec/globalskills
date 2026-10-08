@@ -23,5 +23,5 @@ task_source_todo_api_poll() {
     | {taskSourceType:"todo_api", taskSourceId:(.id|tostring), taskSourceUrl:($base + "/todo/api/1/tasks/" + (.id|tostring)),
        title:(.description // ""), body:(.description // ""), createdAt:(.addedTime // ""), updatedAt:(.modifiedTime // .addedTime // ""),
        state:(if (.isToDo // true) then "OPEN" else "DONE" end),
-       metadata:{ownerId:.ownerId, isToDo:(.isToDo // true), priority:(.priority // null), parentTaskId:(.parentTaskId // null), expirationDate:(.expirationDate // null)}}' <<<"$tasks"
+       metadata:{ownerId:.ownerId, isToDo:(.isToDo // true), priority:(.priority // null), parentTaskId:(.parentTaskId // null), expirationDate:(.expirationDate // null)}, execution:{kind:"non_repository"}}' <<<"$tasks"
 }
