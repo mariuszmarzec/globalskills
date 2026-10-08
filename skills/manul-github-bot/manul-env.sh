@@ -80,6 +80,32 @@ EOF
     fi
   done
 
+  # Jira credentials may use operator-selected environment variable names.
+  # Capture only names explicitly configured by enabled Jira task sources; never
+  # copy arbitrary process environment variables into Manul runtime state.
+  local jira_variable
+  if [ -f "$runtime_dir/config.json" ]; then
+    while IFS= read -r jira_variable; do
+      [ -n "$jira_variable" ] || continue
+      if [[ ! "$jira_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "  Ignoring invalid Jira environment variable name: $jira_variable" >&2
+        continue
+      fi
+      value="${!jira_variable:-}"
+      if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${jira_variable}=" "$env_file"; then
+        printf "%s=%q\n" "$jira_variable" "$value" >> "$env_file"
+        echo "  Captured $jira_variable for unattended Manul processes" >&2
+      fi
+    done < <(
+      jq -r '
+        .taskSources[]?
+        | select((.enabled // true) == true)
+        | select(.type == "jira_tasks")
+        | (.userEnv // "MANUL_JIRA_USER"), (.passwordEnv // "MANUL_JIRA_PASSWORD")
+      ' "$runtime_dir/config.json" 2>/dev/null | sort -u
+    )
+  fi
+
   chmod 600 "$env_file" || return 1
 
   if ! bash -n "$env_file" >/dev/null 2>&1; then
