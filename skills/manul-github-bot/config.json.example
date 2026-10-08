@@ -49,6 +49,7 @@
       "type": "jira_tasks",
       "enabled": false,
       "baseUrl": "https://your-domain.atlassian.net",
+      "repository": "mariuszmarzec/your-repo",
       "userEnv": "MANUL_JIRA_USER",
       "passwordEnv": "MANUL_JIRA_PASSWORD",
       "jql": "project is not EMPTY",
