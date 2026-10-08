@@ -304,7 +304,37 @@ Behavioural compatibility is required; obsolete filesystem layout
 compatibility is not.
 
 
-## 20. Unit-test contract
+## 20. Task-source contract
+
+Manul task sources are configured as `.taskSources[]`. Each enabled source is
+an independent provider and is polled during the same cycle.
+
+The provider contract is normalized to:
+- `taskSourceType`
+- `taskSourceId`
+- `taskSourceUrl`
+- title/body and timestamps
+- provider-specific `metadata`
+
+The task-source identity is the root work item. A pull request, review
+comment, or CI check is never a task-source root. Those artifacts may be linked
+as context to a task owned by another source.
+
+The default source is `github_issues`. Existing configurations without
+`.taskSources` fall back to the legacy `.repositories` array as one GitHub
+Issues source.
+
+Multiple enabled sources are independent: a failure in one provider must not
+prevent other providers from being polled.
+
+The initial non-GitHub provider is `todo_api`. Its documented endpoint is
+`GET /todo/api/1/tasks`; executable tasks are selected by the configured
+Manul trigger in the task description. Authentication is supplied through the
+environment variable named by `tokenEnv` (default `MANUL_TODO_PAT`), never
+stored in JSON configuration. The provider remains disabled by default until
+the Todo backend PAT flow is available.
+
+## 21. Unit-test contract
 
 When an implementation task adds or changes unit tests:
 - tests must prove the requested behavior, not merely object construction, helper execution, DTO conversion, or property structure;
