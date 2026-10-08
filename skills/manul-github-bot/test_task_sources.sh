@@ -39,28 +39,29 @@ assert_contains "first GitHub repository preserved" "$multi" "owner/b"
 assert_contains "second GitHub repository preserved" "$multi" "owner/a"
 assert_contains "Jira source is preserved when enabled" "$multi" '"type":"jira_tasks"'
 
-cat >"$WORK/todo.json" <<'JSON'
-{"type":"jira_tasks","enabled":true,"baseUrl":"http://todo.local","tokenEnv":"MANUL_JIRA_PASSWORD","trigger":"/manul"}
+cat >"$WORK/jira.json" <<'JSON'
+{"type":"jira_tasks","enabled":true,"baseUrl":"http://jira.local","userEnv":"MANUL_JIRA_USER","passwordEnv":"MANUL_JIRA_PASSWORD","jql":"project = DEMO"}
 JSON
 cat >"$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
 cat <<'JSON'
-[{"id":7,"ownerId":1,"description":"/manul Fix sync","addedTime":"2026-10-08T10:00:00Z","modifiedTime":"2026-10-08T11:00:00Z","isToDo":true},{"id":8,"ownerId":1,"description":"Do not run","isToDo":true}]
+{"issues":[{"id":"10001","key":"DEMO-7","fields":{"summary":"Fix sync","description":"/manul Fix sync","created":"2026-10-08T10:00:00.000+0000","updated":"2026-10-08T11:00:00.000+0000","status":{"name":"To Do"},"project":{"key":"DEMO"},"issuetype":{"name":"Task"}}},{"id":"10002","key":"DEMO-8","fields":{"summary":"Do not run","description":"ordinary Jira task","status":{"name":"To Do"},"project":{"key":"DEMO"},"issuetype":{"name":"Task"}}}]}
 JSON
 CURL
 chmod +x "$BIN/curl"
 export PATH="$BIN:$PATH"
-export MANUL_JIRA_PASSWORD="secret"
+export MANUL_JIRA_USER="jira-user"
+export MANUL_JIRA_PASSWORD="jira-password"
 source "$SCRIPT_DIR/task-source-jira-tasks.sh"
-todo_source="$(cat "$WORK/todo.json")"
-todo_json="$(task_source_jira_tasks_poll "$todo_source")"
-assert_contains "Jira trigger is discovered" "$todo_json" '"taskSourceType":"jira_tasks"'
-assert_contains "Jira id preserved" "$todo_json" '"taskSourceId":"7"'
-assert_not_contains "Jira item without trigger ignored" "$todo_json" '"taskSourceId":"8"'
-assert_contains "Jira execution target is explicit" "$todo_json" '"kind":"non_repository"'
-assert_not_contains "PAT never appears in normalized data" "$todo_json" "secret"
-if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a supported task source"; fi
-assert_eq "stable task-source identity" "jira_tasks:7" "$(task_source_identity '{"taskSourceType":"jira_tasks","taskSourceId":"7"}')"
-
+jira_source="$(cat "$WORK/jira.json")"
+jira_tasks="$(task_source_jira_tasks_poll "$jira_source")"
+assert_contains "Jira trigger is discovered" "$jira_tasks" '"taskSourceType":"jira_task"'
+assert_contains "Jira issue key is stable id" "$jira_tasks" '"taskSourceId":"DEMO-7"'
+assert_contains "Jira browse url is normalized" "$jira_tasks" '"https://jira.example.com/browse/DEMO-7"'
+assert_not_contains "Jira task without trigger is ignored" "$jira_tasks" '"taskSourceId":"DEMO-8"'
+assert_not_contains "Jira user is not emitted" "$jira_tasks" "jira-user"
+assert_not_contains "Jira password is not emitted" "$jira_tasks" "jira-password"
+if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a task source"; fi
+assert_eq "stable Jira source identity" "jira_task:DEMO-7" "$(task_source_identity '{"taskSourceType":"jira_task","taskSourceId":"DEMO-7"}')"
 echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
