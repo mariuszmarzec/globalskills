@@ -6,6 +6,22 @@
   "autoRebaseOnPrBase": true,
   "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
   "repositories": ["mariuszmarzec/caracal-rag", "mariuszmarzec/todo", "mariuszmarzec/test-manul-e2e", "mariuszmarzec/shoppingListGenerator"],
+  "taskSources": [
+    {
+      "type": "github_issues",
+      "enabled": true,
+      "repositories": ["mariuszmarzec/caracal-rag", "mariuszmarzec/todo", "mariuszmarzec/test-manul-e2e", "mariuszmarzec/shoppingListGenerator"]
+    },
+    {
+      "type": "todo_api",
+      "enabled": false,
+      "baseUrl": "http://localhost",
+      "tasksPath": "/todo/api/1/tasks",
+      "tokenEnv": "MANUL_TODO_PAT",
+      "authScheme": "Bearer",
+      "trigger": "/manul"
+    }
+  ],
   "retryConfig": {
     "maxAttempts": 3,
     "delaySeconds": 60,
