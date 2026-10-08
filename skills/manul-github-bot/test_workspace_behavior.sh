@@ -599,6 +599,129 @@ test_invalid_ownership_blocks_dispatch() {
 }
 run_and_test "Test 21: Invalid ownership blocks dispatch" test_invalid_ownership_blocks_dispatch
 
+
+# Test 22: exact thread context reclaims the same workspace and keeps
+# uncommitted changes between separate tasks.
+echo ""
+echo "=== Test 22: Thread context preserves uncommitted work ==="
+test_thread_context_reclaims_workspace() {
+  workspace_pool_init 2 reset
+
+  local context="conv-repo-issue-36-review-123"
+  local parent="conv-repo-issue-36"
+  local ws1 ws2 path
+  ws1="$(workspace_context_acquire "task-thread-1" "$context" "$parent" "repo" 36)"
+  [ -n "$ws1" ] || return 1
+  path="$(workspace_get_path "task-thread-1")"
+  [ -n "$path" ] || return 1
+
+  printf '%s\n' "local uncommitted change" > "$path/local-thread.txt"
+  workspace_release "$ws1" "task-thread-1"
+
+  ws2="$(workspace_context_acquire "task-thread-2" "$context" "$parent" "repo" 36)"
+  [ "$ws2" = "$ws1" ] || return 1
+  path="$(workspace_get_path "task-thread-2")"
+  [ -f "$path/local-thread.txt" ] || return 1
+  grep -Fxq "local uncommitted change" "$path/local-thread.txt" || return 1
+  workspace_release "$ws2" "task-thread-2"
+}
+run_and_test "Test 22: Thread context preserves uncommitted work" test_thread_context_reclaims_workspace
+
+# Test 23: a thread without its own prior workspace inherits the PR root
+# workspace, preserving the root's local changes.
+echo ""
+echo "=== Test 23: Review thread falls back to PR context ==="
+test_thread_context_falls_back_to_pr() {
+  workspace_pool_init 2 reset
+
+  local pr_context="conv-repo-issue-36"
+  local thread_context="conv-repo-review-456"
+  local ws_pr ws_thread path
+  ws_pr="$(workspace_context_acquire "task-pr-1" "$pr_context" "" "repo" 36)"
+  [ -n "$ws_pr" ] || return 1
+  path="$(workspace_get_path "task-pr-1")"
+  printf '%s\n' "PR local work" > "$path/local-pr.txt"
+  workspace_release "$ws_pr" "task-pr-1"
+
+  ws_thread="$(workspace_context_acquire "task-thread-1" "$thread_context" "$pr_context" "repo" 36)"
+  [ "$ws_thread" = "$ws_pr" ] || return 1
+  path="$(workspace_get_path "task-thread-1")"
+  [ -f "$path/local-pr.txt" ] || return 1
+  grep -Fxq "PR local work" "$path/local-pr.txt" || return 1
+  workspace_release "$ws_thread" "task-thread-1"
+}
+run_and_test "Test 23: Review thread falls back to PR context" test_thread_context_falls_back_to_pr
+
+# Test 24: mapped workspaces are not stolen by unrelated new contexts.
+echo ""
+echo "=== Test 24: Mapped workspace is protected from unrelated contexts ==="
+test_mapped_workspace_not_stolen() {
+  workspace_pool_init 2 reset
+
+  local ws_pr ws_other
+  ws_pr="$(workspace_context_acquire "task-pr" "conv-repo-issue-36" "" "repo" 36)"
+  [ -n "$ws_pr" ] || return 1
+  workspace_release "$ws_pr" "task-pr"
+
+  ws_other="$(workspace_context_acquire "task-other" "conv-repo-issue-99" "" "repo" 99)"
+  [ -n "$ws_other" ] || return 1
+  [ "$ws_other" != "$ws_pr" ] || return 1
+  workspace_release "$ws_other" "task-other"
+}
+run_and_test "Test 24: Mapped workspace protected from unrelated contexts" test_mapped_workspace_not_stolen
+
+# Test 25: idle context workspaces survive stale cleanup so local changes
+# remain available for a later comment.
+echo ""
+echo "=== Test 25: Context workspace survives stale cleanup ==="
+test_context_workspace_survives_stale_cleanup() {
+  workspace_pool_init 1 reset
+
+  local context="conv-repo-issue-36"
+  local ws path
+  ws="$(workspace_context_acquire "task-stale" "$context" "" "repo" 36)"
+  [ -n "$ws" ] || return 1
+  path="$(workspace_get_path "task-stale")"
+  printf '%s\n' "keep me" > "$path/local.txt"
+  workspace_release "$ws" "task-stale"
+
+  sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
+  workspace_cleanup_stale 1
+
+  sqlite3 "$DB" "SELECT 1 FROM workspace_contexts WHERE contextId='$context' AND workspaceId='$ws';" | grep -qx 1 || return 1
+  [ -d "$path/.git" ] || true
+  [ -f "$path/local.txt" ] || return 1
+}
+run_and_test "Test 25: Context workspace survives stale cleanup" test_context_workspace_survives_stale_cleanup
+
+# Test 26: PR branch preparation never discards dirty local changes.
+echo ""
+echo "=== Test 26: PR branch preparation preserves dirty work ==="
+test_pr_branch_preparation_preserves_dirty_work() {
+  local tmp remote work
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  remote="$tmp/remote.git"
+  work="$tmp/work"
+  git init --bare -q "$remote"
+  git clone -q "$remote" "$work"
+  git -C "$work" config user.email "test@example.com"
+  git -C "$work" config user.name "Test"
+  printf '%s\n' "base" > "$work/file.txt"
+  git -C "$work" add file.txt
+  git -C "$work" commit -qm "initial"
+  git -C "$work" branch -M master
+  git -C "$work" push -q origin master
+  git -C "$work" checkout -qb feature/test
+  git -C "$work" push -q -u origin feature/test
+
+  printf '%s\n' "dirty local work" >> "$work/file.txt"
+  workspace_prepare_pr_branch "$work" feature/test || return 1
+  grep -Fxq "dirty local work" "$work/file.txt" || return 1
+  [ "$(git -C "$work" symbolic-ref --short HEAD)" = "feature/test" ] || return 1
+}
+run_and_test "Test 26: PR branch preparation preserves dirty work" test_pr_branch_preparation_preserves_dirty_work
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"
