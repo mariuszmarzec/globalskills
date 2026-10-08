@@ -36,4 +36,6 @@ assert_contains "Todo id preserved" "$todo" '"taskSourceId":"7"'
 assert_not_contains "Todo item without trigger ignored" "$todo" '"taskSourceId":"8"'
 assert_not_contains "PAT never appears in normalized data" "$todo" "secret"
 if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a supported task source"; fi
+assert_eq(){ local n="$1" e="$2" a="$3"; [ "$e" = "$a" ] && ok "$n" || fail "$n (expected $e, got $a)"; }
+assert_eq "stable task-source identity" "todo_api:7" "$(task_source_identity "{\"taskSourceType\":\"todo_api\",\"taskSourceId\":\"7\"}")"
 echo "Results: $PASS passed, $FAIL failed"; exit "$FAIL"
