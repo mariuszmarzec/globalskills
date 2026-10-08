@@ -49,9 +49,12 @@ task_source_identity() {
 
 
 task_source_poll_all() {
-  local config="$1" source_json
+  local config="$1" source_json baseline trigger
+  baseline="$(jq -r ".baseline // empty" "$config")"
+  trigger="$(jq -r ".trigger // "/manul"" "$config")"
   while IFS= read -r source_json; do
     [ -n "$source_json" ] || continue
+    source_json="$(jq -c --arg baseline "$baseline" --arg trigger "$trigger" '.baseline=$baseline | .trigger=$trigger' <<<"$source_json")"
     task_source_poll "$source_json"
   done < <(task_source_configured_sources "$config")
 }
