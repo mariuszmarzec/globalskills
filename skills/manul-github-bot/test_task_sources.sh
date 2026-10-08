@@ -51,7 +51,9 @@ CURL
 chmod +x "$BIN/curl"
 export PATH="$BIN:$PATH"
 export MANUL_TODO_PAT="secret"
-todo_json="$(task_source_todo_api_poll "$(cat "$WORK/todo.json")")"
+source "$SCRIPT_DIR/task-source-todo-api.sh"
+todo_source="$(cat "$WORK/todo.json")"
+todo_json="$(task_source_todo_api_poll "$todo_source")"
 assert_contains "Todo trigger is discovered" "$todo_json" '"taskSourceType":"todo_api"'
 assert_contains "Todo id preserved" "$todo_json" '"taskSourceId":"7"'
 assert_not_contains "Todo item without trigger ignored" "$todo_json" '"taskSourceId":"8"'
