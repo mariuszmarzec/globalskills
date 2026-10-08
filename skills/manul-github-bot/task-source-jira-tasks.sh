@@ -40,6 +40,7 @@ task_source_jira_tasks_poll() {
   curl --fail --silent --show-error     --connect-timeout "${MANUL_JIRA_CONNECT_TIMEOUT:-10}"     --max-time "${MANUL_JIRA_TIMEOUT:-30}"     -u "$user:$password"     -H 'Accept: application/json'     -H 'Content-Type: application/json'     --data "$payload"     -X POST "$url" 2>/dev/null |
     jq -c --arg base "$base_url" --arg repository "$repository" '
       .issues[]?
+      | select(((.fields.status.name // "") | ascii_upcase) != "DONE")
       | {
           taskSourceType:"jira_tasks",
           taskSourceId:(.key // (.id|tostring)),
