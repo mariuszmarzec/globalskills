@@ -1120,12 +1120,16 @@ queue_normalized_source_task() {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
+  local issue_number
+  issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
+  issue_number="$(sql_num "$issue_number")"
+  issue_number="${issue_number:-0}"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
   if [ -z "$repo" ]; then
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",0,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",${issue_number},\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
