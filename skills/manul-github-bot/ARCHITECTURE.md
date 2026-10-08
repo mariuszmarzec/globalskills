@@ -71,7 +71,7 @@ OpenClaw configuration/state remains outside that ownership boundary.
 
 Manul separates the root task source from development artifacts such as pull requests and review threads.
 
-Configured sources live in `.taskSources[]` and are polled independently:
+Configured sources live in `.taskSources[]`; disabled entries are ignored and enabled entries are polled independently:
 
 ```text
 Task sources
