@@ -46,3 +46,12 @@ task_source_configured_sources() {
 task_source_identity() {
   jq -r '.taskSourceType as $t | .taskSourceId as $i | if ($t // "") == "" or ($i // "") == "" then empty else ($t + ":" + $i) end' <<<"$1"
 }
+
+
+task_source_poll_all() {
+  local config="$1" source_json
+  while IFS= read -r source_json; do
+    [ -n "$source_json" ] || continue
+    task_source_poll "$source_json"
+  done < <(task_source_configured_sources "$config")
+}
