@@ -13,7 +13,7 @@ task_source_type_is_supported() {
   case "$1" in github_issues|jira_tasks) return 0 ;; *) return 1 ;; esac
 }
 
-task_source_enabled() { jq -e '(.enabled // true) == true' <<<"$1" >/dev/null 2>&1; }
+task_source_enabled() { jq -e '(.enabled != false)' <<<"$1" >/dev/null 2>&1; }
 task_source_name() { jq -r '.type // empty' <<<"$1"; }
 
 task_source_poll() {
@@ -45,7 +45,7 @@ task_source_configured_sources() {
     allowed_users="$(jq -c '.allowedUsers // []' "$config")"
     jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" '
       .taskSources[]
-      | select((.enabled // true) == true)
+      | select((.enabled != false))
       | if .type == "github_issues"
         then .trigger = (.trigger // $trigger)
            | .allowedUsers = (.allowedUsers // $allowedUsers)
