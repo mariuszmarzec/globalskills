@@ -2192,15 +2192,17 @@ else
     fi
   fi
 
-  # Final result-comment verification is performed after PR verification so a
-  # known PR is persisted even when the agent's result comment is malformed.
+  # Result-comment marker validation is a correlation/presentation safeguard,
+  # not a reason to discard already-verified repository delivery. By this point
+  # the PR/branch/remote state has been verified. A missing marker is repaired
+  # when possible and recorded diagnostically, while TASK_DONE remains a valid
+  # completion once the actual repository delivery checks passed.
   if [ "$SUCCESS" = "true" ]; then
     if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      log "dispatch: task $COMMENT_ID attempt $current_attempt has invalid result comment state"
-      lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-      SUCCESS="false"
-      FAILURE_CODE="VERIFICATION_FAILED"
-      FAIL_REASON="Agent emitted TASK_DONE but the final result-comment state does not contain exactly one valid deterministic marker for attempt $current_attempt"
+      log "WARN: task $COMMENT_ID attempt $current_attempt has no matching result marker; repository delivery already verified"
+      lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt action=delivery-preserved"
+    else
+      log "dispatch: task $COMMENT_ID attempt $current_attempt result comment marker verified"
     fi
   fi
 
