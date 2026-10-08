@@ -202,8 +202,8 @@ ensure_repo() {
   # Acquire before touching the shared checkout. This closes the race where
   # two workers fetched/reset the same repo cache concurrently.
   if ! acquire_repo_lock "$repo"; then
-    log "repo $repo is locked or stale, skipping"
-    return 1
+    log "repo $repo is locked or stale, retrying later"
+    return 2
   fi
 
   # Check if repo already exists and is up-to-date
@@ -351,6 +351,17 @@ release_repo_lock() {
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
   rm -rf "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
+}
+
+# Release the repository lock only when this task successfully acquired it.
+# Bash function scope is dynamic, so REPO_LOCK_HELD is the task-local owner
+# flag visible here.
+release_task_repo_lock() {
+  local repo="$1"
+  if [ "${REPO_LOCK_HELD:-false}" = "true" ]; then
+    release_repo_lock "$repo"
+    REPO_LOCK_HELD=false
+  fi
 }
 
 archive_task_artifacts() {
@@ -2717,8 +2728,19 @@ PROMPT_EOF
 
     # Repository Management: Ensure target repository exists and is authoritative
     local REPO_DIR
-    REPO_DIR="$(ensure_repo "$REPO")"
-    if [ $? -ne 0 ]; then
+    local ensure_repo_rc=0
+    REPO_DIR="$(ensure_repo "$REPO")" || ensure_repo_rc=$?
+
+    if [ "$ensure_repo_rc" -eq 2 ]; then
+      log "dispatch: repository $REPO is busy, requeueing task $COMMENT_ID"
+      lc_log "REPO_BUSY" "task=$COMMENT_ID repo=$REPO"
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
+    if [ "$ensure_repo_rc" -ne 0 ]; then
       log "dispatch: FAILED to ensure repository $REPO, failing task"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
@@ -2730,6 +2752,10 @@ PROMPT_EOF
       return 0
     fi
 
+    # ensure_repo() succeeded, so the task owns the repo lock until the shared
+    # repo cache has been cloned/reused by its workspace.
+    local REPO_LOCK_HELD=true
+
     # Verify repository integrity
     if ! verify_repo "$REPO" "$REPO_DIR"; then
       log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
@@ -2738,7 +2764,7 @@ PROMPT_EOF
       local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
       post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
+      release_task_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -2768,7 +2794,7 @@ PROMPT_EOF
       WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
       if [ -z "$WORKSPACE_ID" ]; then
         log "dispatch: continuation session has no reclaimable workspace for task $COMMENT_ID"
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2780,7 +2806,7 @@ PROMPT_EOF
         log "dispatch: logical workspace context is busy for task $COMMENT_ID; requeueing"
         lc_log "WORKSPACE_CONTEXT_BUSY" "task=$COMMENT_ID context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
         sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2791,7 +2817,7 @@ PROMPT_EOF
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      release_repo_lock "$REPO"
+      release_task_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -2808,7 +2834,7 @@ PROMPT_EOF
       log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
       stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
+      release_task_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -2821,7 +2847,7 @@ PROMPT_EOF
         log "dispatch: failed to clone repository into workspace, releasing and failing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
         stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2831,6 +2857,11 @@ PROMPT_EOF
       git -C "$workspace_path" remote set-url origin "https://github.com/${REPO}" 2>>"$LOG"
       log "dispatch: updated workspace origin to https://github.com/${REPO}"
     fi
+
+    # The agent works only in its isolated workspace from this point on.
+    # Releasing the shared repo-cache lock here allows another task for the
+    # same repository to prepare its own workspace concurrently.
+    release_task_repo_lock "$REPO"
 
 # Use the workspace as the working directory for the agent
      WORKDIR="$workspace_path"
@@ -2843,7 +2874,7 @@ PROMPT_EOF
         log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH without destroying local work, releasing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
         stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2853,7 +2884,7 @@ PROMPT_EOF
       if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
         log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
         return 0
@@ -2872,20 +2903,20 @@ PROMPT_EOF
        log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
        if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
          log "ERROR: failed to fetch origin before task setup on $REPO"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
        if ! git -C "$WORKDIR" checkout -B "$base_branch" "origin/$base_branch" 2>>"$LOG"; then
          log "ERROR: failed to checkout base branch '$base_branch' for task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
        if ! git -C "$WORKDIR" reset --hard "origin/$base_branch" --quiet 2>>"$LOG"; then
          log "ERROR: failed to reset workspace to origin/$base_branch for task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
        if ! git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG"; then
          log "ERROR: failed to clean workspace before task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
        fi
      fi
 log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
@@ -2903,7 +2934,7 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
        log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
        stop_heartbeat "$COMMENT_ID"
        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-       release_repo_lock "$REPO"
+       release_task_repo_lock "$REPO"
        release_task_lock
        set_activity "none" "idle"
        return 0
@@ -3008,7 +3039,7 @@ PROMPT_APPEND
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        stop_heartbeat "$COMMENT_ID"
        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-       release_repo_lock "$REPO"
+       release_task_repo_lock "$REPO"
        release_task_lock
        set_activity "none" "idle"
        return 0
@@ -3119,7 +3150,7 @@ PROMPT_APPEND
           log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
         fi
         stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
+        release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "$COMMENT_ID" "blocked_user"
         return 0
@@ -3219,7 +3250,7 @@ PROMPT_APPEND
     fi
 
     # Release repository lock
-    release_repo_lock "$REPO"
+    release_task_repo_lock "$REPO"
 
     # Persist task diagnostics before removing transient worker artifacts.
     archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
