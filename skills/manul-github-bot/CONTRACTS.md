@@ -327,7 +327,7 @@ Issues source.
 Multiple enabled sources are independent: a failure in one provider must not
 prevent other providers from being polled.
 
-The initial non-GitHub provider is `todo_api`. Its documented endpoint is
+The initial non-GitHub provider is `jira_tasks`. Its documented endpoint is
 `GET /todo/api/1/tasks`; executable tasks are selected by the configured
 Manul trigger in the task description. Authentication is supplied through the
 environment variable named by `tokenEnv` (default `MANUL_TODO_PAT`), never
