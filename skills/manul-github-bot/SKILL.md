@@ -89,6 +89,19 @@ process boundary. They must not spawn subprocesses directly and must not
 depend on each other. Runtime-specific sessions and continuation mechanics
 belong to the adapter, not to Manul task contracts.
 
+
+## Task sources
+
+The root work item is owned by a configured task source. GitHub Issues are the default source. Additional providers can be enabled in `.taskSources[]` and are polled independently.
+
+PRs, review comments and CI checks are related development context, not task sources. A source can have multiple PRs attached to it.
+
+Current provider types:
+
+- `github_issues` — default, backed by GitHub repositories.
+- `todo_api` — initial Todo REST provider, disabled by default until PAT/authentication is ready.
+
+See `task-source.sh` and `task-source-todo-api.sh` for the provider contract.
 ## GitHub task workflow
 
 ### Issue task
