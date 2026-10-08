@@ -281,6 +281,7 @@ else
         [ -n "$last_event_type" ] && _summary+="; last_event=$last_event_type"
     fi
 fi
+fi
 
 # Keep RAW_STDOUT_FILE; Manul task retention is responsible for cleanup.
 
