@@ -21,6 +21,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
+source "$SCRIPT_DIR/task-source.sh"
+source "$SCRIPT_DIR/manul-env.sh"
 CONFIG="$MANUL_CONFIG"
 DB="${DB:-$MANUL_DB}"
 LOCK="${MANUL_LOCKS_DIR}/poll.lock"
@@ -656,6 +658,27 @@ if [ $# -gt 0 ]; then
 else
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 fi
+
+# Generic task-source configuration. `taskSources` is authoritative when present;
+# legacy `.repositories` continues to mean GitHub Issues.
+TASK_SOURCE_CONFIGS=()
+while IFS= read -r _source_json; do
+  [ -n "$_source_json" ] || continue
+  TASK_SOURCE_CONFIGS+=("$_source_json")
+done < <(task_source_configured_sources "$CONFIG" 2>>"$LOG")
+
+# Provider polling errors are isolated: one broken provider must not prevent
+# other task sources from being scanned in the same cycle.
+poll_configured_task_sources() {
+  local source_json type
+  for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
+    type="$(task_source_name "$source_json")"
+    [ -n "$type" ] || continue
+    if ! task_source_poll "$source_json" 2>>"$LOG"; then
+      log "WARN: task source provider failed (type=$type), continuing with other sources"
+    fi
+  done
+}
 
 # === DB schema initialization and migration (runs on source) ===
 mkdir -p "$MANUL_DIR"
