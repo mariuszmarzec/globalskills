@@ -696,7 +696,7 @@ test_repository_lock_atomicity_and_scope() {
   lock_body="$(sed -n '/^acquire_repo_lock()/,/^archive_task_artifacts()/p' "$DAEMON")"
   assert_contains "$TEST_NAME (atomic lock acquisition)" "$lock_body" 'mkdir "$lockfile"'
   assert_contains "$TEST_NAME (serialized stale recovery)" "$lock_body" 'mkdir "$reclaim_lock"'
-  assert_contains "$TEST_NAME (lock release removes directory)" "$lock_body" 'rm -rf "\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"'
+  assert_contains "$TEST_NAME (lock release removes directory)" "$lock_body" 'rm -rf "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"'
 
   local ensure_body
   ensure_body="$(sed -n '/^ensure_repo()/,/^# Verify repository ownership and integrity/p' "$DAEMON")"
