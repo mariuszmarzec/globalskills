@@ -5,7 +5,7 @@ set -uo pipefail
 
 task_source_todo_api_poll() {
   local source_json="$1" base_url token_env tasks_path auth_scheme trigger token_value tasks url
-  base_url="$(jq -r ".baseUrl // empty" <<<"$source_json")"
+  base_url="$(jq -r ".baseUrl // env.MANUL_TODO_BASE_URL // empty" <<<"$source_json")"
   token_env="$(jq -r ".tokenEnv // \"MANUL_TODO_PAT\"" <<<"$source_json")"
   tasks_path="$(jq -r ".tasksPath // \"/todo/api/1/tasks\"" <<<"$source_json")"
   auth_scheme="$(jq -r ".authScheme // \"Bearer\"" <<<"$source_json")"
