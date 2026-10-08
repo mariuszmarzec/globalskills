@@ -718,7 +718,7 @@ test_pr_branch_preparation_preserves_dirty_work() (
   workspace_prepare_pr_branch "$work" feature/test || return 1
   grep -Fxq "dirty local work" "$work/file.txt" || return 1
   [ "$(git -C "$work" symbolic-ref --short HEAD)" = "feature/test" ] || return 1
-}
+)
 run_and_test "Test 26: PR branch preparation preserves dirty work" test_pr_branch_preparation_preserves_dirty_work
 
 
