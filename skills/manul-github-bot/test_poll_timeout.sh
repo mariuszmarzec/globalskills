@@ -108,7 +108,7 @@ no_orphans() {
   sleep 0.5
   ps -eo pid,ppid,cmd | grep "sleep 999999" | grep -v "grep" > /dev/null && return 1 || return 0
 }
-lock_cleaned() { [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; }
+lock_cleaned() { [ ! -e "$MANUL_DIR/state/locks/repo/hang.lock" ]; }
 log_exists() { [ -f "$MANUL_DIR/logs/poll.log" ]; }
 
 if has_timeout && log_exists; then
@@ -154,7 +154,7 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ] && [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
+if [ ! -e "$MANUL_DIR/state/locks/repo/hang.lock" ] && [ ! -e "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 2: Both locks cleaned"
 else
   echo "FAIL 2: Lock(s) still present"
@@ -243,7 +243,7 @@ else
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
+if [ ! -e "$MANUL_DIR/state/locks/repo/fast.lock" ]; then
   echo "PASS 4: Non-hang repo lock cleaned"
 else
   echo "FAIL 4: Non-hang repo lock still present"
@@ -301,7 +301,7 @@ fi
 # Simulate the outer daemon timeout interrupting poll.sh before the repo-level
 # timeout can fire. The poll process must clean the lock it acquired before
 # receiving SIGTERM.
-rm -f "$DB" "$POLL_FLOCK" "$MANUL_DIR/state/locks/repo/hang.lock"
+rm -f "$DB" "$POLL_FLOCK"; rm -rf "$MANUL_DIR/state/locks/repo/hang.lock"
 init_poll_db
 export MANUL_REPO_POLL_TIMEOUT=30
 if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_DIR/test5.txt" 2>&1; then
@@ -310,7 +310,7 @@ if timeout --signal=TERM --kill-after=2s 1s bash "$POLL_SCRIPT" "hang" > "$TEST_
   exit 1
 fi
 
-if [ ! -f "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
+if [ ! -e "$MANUL_DIR/state/locks/repo/hang.lock" ]; then
   echo "PASS 5: Repo lock cleaned after global SIGTERM"
 else
   echo "FAIL 5: Repo lock leaked after global SIGTERM"
