@@ -112,7 +112,12 @@ init_schema() {
         session_id TEXT,
         action TEXT DEFAULT 'IMPLEMENT',
         prNumber INTEGER,
-        prUrl TEXT
+        prUrl TEXT,
+        taskSourceType TEXT,
+        taskSourceId TEXT,
+        taskSourceUrl TEXT,
+        taskSourceTitle TEXT,
+        taskSourceUpdatedAt TEXT
       );
       CREATE TABLE IF NOT EXISTS conversations (
         conversationId TEXT PRIMARY KEY,
@@ -147,6 +152,14 @@ init_schema() {
   }
 
   local alter_sql=""
+  if ! echo "$col_check" | grep -q "|taskSourceType|"; then
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT; "
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT; "
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT; "
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT; "
+    alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT; "
+  fi
+
   if ! echo "$col_check" | grep -q '|action|'; then
     alter_sql="${alter_sql}ALTER TABLE processed_comments ADD COLUMN action TEXT DEFAULT 'IMPLEMENT'; "
   fi
