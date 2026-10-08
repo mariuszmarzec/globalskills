@@ -54,41 +54,73 @@ sql_num() {
 }
 
 # Per-repo lock: prevents two different tasks from working on the same local
-# repo workdir at the same time. Repo is identified by its workdir slug.
+# repo workdir at the same time. The lock is an atomic directory creation, so
+# concurrent contenders cannot both acquire it. A short-lived reclaim mutex
+# serializes stale-lock recovery.
 acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="${REPO_LOCK_DIR}/${slug}.lock"
-  if [ -f "$lockfile" ]; then
-    local age
-    age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
-    if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
-      log "repo $repo is locked by another task (age=${age}s, ttl=${REPO_LOCK_TTL}s); skipping"
-      return 1
-    fi
-    # Lock is stale — but only remove it if no task is currently running for
-    # this repo in DB. If a task is still marked `running`, the old worker
-    # may still be alive; do NOT steal the lock.
-    local running_count
-    local safe_repo
-    safe_repo="$(sql_escape "$repo")"
-    running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
-    if [ "${running_count:-0}" -gt 0 ]; then
-      log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
-      return 1
-    fi
-    log "stale repo lock for $repo removed (age=${age}s, no running tasks)"
-    rm -f "$lockfile"
+  local lockfile="\${REPO_LOCK_DIR}/\${slug}.lock"
+  local reclaim_lock="\${lockfile}.reclaim"
+
+  mkdir -p "$REPO_LOCK_DIR"
+
+  # Fast path: mkdir is atomic across processes.
+  if mkdir "$lockfile" 2>/dev/null; then
+    date +%s >"$lockfile/acquiredAt"
+    printf '%s\n' "$$" >"$lockfile/pid"
+    return 0
   fi
-  date +%s >"$lockfile"
-  return 0
+
+  local age
+  age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
+  if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
+    log "repo $repo is locked by another task (age=\${age}s, ttl=\${REPO_LOCK_TTL}s); skipping"
+    return 1
+  fi
+
+  # Stale recovery must itself be serialized; otherwise two contenders could
+  # both remove the stale lock and then both acquire a replacement lock.
+  if ! mkdir "$reclaim_lock" 2>/dev/null; then
+    log "repo $repo stale-lock recovery is already in progress; skipping"
+    return 1
+  fi
+
+  local safe_repo
+  safe_repo="$(sql_escape "$repo")"
+  local running_count
+  running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
+
+  # Re-check the lock after taking the reclaim mutex.
+  age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
+  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "\${running_count:-0}" -eq 0 ]; then
+    log "stale repo lock for $repo removed (age=\${age}s, no running tasks)"
+    rm -rf "$lockfile"
+  elif [ "\${running_count:-0}" -gt 0 ]; then
+    log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
+  fi
+
+  rmdir "$reclaim_lock" 2>/dev/null || true
+
+  # Retry exactly once after successful stale cleanup. The second acquisition
+  # is still atomic, so only one contender can win.
+  if [ ! -e "$lockfile" ]; then
+    if mkdir "$lockfile" 2>/dev/null; then
+      date +%s >"$lockfile/acquiredAt"
+      printf '%s\n' "$$" >"$lockfile/pid"
+      return 0
+    fi
+  fi
+
+  return 1
 }
+
 release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -f "${REPO_LOCK_DIR}/${slug}.lock"
+  rm -rf "\${REPO_LOCK_DIR}/\${slug}.lock"
 }
 
 [ -f "$CONFIG" ] || fail "no config at $CONFIG"
