@@ -211,7 +211,7 @@ ensure_repo() {
     # Verify this is the correct repository
     local actual_repo
     actual_repo="$(cd "$repo_dir" && git remote get-url origin 2>/dev/null || true)"
-    if [[ "$actual_repo" == "https://github.com/mariuszmarzec/globalskills" ]]; then
+    if [[ "$actual_repo" == "https://github.com/${repo}" ]]; then
       # Synchronize with remote while holding the repo lock.
       if ! (cd "$repo_dir" && git fetch origin --quiet); then
         log "FAILED to fetch repo $repo"
@@ -237,7 +237,7 @@ ensure_repo() {
       echo "$repo_dir"
       return 0
     else
-      log "repo $repo origin mismatch, expected https://github.com/mariuszmarzec/globalskills, got $actual_repo"
+      log "repo $repo origin mismatch, expected https://github.com/${repo}, got $actual_repo"
       rm -rf "$repo_dir"
     fi
   fi
@@ -249,7 +249,7 @@ ensure_repo() {
   cd "$repo_dir"
 
   # Clone with minimal fetch
-  if ! git clone --depth 1 "https://github.com/mariuszmarzec/globalskills" . 2>/dev/null; then
+  if ! git clone --depth 1 "https://github.com/${repo}" . 2>/dev/null; then
     log "FAILED to clone repo $repo"
     rm -rf "$repo_dir"
     release_repo_lock "$repo"
@@ -291,9 +291,9 @@ acquire_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  local lockfile="\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"
-  local reclaim_lock="\${lockfile}.reclaim"
-  local lock_dir="\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}"
+  local lockfile="${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
+  local reclaim_lock="${lockfile}.reclaim"
+  local lock_dir="${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}"
 
   mkdir -p "$lock_dir"
 
@@ -306,7 +306,7 @@ acquire_repo_lock() {
   local age
   age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
   if [ "$age" -lt "$REPO_LOCK_TTL" ]; then
-    log "repo $repo is locked by another task (age=\${age}s, ttl=\${REPO_LOCK_TTL}s); skipping"
+    log "repo $repo is locked by another task (age=${age}s, ttl=${REPO_LOCK_TTL}s); skipping"
     return 1
   fi
 
@@ -321,10 +321,10 @@ acquire_repo_lock() {
   running_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
 
   age=$(( $(date +%s) - $(stat -c %Y "$lockfile" 2>/dev/null || echo 0) ))
-  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "\${running_count:-0}" -eq 0 ]; then
-    log "stale repo lock for $repo removed (age=\${age}s, no running tasks)"
+  if [ -d "$lockfile" ] && [ "$age" -ge "$REPO_LOCK_TTL" ] && [ "${running_count:-0}" -eq 0 ]; then
+    log "stale repo lock for $repo removed (age=${age}s, no running tasks)"
     rm -rf "$lockfile"
-  elif [ "\${running_count:-0}" -gt 0 ]; then
+  elif [ "${running_count:-0}" -gt 0 ]; then
     log "stale repo lock for $repo ignored because task is still running in DB (running=$running_count); skipping"
   fi
 
@@ -343,7 +343,7 @@ release_repo_lock() {
   local repo="$1"
   local slug
   slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
-  rm -rf "\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"
+  rm -rf "${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/${slug}.lock"
 }
 
 archive_task_artifacts() {
@@ -2782,6 +2782,7 @@ PROMPT_EOF
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      release_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
       return 0
