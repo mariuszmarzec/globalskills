@@ -21,6 +21,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
+source "$SCRIPT_DIR/task-source.sh"
+source "$SCRIPT_DIR/manul-env.sh"
+manul_env_load "$MANUL_DIR" || fail "failed to load Manul environment"
 CONFIG="$MANUL_CONFIG"
 DB="${DB:-$MANUL_DB}"
 LOCK="${MANUL_LOCKS_DIR}/poll.lock"
@@ -657,6 +660,32 @@ else
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 fi
 
+# `taskSources` is authoritative for generic providers. When configured, derive
+# the GitHub Issue repository set from all enabled github_issues sources so the
+# legacy GitHub event/context plane scans every configured GitHub source.
+if [ $# -eq 0 ] && jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
+  mapfile -t REPOS < <(
+    jq -r '.taskSources[] | select((.enabled != false)) | select(.type == "github_issues") | .repositories[]?' "$CONFIG" 2>/dev/null |
+      sort -u
+  )
+fi
+
+# `taskSources` is authoritative for generic providers; legacy repositories remain GitHub Issues.
+
+# Generic task-source configuration. `taskSources` is authoritative when present;
+# legacy `.repositories` continues to mean GitHub Issues.
+TASK_SOURCE_CONFIGS=()
+while IFS= read -r _source_json; do
+  [ -n "$_source_json" ] || continue
+  TASK_SOURCE_CONFIGS+=("$_source_json")
+done < <(task_source_configured_sources "$CONFIG" 2>>"$LOG")
+
+# Explicit taskSources makes adapter-based root discovery authoritative.
+TASK_SOURCES_EXPLICIT=0
+if jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
+  TASK_SOURCES_EXPLICIT=1
+fi
+
 # === DB schema initialization and migration (runs on source) ===
 mkdir -p "$MANUL_DIR"
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
@@ -688,6 +717,14 @@ fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|context|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
     log "migration: added context column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|taskSourceType|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT;" 2>>"$LOG"
+    log "migration: added generic task source identity fields"
 fi
 # migration for existing DBs (pre-action/PR fields)
 # The poller writes these fields directly; older DBs may predate them.
@@ -771,6 +808,23 @@ if [ -z "$BASELINE" ]; then
     log "ERROR: baseline is missing from Manul state; refusing to poll without an installation baseline"
     fail "baseline is missing from Manul state (run install-manul.sh or repair-manul-runtime.sh)"
 fi
+
+# Generic task-source state helpers
+# Existing GitHub comment/review processing below remains unchanged for context.
+# Root task rows discovered from non-GitHub providers use source:<type>:<id>.
+ensure_task_source_columns() {
+  local cols
+  cols="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" || true)"
+  if ! grep -q "|taskSourceType|" <<<"$cols"; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT;" 2>>"$LOG"
+  fi
+}
+
+ensure_task_source_columns
 
 # === context enrichment helpers ===
 declare -A CTX_PR_CACHE CTX_ISSUE_CACHE
@@ -1025,6 +1079,67 @@ scan_failing_ci() {
 
 NEW=0
 
+queue_normalized_source_task() {
+  local task_json="$1" source_type source_id source_url title body created updated state execution_kind
+  source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
+  source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
+  source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
+  title="$(jq -r ".title // empty" <<<"$task_json")"
+  body="$(jq -r ".body // empty" <<<"$task_json")"
+  created="$(jq -r ".createdAt // \"\"" <<<"$task_json")"
+  updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
+  state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
+  execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
+  local normalized_prompt
+  normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0
+  [ "$state" = "OPEN" ] || return 0
+
+  # Discovery for non-repository sources is intentionally staged before the
+  # execution boundary is ready. Do not inject NULL issueNumber rows into the
+  # legacy GitHub-oriented queue schema or pretend a Todo task has a repo.
+  if [ "$execution_kind" != "repository" ]; then
+    log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); execution adapter not enabled yet"
+    return 0
+  fi
+
+  local task_id="source:${source_type}:${source_id}" now lease repo source_context
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+  repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
+  local issue_number
+  issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
+  issue_number="$(sql_num "$issue_number")"
+  issue_number="${issue_number:-0}"
+  source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
+  if [ -z "$repo" ]; then
+    log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
+    return 0
+  fi
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",${issue_number},\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+    NEW=$((NEW + 1))
+    log "queued task source $source_type:$source_id"
+  fi
+}
+poll_all_task_sources() {
+  local source_json type task_json
+  for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
+    type="$(task_source_name "$source_json")"
+    [ -n "$type" ] || continue
+    # The install baseline is scan metadata, not a universal task filter.
+    # Providers decide whether/how they apply it.
+    local source_poll_json
+    source_poll_json="$(jq -c --arg baseline "$BASELINE" '.baseline=$baseline' <<<"$source_json")"
+    while IFS= read -r task_json; do
+      [ -n "$task_json" ] || continue
+      queue_normalized_source_task "$task_json"
+    done < <(task_source_poll "$source_poll_json" 2>>"$LOG" || {
+      log "WARN: task source provider failed (type=$type), continuing with other sources"
+      true
+    })
+  done
+}
+
 # process_repo_body — processes a single repository (issue comments, issue bodies,
 # PR review comments, PR reviews, skip-log drain, CI scan). Used by poll.sh's main
 # loop and by tests. Must be called from within this script's shell.
@@ -1163,6 +1278,7 @@ process_repo_body() {
       fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; ""))
     }' 2>>"$LOG" || true)
 
+  if [ "$TASK_SOURCES_EXPLICIT" -eq 0 ]; then
   # 1b) Issue bodies (new OPEN issues carrying the trigger in the description)
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
@@ -1222,6 +1338,8 @@ process_repo_body() {
       action: $action,
       prompt: $actx.prompt
     }' 2>>"$LOG" || true)
+
+  fi
 
   # 2) PR review comments
   review_comments="$(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" || echo "[]")"
@@ -1414,7 +1532,7 @@ process_repo_body() {
 # === Main polling logic (runs only when executed directly) ===
 # Only run main logic when executed directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  if [ "${#REPOS[@]}" -eq 0 ]; then
+  if [ "${#REPOS[@]}" -eq 0 ] && [ "${#TASK_SOURCE_CONFIGS[@]}" -eq 0 ]; then
     echo 'MANUL_RESULT {"fire":false,"new":0,"pending":0,"repos":0}'
     exit 0
   fi
@@ -1547,6 +1665,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     ACTIVE_REPO_LAUNCHER_PID=""
     return "$result"
   }
+
+  if [ "$TASK_SOURCES_EXPLICIT" -eq 1 ]; then
+    poll_all_task_sources
+  fi
 
   for repo in "${REPOS[@]}"; do
     [ -n "$repo" ] || continue

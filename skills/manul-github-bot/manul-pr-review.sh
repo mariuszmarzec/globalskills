@@ -145,7 +145,12 @@ init_schema() {
         prUrl TEXT,
         resultSummary TEXT,
         resultJson TEXT,
-        baseId TEXT
+        baseId TEXT,
+        taskSourceType TEXT,
+        taskSourceId TEXT,
+        taskSourceUrl TEXT,
+        taskSourceTitle TEXT,
+        taskSourceUpdatedAt TEXT
       );
       COMMIT;
     " 2>&1)" && success=true || {
@@ -162,6 +167,17 @@ init_schema() {
       fi
     }
   done
+
+  # Migrate generic root task-source identity fields. PR review data is related context only.
+  local source_cols
+  source_cols="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
+  if ! echo "$source_cols" | grep -q "|taskSourceType|"; then
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 3
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT;" 3
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT;" 3
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT;" 3
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT;" 3
+  fi
 
   # Migrate: add taskId column if missing (for review-task association)
   # Safe/idempotent migration: check first, then ALTER with retry

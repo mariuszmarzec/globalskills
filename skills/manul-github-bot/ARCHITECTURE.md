@@ -66,6 +66,32 @@ The runtime effectively treats these as Manul runtime data under `MANUL_DIR`:
 
 OpenClaw configuration/state remains outside that ownership boundary.
 
+
+## Task source plane
+
+Manul separates the root task source from development artifacts such as pull requests and review threads.
+
+Configured sources live in `.taskSources[]`; disabled entries are ignored and enabled entries are polled independently:
+
+```text
+Task sources
+  +--> GitHub Issues
+  +--> Jira Tasks
+  +--> Todo (future)
+          |
+          v
+   provider-specific filter
+          |
+          v
+   normalized root task
+          |
+          v
+      SQLite queue
+```
+
+A pull request is never a root task source. A GitHub Issue or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
+
+The legacy `.repositories` configuration remains the default GitHub Issues source when `.taskSources` is absent.
 ## Task execution plane
 
 ```

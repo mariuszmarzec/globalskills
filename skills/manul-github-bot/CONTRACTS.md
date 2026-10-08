@@ -304,7 +304,48 @@ Behavioural compatibility is required; obsolete filesystem layout
 compatibility is not.
 
 
-## 20. Unit-test contract
+## 20. Task-source contract
+
+Manul task sources are configured as `.taskSources[]`. Each enabled source is
+an independent provider and is polled during the same cycle.
+
+The provider contract is normalized to:
+- `taskSourceType`
+- `taskSourceId`
+- `taskSourceUrl`
+- title/body, timestamps and a normalized `prompt`
+- provider-specific `metadata`
+- an execution target when the provider can resolve one (currently
+  `metadata.repository` for repository-backed execution)
+
+Filtering is provider-owned. The common poller does not impose a universal
+trigger or task-selection rule:
+- `github_issues` selects issue roots containing the configured `/manul`
+  trigger;
+- `jira_tasks` selects issues returned by its configured JQL;
+- future sources such as Todo may use their own predicates, for example a
+  user-sharing filter for `manul@local.ai`.
+
+The task-source identity is the root work item. A pull request, review
+comment, or CI check is never a task-source root. Those artifacts may be linked
+as context to a task owned by another source.
+
+The default source is `github_issues`. Existing configurations without
+`.taskSources` fall back to the legacy `.repositories` array as one GitHub
+Issues source.
+
+Multiple enabled sources are independent: a failure in one provider must not
+prevent other providers from being polled.
+
+The initial non-GitHub provider is `jira_tasks`. Its REST search endpoint is
+configurable (default `/rest/api/2/search`). Authentication uses the
+environment variables named by `userEnv` and `passwordEnv` (defaults
+`MANUL_JIRA_USER` and `MANUL_JIRA_PASSWORD`), and credential values never
+appear in JSON configuration or normalized tasks. A repository mapping can be
+provided with `repository` when the Jira task is executed against a known
+repository. The provider is disabled by default.
+
+## 21. Unit-test contract
 
 When an implementation task adds or changes unit tests:
 - tests must prove the requested behavior, not merely object construction, helper execution, DTO conversion, or property structure;
