@@ -686,6 +686,43 @@ test_repository_lock_scheduler() {
 }
 
 # ============================================================================
+# Test 19: Repository lock is atomic and acquired before shared-cache sync
+# ============================================================================
+test_repository_lock_atomicity_and_scope() {
+  TEST_NAME="repository_lock_atomicity_and_scope"
+  echo "=== Test 19: Repository lock atomicity and scope ==="
+
+  local lock_body
+  lock_body="$(sed -n '/^acquire_repo_lock()/,/^archive_task_artifacts()/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (atomic lock acquisition)" "$lock_body" 'mkdir "$lockfile"'
+  assert_contains "$TEST_NAME (serialized stale recovery)" "$lock_body" 'mkdir "$reclaim_lock"'
+  assert_contains "$TEST_NAME (lock release removes directory)" "$lock_body" 'rm -rf "\${REPO_LOCK_DIR:-$MANUL_LOCKS_DIR/repo}/\${slug}.lock"'
+
+  local ensure_body
+  ensure_body="$(sed -n '/^ensure_repo()/,/^# Verify repository ownership and integrity/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (lock before fetch)" "$ensure_body" 'if ! acquire_repo_lock "$repo"; then'
+  assert_contains "$TEST_NAME (existing checkout fetch)" "$ensure_body" 'git fetch origin --quiet'
+
+  local acquire_line fetch_line
+  acquire_line="$(printf '%s\n' "$ensure_body" | grep -n 'if ! acquire_repo_lock "\$repo"; then' | head -1 | cut -d: -f1)"
+  fetch_line="$(printf '%s\n' "$ensure_body" | grep -n 'git fetch origin --quiet' | head -1 | cut -d: -f1)"
+  if [ -n "$acquire_line" ] && [ -n "$fetch_line" ] && [ "$acquire_line" -lt "$fetch_line" ]; then
+    ok "$TEST_NAME (lock acquired before existing checkout fetch)"
+  else
+    fail "$TEST_NAME (lock acquired before existing checkout fetch)"
+  fi
+
+  # A workspace scheduling miss must not leak the repository lock.
+  local workspace_paths
+  workspace_paths="$(sed -n '/workspace_reclaim "\$COMMENT_ID"/,/Get workspace path from lease/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (workspace reclaim failure releases repo lock)" "$workspace_paths" 'release_repo_lock "$REPO"'
+
+  local no_workspace_paths
+  no_workspace_paths="$(sed -n '/if \[ -z "\$WORKSPACE_ID" \]; then/,/sqlite3 "\$DB" "UPDATE processed_comments SET workspaceId=/p' "$DAEMON")"
+  assert_contains "$TEST_NAME (no-workspace retry releases repo lock)" "$no_workspace_paths" 'release_repo_lock "$REPO"'
+}
+
+# ============================================================================
 # Helper: assert_gt (greater than)
 # ============================================================================
 assert_gt() {
@@ -731,6 +768,7 @@ test_completed_task_guard
 test_retry_backoff
 test_schema_migration
 test_repository_lock_scheduler
+test_repository_lock_atomicity_and_scope
 
 echo ""
 echo "========================================"
