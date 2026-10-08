@@ -95,7 +95,7 @@ reset_pool() {
 self_check() {
   local expected_tests=29
   local actual_tests
-  actual_tests=$(grep -c "^test_[a-zA-Z0-9_]*() {" "$0" 2>/dev/null || echo 0)
+  actual_tests=$(grep -Ec "^test_[a-zA-Z0-9_]+\(\)[[:space:]]*(\{|\()" "$0" 2>/dev/null || echo 0)
 
   if [ "$actual_tests" -ne "$expected_tests" ]; then
     echo "  FAIL: Test discovery mismatch: expected $expected_tests, found $actual_tests"
