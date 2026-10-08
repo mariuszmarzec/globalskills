@@ -680,6 +680,12 @@ while IFS= read -r _source_json; do
   TASK_SOURCE_CONFIGS+=("$_source_json")
 done < <(task_source_configured_sources "$CONFIG" 2>>"$LOG")
 
+# Explicit taskSources makes adapter-based root discovery authoritative.
+TASK_SOURCES_EXPLICIT=0
+if jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
+  TASK_SOURCES_EXPLICIT=1
+fi
+
 # Provider polling errors are isolated: one broken provider must not prevent
 # other task sources from being scanned in the same cycle.
 poll_configured_task_sources() {
@@ -1097,7 +1103,9 @@ queue_normalized_source_task() {
   updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
   state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
   execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
-  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] || return 0
+  local normalized_prompt
+  normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0
   [ "$state" = "OPEN" ] || return 0
 
   # Discovery for non-repository sources is intentionally staged before the
@@ -1117,7 +1125,7 @@ queue_normalized_source_task() {
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",0,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",0,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
@@ -1275,6 +1283,7 @@ process_repo_body() {
       fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; ""))
     }' 2>>"$LOG" || true)
 
+  if [ "$TASK_SOURCES_EXPLICIT" -eq 0 ]; then
   # 1b) Issue bodies (new OPEN issues carrying the trigger in the description)
   while IFS= read -r obj; do
     [ -n "$obj" ] || continue
@@ -1334,6 +1343,8 @@ process_repo_body() {
       action: $action,
       prompt: $actx.prompt
     }' 2>>"$LOG" || true)
+
+  fi
 
   # 2) PR review comments
   review_comments="$(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" || echo "[]")"
@@ -1526,7 +1537,7 @@ process_repo_body() {
 # === Main polling logic (runs only when executed directly) ===
 # Only run main logic when executed directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  if [ "${#REPOS[@]}" -eq 0 ]; then
+  if [ "${#REPOS[@]}" -eq 0 ] && [ "${#TASK_SOURCE_CONFIGS[@]}" -eq 0 ]; then
     echo 'MANUL_RESULT {"fire":false,"new":0,"pending":0,"repos":0}'
     exit 0
   fi
