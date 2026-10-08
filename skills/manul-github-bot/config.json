@@ -13,13 +13,13 @@
       "repositories": ["mariuszmarzec/caracal-rag", "mariuszmarzec/todo", "mariuszmarzec/test-manul-e2e", "mariuszmarzec/shoppingListGenerator"]
     },
     {
-      "type": "todo_api",
+      "type": "jira_tasks",
       "enabled": false,
-      "baseUrl": "http://localhost",
-      "tasksPath": "/todo/api/1/tasks",
-      "tokenEnv": "MANUL_TODO_PAT",
-      "authScheme": "Bearer",
-      "trigger": "/manul"
+      "baseUrl": "https://your-domain.atlassian.net",
+      "userEnv": "MANUL_JIRA_USER",
+      "passwordEnv": "MANUL_JIRA_PASSWORD",
+      "jql": "project is not EMPTY",
+      "searchPath": "/rest/api/2/search"
     }
   ],
   "retryConfig": {
