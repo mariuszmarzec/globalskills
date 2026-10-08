@@ -77,8 +77,10 @@ Configured sources live in `.taskSources[]` and are polled independently:
 Task sources
   +--> GitHub Issues
   +--> Jira Tasks
-  +--> Jira (future)
-  +--> Todo MCP (future)
+  +--> Todo (future)
+          |
+          v
+   provider-specific filter
           |
           v
    normalized root task
@@ -87,7 +89,7 @@ Task sources
       SQLite queue
 ```
 
-A pull request is never a root task source. A GitHub Issue, Jira task, or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
+A pull request is never a root task source. A GitHub Issue or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
 
 The legacy `.repositories` configuration remains the default GitHub Issues source when `.taskSources` is absent.
 ## Task execution plane
