@@ -34,6 +34,7 @@ PATH="$BIN:$PATH" MANUL_TODO_PAT="secret" todo="$(PATH="$BIN:$PATH" MANUL_TODO_P
 assert_contains "Todo trigger is discovered" "$todo" '"taskSourceType":"todo_api"'
 assert_contains "Todo id preserved" "$todo" '"taskSourceId":"7"'
 assert_not_contains "Todo item without trigger ignored" "$todo" '"taskSourceId":"8"'
+assert_contains "Todo execution target is explicit" "$todo" '"kind":"non_repository"'
 assert_not_contains "PAT never appears in normalized data" "$todo" "secret"
 if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a supported task source"; fi
 assert_eq(){ local n="$1" e="$2" a="$3"; [ "$e" = "$a" ] && ok "$n" || fail "$n (expected $e, got $a)"; }
