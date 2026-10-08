@@ -99,7 +99,7 @@ PRs, review comments and CI checks are related development context, not task sou
 Current provider types:
 
 - `github_issues` — default, backed by GitHub repositories.
-- `jira_tasks` — initial Jira REST provider, disabled by default until PAT/authentication is ready.
+- `jira_tasks` — Jira REST provider, disabled by default.
 
 See `task-source.sh` and `task-source-jira-tasks.sh` for the provider contract.
 ## GitHub task workflow
