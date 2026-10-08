@@ -770,6 +770,24 @@ test_schema_migration
 test_repository_lock_scheduler
 test_repository_lock_atomicity_and_scope
 
+# Test 20: Missing result marker must not invalidate verified repository delivery
+# ============================================================================
+test_marker_missing_preserves_delivery() {
+  TEST_NAME="marker_missing_preserves_delivery"
+  echo "=== Test 20: Missing result marker preserves verified delivery ==="
+
+  local eval_body
+  eval_body="$(sed -n '/^evaluate_task_completion()/,/^run_once()/p' "$DAEMON")"
+
+  # verify_result_comment remains a diagnostic/correlation check, but it must not
+  # set SUCCESS=false once repository/PR/push verification has already succeeded.
+  local invalid_assignment
+  invalid_assignment="$(printf '%s\n' "$eval_body" | sed -n '/Result-comment marker validation/,/fi$/p' | grep -c 'SUCCESS="false"' || true)"
+  assert_eq "$TEST_NAME (marker check does not invalidate delivery)" "0" "$invalid_assignment"
+  assert_contains "$TEST_NAME (marker failure logs diagnostic)" "$eval_body" 'RESULT_COMMENT_INVALID'
+  assert_contains "$TEST_NAME (delivery preserved)" "$eval_body" 'repository delivery already verified'
+}
+
 echo ""
 echo "========================================"
 echo "  Results: $PASS passed, $FAIL failed"
