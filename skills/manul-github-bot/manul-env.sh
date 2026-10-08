@@ -71,8 +71,8 @@ EOF
     OPENCLAW_GATEWAY_PORT \
     OPENCLAW_BIN \
     OPENCODE_BIN \
-    MANUL_TODO_PAT \
-    MANUL_TODO_BASE_URL; do
+    MANUL_JIRA_USER \
+    MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
     if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
       printf '%s=%q\n' "$variable" "$value" >> "$env_file"
