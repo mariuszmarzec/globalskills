@@ -63,7 +63,7 @@ assert_not_contains "Jira user is not emitted" "$jira_tasks" "jira-user"
 assert_not_contains "Jira password is not emitted" "$jira_tasks" "jira-password"
 assert_contains "Jira repository execution target is normalized" "$jira_tasks" '"repository":"owner/jira-repo"'
 if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a task source"; fi
-assert_eq "stable Jira source identity" "jira_tasks:DEMO-7" "$(task_source_identity '{"taskSourceType":"jira_task","taskSourceId":"DEMO-7"}')"
+assert_eq "stable Jira source identity" "jira_tasks:DEMO-7" "$(task_source_identity '{"taskSourceType":"jira_tasks","taskSourceId":"DEMO-7"}')"
 
 cat >"$BIN/gh" <<'GH'
 #!/usr/bin/env bash
