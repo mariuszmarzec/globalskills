@@ -686,19 +686,6 @@ if jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
   TASK_SOURCES_EXPLICIT=1
 fi
 
-# Provider polling errors are isolated: one broken provider must not prevent
-# other task sources from being scanned in the same cycle.
-poll_configured_task_sources() {
-  local source_json type
-  for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
-    type="$(task_source_name "$source_json")"
-    [ -n "$type" ] || continue
-    if ! task_source_poll "$source_json" 2>>"$LOG"; then
-      log "WARN: task source provider failed (type=$type), continuing with other sources"
-    fi
-  done
-}
-
 # === DB schema initialization and migration (runs on source) ===
 mkdir -p "$MANUL_DIR"
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
@@ -1139,10 +1126,14 @@ poll_all_task_sources() {
   for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
     type="$(task_source_name "$source_json")"
     [ -n "$type" ] || continue
+    # The install baseline is scan metadata, not a universal task filter.
+    # Providers decide whether/how they apply it.
+    local source_poll_json
+    source_poll_json="$(jq -c --arg baseline "$BASELINE" '.baseline=$baseline' <<<"$source_json")"
     while IFS= read -r task_json; do
       [ -n "$task_json" ] || continue
       queue_normalized_source_task "$task_json"
-    done < <(task_source_poll "$source_json" 2>>"$LOG" || {
+    done < <(task_source_poll "$source_poll_json" 2>>"$LOG" || {
       log "WARN: task source provider failed (type=$type), continuing with other sources"
       true
     })
@@ -1675,7 +1666,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     return "$result"
   }
 
-  poll_all_task_sources
+  if [ "$TASK_SOURCES_EXPLICIT" -eq 1 ]; then
+    poll_all_task_sources
+  fi
 
   for repo in "${REPOS[@]}"; do
     [ -n "$repo" ] || continue
