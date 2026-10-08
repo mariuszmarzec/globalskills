@@ -51,8 +51,14 @@ OPENCLAW_CONFIG_PATH="$TMP/openclaw/config with spaces.json"
 OPENCLAW_BIN="$TMP/bin/openclaw-custom"
 OPENCODE_BIN="$TMP/bin/opencode-custom"
 UNSAFE_SECRET="must-not-be-copied"
+CUSTOM_JIRA_USER="custom-jira-user"
+CUSTOM_JIRA_PASSWORD="custom-jira-password"
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN UNSAFE_SECRET
+cat > "$RUNTIME/config.json" <<'EOF'
+{"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
+EOF
+
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -62,7 +68,9 @@ assert_file_mode_600 "$ENV_FILE"
 if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
-   ! grep -q '^OPENCODE_BIN=' "$ENV_FILE"; then
+   ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
+   ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
+   ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
 else
   ok "Bootstrap persists supported provider variables"
@@ -80,7 +88,9 @@ if (
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
   [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
-  [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ]
+  [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
+  [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
+  [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
   ok "Bootstrap shell-quotes provider values correctly"
 else
