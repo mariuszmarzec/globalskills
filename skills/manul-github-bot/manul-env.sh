@@ -99,7 +99,7 @@ EOF
     done < <(
       jq -r '
         .taskSources[]?
-        | select((.enabled // true) == true)
+        | select((.enabled != false))
         | select(.type == "jira_tasks")
         | (.userEnv // "MANUL_JIRA_USER"), (.passwordEnv // "MANUL_JIRA_PASSWORD")
       ' "$runtime_dir/config.json" 2>/dev/null | sort -u
