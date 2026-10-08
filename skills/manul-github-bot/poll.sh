@@ -23,6 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
 source "$SCRIPT_DIR/task-source.sh"
 source "$SCRIPT_DIR/manul-env.sh"
+manul_env_load "$MANUL_DIR" || fail "failed to load Manul environment"
 CONFIG="$MANUL_CONFIG"
 DB="${DB:-$MANUL_DB}"
 LOCK="${MANUL_LOCKS_DIR}/poll.lock"
@@ -659,6 +660,16 @@ else
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 fi
 
+# `taskSources` is authoritative for generic providers. When configured, derive
+# the GitHub Issue repository set from all enabled github_issues sources so the
+# legacy GitHub event/context plane scans every configured GitHub source.
+if [ $# -eq 0 ] && jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
+  mapfile -t REPOS < <(
+    jq -r '.taskSources[] | select((.enabled // true) == true) | select(.type == "github_issues") | .repositories[]?' "$CONFIG" 2>/dev/null |
+      sort -u
+  )
+fi
+
 # `taskSources` is authoritative for generic providers; legacy repositories remain GitHub Issues.
 
 # Generic task-source configuration. `taskSources` is authoritative when present;
@@ -1076,7 +1087,7 @@ scan_failing_ci() {
 NEW=0
 
 queue_normalized_source_task() {
-  local task_json="$1" source_type source_id source_url title body created updated state
+  local task_json="$1" source_type source_id source_url title body created updated state execution_kind
   source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
   source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
   source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
@@ -1085,14 +1096,28 @@ queue_normalized_source_task() {
   created="$(jq -r ".createdAt // \"\"" <<<"$task_json")"
   updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
   state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
+  execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] || return 0
   [ "$state" = "OPEN" ] || return 0
+
+  # Discovery for non-repository sources is intentionally staged before the
+  # execution boundary is ready. Do not inject NULL issueNumber rows into the
+  # legacy GitHub-oriented queue schema or pretend a Todo task has a repo.
+  if [ "$execution_kind" != "repository" ]; then
+    log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); execution adapter not enabled yet"
+    return 0
+  fi
+
   local task_id="source:${source_type}:${source_id}" now lease repo source_context
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",NULL,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  if [ -z "$repo" ]; then
+    log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
+    return 0
+  fi
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",0,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
