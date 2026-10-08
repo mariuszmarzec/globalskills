@@ -665,7 +665,7 @@ fi
 # legacy GitHub event/context plane scans every configured GitHub source.
 if [ $# -eq 0 ] && jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
   mapfile -t REPOS < <(
-    jq -r '.taskSources[] | select((.enabled // true) == true) | select(.type == "github_issues") | .repositories[]?' "$CONFIG" 2>/dev/null |
+    jq -r '.taskSources[] | select((.enabled != false)) | select(.type == "github_issues") | .repositories[]?' "$CONFIG" 2>/dev/null |
       sort -u
   )
 fi
