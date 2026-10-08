@@ -2404,8 +2404,9 @@ run_once() {
 
     # 3. Read task details after claiming — query each field separately
     # to avoid pipe-delimited parsing issues with prompt containing |
-    local COMMENT_URL AUTHOR AGENT TASK_PROMPT TASK_CONTEXT TASK_ACTION
+    local COMMENT_URL AUTHOR AGENT TASK_PROMPT TASK_CONTEXT TASK_ACTION CONVERSATION_ID
     COMMENT_URL="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    CONVERSATION_ID="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     AUTHOR="$(sqlite3 "$DB" "SELECT author FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     AGENT="$(sqlite3 "$DB" "SELECT agent FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_PROMPT="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
@@ -2707,14 +2708,23 @@ PROMPT_EOF
     # 6. Set working directory to the repository root
     local WORKDIR="$REPO_DIR"
 
-    # 6.5. Lease workspace for exclusive task access. A continuation must
-    # reclaim the exact prior workspace so the runtime session and checkout
-    # remain bound to the same filesystem location.
+    # 6.5. Acquire workspace through the logical conversation tree.
+    #
+    # PR conversation is the root. Each review thread is a child context,
+    # and replies are leaves that stay inside that thread context.
+    # Resolution is exact thread -> parent PR -> fresh unbound workspace.
     source "$MANUL_DIR/workspace-manager.sh"
     local WORKSPACE_ID
     local EXISTING_SESSION_ID EXISTING_WORKSPACE_ID
     EXISTING_SESSION_ID="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
     EXISTING_WORKSPACE_ID="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+
+    local PARENT_WORKSPACE_CONTEXT_ID=""
+    if [ -n "$PR_HEAD_BRANCH" ] && [ -n "${PR_NUM_FROM_URL:-}" ] && [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
+      PARENT_WORKSPACE_CONTEXT_ID="conv-${REPO}-issue-${PR_NUM_FROM_URL}"
+    fi
+
+    local workspace_acquire_rc=0
     if [ -n "$EXISTING_SESSION_ID" ] && [ -n "$EXISTING_WORKSPACE_ID" ]; then
       WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
       if [ -z "$WORKSPACE_ID" ]; then
@@ -2723,29 +2733,30 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       fi
-      log "dispatch: reclaimed workspace $WORKSPACE_ID for continuation task $COMMENT_ID"
+      log "dispatch: reclaimed exact workspace $WORKSPACE_ID for continuation task $COMMENT_ID"
     else
-      WORKSPACE_ID="$(workspace_lease "$COMMENT_ID")"
+      WORKSPACE_ID="$(workspace_context_acquire "$COMMENT_ID" "$CONVERSATION_ID" "$PARENT_WORKSPACE_CONTEXT_ID" "$REPO" "${PR_NUM_FROM_URL:-$ISSUE_NUM}")" || workspace_acquire_rc=$?
+      if [ "$workspace_acquire_rc" -eq 2 ]; then
+        log "dispatch: logical workspace context is busy for task $COMMENT_ID; requeueing"
+        lc_log "WORKSPACE_CONTEXT_BUSY" "task=$COMMENT_ID context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+      fi
     fi
+
     if [ -z "$WORKSPACE_ID" ]; then
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
-      lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO"
+      lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
       sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
     fi
-    
-    # Update task with workspace association
-    sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';"
-    
-# NOTE: The "reuse previous workspace for conversation" block has been
-     # intentionally removed. It released the freshly-leased workspace and
-     # pointed the task at an unrelated completed/failed workspace whose
-     # currentTaskId was already NULL, which broke the task→workspace
-     # ownership invariant and prevented workspace_get_path from resolving
-     # the path. The workspace leased above (workspace_lease) is the single
-     # authoritative workspace for this task for the rest of the dispatch.
+
+    sqlite3 "$DB" "UPDATE processed_comments SET workspaceId='$WORKSPACE_ID' WHERE commentId='$safe_comment_id';" 2>/dev/null || true
+    log "dispatch: task $COMMENT_ID bound to workspace context $CONVERSATION_ID -> $WORKSPACE_ID${PARENT_WORKSPACE_CONTEXT_ID:+ (parent=$PARENT_WORKSPACE_CONTEXT_ID)}"
 
 
     # Get workspace path from lease
@@ -2782,12 +2793,12 @@ PROMPT_EOF
 # Use the workspace as the working directory for the agent
      WORKDIR="$workspace_path"
 
-     # Deterministic workspace preparation: ensure correct branch is checked out
+     # PR workspaces are persistent contexts. Never reset a dirty checkout or
+     # discard local commits that have not reached the remote PR branch.
      if [ -n "$PR_HEAD_BRANCH" ]; then
-      # PR task: fetch and checkout the PR head branch explicitly
-      log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
-      if ! git -C "$WORKDIR" fetch origin "$PR_HEAD_BRANCH" 2>>"$LOG"; then
-        log "dispatch: failed to fetch PR head branch, releasing and failing"
+      log "dispatch: preparing persistent PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
+      if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" 2>>"$LOG"; then
+        log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH without destroying local work, releasing"
         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
         stop_heartbeat "$COMMENT_ID"
         release_repo_lock "$REPO"
@@ -2795,16 +2806,6 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       fi
-      if ! git -C "$WORKDIR" checkout -B "$PR_HEAD_BRANCH" "FETCH_HEAD" 2>>"$LOG"; then
-        log "dispatch: failed to checkout PR head branch, releasing and failing"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        stop_heartbeat "$COMMENT_ID"
-        release_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
-        return 0
-      fi
-      # Verify HEAD is the expected PR head branch
       local verify_branch
       verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
       if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
@@ -2815,7 +2816,7 @@ PROMPT_EOF
         set_activity "none" "idle"
         return 0
       fi
-log "dispatch: verified PR head branch $verify_branch in workspace"
+      log "dispatch: verified persistent PR head branch $verify_branch in workspace"
      else
        # Issue / standalone task: the workspace may have been left on a stale
        # task branch from a previous run. Reset to the default branch so the
