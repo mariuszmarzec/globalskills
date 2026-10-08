@@ -13,6 +13,12 @@ mkdir -p "$MANUL_DIR/state/locks" "$MANUL_DIR/state/tasks" "$MANUL_DIR/logs" "$M
 cat > "$MANUL_DIR/config.json" <<'JSON'
 {
   "mode": "human",
+  "commentStyle": {
+    "human": {
+      "concise": true,
+      "maxLines": 4
+    }
+  },
   "automation": {
     "agentRuntime": "openclaw"
   }
@@ -89,6 +95,28 @@ fi
 post_github_comment "owner/repo" "123" "bot result"
 if ! grep -qF 'bot result' "$GH_LOG" || ! grep -qF 'manul 🐈' "$GH_LOG"; then
   echo "FAIL: bot mode did not retain Manul signature"
+  exit 1
+fi
+
+# Production prompt must include the configured human comment-style guidance.
+if ! grep -qF -- '## Result comment style' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon prompt has no result comment style section"
+  exit 1
+fi
+if ! grep -qF -- 'lead with what was done or found' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon prompt lacks concise human guidance"
+  exit 1
+fi
+if ! grep -qF -- 'do not use automation headings or fields' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon prompt does not discourage automation boilerplate"
+  exit 1
+fi
+if ! grep -qF -- '__HUMAN_COMMENT_MAX_LINES__' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon prompt has no configurable human comment line limit"
+  exit 1
+fi
+if ! grep -qF -- '.commentStyle.human.concise' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon does not read human comment style configuration"
   exit 1
 fi
 

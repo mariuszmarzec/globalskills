@@ -253,8 +253,10 @@ config.json.example
 Current automation controls include:
 
 - `mode`: `bot` (default) or `human`;
+- `commentStyle.human.concise` (default `true`) controls concise human-mode result comments;
+- `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
 
-Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed).
+Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed). When `commentStyle.human.concise` is enabled, that result should read like a short teammate reply and stay within the configured visible line limit, without automation-report headings or boilerplate.
 
 ```
 agentTimeoutSeconds

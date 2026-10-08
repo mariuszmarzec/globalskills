@@ -236,6 +236,7 @@ The top-level configuration key `mode` selects Manul's GitHub presentation/attri
 
 - `bot` is the default and preserves the existing Manul signature, lifecycle/status/error comments, and AI commit attribution.
 - `human` suppresses Manul signatures and orchestration lifecycle/status/error comments on GitHub.
+- In `human`, when `commentStyle.human.concise` is enabled, the visible result comment should be a short, natural teammate reply and stay within `commentStyle.human.maxLines`; automation-report headings and boilerplate should be avoided.
 - In `human`, the agent's actual result comment remains user-facing and is verified using the invisible deterministic task/attempt marker.
 - In `human`, commits must not contain an AI `Co-authored-by` trailer.
 - Task state, recovery, leases, and local diagnostics remain unchanged; human mode is not a weaker execution or verification mode.
