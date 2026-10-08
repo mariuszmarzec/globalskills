@@ -562,8 +562,21 @@ MOCK
   assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
 }
 
+test_opencode_adapter_syntax() {
+  local rc
+  bash -n "$SCRIPT_DIR/opencode-adapter.sh" 2>"$MANUL_DIR/opencode-adapter-syntax.err"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "OpenCode adapter passes bash syntax validation"
+  else
+    fail "OpenCode adapter has shell syntax errors: $(cat "$MANUL_DIR/opencode-adapter-syntax.err" 2>/dev/null || true)"
+  fi
+}
+
 echo "=== Adapter Unit Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
+
+test_opencode_adapter_syntax
 
 test_process_runner_mock
 test_process_runner_cwd_env
