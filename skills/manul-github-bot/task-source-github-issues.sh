@@ -13,7 +13,7 @@ task_source_github_issues_poll() {
       jq -c --arg repo "$repo" --arg trigger "$trigger" --arg baseline "$baseline" --argjson allowed "$allowed_json" '
         .[] | select(.pull_request | not)
         | select(.created_at >= $baseline)
-        | select(($allowed | length == 0) or (($allowed | index(.user.login)) != null))
+        | select(($allowed | length == 0) or (.user.login as $u | ($allowed | index($u)) != null))
         | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + ($trigger | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) + "([ \\t\\r\\n]|$)"))
         | {taskSourceType:"github_issues", taskSourceId:($repo + "#" + (.number|tostring)), taskSourceUrl:.html_url,
            title:(.title // ""), body:(.body // ""), prompt:((.body // "") | sub("^[ \\t]*" + $trigger + "[ \\t]*"; "")), createdAt:(.created_at // ""),
