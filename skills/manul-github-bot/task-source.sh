@@ -36,25 +36,40 @@ task_source_normalize_id() { printf "%s:%s" "$1" "$2"; }
 
 task_source_configured_sources() {
   local config="$1"
+
+  # Explicit taskSources are independent provider configurations. Only
+  # GitHub-specific defaults are inherited from the top-level configuration.
   if jq -e '(.taskSources // []) | length > 0' "$config" >/dev/null 2>&1; then
-    jq -c '.taskSources[] | select((.enabled // true) == true)' "$config"
+    local trigger allowed_users
+    trigger="$(jq -r '.trigger // "/manul"' "$config")"
+    allowed_users="$(jq -c '.allowedUsers // []' "$config")"
+    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" '
+      .taskSources[]
+      | select((.enabled // true) == true)
+      | if .type == "github_issues"
+        then .trigger = (.trigger // $trigger)
+           | .allowedUsers = (.allowedUsers // $allowedUsers)
+        else .
+        end
+    ' "$config"
     return 0
   fi
-  jq -c '{type:"github_issues", enabled:true, repositories:(.repositories // [])}' "$config"
+
+  # Backward-compatible default: GitHub Issues only.
+  jq -c     --arg trigger "$(jq -r '.trigger // "/manul"' "$config")"     --argjson allowedUsers "$(jq -c '.allowedUsers // []' "$config")" '
+      {
+        type:"github_issues",
+        enabled:true,
+        repositories:(.repositories // []),
+        trigger:$trigger,
+        allowedUsers:$allowedUsers
+      }
+    ' "$config"
 }
 
 task_source_identity() {
-  jq -r '.taskSourceType as $t | .taskSourceId as $i | if ($t // "") == "" or ($i // "") == "" then empty else ($t + ":" + $i) end' <<<"$1"
-}
-
-
-task_source_poll_all() {
-  local config="$1" source_json baseline trigger
-  baseline="$(jq -r ".baseline // empty" "$config")"
-  trigger="$(jq -r '.trigger // "/manul"' "$config")"
-  while IFS= read -r source_json; do
-    [ -n "$source_json" ] || continue
-    source_json="$(jq -c --arg baseline "$baseline" --arg trigger "$trigger" '.baseline=$baseline | .trigger=$trigger' <<<"$source_json")"
-    task_source_poll "$source_json"
-  done < <(task_source_configured_sources "$config")
+  jq -r '.taskSourceType as $t | .taskSourceId as $i
+    | if ($t // "") == "" or ($i // "") == "" then empty
+      else ($t + ":" + $i)
+      end' <<<"$1"
 }
