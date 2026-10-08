@@ -697,10 +697,9 @@ run_and_test "Test 25: Context workspace survives stale cleanup" test_context_wo
 # Test 26: PR branch preparation never discards dirty local changes.
 echo ""
 echo "=== Test 26: PR branch preparation preserves dirty work ==="
-test_pr_branch_preparation_preserves_dirty_work() {
-  local tmp remote work
+test_pr_branch_preparation_preserves_dirty_work() (
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "$tmp"' EXIT
   remote="$tmp/remote.git"
   work="$tmp/work"
   git init --bare -q "$remote"
