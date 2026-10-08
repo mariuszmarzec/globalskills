@@ -193,7 +193,25 @@ workspace_context_acquire() {
   local ws_id
   ws_id="$(workspace_lease "$task_id" 2>/dev/null || true)"
   if [ -z "$ws_id" ]; then
-    return 1
+    # Context persistence is independent from the concurrency pool size.
+    # When there is concurrency capacity but every idle workspace already
+    # belongs to another context, create a fresh workspace for this new leaf.
+    local busy_count max_concurrent
+    busy_count="$(workspace_busy_count)"
+    max_concurrent="${MAX_CONCURRENT_TASKS:-1}"
+    if [ "${busy_count:-0}" -ge "${max_concurrent:-1}" ]; then
+      return 1
+    fi
+
+    local new_index ws_id ws_path
+    new_index="$(sqlite3 "$DB" "SELECT COALESCE(MAX(CAST(substr(workspaceId,4,instr(substr(workspaceId,4),'-')-1) AS INTEGER)), -1) + 1 FROM workspaces WHERE workspaceId LIKE 'ws-%';" 2>/dev/null || echo 0)"
+    ws_id="ws-${new_index}-$(date +%s)"
+    ws_path="$WORKSPACES_DIR/$ws_id"
+    mkdir -p "$ws_path" || return 1
+    if ! sqlite3 "$DB" "INSERT INTO workspaces(workspaceId,workspacePath,status,currentTaskId,lastUsedAt) VALUES('$(sql_escape "$ws_id")','$(sql_escape "$ws_path")','BUSY','$(sql_escape "$task_id")',datetime('now'));" 2>/dev/null; then
+      rm -rf "$ws_path"
+      return 1
+    fi
   fi
 
   if ! sqlite3 "$DB" "
