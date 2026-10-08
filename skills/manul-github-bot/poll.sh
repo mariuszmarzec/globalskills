@@ -659,6 +659,8 @@ else
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 fi
 
+# `taskSources` is authoritative for generic providers; legacy repositories remain GitHub Issues.
+
 # Generic task-source configuration. `taskSources` is authoritative when present;
 # legacy `.repositories` continues to mean GitHub Issues.
 TASK_SOURCE_CONFIGS=()
@@ -711,6 +713,14 @@ fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|context|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
     log "migration: added context column"
+fi
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|taskSourceType|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT;" 2>>"$LOG"
+    log "migration: added generic task source identity fields"
 fi
 # migration for existing DBs (pre-action/PR fields)
 # The poller writes these fields directly; older DBs may predate them.
@@ -1047,6 +1057,41 @@ scan_failing_ci() {
 # === end ci fix helpers ===
 
 NEW=0
+
+queue_normalized_source_task() {
+  local task_json="$1" source_type source_id source_url title body created updated state
+  source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
+  source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
+  source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
+  title="$(jq -r ".title // empty" <<<"$task_json")"
+  body="$(jq -r ".body // empty" <<<"$task_json")"
+  created="$(jq -r ".createdAt // \"\"" <<<"$task_json")"
+  updated="$(jq -r ".updatedAt // .createdAt // \"\"" <<<"$task_json")"
+  state="$(jq -r ".state // \"OPEN\"" <<<"$task_json")"
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] || return 0
+  [ "$state" = "OPEN" ] || return 0
+  local task_id="source:${source_type}:${source_id}" now lease
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+  local repo="${REPO_OVERRIDE:-}"
+  repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",NULL,\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$body")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+    NEW=$((NEW + 1))
+    log "queued task source $source_type:$source_id"
+  fi
+}
+
+poll_non_github_task_sources() {
+  local source_json type task_json
+  for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
+    type="$(task_source_name "$source_json")"
+    [ "$type" = "github_issues" ] && continue
+    while IFS= read -r task_json; do
+      [ -n "$task_json" ] || continue
+      queue_normalized_source_task "$task_json"
+    done < <(task_source_poll "$source_json" 2>>"$LOG" || true)
+  done
+}
 
 # process_repo_body — processes a single repository (issue comments, issue bodies,
 # PR review comments, PR reviews, skip-log drain, CI scan). Used by poll.sh's main
@@ -1570,6 +1615,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     ACTIVE_REPO_LAUNCHER_PID=""
     return "$result"
   }
+
+  poll_non_github_task_sources
 
   for repo in "${REPOS[@]}"; do
     [ -n "$repo" ] || continue
