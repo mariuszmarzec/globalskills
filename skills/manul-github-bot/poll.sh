@@ -805,6 +805,23 @@ if [ -z "$BASELINE" ]; then
     fail "baseline is missing from Manul state (run install-manul.sh or repair-manul-runtime.sh)"
 fi
 
+# Generic task-source state helpers
+# Existing GitHub comment/review processing below remains unchanged for context.
+# Root task rows discovered from non-GitHub providers use source:<type>:<id>.
+ensure_task_source_columns() {
+  local cols
+  cols="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" || true)"
+  if ! grep -q "|taskSourceType|" <<<"$cols"; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceId TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUrl TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceTitle TEXT;" 2>>"$LOG"
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceUpdatedAt TEXT;" 2>>"$LOG"
+  fi
+}
+
+ensure_task_source_columns
+
 # === context enrichment helpers ===
 declare -A CTX_PR_CACHE CTX_ISSUE_CACHE
 
