@@ -1,6 +1,12 @@
 {
   "enabled": true,
   "mode": "bot",
+  "commentStyle": {
+    "human": {
+      "concise": true,
+      "maxLines": 6
+    }
+  },
   "pollInterval": 60,
   "trigger": "/manul",
   "agents": [
