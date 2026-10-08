@@ -268,21 +268,19 @@ else
         error_type="RUNTIME_FAILURE"
     else
         _status="FAILED"
-    _status="FAILED"
-    if [ "$pr_rc" -eq 127 ]; then
-        _summary="OpenCode binary not found"
-    else
-        _summary="OpenCode agent exited with code $pr_rc"
-        [ -n "$error_type" ] && _summary+="; error_type=$error_type"
-        [ -n "$error_message" ] && _summary+="; error=$error_message"
-        [ -n "$error_source" ] && _summary+="; error_source=$error_source"
-        _summary+="; duration_s=$duration"
-        [ -n "$session_id" ] && _summary+="; session=$session_id"
-        [ -n "$last_event_type" ] && _summary+="; last_event=$last_event_type"
+        if [ "$pr_rc" -eq 127 ]; then
+            _summary="OpenCode binary not found"
+        else
+            _summary="OpenCode agent exited with code $pr_rc"
+            [ -n "$error_type" ] && _summary+="; error_type=$error_type"
+            [ -n "$error_message" ] && _summary+="; error=$error_message"
+            [ -n "$error_source" ] && _summary+="; error_source=$error_source"
+            _summary+="; duration_s=$duration"
+            [ -n "$session_id" ] && _summary+="; session=$session_id"
+            [ -n "$last_event_type" ] && _summary+="; last_event=$last_event_type"
+        fi
     fi
 fi
-fi
-
 # Keep RAW_STDOUT_FILE; Manul task retention is responsible for cleanup.
 
 # Derive a stable, machine-readable failure code from the classified status so
