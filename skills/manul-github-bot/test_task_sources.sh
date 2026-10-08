@@ -12,13 +12,13 @@ cat >"$WORK/config.json" <<'JSON'
 {"repositories":["legacy/repo"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/issues"]},{"type":"todo_api","enabled":false,"baseUrl":"http://todo.local"}]}
 JSON
 sources="$(task_source_configured_sources "$WORK/config.json")"
-assert_contains "enabled GitHub source appears" "$sources" ""type":"github_issues""
-assert_not_contains "disabled Todo source is omitted" "$sources" ""type":"todo_api""
+assert_contains "enabled GitHub source appears" "$sources" '"type":"github_issues"'
+assert_not_contains "disabled Todo source is omitted" "$sources" '"type":"todo_api"'
 cat >"$WORK/legacy.json" <<'JSON'
 {"repositories":["owner/legacy"]}
 JSON
 legacy="$(task_source_configured_sources "$WORK/legacy.json")"
-assert_contains "legacy config maps to GitHub Issues" "$legacy" ""type":"github_issues""
+assert_contains "legacy config maps to GitHub Issues" "$legacy" '"type":"github_issues"'
 assert_contains "legacy repository preserved" "$legacy" "owner/legacy"
 cat >"$WORK/todo.json" <<'JSON'
 {"type":"todo_api","enabled":true,"baseUrl":"http://todo.local","tokenEnv":"MANUL_TODO_PAT","trigger":"/manul"}
@@ -31,9 +31,9 @@ JSON
 CURL
 chmod +x "$BIN/curl"
 PATH="$BIN:$PATH" MANUL_TODO_PAT="secret" todo="$(PATH="$BIN:$PATH" MANUL_TODO_PAT="secret" bash -c "source \"$SCRIPT_DIR/task-source-todo-api.sh\"; task_source_todo_api_poll \"$(cat "$WORK/todo.json")\"")"
-assert_contains "Todo trigger is discovered" "$todo" ""taskSourceType":"todo_api""
-assert_contains "Todo id preserved" "$todo" ""taskSourceId":"7""
-assert_not_contains "Todo item without trigger ignored" "$todo" ""taskSourceId":"8""
+assert_contains "Todo trigger is discovered" "$todo" '"taskSourceType":"todo_api"'
+assert_contains "Todo id preserved" "$todo" '"taskSourceId":"7"'
+assert_not_contains "Todo item without trigger ignored" "$todo" '"taskSourceId":"8"'
 assert_not_contains "PAT never appears in normalized data" "$todo" "secret"
 if task_source_type_is_supported github_pr; then fail "PR must not be a task source"; else ok "PR is not a supported task source"; fi
 echo "Results: $PASS passed, $FAIL failed"; exit "$FAIL"
