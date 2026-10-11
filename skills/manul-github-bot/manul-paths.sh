@@ -65,6 +65,26 @@ case "$AGENT_RUNTIME" in
         ;;
 esac
 
+# Role execution is separate from the automatic/default entry-point runtime.
+# Explicit canonical roles use OpenCode's native --agent switch by default,
+# including when unselected tasks still enter through OpenClaw.
+_CONFIG_ROLE_RUNTIME=""
+if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+    _CONFIG_ROLE_RUNTIME="$(jq -r '.automation.roleRuntime // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
+fi
+ROLE_RUNTIME="${ROLE_RUNTIME:-${MANUL_ROLE_RUNTIME:-${_CONFIG_ROLE_RUNTIME:-opencode}}}"
+
+case "$ROLE_RUNTIME" in
+    openclaw|opencode) ;;
+    "")
+        ROLE_RUNTIME="opencode"
+        ;;
+    *)
+        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw' or 'opencode'." >&2
+        exit 1
+        ;;
+esac
+
 # Ensure MANUL_STATE_DIR exists before we need it. Individual components may
 # also create subdirs on demand; this is the canonical location guarantee.
 mkdir -p "$MANUL_STATE_DIR" \
