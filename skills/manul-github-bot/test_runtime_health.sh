@@ -228,6 +228,20 @@ else
   fail "Installer declares only $SCRIPT_COUNT runtime entries (expected at least 20)"
 fi
 
+# Regression for the missing task-source symlinks. poll.sh sources
+# task-source.sh at runtime; if the installer list omits the generic
+# task-source adapters (added in 9415b99), every poll cycle dies with
+# `task_source_configured_sources: command not found` and the generic
+# provider path silently degrades to legacy GitHub Issues only.
+for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh; do
+  if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
+       | grep -q "\"$_ts\""; then
+    ok "Installer declares $_ts"
+  else
+    fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
+  fi
+done
+
 # ── Test 3b: installer self-healing (idempotent, safe to run repeatedly) ───────
 echo
 echo "Test 3b: Installer self-healing"

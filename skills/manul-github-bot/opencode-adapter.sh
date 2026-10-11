@@ -56,19 +56,57 @@ if [ ! -d "$OPT_WORKSPACE" ]; then
     exit 66
 fi
 
+# Known install locations for the OpenCode CLI, in priority order. The binary
+# is commonly installed at $HOME/.opencode/bin (added by the OpenCode installer
+# to the interactive shell PATH only), but the daemon worker inherits a
+# non-interactive PATH that omits it — exactly the failure mode that already
+# bit the OpenClaw adapter. Explicit OPENCODE_BIN always wins; otherwise PATH;
+# otherwise these well-known locations are probed before giving up.
+OPENCODE_KNOWN_DIRS=(
+    "$HOME/.opencode/bin"
+    "$HOME/.local/bin"
+    "/usr/local/bin"
+    "/usr/bin"
+    "/bin"
+)
+
 _resolve_opencode_bin() {
     if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
         printf '%s' "$OPENCODE_BIN"
         return 0
     fi
-    command -v opencode 2>/dev/null || true
+    local found
+    found="$(command -v opencode 2>/dev/null || true)"
+    if [ -n "$found" ] && [ -x "$found" ]; then
+        printf '%s' "$found"
+        return 0
+    fi
+    local dir bin
+    for dir in "${OPENCODE_KNOWN_DIRS[@]}"; do
+        bin="$dir/opencode"
+        if [ -x "$bin" ]; then
+            printf '%s' "$bin"
+            return 0
+        fi
+    done
+    return 1
 }
 OPENCODE_BIN="$(_resolve_opencode_bin)"
 if [ -z "$OPENCODE_BIN" ]; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":127,"summary":"OpenCode binary not found (opencode not on PATH)","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":127,"summary":"OpenCode binary not found (opencode not on PATH or known dirs)","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
     exit 127
 fi
 export OPENCODE_BIN
+# Surface the resolution path in diagnostics so a future failure is not a
+# silent empty-stderr death like the one this fix addresses.
+if [ -n "${OPENCODE_BIN_OVERRIDE:-}" ]; then
+    _OC_SOURCE="OPENCODE_BIN override"
+elif command -v opencode >/dev/null 2>&1; then
+    _OC_SOURCE="PATH"
+else
+    _OC_SOURCE="known-dir fallback"
+fi
+export _OC_SOURCE
 
 AGENT_TIMEOUT="${OPT_TIMEOUT:-0}"
 if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then
@@ -104,7 +142,7 @@ mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/
 log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN workspace=$OPT_WORKSPACE"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
 
 # ProcessRunner is the only process boundary. The raw JSONL is retained as a
 # per-attempt diagnostic artifact; OPT_STDOUT_FILE is rewritten below into plain

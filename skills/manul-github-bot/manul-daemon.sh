@@ -24,8 +24,15 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 # must also be reachable or the agent dies with "npx: not found".
 # NOTE: the nvm glob must be expanded BEFORE assignment (unquoted), otherwise
 # the literal string "*.bin" ends up on PATH and `npx` is still not found.
+#
+# The OpenCode CLI is installed at $HOME/.opencode/bin by its installer, which
+# only appends that directory to the interactive shell PATH (~/.zshrc). The
+# daemon worker inherits a non-interactive PATH that omits it, so
+# `command -v opencode` returned nothing and every opencode agent died with
+# exit 127 before logging a single line. Add the OpenCode bin dir here so the
+# OpenCode adapter (and any other tool installed there) is reachable.
 _NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
-export PATH="$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may

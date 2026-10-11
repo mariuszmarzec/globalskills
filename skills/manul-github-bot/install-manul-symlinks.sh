@@ -81,6 +81,13 @@ SCRIPTS=(
     "manul-wait.sh"
     "orchestrator.prompt.md"
     "poll.sh"
+    # Generic task-source adapters (added in 9415b99). poll.sh sources
+    # task-source.sh at runtime; if the symlinks are missing, every poll cycle
+    # dies with `task_source_configured_sources: command not found` and the
+    # generic provider path silently degrades to legacy GitHub Issues only.
+    "task-source.sh"
+    "task-source-github-issues.sh"
+    "task-source-jira-tasks.sh"
     "start-manul-automation.sh"
     "task-recovery.sh"
     "watchdog.sh"
