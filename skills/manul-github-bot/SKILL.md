@@ -37,9 +37,12 @@ The current implementation uses:
 MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 ```
 
-Path resolution and `AGENT_RUNTIME` validation are centralized in
-`manul-paths.sh`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to
-`~/.openclaw/manul`.
+Path resolution and runtime validation are centralized in
+`manul-paths.sh`. `AGENT_RUNTIME` selects the automatic entry-point runtime
+(default: `openclaw`); `ROLE_RUNTIME` selects the worker runtime for explicitly
+named canonical roles (default: `opencode`). The config keys are
+`automation.agentRuntime` and `automation.roleRuntime`. There is no
+`OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 The installer deploys the runtime scripts as symlinks.
 
@@ -75,14 +78,18 @@ load this file because cron/systemd does not load `~/.zshrc`.
 ## Agent execution boundary
 
 The daemon never invokes an agent runtime directly. It calls
-`AgentExecutionController.execute`, which routes through `AgentExecutor` to a
-backend adapter selected by `AGENT_RUNTIME`:
+`AgentExecutionController.execute`, which routes through `AgentExecutor`:
 
 ```
-Manul -> AgentExecutor -> OpenClawAdapter   (default)
-                         -> OpenCodeAdapter
-                         -> other adapters
+No explicit role -> AGENT_RUNTIME -> OpenClawAdapter (default) or OpenCodeAdapter
+Explicit role    -> ROLE_RUNTIME  -> OpenCodeAdapter (default)
 ```
+
+This means a plain `/manul run <task>` uses OpenClaw by default, while
+`/manul run --agent coder <task>` runs the canonical `coder` role through
+OpenCode's native `--agent` option. This is direct CLI routing, not an ACP
+session spawned by OpenClaw. Setting `automation.roleRuntime` to `openclaw`
+fails closed for explicit roles until a native OpenClaw role adapter exists.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
