@@ -126,6 +126,13 @@ parse_command() {
   local prompt=""
   local flags=""
 
+  # Role allow-list is configured by Manul, with a fallback for older configs.
+  local known_agents
+  known_agents="$(jq -r '.agents[]?' "$CONFIG" 2>/dev/null | paste -sd ' ' -)"
+  if [ -z "$known_agents" ]; then
+    known_agents="architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
+  fi
+
   # Known actions
   local known_actions="run review-fix continue verify status close"
 
@@ -136,13 +143,21 @@ parse_command() {
   case "$first_token" in
     run)
       action="IMPLEMENT"
-      # Check for --agent flag
-      if [[ "$cmd" == *"--agent"* ]]; then
-        agent="$(echo "$cmd" | grep -oP '(?<=--agent\s)\S+' || echo "")"
-        # Remove agent flag and value from prompt
-        prompt="$(echo "$cmd" | sed 's/--agent\s*\S*//g' | sed 's/^run[[:space:]]*//' | sed 's/^[[:space:]]*//')"
+      local run_args
+      run_args="${cmd#run}"
+      run_args="${run_args#"${run_args%%[![:space:]]*}"}"
+      if [[ "$run_args" == --agent* ]]; then
+        if [[ "$run_args" =~ ^--agent[[:space:]]+([^[:space:]]+)([[:space:]]+(.*))?$ ]]; then
+          agent="${BASH_REMATCH[1]}"
+          prompt="${BASH_REMATCH[3]:-}"
+        else
+          # Preserve malformed selectors so routing fails visibly instead of
+          # silently treating the selector as part of the task.
+          agent="__missing_agent__"
+          prompt=""
+        fi
       else
-        prompt="$(echo "$cmd" | sed 's/^run[[:space:]]*//')"
+        prompt="$run_args"
       fi
       ;;
     review-fix)
@@ -166,8 +181,7 @@ parse_command() {
       prompt=""
       ;;
     *)
-      # Try to use first token as agent if it's a known agent
-      local known_agents="architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert debugger debugger-expert researcher tester security performance refactorer"
+      # Try to use first token as a configured role agent.
       if echo "$known_agents" | grep -qw "$first_token"; then
         agent="$first_token"
         prompt="$(echo "$cmd" | sed "s/^${first_token}[[:space:]]*//")"
@@ -180,18 +194,25 @@ parse_command() {
       ;;
   esac
 
+  # Empty agent means automatic runtime entry-point selection; non-empty means
+  # the user explicitly selected a canonical role.
+  local agent_selection="automatic"
+  [ -n "${agent:-}" ] && agent_selection="explicit"
+
   # Build JSON output
   local result
   result=$(jq -n \
     --arg action "$action" \
     --arg prompt "${prompt:-}" \
-    --arg agent "${agent:-main}" \
+    --arg agent "${agent:-}" \
+    --arg agentSelection "$agent_selection" \
     --arg raw_command "$cmd" \
     '{
       valid: true,
       action: $action,
       prompt: $prompt,
       agent: $agent,
+      agentSelection: $agentSelection,
       rawCommand: $raw_command
     }')
 
