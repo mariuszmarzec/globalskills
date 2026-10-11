@@ -25,17 +25,23 @@ GitHub
                     |
                     v
                AgentExecutor
-                /        \
-               v          v
-       OpenClawAdapter  OpenCodeAdapter
-               |
-               v
-          agent runtime
+                 /        \
+                v          v
+        OpenClawAdapter  OpenCodeAdapter
+                ^          ^
+                |          |
+       automatic runtime   explicit role runtime
+       (agentRuntime)      (roleRuntime)
 ```
 
 The daemon is runtime-neutral: it reaches an agent runtime only through
-`AgentExecutionController` → `AgentExecutor` → a backend adapter. OpenClaw is
-the default adapter today; OpenCode is an independent alternate backend.
+`AgentExecutionController` → `AgentExecutor` → a backend adapter.
+`automation.agentRuntime` controls automatic entry-point selection (default
+OpenClaw); `automation.roleRuntime` controls execution of explicitly selected
+canonical roles (default OpenCode). With these defaults, a task without an
+explicit role runs through OpenClaw, while an explicit `coder` role runs through
+the OpenCode CLI using `--agent coder`. This is direct CLI routing, not an ACP
+session spawned inside OpenClaw.
 
 ### Current source/runtime split
 
@@ -49,7 +55,7 @@ Current default runtime:
 
 The installer deploys the runtime scripts as symlinks from the canonical skill directory and keeps runtime data such as the SQLite DB, logs, locks and task files in the runtime directory.
 
-Path selection is centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates `AGENT_RUNTIME` against the known adapter set. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
+Path and runtime selection are centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates both `AGENT_RUNTIME` and `ROLE_RUNTIME` against the known adapter set. Their config keys are `automation.agentRuntime` and `automation.roleRuntime`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 ### Current runtime ownership
 
@@ -210,7 +216,7 @@ Manul should own **task lifecycle and scheduling**.
 
 The runtime should own **agent execution and its own loop/session semantics**.
 
-Both the OpenClaw and OpenCode adapters are implemented. Additional runtimes can be added by writing a new adapter behind the same `AgentExecutor` boundary.
+Both the OpenClaw and OpenCode adapters are implemented. Explicit canonical roles use the configured `ROLE_RUNTIME` (OpenCode by default); if `ROLE_RUNTIME=openclaw`, explicit role routing fails closed rather than treating a role name as an OpenClaw config agent ID. Additional runtimes can be added behind the same `AgentExecutor` boundary.
 
 ## Ownership rule
 
