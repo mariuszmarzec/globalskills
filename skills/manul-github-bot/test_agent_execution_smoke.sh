@@ -27,6 +27,7 @@ mkdir -p "$MANUL_DIR/state/tasks" "$MANUL_DIR/state/locks" "$MANUL_DIR/logs"
 
 cat >"$MANUL_DIR/config.json" <<'JSON'
 {
+  "agents": ["coder"],
   "automation": {
     "agentRuntime": "openclaw"
   }
@@ -93,6 +94,10 @@ export PATH="$FAKE_BIN:$PATH"
 # launching the isolated executor.
 if ! grep -Fq 'setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&-' "$SCRIPT_DIR/manul-daemon.sh"; then
   echo "FAIL: daemon must close dispatcher lock FD 210 before launching the isolated executor" >&2
+  exit 1
+fi
+if ! grep -Fq -- '--arg agent "${AGENT:-}"' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon must propagate the persisted agent into the execution context" >&2
   exit 1
 fi
 
@@ -183,3 +188,108 @@ fi
 echo "PASS: daemon dispatch -> agent-task-runner -> controller -> executor -> OpenClawAdapter -> ProcessRunner -> fake OpenClaw"
 echo "PASS: execution result JSON, task metadata, dispatcher lock isolation and TASK_DONE crossed the boundary"
 echo "PASS: task-local executor PID was created and cleaned up"
+
+# Validate explicit OpenCode role routing with a fake CLI.
+OPENCODE_PROOF_FILE="$TEST_ROOT/opencode-proof"
+cat >"$FAKE_BIN/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' >>"$OPENCODE_PROOF_FILE"
+printf 'args=%s\n' "$*" >>"$OPENCODE_PROOF_FILE"
+printf '%s\n' '{"type":"text","part":{"text":"TASK_DONE opencode-role-routing"}}'
+MOCK
+chmod +x "$FAKE_BIN/opencode"
+export OPENCODE_PROOF_FILE
+export AGENT_RUNTIME=opencode
+export OPENCODE_BIN="$FAKE_BIN/opencode"
+
+OPENCODE_CTX_FILE="$MANUL_DIR/state/tasks/opencode-role.ctx.json"
+OPENCODE_RESULT_FILE="$MANUL_DIR/state/tasks/opencode-role.executor-result"
+OPENCODE_STDOUT_FILE="$MANUL_DIR/state/tasks/opencode-role.stdout"
+OPENCODE_STDERR_FILE="$MANUL_DIR/state/tasks/opencode-role.stderr"
+OPENCODE_PID_FILE="$MANUL_DIR/opencode-role.executor.pid"
+jq -n \
+  --arg taskId "smoke-opencode-role" \
+  --arg prompt "$PROMPT_FILE" \
+  --arg workspace "$WORKSPACE" \
+  --arg stdoutFile "$OPENCODE_STDOUT_FILE" \
+  --arg stderrFile "$OPENCODE_STDERR_FILE" \
+  --arg agent "coder" \
+  '{
+    taskId: $taskId,
+    prompt: $prompt,
+    workspace: $workspace,
+    agent: $agent,
+    agentSelection: "explicit",
+    attempt: 1,
+    timeout: 30,
+    session_id: "",
+    stdout_file: $stdoutFile,
+    stderr_file: $stderrFile
+  }' >"$OPENCODE_CTX_FILE"
+
+set +e
+setsid --wait "$SCRIPT_DIR/agent-task-runner.sh" \
+  "$OPENCODE_CTX_FILE" "$OPENCODE_PID_FILE" 210>&- \
+  >"$OPENCODE_RESULT_FILE" 2>"$TEST_ROOT/opencode-launcher.stderr"
+OPENCODE_RC=$?
+set -e
+if [ "$OPENCODE_RC" -ne 0 ]; then
+  echo "FAIL: explicit OpenCode role execution returned rc=$OPENCODE_RC" >&2
+  cat "$TEST_ROOT/opencode-launcher.stderr" "$OPENCODE_STDERR_FILE" "$OPENCODE_RESULT_FILE" >&2 || true
+  exit 1
+fi
+jq -e --arg taskId "smoke-opencode-role" \
+  '.status == "COMPLETED" and .task_id == $taskId and (.summary | contains("opencode-role-routing"))' \
+  "$OPENCODE_RESULT_FILE" >/dev/null || {
+    echo "FAIL: explicit OpenCode role execution did not complete:" >&2
+    cat "$OPENCODE_RESULT_FILE" >&2
+    exit 1
+  }
+grep -q '^called$' "$OPENCODE_PROOF_FILE" || { echo "FAIL: fake OpenCode was not invoked" >&2; exit 1; }
+grep -q '^args=.*--agent coder' "$OPENCODE_PROOF_FILE" || {
+  echo "FAIL: selected coder role did not reach OpenCode CLI" >&2
+  cat "$OPENCODE_PROOF_FILE" >&2
+  exit 1
+}
+
+# OpenClaw's --agent selects a runtime configuration entry, not an agent role.
+# Until ACP mapping is implemented, an explicit worker role must fail closed.
+export AGENT_RUNTIME=openclaw
+ROLE_CTX_FILE="$MANUL_DIR/state/tasks/openclaw-role.ctx.json"
+jq -n \
+  --arg taskId "smoke-openclaw-role" \
+  --arg prompt "$PROMPT_FILE" \
+  --arg workspace "$WORKSPACE" \
+  --arg stdoutFile "$MANUL_DIR/state/tasks/openclaw-role.stdout" \
+  --arg stderrFile "$MANUL_DIR/state/tasks/openclaw-role.stderr" \
+  --arg agent "coder" \
+  '{
+    taskId: $taskId,
+    prompt: $prompt,
+    workspace: $workspace,
+    agent: $agent,
+    agentSelection: "explicit",
+    attempt: 1,
+    timeout: 30,
+    session_id: "",
+    stdout_file: $stdoutFile,
+    stderr_file: $stderrFile
+  }' >"$ROLE_CTX_FILE"
+set +e
+ROLE_RESULT="$(bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ROLE_CTX_FILE" 2>"$TEST_ROOT/role-routing.stderr")"
+ROLE_RC=$?
+set -e
+if [ "$ROLE_RC" -eq 0 ] || ! jq -e '.status == "FAILED" and (.summary | contains("OpenClaw does not yet support direct role routing"))' <<<"$ROLE_RESULT" >/dev/null; then
+  echo "FAIL: unsupported OpenClaw role must fail closed with an explicit diagnostic" >&2
+  printf '%s\n' "$ROLE_RESULT" >&2
+  cat "$TEST_ROOT/role-routing.stderr" >&2 || true
+  exit 1
+fi
+if [ "$(grep -c '^called$' "$PROOF_FILE")" -ne 1 ]; then
+  echo "FAIL: unsupported OpenClaw role unexpectedly invoked the runtime" >&2
+  cat "$PROOF_FILE" >&2
+  exit 1
+fi
+
+echo "PASS: explicit role is propagated to OpenCode and OpenClaw refuses unsupported role mapping"
