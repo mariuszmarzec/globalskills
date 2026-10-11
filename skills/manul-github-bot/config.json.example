@@ -91,6 +91,7 @@
   "automation": {
     "enabled": true,
     "agentRuntime": "openclaw",
+    "roleRuntime": "opencode",
     "agentTimeoutSeconds": 43500,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,
