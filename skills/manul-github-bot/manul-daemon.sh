@@ -3361,6 +3361,11 @@ PROMPT_APPEND
      set_activity "$COMMENT_ID" "working"
 
      # Build the execution context JSON file consumed by AgentExecutor.
+     local AGENT_SELECTION="automatic"
+     if [ -n "${AGENT:-}" ] && [ "$AGENT" != "null" ]; then
+       AGENT_SELECTION="explicit"
+     fi
+
      local prev_dir
      prev_dir="$(pwd)"
      cd "$WORKDIR" || {
@@ -3387,13 +3392,14 @@ PROMPT_APPEND
        --arg taskId "$COMMENT_ID" \
        --arg prompt "$TASK_PROMPT_FILE" \
        --arg workspace "$WORKDIR" \
-       --arg agent "" \
+       --arg agent "${AGENT:-}" \
+       --arg agentSelection "$AGENT_SELECTION" \
        --argjson attempt "$current_attempt" \
        --argjson timeout "$AGENT_TIMEOUT" \
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, agentSelection: $agentSelection, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      local executor_output
