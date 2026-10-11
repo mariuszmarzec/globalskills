@@ -82,6 +82,43 @@ AgentExecutor.execute() {
         return 1
     fi
 
+    # "main" is a legacy runtime entry-point label, not a canonical worker role.
+    # OpenCode's automatic entry point is configured as orchestrator.
+    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" = "opencode" ]; then
+        agent=""
+    fi
+
+    # Explicit worker roles must exist in Manul's configured role allow-list.
+    # If an older config has no usable list, use the built-in role set also used
+    # by the command parser and poller.
+    if [ -n "$agent" ] && [ "$agent" != "main" ]; then
+        local allowed_agents_json
+        allowed_agents_json="$(jq -c '.agents // []' "$MANUL_CONFIG" 2>/dev/null || printf '[]')"
+        if ! jq -e 'type == "array" and length > 0' <<<"$allowed_agents_json" >/dev/null 2>&1; then
+            allowed_agents_json='["architect","coder","coder-cheap","coder-strong","coder-expert","reviewer","reviewer-expert","reviewer-adversarial","debugger","debugger-expert","researcher","tester","security","performance","refactorer"]'
+        fi
+        if ! jq -e --arg agent "$agent" 'type == "array" and index($agent) != null' <<<"$allowed_agents_json" >/dev/null 2>&1; then
+            local routing_error
+            routing_error="Unknown or unconfigured agent role: $agent"
+            jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
+              '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
+            AgentExecutor_ExitCode=1
+            return 1
+        fi
+
+        # OpenClaw's --agent selects an OpenClaw config entry (currently main),
+        # not a Markdown role under ~/.globalskills/agents. Until ACP role mapping
+        # is implemented, fail closed rather than silently run a different agent.
+        if [ "$AGENT_RUNTIME" = "openclaw" ]; then
+            local routing_error
+            routing_error="OpenClaw does not yet support direct role routing for '$agent'; use AGENT_RUNTIME=opencode until ACP role mapping is implemented"
+            jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
+              '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
+            AgentExecutor_ExitCode=1
+            return 1
+        fi
+    fi
+
     # Route to the correct adapter
     local adapter_script
     case "$AGENT_RUNTIME" in
