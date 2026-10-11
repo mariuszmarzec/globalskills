@@ -50,7 +50,7 @@ printf 'called\n' >>"$SMOKE_PROOF_FILE"
 printf 'args=%s\n' "$*" >>"$SMOKE_PROOF_FILE"
 printf 'task_id=%s\n' "$(printenv MANUL_TASK_ID)" >>"$SMOKE_PROOF_FILE"
 printf 'workspace=%s\n' "$(printenv WORKSPACE)" >>"$SMOKE_PROOF_FILE"
-if [ -e "/proc/$/fd/210" ]; then
+if [ -e "/proc/$$/fd/210" ]; then
   printf 'lock_fd=present\n' >>"$SMOKE_PROOF_FILE"
 else
   printf 'lock_fd=absent\n' >>"$SMOKE_PROOF_FILE"
@@ -89,16 +89,15 @@ export OPENCLAW_BIN="$FAKE_BIN/openclaw"
 export SMOKE_PROOF_FILE="$PROOF_FILE"
 export PATH="$FAKE_BIN:$PATH"
 
-# This must stay byte-for-byte compatible with the executor invocation used by
-# manul-daemon.sh. The daemon creates the same task-local PID/result files and
-# removes them after this wait returns.
+# Require the production daemon to close its dispatcher-lock descriptor before
+# launching the isolated executor.
 if ! grep -Fq 'setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&-' "$SCRIPT_DIR/manul-daemon.sh"; then
   echo "FAIL: daemon must close dispatcher lock FD 210 before launching the isolated executor" >&2
   exit 1
 fi
 
 # Hold the dispatcher lock in this test process. The production executor must
-# not inherit descriptor 210 or it would keep the lock alive after this process
+# not inherit descriptor 210 or it could keep the lock alive after this process
 # dies/restarts.
 LOCK_FILE="$MANUL_DIR/state/locks/task-dispatch.flock"
 exec 210>"$LOCK_FILE"
@@ -155,27 +154,12 @@ grep -q -- 'agent' "$PROOF_FILE" || { echo "FAIL: OpenClawAdapter did not invoke
 grep -q -- '--agent main' "$PROOF_FILE" || { echo "FAIL: OpenClawAdapter lost the default main agent" >&2; exit 1; }
 grep -q 'task_id=smoke-execution-1' "$PROOF_FILE" || { echo "FAIL: task ID was not propagated to OpenClaw" >&2; exit 1; }
 grep -q "workspace=$WORKSPACE" "$PROOF_FILE" || { echo "FAIL: workspace was not propagated to OpenClaw" >&2; exit 1; }
-grep -q '^lock_fd=absent
-  echo "FAIL: TASK_DONE was not preserved through ProcessRunner" >&2
-  exit 1
-}
-
-if [ -s "$STDERR_FILE" ]; then
-  if grep -qiE 'error|failed|permission denied|not found' "$STDERR_FILE"; then
-    echo "FAIL: execution produced unexpected adapter stderr:" >&2
-    cat "$STDERR_FILE" >&2
-    exit 1
-  fi
-fi
-
-echo "PASS: daemon dispatch -> agent-task-runner -> controller -> executor -> OpenClawAdapter -> ProcessRunner -> fake OpenClaw"
-echo "PASS: execution result JSON, task metadata and TASK_DONE crossed the boundary"
-echo "PASS: task-local executor PID was created and cleaned up"
- "$PROOF_FILE" || {
+grep -q '^lock_fd=absent$' "$PROOF_FILE" || {
   echo "FAIL: agent runtime inherited task-dispatch lock FD 210" >&2
   cat "$PROOF_FILE" >&2
   exit 1
 }
+
 if flock -n "$LOCK_FILE" -c true 2>/dev/null; then
   echo "FAIL: parent lost its dispatcher lock while the executor was running" >&2
   exit 1
@@ -183,7 +167,7 @@ fi
 flock -u 210
 exec 210>&-
 
-grep -q '^TASK_DONE smoke-agent-completed
+grep -q '^TASK_DONE smoke-agent-completed$' "$STDOUT_FILE" || {
   echo "FAIL: TASK_DONE was not preserved through ProcessRunner" >&2
   exit 1
 }
@@ -197,21 +181,5 @@ if [ -s "$STDERR_FILE" ]; then
 fi
 
 echo "PASS: daemon dispatch -> agent-task-runner -> controller -> executor -> OpenClawAdapter -> ProcessRunner -> fake OpenClaw"
-echo "PASS: execution result JSON, task metadata and TASK_DONE crossed the boundary"
-echo "PASS: task-local executor PID was created and cleaned up"
- "$STDOUT_FILE" || {
-  echo "FAIL: TASK_DONE was not preserved through ProcessRunner" >&2
-  exit 1
-}
-
-if [ -s "$STDERR_FILE" ]; then
-  if grep -qiE 'error|failed|permission denied|not found' "$STDERR_FILE"; then
-    echo "FAIL: execution produced unexpected adapter stderr:" >&2
-    cat "$STDERR_FILE" >&2
-    exit 1
-  fi
-fi
-
-echo "PASS: daemon dispatch -> agent-task-runner -> controller -> executor -> OpenClawAdapter -> ProcessRunner -> fake OpenClaw"
-echo "PASS: execution result JSON, task metadata and TASK_DONE crossed the boundary"
+echo "PASS: execution result JSON, task metadata, dispatcher lock isolation and TASK_DONE crossed the boundary"
 echo "PASS: task-local executor PID was created and cleaned up"
