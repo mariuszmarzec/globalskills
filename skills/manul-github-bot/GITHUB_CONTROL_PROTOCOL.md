@@ -34,18 +34,24 @@ into Manul or runtime-specific directories.
 
 Both `/manul run --agent <role> <task>` and the shorthand
 `/manul <role> <task>` select a role explicitly. Without an explicit role,
-the `agent` field is empty and the selected runtime uses its configured
-automatic entry point. The daemon must preserve the stored role in the execution
-context; an empty value means automatic selection, not an implicit `main`.
+the `agent` field is empty and Manul uses the configured automatic entry point.
+The daemon must preserve the stored role in the execution context; an empty
+value means automatic selection, not an implicit `main`.
 
-OpenCode can receive configured role names through its native `--agent` flag.
+The automatic entry-point runtime is configured through
+`automation.agentRuntime` (default: `openclaw`). Explicit canonical worker
+roles are routed through `automation.roleRuntime` (default: `opencode`).
+This separation lets ordinary tasks continue to use OpenClaw while an explicit
+role such as `coder` is run by OpenCode's documented CLI
+(`opencode run --agent coder`). It uses OpenCode directly; it does not claim
+that OpenClaw has delegated the role through ACP.
+
 OpenClaw's `--agent` selects an OpenClaw configuration entry, not a Markdown
-role definition. Until the ACP role-mapping phase is implemented, Manul fails
-closed when an explicit canonical worker role is selected with the OpenClaw
-runtime; it must not silently execute the task under `main`.
-
-Unknown/unconfigured roles also fail before the runtime is started. They must
-not be converted into prompt text or silently fall back to another role.
+role definition. If `automation.roleRuntime` is set to `openclaw`, Manul fails
+closed for explicit canonical worker roles rather than silently executing them
+under `main`. Unknown/unconfigured roles also fail before a runtime starts;
+they must not be converted into prompt text or silently fall back to another
+role.
 
 ## Event format
 
