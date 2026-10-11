@@ -253,16 +253,21 @@ grep -q '^args=.*--agent coder' "$OPENCODE_PROOF_FILE" || {
   exit 1
 }
 
-# OpenClaw's --agent selects a runtime configuration entry, not an agent role.
-# Until ACP mapping is implemented, an explicit worker role must fail closed.
+# With OpenClaw as the automatic runtime, an explicit canonical role routes
+# through the configured role runtime (OpenCode) and its native --agent switch.
 export AGENT_RUNTIME=openclaw
+export ROLE_RUNTIME=opencode
 ROLE_CTX_FILE="$MANUL_DIR/state/tasks/openclaw-role.ctx.json"
+ROLE_RESULT_FILE="$MANUL_DIR/state/tasks/openclaw-role.executor-result"
+ROLE_STDOUT_FILE="$MANUL_DIR/state/tasks/openclaw-role.stdout"
+ROLE_STDERR_FILE="$MANUL_DIR/state/tasks/openclaw-role.stderr"
+ROLE_PID_FILE="$MANUL_DIR/openclaw-role.executor.pid"
 jq -n \
   --arg taskId "smoke-openclaw-role" \
   --arg prompt "$PROMPT_FILE" \
   --arg workspace "$WORKSPACE" \
-  --arg stdoutFile "$MANUL_DIR/state/tasks/openclaw-role.stdout" \
-  --arg stderrFile "$MANUL_DIR/state/tasks/openclaw-role.stderr" \
+  --arg stdoutFile "$ROLE_STDOUT_FILE" \
+  --arg stderrFile "$ROLE_STDERR_FILE" \
   --arg agent "coder" \
   '{
     taskId: $taskId,
@@ -276,20 +281,39 @@ jq -n \
     stdout_file: $stdoutFile,
     stderr_file: $stderrFile
   }' >"$ROLE_CTX_FILE"
+
 set +e
-ROLE_RESULT="$(bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ROLE_CTX_FILE" 2>"$TEST_ROOT/role-routing.stderr")"
+setsid --wait "$SCRIPT_DIR/agent-task-runner.sh" \
+  "$ROLE_CTX_FILE" "$ROLE_PID_FILE" 210>&- \
+  >"$ROLE_RESULT_FILE" 2>"$TEST_ROOT/role-launcher.stderr"
 ROLE_RC=$?
 set -e
-if [ "$ROLE_RC" -eq 0 ] || ! jq -e '.status == "FAILED" and (.summary | contains("OpenClaw does not yet support direct role routing"))' <<<"$ROLE_RESULT" >/dev/null; then
-  echo "FAIL: unsupported OpenClaw role must fail closed with an explicit diagnostic" >&2
-  printf '%s\n' "$ROLE_RESULT" >&2
-  cat "$TEST_ROOT/role-routing.stderr" >&2 || true
+if [ "$ROLE_RC" -ne 0 ]; then
+  echo "FAIL: role routing from OpenClaw runtime returned rc=$ROLE_RC" >&2
+  cat "$TEST_ROOT/role-launcher.stderr" "$ROLE_STDERR_FILE" "$ROLE_RESULT_FILE" >&2 || true
   exit 1
 fi
+jq -e --arg taskId "smoke-openclaw-role" \
+  '.status == "COMPLETED" and .task_id == $taskId and (.summary | contains("opencode-role-routing"))' \
+  "$ROLE_RESULT_FILE" >/dev/null || {
+    echo "FAIL: explicit role routed from OpenClaw runtime did not complete:" >&2
+    cat "$ROLE_RESULT_FILE" >&2
+    exit 1
+  }
 if [ "$(grep -c '^called$' "$PROOF_FILE")" -ne 1 ]; then
-  echo "FAIL: unsupported OpenClaw role unexpectedly invoked the runtime" >&2
+  echo "FAIL: an explicit role must not run OpenClaw main" >&2
   cat "$PROOF_FILE" >&2
   exit 1
 fi
+if [ "$(grep -c '^called$' "$OPENCODE_PROOF_FILE")" -ne 2 ]; then
+  echo "FAIL: explicit role was not routed through OpenCode exactly once" >&2
+  cat "$OPENCODE_PROOF_FILE" >&2
+  exit 1
+fi
+grep -q '^args=.*--agent coder' "$OPENCODE_PROOF_FILE" || {
+  echo "FAIL: selected coder role did not reach OpenCode CLI" >&2
+  cat "$OPENCODE_PROOF_FILE" >&2
+  exit 1
+}
 
-echo "PASS: explicit role is propagated to OpenCode and OpenClaw refuses unsupported role mapping"
+echo "PASS: explicit roles route through OpenCode even when the automatic runtime is OpenClaw"
