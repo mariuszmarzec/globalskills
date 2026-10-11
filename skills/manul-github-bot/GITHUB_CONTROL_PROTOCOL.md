@@ -19,12 +19,33 @@ Issue/PR comments beginning with `/manul` are parsed as:
 | Command | Action | Description |
 |---|---|---|
 | `/manul run <task>` | `IMPLEMENT` | Submit an implementation task |
-| `/manul run --agent <agent> <task>` | `IMPLEMENT` | Submit with a specific configured agent |
+| `/manul run --agent <agent> <task>` | `IMPLEMENT` | Submit with a specific configured role agent |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` | Create a task for PR review feedback |
 | `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input |
 | `/manul verify <prompt>` | `VERIFY` | Create a verification task |
 | `/manul status` | `STATUS` | Query conversation status |
 | `/manul close` | `CLOSE` | Close a conversation |
+
+## Agent selection and runtime compatibility
+
+Role names are taken from the configured `.agents[]` allow-list; the agent
+definitions remain canonical under `~/.globalskills/agents` and are not copied
+into Manul or runtime-specific directories.
+
+Both `/manul run --agent <role> <task>` and the shorthand
+`/manul <role> <task>` select a role explicitly. Without an explicit role,
+the `agent` field is empty and the selected runtime uses its configured
+automatic entry point. The daemon must preserve the stored role in the execution
+context; an empty value means automatic selection, not an implicit `main`.
+
+OpenCode can receive configured role names through its native `--agent` flag.
+OpenClaw's `--agent` selects an OpenClaw configuration entry, not a Markdown
+role definition. Until the ACP role-mapping phase is implemented, Manul fails
+closed when an explicit canonical worker role is selected with the OpenClaw
+runtime; it must not silently execute the task under `main`.
+
+Unknown/unconfigured roles also fail before the runtime is started. They must
+not be converted into prompt text or silently fall back to another role.
 
 ## Event format
 
