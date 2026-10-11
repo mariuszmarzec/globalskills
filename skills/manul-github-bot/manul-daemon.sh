@@ -835,21 +835,193 @@ start_heartbeat() {
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
   lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
+task_process_is_running() {
+  local pid="$1"
+  local process_state
+  process_state="$(ps -o stat= -p "$pid" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+  [ -n "$process_state" ] && [[ "$process_state" != Z* ]]
+}
+
+# Print every live descendant of a PID from one process-table snapshot. This
+# includes tools such as GNU timeout that put their own children into a
+# different process group, which a group-only signal cannot terminate.
+task_descendant_pids() {
+  local root_pid="$1"
+  ps -eo pid=,ppid= | awk -v root="$root_pid" '
+    {
+      pids[NR] = $1
+      parents[$1] = $2
+      total = NR
+    }
+    END {
+      descendants[root] = 1
+      do {
+        changed = 0
+        for (i = 1; i <= total; i++) {
+          pid = pids[i]
+          if (pid != root && descendants[parents[pid]] && !descendants[pid]) {
+            descendants[pid] = 1
+            changed = 1
+          }
+        }
+      } while (changed)
+      for (i = 1; i <= total; i++) {
+        if (pids[i] != root && descendants[pids[i]]) print pids[i]
+      }
+    }'
+}
+
+# Find a task runner by its explicit context/PID-file arguments when a prior
+# stop removed the PID marker before the isolated process had actually exited.
+find_task_executor_pid() {
+  local comment_id="$1"
+  local expected_context="$MANUL_STATE_DIR/tasks/task-$comment_id.ctx.json"
+  local expected_pid_file="$MANUL_DIR/task-$comment_id.executor.pid"
+  local cmdline_file cmdline pid
+
+  for cmdline_file in /proc/[0-9]*/cmdline; do
+    [ -r "$cmdline_file" ] || continue
+    cmdline="$(tr '\0' ' ' < "$cmdline_file" 2>/dev/null || true)"
+    [[ "$cmdline" == *agent-task-runner.sh*"$expected_context"*"$expected_pid_file"* ]] || continue
+    pid="${cmdline_file#/proc/}"
+    pid="${pid%/cmdline}"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done
+  return 1
+}
+
 terminate_task_executor() {
   local comment_id="$1"
-  local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
-  local executor_pid=""
+  local pid_file="$MANUL_DIR/task-$comment_id.executor.pid"
+  local executor_pid="" executor_args="" executor_pgid=""
+  local descendants=() process_pid wait_attempt alive forced=0
 
   if [ -f "$pid_file" ]; then
     executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
   fi
 
-  if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
-    log "terminating isolated executor for stale task $comment_id (pid=$executor_pid)"
-    kill -- "-$executor_pid" 2>/dev/null || kill "$executor_pid" 2>/dev/null || true
-    lc_log "EXECUTOR_KILLED" "task=$comment_id pid=$executor_pid"
+  # Older stop paths removed PID files even though setsid-created executors
+  # survived. Recover the root PID from its task-specific command line.
+  if ! [[ "$executor_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$executor_pid" 2>/dev/null; then
+    executor_pid="$(find_task_executor_pid "$comment_id" 2>/dev/null || true)"
   fi
+
+  if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
+    executor_args="$(ps -o args= -p "$executor_pid" 2>/dev/null || true)"
+    # A PID file can outlive its process and the OS can reuse the numeric PID.
+    # Never signal a process unless it still identifies the expected task runner.
+    if [[ "$executor_args" != *agent-task-runner.sh* || "$executor_args" != *"$pid_file"* ]]; then
+      local discovered_pid
+      discovered_pid="$(find_task_executor_pid "$comment_id" 2>/dev/null || true)"
+      if [[ "$discovered_pid" =~ ^[0-9]+$ ]] && [ "$discovered_pid" -gt 0 ] && kill -0 "$discovered_pid" 2>/dev/null; then
+        executor_pid="$discovered_pid"
+        executor_args="$(ps -o args= -p "$executor_pid" 2>/dev/null || true)"
+      fi
+    fi
+
+    if [[ "$executor_args" == *agent-task-runner.sh* && "$executor_args" == *"$pid_file"* ]]; then
+      executor_pgid="$(ps -o pgid= -p "$executor_pid" 2>/dev/null | tr -d '[:space:]')"
+      mapfile -t descendants < <(task_descendant_pids "$executor_pid")
+      log "terminating task executor tree for $comment_id (pid=$executor_pid descendants=${#descendants[@]})"
+
+      # Signal descendants before their parents so a child that created a new
+      # session (e.g. timeout -> opencode) cannot survive when its parent exits.
+      for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
+        kill -TERM "${descendants[$wait_attempt]}" 2>/dev/null || true
+      done
+      if [[ "$executor_pgid" =~ ^[0-9]+$ ]] && [ "$executor_pgid" -eq "$executor_pid" ]; then
+        kill -TERM -- "-$executor_pgid" 2>/dev/null || true
+      fi
+      kill -TERM "$executor_pid" 2>/dev/null || true
+
+      alive=1
+      for ((wait_attempt=0; wait_attempt<30; wait_attempt++)); do
+        alive=0
+        for process_pid in "${descendants[@]}" "$executor_pid"; do
+          if task_process_is_running "$process_pid"; then
+            alive=1
+            break
+          fi
+        done
+        [ "$alive" -eq 0 ] && break
+        sleep 0.1
+      done
+
+      if [ "$alive" -eq 1 ]; then
+        forced=1
+        log "WARN: task executor tree for $comment_id did not stop after TERM; sending KILL"
+        for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
+          process_pid="${descendants[$wait_attempt]}"
+          task_process_is_running "$process_pid" && kill -KILL "$process_pid" 2>/dev/null || true
+        done
+        if [[ "$executor_pgid" =~ ^[0-9]+$ ]] && [ "$executor_pgid" -eq "$executor_pid" ]; then
+          kill -KILL -- "-$executor_pgid" 2>/dev/null || true
+        fi
+        kill -KILL "$executor_pid" 2>/dev/null || true
+      fi
+      lc_log "EXECUTOR_KILLED" "task=$comment_id pid=$executor_pid descendants=${#descendants[@]} forced=$forced"
+    else
+      log "WARN: refusing to terminate PID $executor_pid for task $comment_id because it no longer matches the task runner"
+    fi
+  fi
+
   rm -f "$pid_file" 2>/dev/null || true
+}
+
+# Return unique task IDs for executors still represented by PID files or live
+# agent-task-runner processes. The latter recovers from legacy stop paths that
+# removed PID markers before their process tree exited.
+list_task_executor_ids() {
+  local pid_file base task_id cmdline_file cmdline remainder
+  local context_prefix="$MANUL_STATE_DIR/tasks/task-"
+  declare -A seen_task_ids=()
+
+  for pid_file in "$MANUL_DIR"/task-*.executor.pid; do
+    [ -f "$pid_file" ] || continue
+    base="${pid_file##*/}"
+    task_id="${base#task-}"
+    task_id="${task_id%.executor.pid}"
+    [ -n "$task_id" ] && seen_task_ids["$task_id"]=1
+  done
+
+  for cmdline_file in /proc/[0-9]*/cmdline; do
+    [ -r "$cmdline_file" ] || continue
+    cmdline="$(tr '\0' ' ' < "$cmdline_file" 2>/dev/null || true)"
+    [[ "$cmdline" == *agent-task-runner.sh*"$context_prefix"*".ctx.json"* ]] || continue
+    remainder="${cmdline#*"$context_prefix"}"
+    task_id="${remainder%%.ctx.json*}"
+    [ -n "$task_id" ] && [ "$task_id" != "$remainder" ] && seen_task_ids["$task_id"]=1
+  done
+
+  for task_id in "${!seen_task_ids[@]}"; do
+    printf '%s\n' "$task_id"
+  done
+}
+
+terminate_all_task_executors() {
+  local task_id
+  while IFS= read -r task_id; do
+    [ -n "$task_id" ] || continue
+    terminate_task_executor "$task_id"
+  done < <(list_task_executor_ids)
+}
+
+# A queued/terminal task must not retain a detached executor from an earlier
+# attempt. Running tasks are left alone unless stale-task recovery claimed them.
+cleanup_orphaned_task_executors() {
+  local task_id safe_task_id task_status
+  while IFS= read -r task_id; do
+    [ -n "$task_id" ] || continue
+    safe_task_id="$(sql_escape "$task_id")"
+    task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    if [ "$task_status" != "running" ]; then
+      log "cleanup_orphaned_task_executors: terminating executor for task $task_id (status=${task_status:-missing})"
+      terminate_task_executor "$task_id"
+    fi
+  done < <(list_task_executor_ids)
 }
 
 stop_heartbeat() {
@@ -1027,6 +1199,11 @@ stop() {
   # answer still clears a stale marker left by a previous crash.
   rm -f "$MANUL_DIR/.enabled"
 
+  # Executors have their own setsid session, separate from the worker group.
+  # Stop them explicitly, including orphaned processes whose PID files were
+  # deleted by an older stop implementation.
+  terminate_all_task_executors
+
   if [ ! -f "$PID_FILE" ]; then
     echo "not running"
     return 0
@@ -1049,7 +1226,6 @@ stop() {
   kill "$pid" 2>/dev/null
   wait 2>/dev/null || true
   rm -f "$PID_FILE"
-  rm -f "$MANUL_DIR"/task-*.executor.pid 2>/dev/null || true
   lc_log "DAEMON_STOP" "pid=$pid"
   echo "manul daemon stopped (pid $pid)"
 }
@@ -3119,7 +3295,10 @@ PROMPT_APPEND
 
      # Run the controller in a dedicated process group. The task-local PID file
      # lets watchdog/recovery terminate a hung executor without killing the worker.
-     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" >"$executor_result_file" 2>>"$STDERR_FILE" &
+     # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
+     # executor or any descendants inherit it: their lifetime may outlive the
+     # worker and would keep the dispatcher lock held across a restart.
+     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0
      wait "$executor_launcher_pid" || rc=$?
@@ -3327,8 +3506,11 @@ loop() {
     exit 1
   fi
 
-  # Recover any stale tasks from previous crashes/deadlocks
+  # Recover any stale tasks from previous crashes/deadlocks.
   recover_stale_tasks
+  # A recovered task can already be queued while a detached executor remains
+  # alive (including from older versions that deleted its PID file).
+  cleanup_orphaned_task_executors
 
   # Source workspace manager
   source "$MANUL_DIR/workspace-manager.sh"

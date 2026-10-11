@@ -83,38 +83,89 @@ assert_eq() {
 REPO="owner/repo"
 CURRENT_TEST_PID="$BASHPID"
 
-# 0) Isolated executor process group can be terminated independently.
+# 0) The isolated task runner and descendants in a separate session must be
+# terminated together. Also simulate the old stop path having deleted its PID
+# file: recovery must rediscover the live runner from its task-specific argv.
 EXECUTOR_PID_FILE="$MANUL_DIR/task-test-executor.executor.pid"
-rm -f "$EXECUTOR_PID_FILE"
-setsid --wait bash -c 'printf "%s\n" "$BASHPID" > "$1"; sleep 30' _ "$EXECUTOR_PID_FILE" &
+EXECUTOR_CTX_FILE="$MANUL_DIR/state/tasks/task-test-executor.ctx.json"
+EXECUTOR_CHILD_PID_FILE="$MANUL_DIR/task-test-executor.child.pid"
+FAKE_TASK_RUNNER="$TEST_DIR/agent-task-runner.sh"
+mkdir -p "$MANUL_DIR/state/tasks"
+touch "$EXECUTOR_CTX_FILE"
+cat >"$FAKE_TASK_RUNNER" <<'RUNNER'
+#!/usr/bin/env bash
+set -euo pipefail
+ctx_file="$1"
+pid_file="$2"
+child_pid_file="$3"
+printf '%s\n' "$BASHPID" >"$pid_file"
+setsid --wait bash -c 'sleep 30' &
+child_pid=$!
+printf '%s\n' "$child_pid" >"$child_pid_file"
+wait "$child_pid"
+RUNNER
+chmod +x "$FAKE_TASK_RUNNER"
+rm -f "$EXECUTOR_PID_FILE" "$EXECUTOR_CHILD_PID_FILE"
+setsid --wait "$FAKE_TASK_RUNNER" "$EXECUTOR_CTX_FILE" "$EXECUTOR_PID_FILE" "$EXECUTOR_CHILD_PID_FILE" &
 EXECUTOR_LAUNCHER_PID=$!
-for _ in {1..20}; do
-  [ -s "$EXECUTOR_PID_FILE" ] && break
+for _ in {1..40}; do
+  [ -s "$EXECUTOR_PID_FILE" ] && [ -s "$EXECUTOR_CHILD_PID_FILE" ] && break
   sleep 0.05
 done
 EXECUTOR_PID="$(cat "$EXECUTOR_PID_FILE" 2>/dev/null || true)"
-if ! [[ "$EXECUTOR_PID" =~ ^[0-9]+$ ]] || [ "$EXECUTOR_PID" -le 0 ]; then
-  echo "FAIL: isolated executor did not publish a valid PID" >&2
+EXECUTOR_CHILD_PID="$(cat "$EXECUTOR_CHILD_PID_FILE" 2>/dev/null || true)"
+if ! [[ "$EXECUTOR_PID" =~ ^[0-9]+$ ]] || [ "$EXECUTOR_PID" -le 0 ] ||
+   ! [[ "$EXECUTOR_CHILD_PID" =~ ^[0-9]+$ ]] || [ "$EXECUTOR_CHILD_PID" -le 0 ]; then
+  echo "FAIL: isolated executor or detached child did not publish a valid PID" >&2
   kill "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
   wait "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
   exit 1
 fi
-if ! kill -0 "$EXECUTOR_PID" 2>/dev/null; then
-  echo "FAIL: isolated executor exited before recovery test" >&2
+if ! kill -0 "$EXECUTOR_PID" 2>/dev/null || ! kill -0 "$EXECUTOR_CHILD_PID" 2>/dev/null; then
+  echo "FAIL: isolated executor tree exited before recovery test" >&2
   exit 1
 fi
+rm -f "$EXECUTOR_PID_FILE"
 terminate_task_executor "test-executor"
 wait "$EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
-if kill -0 "$EXECUTOR_PID" 2>/dev/null; then
-  echo "FAIL: terminate_task_executor left executor process alive" >&2
-  kill -9 "$EXECUTOR_PID" 2>/dev/null || true
+if task_process_is_running "$EXECUTOR_PID" || task_process_is_running "$EXECUTOR_CHILD_PID"; then
+  echo "FAIL: terminate_task_executor left an executor descendant alive" >&2
+  kill -KILL "$EXECUTOR_CHILD_PID" "$EXECUTOR_PID" 2>/dev/null || true
   exit 1
 fi
 if [ -f "$EXECUTOR_PID_FILE" ]; then
   echo "FAIL: terminate_task_executor left PID file behind" >&2
   exit 1
 fi
-echo "PASS: isolated task executor is independently recoverable"
+echo "PASS: executor recovery kills the runner tree, including a detached child, without a PID file"
+
+# 0b) A queued task must not retain a detached executor after startup recovery.
+QUEUED_EXECUTOR_PID_FILE="$MANUL_DIR/task-queued-orphan.executor.pid"
+QUEUED_EXECUTOR_CTX="$MANUL_DIR/state/tasks/task-queued-orphan.ctx.json"
+QUEUED_CHILD_PID_FILE="$MANUL_DIR/task-queued-orphan.child.pid"
+touch "$QUEUED_EXECUTOR_CTX"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status) VALUES ('queued-orphan','$REPO',77,'https://github.com/$REPO/issues/77','queued');"
+rm -f "$QUEUED_EXECUTOR_PID_FILE" "$QUEUED_CHILD_PID_FILE"
+setsid --wait "$FAKE_TASK_RUNNER" "$QUEUED_EXECUTOR_CTX" "$QUEUED_EXECUTOR_PID_FILE" "$QUEUED_CHILD_PID_FILE" &
+QUEUED_EXECUTOR_LAUNCHER_PID=$!
+for _ in {1..40}; do
+  [ -s "$QUEUED_EXECUTOR_PID_FILE" ] && [ -s "$QUEUED_CHILD_PID_FILE" ] && break
+  sleep 0.05
+done
+QUEUED_EXECUTOR_PID="$(cat "$QUEUED_EXECUTOR_PID_FILE" 2>/dev/null || true)"
+QUEUED_CHILD_PID="$(cat "$QUEUED_CHILD_PID_FILE" 2>/dev/null || true)"
+if ! [[ "$QUEUED_EXECUTOR_PID" =~ ^[0-9]+$ ]] || ! [[ "$QUEUED_CHILD_PID" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: queued orphan fixture did not start" >&2
+  exit 1
+fi
+cleanup_orphaned_task_executors
+wait "$QUEUED_EXECUTOR_LAUNCHER_PID" 2>/dev/null || true
+if task_process_is_running "$QUEUED_EXECUTOR_PID" || task_process_is_running "$QUEUED_CHILD_PID"; then
+  echo "FAIL: startup cleanup left an executor for a queued task alive" >&2
+  kill -KILL "$QUEUED_CHILD_PID" "$QUEUED_EXECUTOR_PID" 2>/dev/null || true
+  exit 1
+fi
+echo "PASS: startup cleanup terminates executors for queued tasks"
 
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "

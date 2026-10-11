@@ -101,7 +101,7 @@ The default configuration uses:
 
 Repository locks prevent two tasks from concurrently modifying the same repository workspace.
 
-A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks.
+A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks. The dispatcher lock descriptor must not be inherited by an isolated agent executor or any of its descendants. Stopping/recovering a task must terminate the complete executor process tree—including descendants that create their own process groups—before the workspace can be reused. PID-file cleanup must not hide a still-running executor.
 
 ## 7. GitHub comment contract
 
