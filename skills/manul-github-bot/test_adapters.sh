@@ -494,19 +494,26 @@ test_runtime_selection() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/runtime"
-  printf '%s\n' '{"automation":{"agentRuntime":"opencode"}}' >"$tmp/runtime/config.json"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' >"$tmp/runtime/config.json"
 
   local runtime
-  runtime="$(MANUL_DIR="$tmp/runtime" unset AGENT_RUNTIME MANUL_AGENT_RUNTIME; \
-    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "opencode" ] \
-    && ok "manul-paths reads automation.agentRuntime from config" \
-    || fail "manul-paths ignored automation.agentRuntime (got $runtime)"
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode|openclaw" ] \
+    && ok "manul-paths reads automatic and role runtimes from config" \
+    || fail "manul-paths ignored runtime settings (got $runtime)"
 
-  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "openclaw" ] \
-    && ok "OpenClaw remains the default runtime" \
-    || fail "Default runtime changed unexpectedly: $runtime"
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw|opencode" ] \
+    && ok "OpenClaw stays the default automatic runtime and OpenCode the role runtime" \
+    || fail "Default runtimes changed unexpectedly: $runtime"
+
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "ROLE_RUNTIME environment override takes precedence over roleRuntime config" \
+    || fail "ROLE_RUNTIME override did not take precedence (got $runtime)"
 }
 
 # ---------------------------------------------------------------------------
