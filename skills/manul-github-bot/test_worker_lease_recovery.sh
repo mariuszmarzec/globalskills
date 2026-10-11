@@ -196,6 +196,54 @@ flock -u 210
 exec 210>&-
 echo "PASS: heartbeat does not inherit FD 210 and parent retains dispatcher lock"
 
+# 0d) Startup cleanup must reap a legacy orphan heartbeat and all of its
+# descendants when an earlier version inherited FD 210 into that process tree.
+ORPHAN_LOCK_FILE="$MANUL_DIR/state/locks/task-dispatch.flock"
+exec 210>"$ORPHAN_LOCK_FILE"
+flock -n 210 || { echo "FAIL: could not acquire lock for orphan-heartbeat test" >&2; exit 1; }
+ORPHAN_HEARTBEAT_PID_FILE="$MANUL_DIR/task-orphan-heartbeat.heartbeat.pid"
+ORPHAN_HEARTBEAT_CHILD_FILE="$TEST_DIR/orphan-heartbeat-child.pid"
+FAKE_HEARTBEAT_SCRIPT="$TEST_DIR/manul-daemon.sh"
+cat >"$FAKE_HEARTBEAT_SCRIPT" <<'HEARTBEAT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$BASHPID" >"$2"
+sleep 30 &
+child_pid=$!
+printf '%s\n' "$child_pid" >"$3"
+wait "$child_pid"
+HEARTBEAT
+chmod +x "$FAKE_HEARTBEAT_SCRIPT"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts) VALUES ('orphan-heartbeat','$REPO',79,'https://github.com/$REPO/issues/79','queued',1);"
+bash "$FAKE_HEARTBEAT_SCRIPT" loop "$ORPHAN_HEARTBEAT_PID_FILE" "$ORPHAN_HEARTBEAT_CHILD_FILE" &
+ORPHAN_HEARTBEAT_LAUNCHER_PID=$!
+for _ in {1..40}; do
+  [ -s "$ORPHAN_HEARTBEAT_PID_FILE" ] && [ -s "$ORPHAN_HEARTBEAT_CHILD_FILE" ] && break
+  sleep 0.05
+done
+ORPHAN_HEARTBEAT_PID="$(cat "$ORPHAN_HEARTBEAT_PID_FILE" 2>/dev/null || true)"
+ORPHAN_HEARTBEAT_CHILD_PID="$(cat "$ORPHAN_HEARTBEAT_CHILD_FILE" 2>/dev/null || true)"
+if ! [[ "$ORPHAN_HEARTBEAT_PID" =~ ^[0-9]+$ ]] || ! [[ "$ORPHAN_HEARTBEAT_CHILD_PID" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: orphan heartbeat test process tree did not start" >&2
+  kill "$ORPHAN_HEARTBEAT_LAUNCHER_PID" 2>/dev/null || true
+  wait "$ORPHAN_HEARTBEAT_LAUNCHER_PID" 2>/dev/null || true
+  exit 1
+fi
+cleanup_orphaned_task_heartbeats
+wait "$ORPHAN_HEARTBEAT_LAUNCHER_PID" 2>/dev/null || true
+if task_process_is_running "$ORPHAN_HEARTBEAT_PID" || task_process_is_running "$ORPHAN_HEARTBEAT_CHILD_PID"; then
+  echo "FAIL: orphan heartbeat cleanup left a process alive" >&2
+  kill -KILL "$ORPHAN_HEARTBEAT_PID" "$ORPHAN_HEARTBEAT_CHILD_PID" 2>/dev/null || true
+  exit 1
+fi
+if flock -n "$ORPHAN_LOCK_FILE" -c true 2>/dev/null; then
+  echo "FAIL: orphan cleanup released the parent's dispatcher lock" >&2
+  exit 1
+fi
+flock -u 210
+exec 210>&-
+echo "PASS: startup cleanup reaps orphan heartbeat trees without releasing another owner's lock"
+
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES

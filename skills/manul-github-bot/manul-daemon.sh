@@ -1011,8 +1011,97 @@ terminate_all_task_executors() {
   done < <(list_task_executor_ids)
 }
 
-# A queued/terminal task must not retain a detached executor from an earlier
-# attempt. Running tasks are left alone unless stale-task recovery claimed them.
+# Validate that a recorded heartbeat PID still belongs to a Manul loop or is
+# explicitly holding the dispatcher lock. This prevents killing an unrelated
+# process if the PID from an old PID file has been reused by the OS.
+is_manul_heartbeat_process() {
+  local pid="$1" cmdline fd_target daemon_pid worker_file worker_pid
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+
+  daemon_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [ "$pid" = "$daemon_pid" ] && return 1
+  for worker_file in "$MANUL_DIR"/worker-*.pid; do
+    [ -f "$worker_file" ] || continue
+    worker_pid="$(cat "$worker_file" 2>/dev/null || true)"
+    [ "$pid" = "$worker_pid" ] && return 1
+  done
+
+  if [[ "$cmdline" == *manul-daemon.sh* && "$cmdline" == *loop* ]]; then
+    return 0
+  fi
+  fd_target="$(readlink "/proc/$pid/fd/210" 2>/dev/null || true)"
+  [ "$fd_target" = "$TASK_LOCK_FILE" ]
+}
+
+terminate_task_heartbeat() {
+  local comment_id="$1"
+  local pid_file="$MANUL_DIR/task-$comment_id.heartbeat.pid"
+  local heartbeat_pid="" args="" process_pid wait_attempt alive forced=0
+  local descendants=()
+
+  [ -f "$pid_file" ] || return 0
+  heartbeat_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if ! [[ "$heartbeat_pid" =~ ^[0-9]+$ ]] || [ "$heartbeat_pid" -le 1 ] || ! kill -0 "$heartbeat_pid" 2>/dev/null; then
+    rm -f "$pid_file" 2>/dev/null || true
+    return 0
+  fi
+
+  if ! is_manul_heartbeat_process "$heartbeat_pid"; then
+    log "WARN: refusing to terminate PID $heartbeat_pid from heartbeat file for task $comment_id; process identity does not match"
+    return 1
+  fi
+
+  mapfile -t descendants < <(task_descendant_pids "$heartbeat_pid")
+  args="$(ps -o args= -p "$heartbeat_pid" 2>/dev/null || true)"
+  log "terminating heartbeat process tree for task $comment_id (pid=$heartbeat_pid descendants=${#descendants[@]})"
+
+  for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
+    kill -TERM "${descendants[$wait_attempt]}" 2>/dev/null || true
+  done
+  kill -TERM "$heartbeat_pid" 2>/dev/null || true
+
+  alive=1
+  for ((wait_attempt=0; wait_attempt<20; wait_attempt++)); do
+    alive=0
+    for process_pid in "${descendants[@]}" "$heartbeat_pid"; do
+      if task_process_is_running "$process_pid"; then
+        alive=1
+        break
+      fi
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep 0.1
+  done
+
+  if [ "$alive" -eq 1 ]; then
+    forced=1
+    log "WARN: heartbeat process tree for $comment_id did not stop after TERM; sending KILL"
+    for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
+      process_pid="${descendants[$wait_attempt]}"
+      task_process_is_running "$process_pid" && kill -KILL "$process_pid" 2>/dev/null || true
+    done
+    kill -KILL "$heartbeat_pid" 2>/dev/null || true
+  fi
+
+  rm -f "$pid_file" 2>/dev/null || true
+  lc_log "HEARTBEAT_REAPED" "task=$comment_id pid=$heartbeat_pid descendants=${#descendants[@]} forced=$forced"
+}
+
+terminate_all_task_heartbeats() {
+  local pid_file base task_id
+  for pid_file in "$MANUL_DIR"/task-*.heartbeat.pid; do
+    [ -f "$pid_file" ] || continue
+    base="${pid_file##*/}"
+    task_id="${base#task-}"
+    task_id="${task_id%.heartbeat.pid}"
+    [ -n "$task_id" ] || continue
+    terminate_task_heartbeat "$task_id" || true
+  done
+}
+
+# A queued/terminal task must not retain a detached executor or heartbeat from
+# an earlier attempt. Running tasks are left alone unless recovery claimed them.
 cleanup_orphaned_task_executors() {
   local task_id safe_task_id task_status
   while IFS= read -r task_id; do
@@ -1024,6 +1113,23 @@ cleanup_orphaned_task_executors() {
       terminate_task_executor "$task_id"
     fi
   done < <(list_task_executor_ids)
+}
+
+cleanup_orphaned_task_heartbeats() {
+  local pid_file base task_id safe_task_id task_state
+  for pid_file in "$MANUL_DIR"/task-*.heartbeat.pid; do
+    [ -f "$pid_file" ] || continue
+    base="${pid_file##*/}"
+    task_id="${base#task-}"
+    task_id="${task_id%.heartbeat.pid}"
+    [ -n "$task_id" ] || continue
+    safe_task_id="$(sql_escape "$task_id")"
+    task_state="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    if [ "$task_state" != "running" ]; then
+      log "cleanup_orphaned_task_heartbeats: terminating heartbeat for task $task_id (status=${task_state:-missing})"
+      terminate_task_heartbeat "$task_id" || true
+    fi
+  done
 }
 
 stop_heartbeat() {
@@ -1201,9 +1307,9 @@ stop() {
   # answer still clears a stale marker left by a previous crash.
   rm -f "$MANUL_DIR/.enabled"
 
-  # Executors have their own setsid session, separate from the worker group.
-  # Stop them explicitly, including orphaned processes whose PID files were
-  # deleted by an older stop implementation.
+  # Helpers can survive an old worker even if its PID marker has been removed.
+  # Reap heartbeat subtrees and isolated agent executors before stopping workers.
+  terminate_all_task_heartbeats
   terminate_all_task_executors
 
   if [ ! -f "$PID_FILE" ]; then
@@ -3510,9 +3616,10 @@ loop() {
 
   # Recover any stale tasks from previous crashes/deadlocks.
   recover_stale_tasks
-  # A recovered task can already be queued while a detached executor remains
-  # alive (including from older versions that deleted its PID file).
+  # A recovered task can already be queued while detached children remain
+  # alive from a prior worker, including heartbeats/executors from older versions.
   cleanup_orphaned_task_executors
+  cleanup_orphaned_task_heartbeats
 
   # Source workspace manager
   source "$MANUL_DIR/workspace-manager.sh"
