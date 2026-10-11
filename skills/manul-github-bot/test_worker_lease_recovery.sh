@@ -167,6 +167,35 @@ if task_process_is_running "$QUEUED_EXECUTOR_PID" || task_process_is_running "$Q
 fi
 echo "PASS: startup cleanup terminates executors for queued tasks"
 
+# 0c) The heartbeat is a long-lived background child and must not inherit the
+# dispatcher flock, otherwise it can prevent a new worker from dispatching.
+HEARTBEAT_LOCK_FILE="$MANUL_DIR/state/locks/task-dispatch.flock"
+exec 210>"$HEARTBEAT_LOCK_FILE"
+flock -n 210 || { echo "FAIL: could not acquire lock for heartbeat FD test" >&2; exit 1; }
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('heartbeat-fd-test','$REPO',78,'https://github.com/$REPO/issues/78','running',1,$CURRENT_TEST_PID,'heartbeat-fd-token');"
+HEARTBEAT_INTERVAL=60
+start_heartbeat "heartbeat-fd-test" "$CURRENT_TEST_PID" "heartbeat-fd-token"
+HEARTBEAT_PID="${HEARTBEAT_PIDS[heartbeat-fd-test]:-}"
+if ! [[ "$HEARTBEAT_PID" =~ ^[0-9]+$ ]] || [ "$HEARTBEAT_PID" -le 0 ] || ! kill -0 "$HEARTBEAT_PID" 2>/dev/null; then
+  echo "FAIL: heartbeat process did not start" >&2
+  exit 1
+fi
+if [ -e "/proc/$HEARTBEAT_PID/fd/210" ]; then
+  echo "FAIL: heartbeat inherited task-dispatch lock FD 210" >&2
+  ls -l "/proc/$HEARTBEAT_PID/fd/210" >&2 || true
+  stop_heartbeat "heartbeat-fd-test"
+  exit 1
+fi
+if flock -n "$HEARTBEAT_LOCK_FILE" -c true 2>/dev/null; then
+  echo "FAIL: parent lost dispatcher lock during heartbeat test" >&2
+  stop_heartbeat "heartbeat-fd-test"
+  exit 1
+fi
+stop_heartbeat "heartbeat-fd-test"
+flock -u 210
+exec 210>&-
+echo "PASS: heartbeat does not inherit FD 210 and parent retains dispatcher lock"
+
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES

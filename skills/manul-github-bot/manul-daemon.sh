@@ -828,7 +828,9 @@ start_heartbeat() {
       fi
       sleep "$HEARTBEAT_INTERVAL"
     done
-  ) &
+  # The dispatcher owns FD 210 until dispatch() finishes. This helper
+  # may outlive the worker during shutdown/recovery, so never inherit the lock.
+  ) 210>&- &
   local heartbeat_pid=$!
   echo "$heartbeat_pid" > "$pid_file" 2>/dev/null || true
   HEARTBEAT_PIDS["$comment_id"]=$heartbeat_pid
