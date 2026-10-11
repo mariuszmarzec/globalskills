@@ -17,6 +17,7 @@
     "coder-expert",
     "reviewer",
     "reviewer-expert",
+    "reviewer-adversarial",
     "debugger",
     "debugger-expert",
     "researcher",
