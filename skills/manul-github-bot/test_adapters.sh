@@ -237,6 +237,1072 @@ MOCK
 # ---------------------------------------------------------------------------
 # 7. OpenCode success — real CLI shape + text normalization
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 15. OpenCode marker extraction ignores non-text/tool payloads
+# ---------------------------------------------------------------------------
+test_opencode_marker_text_is_not_synthesized_from_tool_docs() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
+printf '%s\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-marker-docs --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Tool docs mentioning user-decision markers do not override TASK_DONE"
+  [ "$(grep -c '^TASK_DONE' "$tmp/stdout")" -eq 1 ] \
+    && ok "TASK_DONE remains the only completion marker" \
+    || fail "Unexpected TASK_DONE count: $(cat "$tmp/stdout")"
+  ! grep -qE '^TASK_NEEDS_USER_BEGIN$|^TASK_NEEDS_USER_END
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_success","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_success","part":{"type":"text","text":"TASK_DONE opencode completed"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_success","part":{"type":"step-finish"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  : >"$tmp/stdout"
+  : >"$tmp/stderr"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
+    MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
+      --agent build --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenCodeAdapter completes JSON-mode TASK_DONE"
+  grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
+  grep -q -- '--dir '"$tmp" "$tmp/args" && ok "OpenCodeAdapter passes workspace with --dir" || fail "OpenCodeAdapter did not pass --dir workspace"
+  grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
+  grep -q '^TASK_DONE opencode completed$' "$tmp/stdout" \
+    && ok "OpenCodeAdapter normalizes text events to task output" \
+    || fail "OpenCodeAdapter lost TASK_DONE marker"
+  printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_success' \
+    && ok "OpenCodeAdapter returns runtime session ID" \
+    || fail "OpenCodeAdapter did not return session ID"
+}
+
+# ---------------------------------------------------------------------------
+# 8. OpenCode normal exit without TASK_DONE retains the session for continuation
+# ---------------------------------------------------------------------------
+test_opencode_marker_text_is_not_synthesized_from_tool_docs() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
+printf '%s\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-marker-docs --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Tool documentation mentioning user-decision markers does not override TASK_DONE"
+  [ "$(grep -c '^TASK_DONE' "$tmp/stdout")" -eq 1 ] \
+    && ok "TASK_DONE remains the only completion marker" \
+    || fail "Unexpected TASK_DONE count: $(cat "$tmp/stdout")"
+  ! grep -q '^TASK_NEEDS_USER_BEGIN$\|^TASK_NEEDS_USER_END
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_no_marker","error":{"message":"maximum steps reached"}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "NEEDS_CONTINUATION" "OpenCode normal step-boundary exit without TASK_DONE requests continuation"
+  [ "$rc" -eq 1 ] && ok "OpenCode no-marker continuation returns retryable rc=1" || fail "OpenCode no-marker continuation rc=$rc"
+  printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_no_marker' \
+    && ok "OpenCode no-marker continuation retains session ID" \
+    || fail "OpenCode no-marker continuation lost session ID"
+}
+
+# ---------------------------------------------------------------------------
+# 8. OpenCode normal stop without TASK_DONE
+# ---------------------------------------------------------------------------
+test_opencode_stop_without_marker() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_stop","part":{"type":"text","text":"The file is inconsistent. Let me rewrite it cleanly:"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1100,"sessionID":"ses_stop","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-stop --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode normal stop without TASK_DONE is a real failure"
+  [ "$rc" -eq 1 ] && ok "OpenCode marker-missing stop returns rc=1" || fail "OpenCode marker-missing stop rc=$rc"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE'     && ok "OpenCode marker-missing stop gets RUNTIME_FAILURE"     || fail "OpenCode marker-missing stop failure_code was not RUNTIME_FAILURE"
+}
+
+# ---------------------------------------------------------------------------
+# 9. OpenCode failure
+# ---------------------------------------------------------------------------
+test_opencode_failure() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
+printf '%s\n' '! permission requested: external_directory (/tmp/*); auto-rejecting.' >&2
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-2 --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "FAILED" "OpenCodeAdapter maps non-step-limit failure"
+  printf '%s' "$out" | jq -r '.summary' | grep -q 'error=provider failed' \
+    && ok "OpenCodeAdapter surfaces structured runtime error in summary" \
+    || fail "OpenCodeAdapter did not surface runtime error message"
+  printf '%s' "$out" | jq -r '.diagnostics.error_type' | grep -qx 'ProviderError' \
+    && ok "OpenCodeAdapter preserves runtime error type" \
+    || fail "OpenCodeAdapter did not preserve runtime error type"
+  printf '%s' "$out" | jq -r '.diagnostics.error_source' | grep -qx 'runtime_jsonl' \
+    && ok "OpenCodeAdapter identifies runtime JSONL as error source" \
+    || fail "OpenCodeAdapter reported wrong error source"
+  [ -f "$tmp/runtime/logs/tasks/task-oc-2.attempt-1.opencode.jsonl" ] \
+    && ok "OpenCodeAdapter retains raw JSONL diagnostic artifact" \
+    || fail "OpenCodeAdapter deleted raw JSONL diagnostic artifact"
+   grep -Fq '! permission requested: external_directory (/tmp/*); auto-rejecting.' "$tmp/stderr" \
+    && ok "OpenCodeAdapter preserves stderr permission diagnostics" \
+    || fail "OpenCodeAdapter lost stderr permission diagnostics"
+}
+
+# ---------------------------------------------------------------------------
+# 9. OpenCode missing binary
+# ---------------------------------------------------------------------------
+test_opencode_missing() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  echo "Do the task" >"$tmp/prompt"
+  local out rc
+  out="$(PATH="/usr/bin:/bin" OPENCODE_BIN="" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-3 --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  [ "$rc" -eq 127 ] && ok "OpenCodeAdapter missing binary rc=127" || fail "OpenCodeAdapter missing binary rc=$rc"
+}
+
+# ---------------------------------------------------------------------------
+# 10. OpenCode permission-blocked tool call
+# ---------------------------------------------------------------------------
+test_opencode_permission_blocked() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s
+' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc failure_code error_type
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-perm --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode permission rejection is a failed execution"
+  failure_code="$(printf '%s' "$out" | jq -r '.failure_code // empty')"
+  error_type="$(printf '%s' "$out" | jq -r '.diagnostics.error_type // empty')"
+  [ "$failure_code" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection gets RUNTIME_PERMISSION_BLOCKED"     || fail "Permission rejection failure_code=$failure_code"
+  [ "$error_type" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection preserves classified diagnostic"     || fail "Permission rejection error_type=$error_type"
+  [ "$rc" -eq 1 ] && ok "OpenCode permission rejection remains retryable"     || fail "Permission rejection rc=$rc"
+}
+
+# ---------------------------------------------------------------------------
+# 10. OpenCode continuation reuses the exact same session
+# ---------------------------------------------------------------------------
+test_opencode_continuation() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
+has_session=false
+for arg in "$@"; do
+  [ "$arg" = "--session" ] && has_session=true
+done
+if $has_session; then
+  printf '%s\n' '{"type":"text","timestamp":2100,"sessionID":"ses_cont","part":{"type":"text","text":"TASK_DONE continued successfully"}}'
+  exit 0
+fi
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_cont","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"error","timestamp":1500,"sessionID":"ses_cont","error":{"message":"maximum steps reached"}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local first rc1 sid
+  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
+  rc1=$?
+  sid="$(printf '%s' "$first" | jq -r '.session_id')"
+  assert_json_status "$first" "NEEDS_CONTINUATION" "OpenCodeAdapter detects step-limit continuation"
+  [ "$rc1" -eq 1 ] && ok "OpenCodeAdapter continuation is retryable" || fail "OpenCodeAdapter continuation rc=$rc1"
+  [ "$sid" = "ses_cont" ] && ok "OpenCodeAdapter exposes continuation session ID" || fail "Continuation session ID=$sid"
+
+  local second
+  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 2 --timeout 30 --session-id "$sid"       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
+  assert_json_status "$second" "COMPLETED" "OpenCodeAdapter resumes the same session"
+  grep -q -- "--session $sid" "$tmp/args"     && ok "OpenCode continuation sends the persisted session ID"     || fail "OpenCode continuation did not reuse session ID"
+  [ "$(grep -c -- '--agent coder' "$tmp/args")" -eq 2 ] \
+    && ok "OpenCode continuation preserves the selected role across both attempts" \
+    || fail "OpenCode continuation lost the selected role on one attempt"
+  grep -q 'Continue exactly where you left off' "$tmp/args"     && ok "OpenCode continuation uses a compact continuation prompt"     || fail "OpenCode continuation replayed the full task prompt"
+  grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2"     && ok "OpenCode continuation produces the completion marker"     || fail "OpenCode continuation lost TASK_DONE"
+}
+# ---------------------------------------------------------------------------
+# 11. AgentExecutor dispatch
+# ---------------------------------------------------------------------------
+test_agent_executor_dispatch() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+}
+
+# ---------------------------------------------------------------------------
+# 12. Default/config runtime selection
+# ---------------------------------------------------------------------------
+test_runtime_selection() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' >"$tmp/runtime/config.json"
+
+  local runtime
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode|openclaw" ] \
+    && ok "manul-paths reads automatic and role runtimes from config" \
+    || fail "manul-paths ignored runtime settings (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw|opencode" ] \
+    && ok "OpenClaw stays the default automatic runtime and OpenCode the role runtime" \
+    || fail "Default runtimes changed unexpectedly: $runtime"
+
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "ROLE_RUNTIME environment override takes precedence over roleRuntime config" \
+    || fail "ROLE_RUNTIME override did not take precedence (got $runtime)"
+}
+
+# ---------------------------------------------------------------------------
+# 13. Unknown runtime fails closed
+# ---------------------------------------------------------------------------
+test_unknown_runtime() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local rc err
+  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
+  rc=$?
+  err="$(cat "$tmp/err" 2>/dev/null || true)"
+  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
+    && ok "Unknown runtime is rejected before dispatch" \
+    || fail "Unknown runtime guard rc=$rc err=$err"
+}
+
+# ---------------------------------------------------------------------------
+# 14. Controller honors caller-supplied stdout path
+# ---------------------------------------------------------------------------
+test_controller_stdout_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+sleep 5
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
+  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
+    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
+    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
+
+  # Mock AgentExecutor at the shell-function boundary so the controller test
+  # isolates the output-path logic.
+  local out
+  out="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/agent-execution-controller.sh"
+    AgentExecutor.execute() {
+      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
+      return 124
+    }
+    AgentExecutionController.execute "$2"
+  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
+}
+
+test_opencode_adapter_syntax() {
+  local tmp rc err
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  bash -n "$SCRIPT_DIR/opencode-adapter.sh" 2>"$tmp/opencode-adapter-syntax.err"
+  rc=$?
+  err="$(cat "$tmp/opencode-adapter-syntax.err" 2>/dev/null || true)"
+  if [ "$rc" -eq 0 ]; then
+    ok "OpenCode adapter passes bash syntax validation"
+  else
+    fail "OpenCode adapter has shell syntax errors: $err"
+  fi
+}
+
+echo "=== Adapter Unit Tests ==="
+echo "Canonical source: $SCRIPT_DIR"
+
+test_opencode_adapter_syntax
+
+test_process_runner_mock
+test_process_runner_cwd_env
+test_openclaw_success
+test_openclaw_no_marker
+test_openclaw_failure
+test_openclaw_missing
+test_openclaw_timeout
+test_opencode_success
+test_opencode_marker_text_is_not_synthesized_from_tool_docs
+test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
+test_opencode_failure
+test_opencode_permission_blocked
+test_opencode_missing
+test_opencode_continuation
+test_agent_executor_dispatch
+test_runtime_selection
+test_unknown_runtime
+test_controller_stdout_path
+
+echo
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0
+
+# ---------------------------------------------------------------------------
+# 11. AgentExecutor dispatch
+# ---------------------------------------------------------------------------
+test_agent_executor_dispatch() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+}
+
+# ---------------------------------------------------------------------------
+# 12. Default/config runtime selection
+# ---------------------------------------------------------------------------
+test_runtime_selection() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode"}}' >"$tmp/runtime/config.json"
+
+  local runtime
+  runtime="$(MANUL_DIR="$tmp/runtime" unset AGENT_RUNTIME MANUL_AGENT_RUNTIME; \
+    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "manul-paths reads automation.agentRuntime from config" \
+    || fail "manul-paths ignored automation.agentRuntime (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw" ] \
+    && ok "OpenClaw remains the default runtime" \
+    || fail "Default runtime changed unexpectedly: $runtime"
+}
+
+# ---------------------------------------------------------------------------
+# 13. Unknown runtime fails closed
+# ---------------------------------------------------------------------------
+test_unknown_runtime() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local rc err
+  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
+  rc=$?
+  err="$(cat "$tmp/err" 2>/dev/null || true)"
+  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
+    && ok "Unknown runtime is rejected before dispatch" \
+    || fail "Unknown runtime guard rc=$rc err=$err"
+}
+
+# ---------------------------------------------------------------------------
+# 14. Controller honors caller-supplied stdout path
+# ---------------------------------------------------------------------------
+test_controller_stdout_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+sleep 5
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
+  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
+    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
+    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
+
+  # Mock AgentExecutor at the shell-function boundary so the controller test
+  # isolates the output-path logic.
+  local out
+  out="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/agent-execution-controller.sh"
+    AgentExecutor.execute() {
+      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
+      return 124
+    }
+    AgentExecutionController.execute "$2"
+  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
+}
+
+echo "=== Adapter Unit Tests ==="
+echo "Canonical source: $SCRIPT_DIR"
+
+test_process_runner_mock
+test_process_runner_cwd_env
+test_openclaw_success
+test_openclaw_no_marker
+test_openclaw_failure
+test_openclaw_missing
+test_openclaw_timeout
+test_canonical_agent_modes_support_direct_invocation
+test_opencode_success
+test_opencode_marker_text_is_not_synthesized_from_tool_docs
+test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
+test_opencode_failure
+test_opencode_permission_blocked
+test_opencode_missing
+test_opencode_continuation
+test_agent_executor_dispatch
+test_runtime_selection
+test_unknown_runtime
+test_controller_stdout_path
+
+echo
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0
+ "$tmp/stdout" \
+    && ok "Marker names in tool payload are not synthesized into output" \
+    || fail "Adapter synthesized TASK_NEEDS_USER markers from tool payload"
+}
+
+test_opencode_no_marker_continuation() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_no_marker","error":{"message":"maximum steps reached"}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "NEEDS_CONTINUATION" "OpenCode normal step-boundary exit without TASK_DONE requests continuation"
+  [ "$rc" -eq 1 ] && ok "OpenCode no-marker continuation returns retryable rc=1" || fail "OpenCode no-marker continuation rc=$rc"
+  printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_no_marker' \
+    && ok "OpenCode no-marker continuation retains session ID" \
+    || fail "OpenCode no-marker continuation lost session ID"
+}
+
+# ---------------------------------------------------------------------------
+# 8. OpenCode normal stop without TASK_DONE
+# ---------------------------------------------------------------------------
+test_opencode_stop_without_marker() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_stop","part":{"type":"text","text":"The file is inconsistent. Let me rewrite it cleanly:"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1100,"sessionID":"ses_stop","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-stop --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode normal stop without TASK_DONE is a real failure"
+  [ "$rc" -eq 1 ] && ok "OpenCode marker-missing stop returns rc=1" || fail "OpenCode marker-missing stop rc=$rc"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE'     && ok "OpenCode marker-missing stop gets RUNTIME_FAILURE"     || fail "OpenCode marker-missing stop failure_code was not RUNTIME_FAILURE"
+}
+
+# ---------------------------------------------------------------------------
+# 9. OpenCode failure
+# ---------------------------------------------------------------------------
+test_opencode_failure() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
+printf '%s\n' '! permission requested: external_directory (/tmp/*); auto-rejecting.' >&2
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-2 --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "FAILED" "OpenCodeAdapter maps non-step-limit failure"
+  printf '%s' "$out" | jq -r '.summary' | grep -q 'error=provider failed' \
+    && ok "OpenCodeAdapter surfaces structured runtime error in summary" \
+    || fail "OpenCodeAdapter did not surface runtime error message"
+  printf '%s' "$out" | jq -r '.diagnostics.error_type' | grep -qx 'ProviderError' \
+    && ok "OpenCodeAdapter preserves runtime error type" \
+    || fail "OpenCodeAdapter did not preserve runtime error type"
+  printf '%s' "$out" | jq -r '.diagnostics.error_source' | grep -qx 'runtime_jsonl' \
+    && ok "OpenCodeAdapter identifies runtime JSONL as error source" \
+    || fail "OpenCodeAdapter reported wrong error source"
+  [ -f "$tmp/runtime/logs/tasks/task-oc-2.attempt-1.opencode.jsonl" ] \
+    && ok "OpenCodeAdapter retains raw JSONL diagnostic artifact" \
+    || fail "OpenCodeAdapter deleted raw JSONL diagnostic artifact"
+   grep -Fq '! permission requested: external_directory (/tmp/*); auto-rejecting.' "$tmp/stderr" \
+    && ok "OpenCodeAdapter preserves stderr permission diagnostics" \
+    || fail "OpenCodeAdapter lost stderr permission diagnostics"
+}
+
+# ---------------------------------------------------------------------------
+# 9. OpenCode missing binary
+# ---------------------------------------------------------------------------
+test_opencode_missing() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  echo "Do the task" >"$tmp/prompt"
+  local out rc
+  out="$(PATH="/usr/bin:/bin" OPENCODE_BIN="" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-3 --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  [ "$rc" -eq 127 ] && ok "OpenCodeAdapter missing binary rc=127" || fail "OpenCodeAdapter missing binary rc=$rc"
+}
+
+# ---------------------------------------------------------------------------
+# 10. OpenCode permission-blocked tool call
+# ---------------------------------------------------------------------------
+test_opencode_permission_blocked() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s
+' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc failure_code error_type
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id oc-perm --prompt "$tmp/prompt" --workspace "$tmp"       --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "FAILED" "OpenCode permission rejection is a failed execution"
+  failure_code="$(printf '%s' "$out" | jq -r '.failure_code // empty')"
+  error_type="$(printf '%s' "$out" | jq -r '.diagnostics.error_type // empty')"
+  [ "$failure_code" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection gets RUNTIME_PERMISSION_BLOCKED"     || fail "Permission rejection failure_code=$failure_code"
+  [ "$error_type" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection preserves classified diagnostic"     || fail "Permission rejection error_type=$error_type"
+  [ "$rc" -eq 1 ] && ok "OpenCode permission rejection remains retryable"     || fail "Permission rejection rc=$rc"
+}
+
+# ---------------------------------------------------------------------------
+# 10. OpenCode continuation reuses the exact same session
+# ---------------------------------------------------------------------------
+test_opencode_continuation() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
+has_session=false
+for arg in "$@"; do
+  [ "$arg" = "--session" ] && has_session=true
+done
+if $has_session; then
+  printf '%s\n' '{"type":"text","timestamp":2100,"sessionID":"ses_cont","part":{"type":"text","text":"TASK_DONE continued successfully"}}'
+  exit 0
+fi
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_cont","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"error","timestamp":1500,"sessionID":"ses_cont","error":{"message":"maximum steps reached"}}'
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local first rc1 sid
+  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
+  rc1=$?
+  sid="$(printf '%s' "$first" | jq -r '.session_id')"
+  assert_json_status "$first" "NEEDS_CONTINUATION" "OpenCodeAdapter detects step-limit continuation"
+  [ "$rc1" -eq 1 ] && ok "OpenCodeAdapter continuation is retryable" || fail "OpenCodeAdapter continuation rc=$rc1"
+  [ "$sid" = "ses_cont" ] && ok "OpenCodeAdapter exposes continuation session ID" || fail "Continuation session ID=$sid"
+
+  local second
+  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 2 --timeout 30 --session-id "$sid"       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
+  assert_json_status "$second" "COMPLETED" "OpenCodeAdapter resumes the same session"
+  grep -q -- "--session $sid" "$tmp/args"     && ok "OpenCode continuation sends the persisted session ID"     || fail "OpenCode continuation did not reuse session ID"
+  [ "$(grep -c -- '--agent coder' "$tmp/args")" -eq 2 ] \
+    && ok "OpenCode continuation preserves the selected role across both attempts" \
+    || fail "OpenCode continuation lost the selected role on one attempt"
+  grep -q 'Continue exactly where you left off' "$tmp/args"     && ok "OpenCode continuation uses a compact continuation prompt"     || fail "OpenCode continuation replayed the full task prompt"
+  grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2"     && ok "OpenCode continuation produces the completion marker"     || fail "OpenCode continuation lost TASK_DONE"
+}
+# ---------------------------------------------------------------------------
+# 11. AgentExecutor dispatch
+# ---------------------------------------------------------------------------
+test_agent_executor_dispatch() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+}
+
+# ---------------------------------------------------------------------------
+# 12. Default/config runtime selection
+# ---------------------------------------------------------------------------
+test_runtime_selection() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' >"$tmp/runtime/config.json"
+
+  local runtime
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode|openclaw" ] \
+    && ok "manul-paths reads automatic and role runtimes from config" \
+    || fail "manul-paths ignored runtime settings (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw|opencode" ] \
+    && ok "OpenClaw stays the default automatic runtime and OpenCode the role runtime" \
+    || fail "Default runtimes changed unexpectedly: $runtime"
+
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME="" \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "ROLE_RUNTIME environment override takes precedence over roleRuntime config" \
+    || fail "ROLE_RUNTIME override did not take precedence (got $runtime)"
+}
+
+# ---------------------------------------------------------------------------
+# 13. Unknown runtime fails closed
+# ---------------------------------------------------------------------------
+test_unknown_runtime() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local rc err
+  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
+  rc=$?
+  err="$(cat "$tmp/err" 2>/dev/null || true)"
+  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
+    && ok "Unknown runtime is rejected before dispatch" \
+    || fail "Unknown runtime guard rc=$rc err=$err"
+}
+
+# ---------------------------------------------------------------------------
+# 14. Controller honors caller-supplied stdout path
+# ---------------------------------------------------------------------------
+test_controller_stdout_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+sleep 5
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
+  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
+    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
+    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
+
+  # Mock AgentExecutor at the shell-function boundary so the controller test
+  # isolates the output-path logic.
+  local out
+  out="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/agent-execution-controller.sh"
+    AgentExecutor.execute() {
+      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
+      return 124
+    }
+    AgentExecutionController.execute "$2"
+  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
+}
+
+test_opencode_adapter_syntax() {
+  local tmp rc err
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  bash -n "$SCRIPT_DIR/opencode-adapter.sh" 2>"$tmp/opencode-adapter-syntax.err"
+  rc=$?
+  err="$(cat "$tmp/opencode-adapter-syntax.err" 2>/dev/null || true)"
+  if [ "$rc" -eq 0 ]; then
+    ok "OpenCode adapter passes bash syntax validation"
+  else
+    fail "OpenCode adapter has shell syntax errors: $err"
+  fi
+}
+
+echo "=== Adapter Unit Tests ==="
+echo "Canonical source: $SCRIPT_DIR"
+
+test_opencode_adapter_syntax
+
+test_process_runner_mock
+test_process_runner_cwd_env
+test_openclaw_success
+test_openclaw_no_marker
+test_openclaw_failure
+test_openclaw_missing
+test_openclaw_timeout
+test_opencode_success
+test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
+test_opencode_failure
+test_opencode_permission_blocked
+test_opencode_missing
+test_opencode_continuation
+test_agent_executor_dispatch
+test_runtime_selection
+test_unknown_runtime
+test_controller_stdout_path
+
+echo
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0
+
+# ---------------------------------------------------------------------------
+# 11. AgentExecutor dispatch
+# ---------------------------------------------------------------------------
+test_agent_executor_dispatch() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+}
+
+# ---------------------------------------------------------------------------
+# 12. Default/config runtime selection
+# ---------------------------------------------------------------------------
+test_runtime_selection() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode"}}' >"$tmp/runtime/config.json"
+
+  local runtime
+  runtime="$(MANUL_DIR="$tmp/runtime" unset AGENT_RUNTIME MANUL_AGENT_RUNTIME; \
+    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "opencode" ] \
+    && ok "manul-paths reads automation.agentRuntime from config" \
+    || fail "manul-paths ignored automation.agentRuntime (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw" ] \
+    && ok "OpenClaw remains the default runtime" \
+    || fail "Default runtime changed unexpectedly: $runtime"
+}
+
+# ---------------------------------------------------------------------------
+# 13. Unknown runtime fails closed
+# ---------------------------------------------------------------------------
+test_unknown_runtime() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local rc err
+  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
+    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
+  rc=$?
+  err="$(cat "$tmp/err" 2>/dev/null || true)"
+  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
+    && ok "Unknown runtime is rejected before dispatch" \
+    || fail "Unknown runtime guard rc=$rc err=$err"
+}
+
+# ---------------------------------------------------------------------------
+# 14. Controller honors caller-supplied stdout path
+# ---------------------------------------------------------------------------
+test_controller_stdout_path() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+sleep 5
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
+  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
+    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
+    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
+
+  # Mock AgentExecutor at the shell-function boundary so the controller test
+  # isolates the output-path logic.
+  local out
+  out="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/agent-execution-controller.sh"
+    AgentExecutor.execute() {
+      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
+      return 124
+    }
+    AgentExecutionController.execute "$2"
+  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
+}
+
+echo "=== Adapter Unit Tests ==="
+echo "Canonical source: $SCRIPT_DIR"
+
+test_process_runner_mock
+test_process_runner_cwd_env
+test_openclaw_success
+test_openclaw_no_marker
+test_openclaw_failure
+test_openclaw_missing
+test_openclaw_timeout
+test_opencode_success
+test_opencode_no_marker_continuation
+test_opencode_stop_without_marker
+test_opencode_failure
+test_opencode_permission_blocked
+test_opencode_missing
+test_opencode_continuation
+test_agent_executor_dispatch
+test_runtime_selection
+test_unknown_runtime
+test_controller_stdout_path
+
+echo
+echo "=== Results: $PASS passed, $FAIL failed ==="
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0
+ "$tmp/stdout" \
+    && ok "Tool payload marker names are not synthesized into output" \
+    || fail "Adapter synthesized TASK_NEEDS_USER markers from tool payload"
+}
+
+# ---------------------------------------------------------------------------
+# 16. Explicit canonical agents can be invoked directly by OpenCode CLI
+# ---------------------------------------------------------------------------
+test_canonical_agent_modes_support_direct_invocation() {
+  local repo_root agents_dir file mode
+  repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  agents_dir="$repo_root/agents"
+  local failed=0
+  for file in "$agents_dir"/*.md; do
+    [ -f "$file" ] || continue
+    mode="$(sed -n 's/^mode: *//p' "$file" | head -n 1)"
+    case "$(basename "$file")" in
+      orchestrator.md) [ "$mode" = "primary" ] ;;
+      *) [ "$mode" = "primary" ] ;;
+    esac
+    if [ "$?" -eq 0 ]; then
+      ok "$(basename "$file") uses direct-invocation mode"
+    else
+      fail "$(basename "$file") has mode=$mode; direct OpenCode invocation may fall back"
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
 test_opencode_success() {
   local tmp
   tmp="$(mktemp -d)"
