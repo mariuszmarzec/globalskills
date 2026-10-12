@@ -1,6 +1,6 @@
 ---
 description: Researches documentation, unknown libraries, APIs, frameworks, and patterns. Delivers distilled findings to other agents. Read-only.
-mode: primary
+mode: all
 model: litellm/gemini-3.1-flash-lite
 steps: 20
 permission:
