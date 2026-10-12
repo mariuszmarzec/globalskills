@@ -1,6 +1,6 @@
 ---
 description: Reviews implementations for bugs, edge cases, quality, architecture problems, and requirements compliance. Read-only — never modifies code.
-mode: primary
+mode: all
 model: litellm/deepseek-v4-flash-free
 steps: 30
 temperature: 0
