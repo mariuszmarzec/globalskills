@@ -1695,50 +1695,67 @@ pr_auto_create() {
 # /compare/... URL instead of a PR). It must NOT mask the requirement: when no
 # PR exists and autoCreatePr is false, the task still fails.
 # Verify an already-existing implementation PR when a retry's agent has
-# returned to the base branch without creating new commits. Never use the
-# agent's report comment as evidence: require a live GitHub PR whose body
-# explicitly identifies this exact task ID and whose base matches the task.
-# Sets VERIFIED_EXISTING_PR_BRANCH and VERIFIED_EXISTING_PR_URL on success.
+# returned to the base branch without creating new commits. Do not trust the
+# agent's report comment alone: require a real GitHub PR against the expected
+# base, a live remote head matching the PR SHA, and task/issue correlation.
+# Correlation is either the exact current task ID in the PR body or a previously
+# completed task for the same repository/issue whose persisted verified PR URL
+# matches this candidate. This supports retries that reach an existing deliverable
+# through a different trigger comment without weakening the normal branch guard.
 VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
 verify_existing_task_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
-  local pr_json
+  local safe_comment_id comment_url issue_num safe_repo prior_urls prior_urls_json
+  local pr_json verified verified_head_sha remote_head
+
   VERIFIED_EXISTING_PR_BRANCH=""
   VERIFIED_EXISTING_PR_URL=""
+  safe_comment_id="$(sql_escape "$comment_id")"
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
+  issue_num="$(printf '%s' "$comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
+  prior_urls_json='[]'
+  if [[ "$issue_num" =~ ^[0-9]+$ ]]; then
+    safe_repo="$(sql_escape "$repo")"
+    prior_urls="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue_num AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='';" 2>/dev/null || true)"
+    prior_urls_json="$(printf '%s\n' "$prior_urls" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
+  fi
+
   pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --json number,url,state,baseRefName,headRefName,body,headRefOid --limit 100 2>>"$LOG")" || {
     log "ERROR: verify_existing_task_pr: GitHub PR query failed for $repo task=$comment_id"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_failure"
     return 1
   }
 
-  # Require explicit task ownership in the generated PR description. A generic
-  # PR touching the same file is not sufficient proof that this task was done.
-  local verified
-  verified="$(printf '%s' "$pr_json" | jq -c --arg task "$comment_id" --arg base "$initial_base_branch" '
+  # A candidate must identify the current task explicitly, or match the PR URL
+  # persisted by an earlier completed task for this exact repository/issue.
+  verified="$(printf '%s' "$pr_json" | jq -c --arg task "$comment_id" --arg base "$initial_base_branch" --argjson priorUrls "$prior_urls_json" '
     if type != "array" then empty else
       map(select(.baseRefName == $base)
           | select(.headRefName != $base)
-          | select((.body // "") | contains("task " + $task))
-          | select((.headRefOid // "") != ""))
+          | select((.headRefOid // "") != "")
+          | select((.url // "") != "")
+          | select(((.body // "") | contains("task " + $task)) or (($priorUrls | index(.url)) != null)))
       | .[0] // empty
     end' 2>/dev/null)"
   [ -n "$verified" ] || {
-    log "verify_existing_task_pr: no PR bound to exact task=$comment_id base=$initial_base_branch"
+    log "verify_existing_task_pr: no PR correlated to task=$comment_id issue=${issue_num:-unknown} base=$initial_base_branch"
     return 1
   }
 
   VERIFIED_EXISTING_PR_BRANCH="$(printf '%s' "$verified" | jq -r '.headRefName // empty')"
   VERIFIED_EXISTING_PR_URL="$(printf '%s' "$verified" | jq -r '.url // empty')"
-  [ -n "$VERIFIED_EXISTING_PR_BRANCH" ] && [ -n "$VERIFIED_EXISTING_PR_URL" ] || return 1
+  verified_head_sha="$(printf '%s' "$verified" | jq -r '.headRefOid // empty')"
+  [ -n "$VERIFIED_EXISTING_PR_BRANCH" ] && [ -n "$VERIFIED_EXISTING_PR_URL" ] && [ -n "$verified_head_sha" ] || return 1
 
-  # Require that the candidate branch exists remotely. This prevents a stale
-  #/closed PR record from qualifying when its head ref was deleted.
-  if ! git -C "$workdir" ls-remote --heads origin "$VERIFIED_EXISTING_PR_BRANCH" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/$VERIFIED_EXISTING_PR_BRANCH"; then
-    log "verify_existing_task_pr: PR head branch is absent from origin: $VERIFIED_EXISTING_PR_BRANCH"
+  remote_head="$(git -C "$workdir" ls-remote --heads origin "$VERIFIED_EXISTING_PR_BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
+  if [ -z "$remote_head" ] || [ "$remote_head" != "$verified_head_sha" ]; then
+    log "verify_existing_task_pr: remote head mismatch for $VERIFIED_EXISTING_PR_BRANCH (remote=${remote_head:-missing} pr=$verified_head_sha)"
     VERIFIED_EXISTING_PR_BRANCH=""
     VERIFIED_EXISTING_PR_URL=""
     return 1
   fi
+
   log "verify_existing_task_pr: verified existing PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$initial_base_branch"
   return 0
 }
@@ -2498,37 +2515,42 @@ else
          fi
        fi
      elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
-      # IMPLEMENT work must normally finish on its own feature branch. If a
-      # retry discovers that the deliverable already exists, allow an explicit
-      # no-op only when GitHub independently confirms a real PR for this task
-      # and that PR's head branch is based on the expected initial base.
+      # IMPLEMENT work normally must finish on its own feature branch. A no-op
+      # on the base branch is accepted only when an existing PR for this same
+      # issue has been independently re-verified.
+      local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
-        if ! verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        if verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+          already_satisfied="true"
+          current_branch="$VERIFIED_EXISTING_PR_BRANCH"
+          log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
+          lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
+        else
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing task PR"
-          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch and no pre-existing task PR was verified"
+          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing task PR was verified"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
-        else
-          log "dispatch: task $COMMENT_ID accepted as already satisfied by a verified pre-existing PR"
-          lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$VERIFIED_EXISTING_PR_BRANCH base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
-          current_branch="$VERIFIED_EXISTING_PR_BRANCH"
         fi
       fi
-      if [ "$SUCCESS" = "true" ] && [ -z "$current_branch" ]; then
-        SUCCESS="false"
-        FAILURE_CODE="VERIFICATION_FAILED"
-        FAIL_REASON="Implementation task has no verified branch"
-      elif [ "$SUCCESS" = "true" ] && ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
-        SUCCESS="false"
-        FAILURE_CODE="VERIFICATION_FAILED"
-        FAIL_REASON="Implementation task completed without a verified PR from its task branch"
-        log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
-        lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
-      else
+
+      if [ "$SUCCESS" = "true" ] && [ "$already_satisfied" != "true" ]; then
+        if ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Implementation task completed without a verified PR from its task branch"
+          log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
+          lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
+        fi
+      fi
+      if [ "$SUCCESS" = "true" ]; then
         local verified_base
-        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if [ "$already_satisfied" = "true" ]; then
+          verified_base="$INITIAL_BASE_BRANCH"
+        else
+          verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        fi
         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
