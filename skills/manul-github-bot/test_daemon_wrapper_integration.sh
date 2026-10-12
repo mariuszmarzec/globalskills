@@ -800,6 +800,61 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
 
+# ─── Test Q: no-op retry on base is accepted only with a task-bound existing PR
+echo ""
+echo "=== Test Q: base-branch no-op requires independently verified task PR ==="
+WORKDIR_Q="$TEST_TMPDIR/workdir-q"
+mkdir -p "$WORKDIR_Q"
+git -C "$WORKDIR_Q" init -q
+git -C "$WORKDIR_Q" config user.email test@example.com
+git -C "$WORKDIR_Q" config user.name test
+printf 'initial\n' >"$WORKDIR_Q/README.md"
+git -C "$WORKDIR_Q" add README.md
+git -C "$WORKDIR_Q" commit -qm initial
+INITIAL_HEAD_Q="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
+git init --bare -q "$TEST_TMPDIR/origin-q.git"
+git -C "$WORKDIR_Q" remote add origin "$TEST_TMPDIR/origin-q.git"
+git -C "$WORKDIR_Q" push -q origin HEAD:main
+git -C "$WORKDIR_Q" checkout -q main
+git -C "$WORKDIR_Q" update-ref refs/remotes/origin/main "$INITIAL_HEAD_Q"
+
+printf '%s\n' '{"number":18,"url":"https://github.com/test/repo/pull/18","state":"OPEN","baseRefName":"main","headRefName":"feature/17-helloworld-java","headRefOid":"abc123","body":"Automatically created by Manul for task issue:6127115709."}' >"$FAKE_GH_PR_LIST"
+printf '%s %s\n' "feature/17-helloworld-java" "main" >>"$FAKE_GH_STATE"
+git -C "$WORKDIR_Q" fetch -q origin refs/heads/main:refs/remotes/origin/main 2>/dev/null || true
+
+# Override the GitHub query boundary with deterministic fixture data; all other
+# verifier code, including task correlation and remote-head validation, is real.
+gh() {
+  if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+    cat "$FAKE_GH_PR_LIST"
+    return 0
+  fi
+  command gh "$@"
+}
+export -f gh
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='issue:6127115709';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('issue:6127115709','test/repo',17,'https://github.com/test/repo/issues/17#issuecomment-6127115709','user','coder-cheap','implement helloworld.java','queued',3,$,'IMPLEMENT');" 2>/dev/null
+VERIFIED_EXISTING_PR_BRANCH=""
+VERIFIED_EXISTING_PR_URL=""
+if verify_existing_task_pr "test/repo" "issue:6127115709" "$WORKDIR_Q" "main"; then
+  if [ "$VERIFIED_EXISTING_PR_BRANCH" = "feature/17-helloworld-java" ] && [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/18" ]; then
+    echo "[OK] Test Q: verified task-bound pre-existing PR on base-branch no-op"
+  else
+    echo "FAIL: Test Q - unexpected verified PR: branch=$VERIFIED_EXISTING_PR_BRANCH url=$VERIFIED_EXISTING_PR_URL"
+    exit 1
+  fi
+else
+  echo "FAIL: Test Q - expected task-bound existing PR to be accepted"
+  exit 1
+fi
+
+# A different task ID must not inherit the same PR evidence.
+if verify_existing_task_pr "test/repo" "issue:unrelated-task" "$WORKDIR_Q" "main"; then
+  echo "FAIL: Test Q - unrelated task inherited pre-existing PR evidence"
+  exit 1
+fi
+echo "[OK] Test Q: pre-existing PR evidence is correlated to the exact task ID"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
