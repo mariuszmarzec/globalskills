@@ -1717,7 +1717,7 @@ verify_existing_task_pr() {
   prior_urls_json='[]'
   if [[ "$issue_num" =~ ^[0-9]+$ ]]; then
     safe_repo="$(sql_escape "$repo")"
-    prior_urls="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue_num AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='';" 2>/dev/null || true)"
+    prior_urls="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE repository='$safe_repo' AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='' AND (issueNumber=$issue_num OR commentUrl LIKE '%/issues/$issue_num#%' OR commentUrl LIKE '%/pull/$issue_num#%' OR commentUrl LIKE '%/issues/$issue_num' OR commentUrl LIKE '%/pull/$issue_num');" 2>/dev/null || true)"
     prior_urls_json="$(printf '%s\n' "$prior_urls" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
   fi
 
