@@ -802,10 +802,6 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
- "$tmp/stdout" \
-    && ok "Marker names in tool payload are not synthesized into output" \
-    || fail "Adapter synthesized TASK_NEEDS_USER markers from tool payload"
-}
 
 test_opencode_no_marker_continuation() {
   local tmp
@@ -1836,10 +1832,6 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
- "$tmp/stdout" \
-    && ok "Marker names in tool payload are not synthesized into output" \
-    || fail "Adapter synthesized TASK_NEEDS_USER markers from tool payload"
-}
 
 test_opencode_no_marker_continuation() {
   local tmp
