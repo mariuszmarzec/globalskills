@@ -7,8 +7,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export MANUL_DIR="$TMP/manul"
 mkdir -p "$MANUL_DIR"
-
-MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
+cat >"$MANUL_DIR/config.json" <<'JSON'
+{"automation":{"heartbeatInterval":60,"heartbeatTimeout":900,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
+JSON
+export MANUL_TESTING=true
+source "$SCRIPT_DIR/manul-daemon.sh"
 DB="$TMP/processed-comments.sqlite"
 LOG="$TMP/daemon.log"
 LIFECYCLE_LOG="$TMP/lifecycle.log"
