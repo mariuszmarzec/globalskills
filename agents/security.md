@@ -1,6 +1,6 @@
 ---
 description: Security review of auth, authorization, validation, injection, secrets, dependency vulnerabilities, and API security. Read-only analysis.
-mode: subagent
+mode: primary
 model: litellm/big-pickle
 steps: 40
 temperature: 0
