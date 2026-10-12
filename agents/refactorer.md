@@ -1,6 +1,6 @@
 ---
 description: Refactors code to improve structure, remove duplication, simplify, and improve maintainability without changing observable behavior.
-mode: subagent
+mode: primary
 model: litellm/groq-qwen3
 steps: 40
 temperature: 0.2
