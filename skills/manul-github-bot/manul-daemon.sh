@@ -1735,7 +1735,8 @@ verify_existing_task_pr() {
           | select(.headRefName != $base)
           | select((.headRefOid // "") != "")
           | select((.url // "") != "")
-          | select(((.body // "") | contains("task " + $task)) or (($priorUrls | index(.url)) != null)))
+          | (.url) as $candidateUrl
+          | select(((.body // "") | contains("task " + $task)) or (($priorUrls | index($candidateUrl)) != null)))
       | .[0] // empty
     end' 2>/dev/null)"
   [ -n "$verified" ] || {
