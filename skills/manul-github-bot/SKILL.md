@@ -322,11 +322,13 @@ The installer currently:
 - installs the watchdog cron;
 - installs the zsh shell integration.
 
-For OpenCode, the installer/repair path ensures the provider-owned global configuration
-contains `permission.external_directory["/tmp/**"] = "allow"` when an OpenCode
-configuration is available. Existing OpenCode settings are preserved and no broad
-permission bypass such as `--auto` is enabled. The provider configuration remains
-outside `~/.manul`.
+For OpenCode, the installer/repair path ensures the provider-owned configuration
+contains `permission.external_directory["/tmp/**"] = "allow"` and
+`permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"`
+when an OpenCode configuration is available. The Gradle rule is strictly scoped to
+the module cache (dependency artifacts such as JARs) and never the whole Gradle home.
+Existing OpenCode settings are preserved and no broad permission bypass such as
+`--auto` is enabled. The provider configuration remains outside `~/.manul`.
 
 The operator `.env` is runtime-owned and mode 600. It carries only the
 provider variables explicitly supported by the installer, such as custom

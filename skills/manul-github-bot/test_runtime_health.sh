@@ -1110,10 +1110,76 @@ else
   echo "$OC_OUTPUT"
 fi
 
+if [ "$OC_RC" -eq 0 ] && jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup adds Gradle dependency-cache allow rule"
+else
+  fail "OpenCode setup did not add Gradle dependency-cache allow rule (rc=$OC_RC)"
+  echo "$OC_OUTPUT"
+fi
+
 if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask"' "$OC_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup preserves unrelated provider configuration"
 else
   fail "OpenCode setup changed unrelated provider configuration"
+fi
+
+# The Gradle rule must be scoped to the module cache only, never the whole
+# Gradle home, which may hold credentials in gradle.properties.
+if jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and (.permission.external_directory["~/.gradle/**"] // "absent" | ( . != "allow" ))' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup scopes the Gradle rule to the module cache only"
+else
+  fail "OpenCode setup granted a broader Gradle rule than the module cache"
+fi
+
+# Explicit OPENCODE_CONFIG override is respected over default ~/.config/opencode/opencode.json.
+CUSTOM_OC_CONFIG="$OC_ROOT/custom-override/opencode.json"
+mkdir -p "$(dirname "$CUSTOM_OC_CONFIG")"
+cat >"$CUSTOM_OC_CONFIG" <<'JSON'
+{
+  "permission": {
+    "external_directory": {
+      "~/custom/**": "allow"
+    }
+  }
+}
+JSON
+set +e
+CUSTOM_OUTPUT="$(HOME="$OC_HOME" OPENCODE_CONFIG="$CUSTOM_OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
+CUSTOM_RC=$?
+set -e
+if [ "$CUSTOM_RC" -eq 0 ] && \
+   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/custom/**"] == "allow"' "$CUSTOM_OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup respects explicitly configured OPENCODE_CONFIG path"
+else
+  fail "OpenCode setup did not modify explicitly configured OPENCODE_CONFIG (rc=$CUSTOM_RC)"
+  echo "$CUSTOM_OUTPUT"
+fi
+
+# Default fallback: without explicit OPENCODE_CONFIG, $HOME/.config/opencode/opencode.json is modified.
+DEFAULT_FALLBACK_HOME="$OC_ROOT/default-fallback-home"
+DEFAULT_FALLBACK_CONFIG="$DEFAULT_FALLBACK_HOME/.config/opencode/opencode.json"
+mkdir -p "$(dirname "$DEFAULT_FALLBACK_CONFIG")"
+cat >"$DEFAULT_FALLBACK_CONFIG" <<'JSON'
+{
+  "permission": {
+    "external_directory": {
+      "~/fallback/**": "allow"
+    }
+  }
+}
+JSON
+set +e
+FALLBACK_OUTPUT="$(unset OPENCODE_CONFIG; HOME="$DEFAULT_FALLBACK_HOME" OPENCODE_BIN="$OC_BIN" \
+  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
+FALLBACK_RC=$?
+set -e
+if [ "$FALLBACK_RC" -eq 0 ] && \
+   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/fallback/**"] == "allow"' "$DEFAULT_FALLBACK_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode setup defaults to \$HOME/.config/opencode/opencode.json when OPENCODE_CONFIG is unset"
+else
+  fail "OpenCode setup did not use default config path when OPENCODE_CONFIG unset (rc=$FALLBACK_RC)"
+  echo "$FALLBACK_OUTPUT"
 fi
 
 OC_HASH_BEFORE="$(sha256sum "$OC_CONFIG" | awk '{print $1}')"
