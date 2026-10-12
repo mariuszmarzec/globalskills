@@ -1269,10 +1269,6 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
- "$tmp/stdout" \
-    && ok "Tool payload marker names are not synthesized into output" \
-    || fail "Adapter synthesized TASK_NEEDS_USER markers from tool payload"
-}
 
 # ---------------------------------------------------------------------------
 # 16. Explicit canonical agents can be invoked directly by OpenCode CLI
