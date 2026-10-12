@@ -22,7 +22,15 @@ mkdir -p "$(dirname "$DB")"
 : >"$LOG"
 : >"$LIFECYCLE_LOG"
 export MANUL_TESTING=true
-source "$SCRIPT_DIR/manul-daemon.sh"
+set +e
+source "$SCRIPT_DIR/manul-daemon.sh" 2>"$TMP/source.err"
+source_rc=$?
+set -e
+if [ "$source_rc" -ne 0 ]; then
+  echo "FAIL: sourcing manul-daemon.sh returned rc=$source_rc"
+  cat "$TMP/source.err" 2>/dev/null || true
+  exit 1
+fi
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
