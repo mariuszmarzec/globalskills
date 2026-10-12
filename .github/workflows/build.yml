@@ -28,7 +28,7 @@ env:
     skills/manul-github-bot/test_pool_recovery.sh
     skills/manul-github-bot/test_github_control_protocol.sh
     skills/manul-github-bot/test_github_control_integration.sh
-    skills/manul-github-bot/test_daemon_wrapper_integration.sh
+    skills/manul-github-bot/test_existing_task_pr.sh
     skills/manul-github-bot/test_prompt_generation.sh
     skills/manul-github-bot/test_conversation_orchestrator.sh
     skills/manul-github-bot/test_conversation_regressions.sh
