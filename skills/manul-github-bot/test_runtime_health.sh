@@ -242,6 +242,14 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
   fi
 done
 
+# Runtime session-state helper must be deployed alongside the execution controller.
+if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
+     | grep -q '"agent-session-state.sh"'; then
+  ok "Installer declares agent-session-state.sh"
+else
+  fail "Installer does not declare agent-session-state.sh (session helper missing from runtime)"
+fi
+
 # ── Test 3b: installer self-healing (idempotent, safe to run repeatedly) ───────
 echo
 echo "Test 3b: Installer self-healing"

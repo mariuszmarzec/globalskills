@@ -37,9 +37,12 @@ The current implementation uses:
 MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 ```
 
-Path resolution and `AGENT_RUNTIME` validation are centralized in
-`manul-paths.sh`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to
-`~/.openclaw/manul`.
+Path resolution and runtime validation are centralized in
+`manul-paths.sh`. `AGENT_RUNTIME` selects the automatic entry-point runtime
+(default: `openclaw`); `ROLE_RUNTIME` selects the worker runtime for explicitly
+named canonical roles (default: `opencode`). The config keys are
+`automation.agentRuntime` and `automation.roleRuntime`. There is no
+`OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 The installer deploys the runtime scripts as symlinks.
 
@@ -75,19 +78,28 @@ load this file because cron/systemd does not load `~/.zshrc`.
 ## Agent execution boundary
 
 The daemon never invokes an agent runtime directly. It calls
-`AgentExecutionController.execute`, which routes through `AgentExecutor` to a
-backend adapter selected by `AGENT_RUNTIME`:
+`AgentExecutionController.execute`, which routes through `AgentExecutor`:
 
 ```
-Manul -> AgentExecutor -> OpenClawAdapter   (default)
-                         -> OpenCodeAdapter
-                         -> other adapters
+No explicit role -> AGENT_RUNTIME -> OpenClawAdapter (default) or OpenCodeAdapter
+Explicit role    -> ROLE_RUNTIME  -> OpenCodeAdapter (default)
 ```
+
+This means a plain `/manul run <task>` uses OpenClaw by default, while
+`/manul run --agent coder <task>` runs the canonical `coder` role through
+OpenCode's native `--agent` option. This is direct CLI routing, not an ACP
+session spawned by OpenClaw. Setting `automation.roleRuntime` to `openclaw`
+fails closed for explicit roles until a native OpenClaw role adapter exists.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
-depend on each other. Runtime-specific sessions and continuation mechanics
-belong to the adapter, not to Manul task contracts.
+depend on each other. The adapter owns runtime-specific session invocation and
+continuation mechanics. Manul owns the persisted session pointer used to resume
+a task: it retains a runtime session ID only when the current claim returns
+`NEEDS_CONTINUATION` with a non-empty ID. Completion, ordinary failures, and
+invalid continuation results clear that pointer without deleting the workspace
+or conversation mapping. This runtime continuation is distinct from
+`/manul continue <answer>`, which resumes a task blocked on user input.
 
 
 ## Task sources
@@ -268,6 +280,8 @@ Current automation controls include:
 - `mode`: `bot` (default) or `human`;
 - `commentStyle.human.concise` (default `true`) controls concise human-mode result comments;
 - `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
+- `automation.agentRuntime` (default `openclaw`) selects the runtime for tasks without an explicit role;
+- `automation.roleRuntime` (default `opencode`) selects the runtime for explicitly named canonical roles; `openclaw` fails closed for these roles until a native role adapter exists;
 
 Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed). When `commentStyle.human.concise` is enabled, that result should read like a short teammate reply and stay within the configured visible line limit, without automation-report headings or boilerplate.
 
@@ -286,7 +300,8 @@ Other top-level controls include:
 - trigger;
 - allowed users;
 - repositories;
-- agent list;
+- agent list (canonical role names);
+- automatic and explicit-role runtime selection;
 - PR creation/rebase behaviour;
 - retry/context strategy;
 - compaction;
@@ -314,7 +329,7 @@ The installer currently:
 
 - verifies dependencies;
 - creates the runtime directory;
-- deploys runtime symlinks;
+- deploys runtime symlinks, including `agent-session-state.sh`;
 - initializes configuration when absent;
 - prepares the operator `.env` for unattended processes;
 - configures required provider-owned OpenCode permissions when OpenCode is installed;
@@ -344,6 +359,7 @@ Relevant test entry points include:
 
 ```bash
 bash skills/manul-github-bot/test_runtime_health.sh
+bash skills/manul-github-bot/test_agent_session_state.sh
 bash skills/manul-github-bot/test_agent_execution_smoke.sh
 bash skills/manul-github-bot/test_manul_cli.sh
 bash skills/manul-github-bot/test_github_control_protocol.sh
@@ -381,6 +397,14 @@ task-recovery.sh --list-stuck
 ```
 
 Use task recovery only for manual intervention; normal stale recovery belongs to the daemon/watchdog mechanisms.
+
+### Explicit role does not execute
+
+Check that the role is present in `agents[]` in `~/.manul/config.json`, then
+inspect `automation.roleRuntime`. The default is OpenCode and explicit roles
+are passed through its native `--agent <role>` option. An unknown role or
+`roleRuntime: "openclaw"` intentionally fails instead of silently running
+OpenClaw's `main` agent.
 
 ### OpenClaw execution failure
 

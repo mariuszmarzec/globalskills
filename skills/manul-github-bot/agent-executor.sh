@@ -82,9 +82,49 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    # Route to the correct adapter
+    # "main" is a legacy runtime entry-point label, not a canonical OpenCode role.
+    # When used with OpenCode, translate it to automatic selection so the default
+    # primary agent configured by OpenCode (normally orchestrator) is selected.
+    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" = "opencode" ]; then
+        agent=""
+    fi
+
+    # Preserve the selected runtime for tasks without an explicit canonical role.
+    # Explicit role names are worker roles and are executed by ROLE_RUNTIME,
+    # which defaults to OpenCode because it supports opencode run --agent <role>.
+    local execution_runtime="$AGENT_RUNTIME"
+    if [ -n "$agent" ] && [ "$agent" != "main" ]; then
+        local allowed_agents_json
+        allowed_agents_json="$(jq -c '.agents // []' "$MANUL_CONFIG" 2>/dev/null || printf '[]')"
+        if ! jq -e 'type == "array" and length > 0' <<<"$allowed_agents_json" >/dev/null 2>&1; then
+            allowed_agents_json='["architect","coder","coder-cheap","coder-strong","coder-expert","reviewer","reviewer-expert","reviewer-adversarial","debugger","debugger-expert","researcher","tester","security","performance","refactorer"]'
+        fi
+        if ! jq -e --arg agent "$agent" 'type == "array" and index($agent) != null' <<<"$allowed_agents_json" >/dev/null 2>&1; then
+            local routing_error
+            routing_error="Unknown or unconfigured agent role: $agent"
+            jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
+              '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
+            AgentExecutor_ExitCode=1
+            return 1
+        fi
+
+        execution_runtime="$ROLE_RUNTIME"
+        # OpenClaw's --agent selects an OpenClaw config entry, not a Markdown
+        # worker role. Keep that distinction explicit until a native OpenClaw
+        # role adapter exists, rather than dispatching the role to "main".
+        if [ "$execution_runtime" = "openclaw" ]; then
+            local routing_error
+            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to 'opencode' or MANUL_ROLE_RUNTIME=opencode"
+            jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
+              '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
+            AgentExecutor_ExitCode=1
+            return 1
+        fi
+    fi
+
+    # Route to the selected automatic runtime or the configured role runtime.
     local adapter_script
-    case "$AGENT_RUNTIME" in
+    case "$execution_runtime" in
         openclaw)
             adapter_script="$MANUL_SCRIPT_DIR/openclaw-adapter.sh"
             ;;
@@ -92,7 +132,7 @@ AgentExecutor.execute() {
             adapter_script="$MANUL_SCRIPT_DIR/opencode-adapter.sh"
             ;;
         *)
-            printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unknown agent runtime: %s","session_id":"","duration_s":0}\n' "$task_id" "$AGENT_RUNTIME"
+            printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unknown execution runtime: %s","session_id":"","duration_s":0}\n' "$task_id" "$execution_runtime"
             AgentExecutor_ExitCode=1
             return 1
             ;;

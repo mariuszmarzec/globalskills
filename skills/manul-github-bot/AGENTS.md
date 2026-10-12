@@ -20,11 +20,14 @@ The runtime isolation refactor has landed. The current implementation:
 
 - Uses `~/.manul/` as the single canonical runtime directory
   (`MANUL_DIR`, resolved in `manul-paths.sh`).
-- Routes all agent execution through `AgentExecutor`, selected by
-  `AGENT_RUNTIME` (`openclaw` default, `opencode` alternate).
+- Routes all agent execution through `AgentExecutor`. `AGENT_RUNTIME`
+  (`openclaw` default, `opencode` alternate) selects the automatic entry point;
+  `ROLE_RUNTIME` (`opencode` default) selects the runtime for an explicitly
+  named canonical role.
 - Adapters are independent backends behind a single `ProcessRunner.run()`
   process boundary; they must not spawn subprocesses directly and must not
-  depend on each other.
+  depend on each other. Explicit roles use OpenCode's native `--agent` flag by
+  default; do not route canonical role names to OpenClaw's config-agent selector.
 - Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
 Do not reintroduce `~/.openclaw/manul` ownership, compatibility shims, or
@@ -70,8 +73,13 @@ Manul owns:
 An agent runtime owns:
 
 - the LLM/tool execution loop;
-- runtime-specific sessions/context;
+- runtime-specific session internals and context;
 - runtime-specific continuation mechanics.
+
+Manul owns the persisted runtime session ID pointer in SQLite because it is
+needed for task retry/recovery. Preserve it only for a claim-scoped
+`NEEDS_CONTINUATION` result with a non-empty session ID; clear it on all other
+outcomes without deleting the workspace/context mapping.
 
 Do not move runtime-specific behaviour into the Manul core when an adapter can contain it.
 

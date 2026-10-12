@@ -25,17 +25,23 @@ GitHub
                     |
                     v
                AgentExecutor
-                /        \
-               v          v
-       OpenClawAdapter  OpenCodeAdapter
-               |
-               v
-          agent runtime
+                 /        \
+                v          v
+        OpenClawAdapter  OpenCodeAdapter
+                ^          ^
+                |          |
+       automatic runtime   explicit role runtime
+       (agentRuntime)      (roleRuntime)
 ```
 
 The daemon is runtime-neutral: it reaches an agent runtime only through
-`AgentExecutionController` → `AgentExecutor` → a backend adapter. OpenClaw is
-the default adapter today; OpenCode is an independent alternate backend.
+`AgentExecutionController` → `AgentExecutor` → a backend adapter.
+`automation.agentRuntime` controls automatic entry-point selection (default
+OpenClaw); `automation.roleRuntime` controls execution of explicitly selected
+canonical roles (default OpenCode). With these defaults, a task without an
+explicit role runs through OpenClaw, while an explicit `coder` role runs through
+the OpenCode CLI using `--agent coder`. This is direct CLI routing, not an ACP
+session spawned inside OpenClaw.
 
 ### Current source/runtime split
 
@@ -49,7 +55,7 @@ Current default runtime:
 
 The installer deploys the runtime scripts as symlinks from the canonical skill directory and keeps runtime data such as the SQLite DB, logs, locks and task files in the runtime directory.
 
-Path selection is centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates `AGENT_RUNTIME` against the known adapter set. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
+Path and runtime selection are centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates both `AGENT_RUNTIME` and `ROLE_RUNTIME` against the known adapter set. Their config keys are `automation.agentRuntime` and `automation.roleRuntime`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 ### Current runtime ownership
 
@@ -112,6 +118,20 @@ running
 The daemon claims queued tasks, assigns worker ownership, starts a heartbeat, executes the agent, verifies the execution result, and performs terminal state transitions.
 
 SQLite is the authoritative task state. Files such as logs, PID markers and transient execution output are operational artifacts, not alternative sources of truth.
+
+### Runtime session continuity
+
+The runtime adapter owns the mechanics of invoking and resuming its session.
+Manul persists only the session ID pointer in `processed_comments.session_id`
+so a queued retry can resume the exact runtime conversation. That pointer is
+retained only when the active claim returns `NEEDS_CONTINUATION` with a
+non-empty session ID; every other outcome clears it. Updates are scoped to the
+current running task and claim token, so an expired worker cannot alter a
+newer attempt's session state. Clearing the pointer does not release or delete
+the task's workspace/context mapping.
+
+This automatic runtime continuation is distinct from `/manul continue <answer>`,
+which resumes a task blocked on user input (`blocked_user`).
 
 ## Reliability plane
 
@@ -189,7 +209,13 @@ additional Manul-specific data.
 
 For unattended Manul execution, the installer/repair path may apply the minimum required provider configuration without moving that configuration into `~/.manul`. The current OpenCode setup ensures the provider-owned global permission rule `/tmp/**: "allow"` when OpenCode configuration is available. Manul does not own or persist `opencode.json` in its runtime state.
 
-The hermetic `test_agent_execution_smoke.sh` suite exercises the production dispatch execution boundary from `manul-daemon.sh` through `agent-task-runner.sh`, `AgentExecutionController`, `AgentExecutor`, `OpenClawAdapter`, and `ProcessRunner` using only a fake OpenClaw executable. It is intentionally independent of GitHub and real OpenClaw gateway state, so CI can detect broken process boundaries, executable entry points, argument propagation, stdout/exit-code handling, and accidental direct adapter invocation deterministically.
+The hermetic `test_agent_execution_smoke.sh` suite exercises the production
+execution boundary through `manul-daemon.sh`, `agent-task-runner.sh`,
+`AgentExecutionController`, `AgentExecutor`, the runtime adapters, and
+`ProcessRunner` using fake OpenClaw and OpenCode executables. It is independent
+of GitHub and real runtime/gateway state, so CI can check process boundaries,
+entry-point executability, automatic-runtime selection, explicit `--agent`
+propagation, stdout/exit-code handling, and accidental direct adapter invocation.
 
 The execution boundary becomes:
 
@@ -209,8 +235,11 @@ AgentExecutor
 Manul should own **task lifecycle and scheduling**.
 
 The runtime should own **agent execution and its own loop/session semantics**.
+Manul still owns the claim-scoped SQLite pointer that tells a retry which runtime
+session to continue; it does not interpret or manipulate the runtime's session
+internals.
 
-Both the OpenClaw and OpenCode adapters are implemented. Additional runtimes can be added by writing a new adapter behind the same `AgentExecutor` boundary.
+Both the OpenClaw and OpenCode adapters are implemented. Explicit canonical roles use the configured `ROLE_RUNTIME` (OpenCode by default); if `ROLE_RUNTIME=openclaw`, explicit role routing fails closed rather than treating a role name as an OpenClaw config agent ID. Additional runtimes can be added behind the same `AgentExecutor` boundary.
 
 ## Ownership rule
 

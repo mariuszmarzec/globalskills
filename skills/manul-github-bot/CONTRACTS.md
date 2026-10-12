@@ -8,12 +8,24 @@ Supported commands parsed from a `/manul` command are:
 
 | Command | Action |
 |---|---|
-| `/manul run <task>` | `IMPLEMENT` |
+| `/manul run <task>` | `IMPLEMENT` using the automatic runtime entry point |
+| `/manul run --agent <role> <task>` | `IMPLEMENT` using an explicit canonical role |
+| `/manul <role> <task>` | `IMPLEMENT` using the explicit-role shorthand |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` |
 | `/manul continue <answer>` | resume a `blocked_user` task |
 | `/manul verify <prompt>` | `VERIFY` |
 | `/manul status` | query conversation status |
 | `/manul close` | close a conversation |
+
+Without an explicit role, Manul uses `automation.agentRuntime` (default
+`openclaw`). With an explicit canonical role, it uses
+`automation.roleRuntime` (default `opencode`) and passes the role to the
+OpenCode CLI using its native `--agent <role>` option. Agent definitions stay
+canonical in `~/.globalskills/agents/`; Manul must not copy them into another
+source directory. Unknown/unconfigured roles, and explicit roles configured
+with `roleRuntime: "openclaw"`, fail closed rather than silently falling back
+to OpenClaw's `main`. This is direct OpenCode CLI routing, not ACP delegation
+from OpenClaw.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -251,6 +263,8 @@ The example configuration currently defines:
 - polling interval;
 - allowed users/repositories;
 - agent names;
+- `automation.agentRuntime` (default `openclaw`) for tasks without an explicit role;
+- `automation.roleRuntime` (default `opencode`) for explicitly named canonical roles;
 - PR automation;
 - rebase behaviour;
 - retry/context limits;
@@ -274,12 +288,19 @@ runtime directly; it calls `AgentExecutionController.execute`, which routes
 through `AgentExecutor` to a backend adapter.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
-process boundary. OpenClaw (`openclaw-adapter.sh`) is the default runtime;
-OpenCode (`opencode-adapter.sh`) is an independent alternative. Adapters must
-not spawn subprocesses directly and must not depend on each other.
+process boundary. `automation.agentRuntime` (default OpenClaw) selects the
+automatic entry point; `automation.roleRuntime` (default OpenCode) selects the
+runtime for explicitly named canonical roles. Adapters must not spawn
+subprocesses directly and must not depend on each other.
 
-Runtime-specific details (sessions, continuation mechanics, tool paths) are
-implementation details of the adapter, not Manul task contracts.
+The adapter owns runtime session invocation/resume mechanics. Manul owns the
+persisted `processed_comments.session_id` pointer: retain it only when the
+current running claim returns `NEEDS_CONTINUATION` with a non-empty session ID,
+and clear it on every other result. Session-pointer updates must be scoped to
+the active claim token so an expired worker cannot overwrite newer task state.
+Clearing the pointer must not delete the task's workspace/context mapping.
+This internal continuation is distinct from the user-input flow
+`blocked_user` → `/manul continue <answer>`.
 
 Every adapter failure result should preserve actionable diagnostics in its
 `ExecutionResult` when the runtime provides them, including the runtime,

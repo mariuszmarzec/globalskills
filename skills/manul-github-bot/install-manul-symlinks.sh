@@ -95,6 +95,7 @@ SCRIPTS=(
     # Agent execution runtime abstraction (added in runtime isolation refactor)
     "agent-executor.sh"
     "agent-execution-controller.sh"
+    "agent-session-state.sh"
     "manul-paths.sh"
     "manul-env.sh"
     "openclaw-adapter.sh"

@@ -149,7 +149,7 @@ SIG="— manul 🐈"
 # in the prompt and the orchestrator decides (default coder).
 mapfile -t AGENTS < <(jq -r '.agents[]?' "$CONFIG" 2>/dev/null)
 if [ "${#AGENTS[@]}" -eq 0 ]; then
-  AGENTS=(architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert debugger debugger-expert researcher tester security performance refactorer)
+  AGENTS=(architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer)
 fi
 AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
 
@@ -1251,12 +1251,19 @@ process_repo_body() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
-       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
-       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
-       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
-       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
-       else {action: null, prompt: $rest}
+    | (if $tok == "run" then
+         (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
+          | if ($run_rest | test("^--agent([ \\t]+|$)")) then
+              (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
+               catch {requested_agent:"__missing_agent__",requested_prompt:""}) as $requested
+              | {action: "IMPLEMENT", prompt: ($requested.requested_prompt // ""), agent: $requested.requested_agent}
+            else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
+            end)
+       elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
+       else {action: null, prompt: $rest, agent: ""}
        end) as $actx
     | (.html_url | capture("(?:issues|pull)/(?<n>[0-9]+)").n | tonumber) as $issue_num
     | (if $actx.action != null then $actx.action
@@ -1272,10 +1279,10 @@ process_repo_body() {
       created: .created_at,
       url: .html_url,
       issueNumber: $issue_num,
-      agent: $agent,
+      agent: ($actx.agent // $agent),
       action: $action,
       prompt: $actx.prompt,
-      fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; ""))
+      fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; "")) end)
     }' 2>>"$LOG" || true)
 
   if [ "$TASK_SOURCES_EXPLICIT" -eq 0 ]; then
@@ -1319,12 +1326,19 @@ process_repo_body() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
-       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
-       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
-       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
-       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
-       else {action: null, prompt: $rest}
+    | (if $tok == "run" then
+         (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
+          | if ($run_rest | test("^--agent([ \\t]+|$)")) then
+              (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
+               catch {requested_agent:"__missing_agent__",requested_prompt:""}) as $requested
+              | {action: "IMPLEMENT", prompt: ($requested.requested_prompt // ""), agent: $requested.requested_agent}
+            else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
+            end)
+       elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
+       else {action: null, prompt: $rest, agent: ""}
        end) as $actx
     | (if $actx.action != null then $actx.action else "IMPLEMENT" end) as $action
     | {
@@ -1334,7 +1348,7 @@ process_repo_body() {
       created: .created_at,
       url: .html_url,
       issueNumber: .number,
-      agent: $agent,
+      agent: ($actx.agent // $agent),
       action: $action,
       prompt: $actx.prompt
     }' 2>>"$LOG" || true)
@@ -1421,12 +1435,19 @@ process_repo_body() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \t]+"; ""))}
-       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \t]+"; ""))}
-       elif $tok == "run" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("run") | sub("^[ \t]+"; ""))}
-       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \t]+"; ""))}
-       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent}
-       else {action: null, prompt: $rest}
+    | (if $tok == "run" then
+         (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
+          | if ($run_rest | test("^--agent([ \\t]+|$)")) then
+              (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
+               catch {requested_agent:"__missing_agent__",requested_prompt:""}) as $requested
+              | {action: "IMPLEMENT", prompt: ($requested.requested_prompt // ""), agent: $requested.requested_agent}
+            else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
+            end)
+       elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
+       elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
+       elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
+       else {action: null, prompt: $rest, agent: ""}
        end) as $actx
     | (if $actx.action != null then $actx.action else "REVIEW_FIX" end) as $action
     | {
@@ -1438,10 +1459,10 @@ process_repo_body() {
       created: .created_at,
       url: .html_url,
       issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
-      agent: $agent,
+      agent: ($actx.agent // $agent),
       action: $action,
       prompt: $actx.prompt,
-      fullBody: (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")),
+      fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")) end),
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
       diffHunk: (.diff_hunk // ""),

@@ -991,6 +991,51 @@ test_trigger_anchors_continue_subcommand() {
   [ "$action" = "CONTINUE" ] || { echo "Expected action=CONTINUE got=$action"; return 1; }
 }
 
+# Test 39: /manul run --agent <role> preserves role and removes selector from task prompt
+test_run_agent_flag_routes_explicit_role() {
+  local now output agent selection prompt action
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "311" --body "/manul run --agent coder add unit tests" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  action="$(echo "$output" | jq -r '.command.action // empty')"
+  [ "$agent" = "coder" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "add unit tests" ] && [ "$action" = "IMPLEMENT" ]
+}
+
+# Test 40: no explicit role means automatic runtime entry-point selection
+test_run_without_agent_is_automatic() {
+  local now output agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "312" --body "/manul run add unit tests" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ -z "$agent" ] && [ "$selection" = "automatic" ] && [ "$prompt" = "add unit tests" ]
+}
+
+# Test 41: shorthand /manul <role> <task> remains supported
+test_shorthand_agent_routes_explicit_role() {
+  local now output agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "313" --body "/manul coder add unit tests" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ "$agent" = "coder" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "add unit tests" ]
+}
+
+# Test 42: unknown role supplied through --agent is preserved for fail-closed validation
+test_unknown_agent_flag_is_not_silently_discarded() {
+  local now output agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "314" --body "/manul run --agent missing-role do the task" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ "$agent" = "missing-role" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "do the task" ]
+}
+
 # ============================================================
 # Run Tests
 # ============================================================
@@ -1048,6 +1093,10 @@ run_test "Test 35: Trigger anchor — prefix command no trigger" test_trigger_an
 run_test "Test 36: Trigger anchor — command with subcommand" test_trigger_anchors_cmd_with_subcommand
 run_test "Test 37: Trigger anchor — bare trigger" test_trigger_anchors_bare_trigger
 run_test "Test 38: Trigger anchor — continue subcommand" test_trigger_anchors_continue_subcommand
+run_test "Test 39: --agent flag routes explicit role" test_run_agent_flag_routes_explicit_role
+run_test "Test 40: no --agent selects automatic runtime entry point" test_run_without_agent_is_automatic
+run_test "Test 41: shorthand role routes explicitly" test_shorthand_agent_routes_explicit_role
+run_test "Test 42: unknown --agent is preserved for fail-closed validation" test_unknown_agent_flag_is_not_silently_discarded
 
 # End-to-end test
 echo ""

@@ -17,6 +17,7 @@
     "coder-expert",
     "reviewer",
     "reviewer-expert",
+    "reviewer-adversarial",
     "debugger",
     "debugger-expert",
     "researcher",
@@ -90,6 +91,7 @@
   "automation": {
     "enabled": true,
     "agentRuntime": "openclaw",
+    "roleRuntime": "opencode",
     "agentTimeoutSeconds": 43500,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,

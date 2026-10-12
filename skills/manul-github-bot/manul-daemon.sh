@@ -57,6 +57,7 @@ source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
+source "$DAEMON_SCRIPT_DIR/agent-session-state.sh"
 
 CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
@@ -3361,6 +3362,11 @@ PROMPT_APPEND
      set_activity "$COMMENT_ID" "working"
 
      # Build the execution context JSON file consumed by AgentExecutor.
+     local AGENT_SELECTION="automatic"
+     if [ -n "${AGENT:-}" ] && [ "$AGENT" != "null" ]; then
+       AGENT_SELECTION="explicit"
+     fi
+
      local prev_dir
      prev_dir="$(pwd)"
      cd "$WORKDIR" || {
@@ -3387,13 +3393,14 @@ PROMPT_APPEND
        --arg taskId "$COMMENT_ID" \
        --arg prompt "$TASK_PROMPT_FILE" \
        --arg workspace "$WORKDIR" \
-       --arg agent "" \
+       --arg agent "${AGENT:-}" \
+       --arg agentSelection "$AGENT_SELECTION" \
        --argjson attempt "$current_attempt" \
        --argjson timeout "$AGENT_TIMEOUT" \
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, agentSelection: $agentSelection, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      local executor_output
@@ -3421,11 +3428,13 @@ PROMPT_APPEND
       exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
       exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
       exec_failure_code="$(printf '%s' "$executor_output" | jq -r '.failure_code // ""' 2>/dev/null)"
-     # Persist a session only when the runtime explicitly says it can be
-     # continued. Generic failures must not accidentally bind future retries
-     # to a stale runtime session.
-     if [ "$exec_status" = "NEEDS_CONTINUATION" ] && [ -n "$exec_session_id" ]; then
-       sqlite3 "$DB" "UPDATE processed_comments SET session_id='$(sql_escape "$exec_session_id")' WHERE commentId='$(sql_escape "$COMMENT_ID")';" 2>/dev/null || true
+     # Retain a runtime session only when the adapter explicitly requests
+     # continuation. Completion, ordinary failures, and malformed continuation
+     # results clear stale session state while preserving the workspace mapping.
+     # The helper scopes writes to the current claim so an expired worker cannot
+     # overwrite the session pointer owned by a newer attempt.
+     if ! manul_record_execution_session_state "$DB" "$COMMENT_ID" "$CLAIM_TOKEN" "$exec_status" "$exec_session_id"; then
+       log "WARN: could not update runtime session state for task $COMMENT_ID (status=$exec_status)"
      fi
 
      # Preserve launcher diagnostics in daemon.log before task artifacts are cleaned
