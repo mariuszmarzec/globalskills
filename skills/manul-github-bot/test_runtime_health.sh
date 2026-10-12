@@ -1090,8 +1090,13 @@ JSON
 cat >"$OC_BIN" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
-  cat "$OPENCODE_CONFIG"
-  exit 0
+  config="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
+  if [ ! -f "$config" ]; then
+    echo "mock opencode: config not found: $config" >&2
+    exit 1
+  fi
+  cat "$config"
+  exit $?
 fi
 exit 2
 MOCK
