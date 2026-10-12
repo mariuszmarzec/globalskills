@@ -20,7 +20,7 @@ INSERT INTO processed_comments VALUES ('task-retry', 'running', 'claim-1', 'old-
 INSERT INTO processed_comments VALUES ('task-cont', 'running', 'claim-2', 'old-session');
 INSERT INTO processed_comments VALUES ('task-no-session', 'running', 'claim-3', 'old-session');
 INSERT INTO processed_comments VALUES ('task-stale-claim', 'running', 'current-claim', 'current-session');
-INSERT INTO processed_comments VALUES ('task-quoted', 'running', 'claim-5', 'old-session');
+INSERT INTO processed_comments VALUES ('task''quoted', 'running', 'claim-5', 'old-session');
 SQL
 
 PASS=0
