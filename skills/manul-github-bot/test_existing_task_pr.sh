@@ -47,6 +47,7 @@ SQL
 # Build a clean base checkout and a feature branch that is pushed to origin.
 WORKDIR="$TMP/workdir"
 ORIGIN="$TMP/origin.git"
+mkdir -p "$WORKDIR"
 git init --quiet --initial-branch=main "$WORKDIR"
 git -C "$WORKDIR" config user.name test
 git -C "$WORKDIR" config user.email test@example.com
