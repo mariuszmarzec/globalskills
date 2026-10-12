@@ -1,6 +1,6 @@
 ---
 description: Analyzes larger tasks, designs the solution, breaks work into steps, makes architectural decisions, identifies risks and dependencies. Prefers analysis over editing code.
-mode: primary
+mode: all
 model: litellm/big-pickle
 steps: 40
 permission:
