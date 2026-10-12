@@ -1722,8 +1722,16 @@ verify_existing_task_pr() {
     # Older issuebody rows may store GitHub's object ID in issueNumber. Match
     # previous completed deliveries by parsing the human issue number from
     # commentUrl instead of trusting that historical column.
-    prior_rows="$(sqlite3 "$DB" "SELECT commentId || char(9) || commentUrl || char(9) || prUrl FROM processed_comments WHERE repository='$safe_repo' AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='';" 2>/dev/null || true)"
-    while IFS=
+    prior_rows="$(sqlite3 "$DB" "SELECT commentId || '|' || commentUrl || '|' || prUrl FROM processed_comments WHERE repository='$safe_repo' AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='';" 2>/dev/null || true)"
+    while IFS='|' read -r prior_comment_id prior_comment_url prior_pr_url; do
+      [ -n "$prior_comment_id" ] || continue
+      prior_issue_num="$(printf '%s' "$prior_comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
+      if [ "$prior_issue_num" = "$issue_num" ] && [ -n "$prior_pr_url" ]; then
+        prior_urls+="$prior_pr_url"$'\n'
+      fi
+    done <<< "$prior_rows"
+    prior_urls_json="$(printf '%s' "$prior_urls" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
+  fi
 
   pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --json number,url,state,baseRefName,headRefName,body,headRefOid --limit 100 2>>"$LOG")" || {
     log "ERROR: verify_existing_task_pr: GitHub PR query failed for $repo task=$comment_id"
