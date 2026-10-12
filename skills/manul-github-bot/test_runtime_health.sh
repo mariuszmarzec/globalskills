@@ -243,7 +243,7 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
 done
 
 # Runtime session-state helper must be deployed alongside the execution controller.
-if awk '/^SCRIPTS=\\(/,/^\\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
+if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
      | grep -q '"agent-session-state.sh"'; then
   ok "Installer declares agent-session-state.sh"
 else
