@@ -180,15 +180,25 @@ if [ -f "$RAW_STDOUT_FILE" ]; then
 fi
 
 # OpenCode has had versions/environment combinations where text events are
-# missing from JSONL even though the session completes. Preserve markers that
-# are visibly present in raw events so Manul's existing lifecycle verifier
-# cannot silently miss a completion signal.
-for marker in TASK_DONE TASK_FAILED TASK_NEEDS_USER_BEGIN TASK_NEEDS_USER_END; do
-    if ! grep -qE "^${marker}($|[[:space:]:])" "$OPT_STDOUT_FILE" 2>/dev/null \
-       && grep -q "${marker}" "$RAW_STDOUT_FILE" 2>/dev/null; then
-        printf '%s\n' "${marker}" >>"$OPT_STDOUT_FILE"
-    fi
-done
+# missing from normalized output. Recover markers only from actual text events:
+# arbitrary raw JSONL may contain tokens in tool calls or documentation.
+if [ -s "$RAW_STDOUT_FILE" ]; then
+    normalized_text_events="$(jq -Rr '
+        try fromjson catch empty
+        | select(.type == "text")
+        | (.part.text // .text // empty)
+    ' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
+
+    for marker in TASK_DONE TASK_FAILED TASK_NEEDS_USER_BEGIN TASK_NEEDS_USER_END; do
+        if ! grep -qE "^${marker}($|[[:space:]:])" "$OPT_STDOUT_FILE" 2>/dev/null; then
+            marker_line="$(printf '%s\n' "$normalized_text_events" |
+                grep -E "^${marker}($|[[:space:]:])" | head -n 1 || true)"
+            if [ -n "$marker_line" ]; then
+                printf '%s\n' "$marker_line" >>"$OPT_STDOUT_FILE"
+            fi
+        fi
+    done
+fi
 
 duration="0"
 if [ -s "$RAW_STDOUT_FILE" ]; then
