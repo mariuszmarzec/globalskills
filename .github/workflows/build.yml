@@ -33,6 +33,7 @@ env:
     skills/manul-github-bot/test_conversation_regressions.sh
     skills/manul-github-bot/test_runtime_health.sh
     skills/manul-github-bot/test_adapters.sh
+    skills/manul-github-bot/test_opencode_marker_recovery.sh
     skills/manul-github-bot/test_agent_session_state.sh
     skills/manul-github-bot/test_agent_execution_smoke.sh
     skills/manul-github-bot/test_manul_environment.sh
