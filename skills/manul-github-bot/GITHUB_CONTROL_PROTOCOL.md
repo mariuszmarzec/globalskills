@@ -154,7 +154,8 @@ CREATE TABLE processed_comments (
   resultSummary TEXT,
   resultJson TEXT,
   baseId TEXT,
-  taskId TEXT
+  taskId TEXT,
+  session_id TEXT
 );
 ```
 
@@ -165,6 +166,7 @@ Important execution fields:
 - `workerPid` / `claimToken` — ownership;
 - `conversationId` / `parentTaskId` — task graph/context;
 - `workspaceId` — isolated workspace assignment;
+- `session_id` — runtime session pointer retained only for an explicit continuation result;
 - `resultSummary` / `resultJson` — result data;
 - `baseId` — idempotency/deduplication support;
 - `taskId` — review/orchestrator task association where present.
@@ -228,13 +230,31 @@ Never treat `/compare` or `/pull/new` URLs as proof of a PR.
 
 ## Current runtime boundary
 
-Manul executes the agent through `AgentExecutor`, which selects a backend
-adapter by `AGENT_RUNTIME` (OpenClaw by default, OpenCode alternate). The
-daemon never invokes an adapter script directly.
+Manul executes tasks through
+`AgentExecutionController` → `AgentExecutor` → a backend adapter; the daemon
+never invokes an adapter script directly.
 
-The filesystem location of Manul's runtime is `~/.manul`. Runtime-specific
-execution details are an implementation detail of the adapter, not part of
-this protocol.
+- No explicit role: `automation.agentRuntime` (default `openclaw`) selects the
+  automatic entry point.
+- Explicit canonical role: `automation.roleRuntime` (default `opencode`)
+  selects the runtime. OpenCode receives the role through its native
+  `--agent <role>` option.
+- Unknown roles and explicit roles with `roleRuntime: "openclaw"` fail closed;
+  they do not fall back to a different role or OpenClaw's `main`.
+
+The adapter owns runtime session mechanics. Manul persists
+`processed_comments.session_id` only when the current claim returns
+`NEEDS_CONTINUATION` with a non-empty ID, and clears it on any other result.
+This write is scoped to the current task claim. The workspace/context mapping is
+preserved when the runtime session pointer is cleared. This runtime continuation
+is not the same as the user-input command `/manul continue <answer>`.
+
+The canonical source for Manul code remains
+`~/.globalskills/skills/manul-github-bot/`; `~/.manul` is the runtime
+directory for configuration, state, logs, locks, and workspace data. Existing
+configuration files do not require a migration: `manul-paths.sh` supplies the
+default runtime values if `automation.agentRuntime` or `automation.roleRuntime`
+is omitted.
 
 ## Testing
 

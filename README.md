@@ -36,7 +36,7 @@ git -C ~/.globalskills pull
 | `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
 | `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Based on QuickMVI library patterns, testing utilities, and best practices extracted from the QuickMVI project. |
 | `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing LiteLLM database connection issues. |
-| `manul-github-bot` | Setup, operate, and reinstall the manul GitHub command bot (OpenClaw + gh). Manul reacts to `/manul` in issue/PR comments, implements the task on a `manul/*` branch, pushes, optionally opens a PR, and replies with comments signed "manul 🐈". Use when installing manul on a (new) machine, changing its config, or debugging it. |
+| `manul-github-bot` | Set up, operate, and debug Manul, the GitHub task orchestrator. Automatic tasks use the configured runtime (OpenClaw by default); explicitly selected canonical roles use the configured role runtime (OpenCode by default). Manul owns task state, workspace isolation, retries, result verification, and GitHub delivery. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. |
 | `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
@@ -79,7 +79,7 @@ signed `— manul 🐈`.
         > ^ <
 ```
 
-Full setup, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
+Full setup, runtime/role routing, session continuation, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
 
 ## Skill Benchmarks
 

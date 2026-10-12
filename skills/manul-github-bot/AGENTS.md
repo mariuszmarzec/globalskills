@@ -73,8 +73,13 @@ Manul owns:
 An agent runtime owns:
 
 - the LLM/tool execution loop;
-- runtime-specific sessions/context;
+- runtime-specific session internals and context;
 - runtime-specific continuation mechanics.
+
+Manul owns the persisted runtime session ID pointer in SQLite because it is
+needed for task retry/recovery. Preserve it only for a claim-scoped
+`NEEDS_CONTINUATION` result with a non-empty session ID; clear it on all other
+outcomes without deleting the workspace/context mapping.
 
 Do not move runtime-specific behaviour into the Manul core when an adapter can contain it.
 
