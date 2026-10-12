@@ -79,7 +79,9 @@ write_pr_fixture() {
     >"$FAKE_GH_PR_LIST"
 }
 
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,action,prUrl) VALUES ('$PREVIOUS_TASK','test/repo',17,'https://github.com/test/repo/issues/17','completed','IMPLEMENT','$PR_URL');"
+# Historical issuebody rows can contain the GitHub object ID in issueNumber;
+# the human issue number must be derived from commentUrl.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,action,prUrl) VALUES ('$PREVIOUS_TASK','test/repo',5816053678,'https://github.com/test/repo/issues/17','completed','IMPLEMENT','$PR_URL');"
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,action,prUrl) VALUES ('$CURRENT_TASK','test/repo',17,'https://github.com/test/repo/issues/17#issuecomment-6127115709','running','IMPLEMENT',NULL);"
 
 # Case 1: the workspace is back on main, but the same issue has a previous
