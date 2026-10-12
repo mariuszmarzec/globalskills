@@ -10,16 +10,19 @@ mkdir -p "$MANUL_DIR"
 cat >"$MANUL_DIR/config.json" <<'JSON'
 {"automation":{"heartbeatInterval":60,"heartbeatTimeout":900,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
 JSON
-export MANUL_TESTING=true
-source "$SCRIPT_DIR/manul-daemon.sh"
+# Configure all runtime paths before sourcing: manul-daemon.sh initializes its
+# DB/schema during source, so use only the test's isolated SQLite/log files.
 DB="$TMP/processed-comments.sqlite"
 LOG="$TMP/daemon.log"
 LIFECYCLE_LOG="$TMP/lifecycle.log"
 CONFIG="$SCRIPT_DIR/config.json"
 GH_API_TIMEOUT=5
+export DB LOG LIFECYCLE_LOG CONFIG GH_API_TIMEOUT
 mkdir -p "$(dirname "$DB")"
 : >"$LOG"
 : >"$LIFECYCLE_LOG"
+export MANUL_TESTING=true
+source "$SCRIPT_DIR/manul-daemon.sh"
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
