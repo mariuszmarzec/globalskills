@@ -67,6 +67,10 @@ git -C "$WORKDIR" push -q --set-upstream origin feature/17-helloworld-java
 git -C "$WORKDIR" checkout -q main
 
 # Fake GitHub's PR-list response while using real Git and SQLite checks.
+# Set all helper globals normally supplied by the daemon's dispatch path.
+DEFAULT_BRANCH="main"
+MANUL_TESTING=true
+
 export FAKE_GH_PR_LIST="$TMP/pr-list.json"
 cat >"$TMP/bin-gh" <<'MOCK'
 #!/usr/bin/env bash
