@@ -1,6 +1,6 @@
 ---
 description: Debugger escalation (EXPERT tier). Finds root causes of the most elusive production bugs, race conditions, and runtime failures. Reports diagnosis and fix.
-mode: subagent
+mode: primary
 model: litellm/big-pickle
 steps: 80
 temperature: 0.2
