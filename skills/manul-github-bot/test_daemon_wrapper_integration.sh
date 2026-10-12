@@ -177,9 +177,13 @@ if [[ "$1" == "api" ]]; then
         fi
     done
 fi
-# gh pr list: no PRs exist in tests (empty array)
+# gh pr list: return fixture PRs when requested by the no-op retry regression.
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
-    echo '[]'
+    if [[ -n "${FAKE_GH_PR_LIST:-}" && -f "$FAKE_GH_PR_LIST" ]]; then
+        cat "$FAKE_GH_PR_LIST"
+    else
+        echo '[]'
+    fi
     exit 0
 fi
 # gh pr create: synthesize a PR URL
