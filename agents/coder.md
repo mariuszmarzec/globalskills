@@ -1,6 +1,6 @@
 ---
 description: Implements features, modifies code, writes and runs tests, fixes implementation issues. The primary execution agent.
-mode: primary
+mode: all
 model: litellm/groq-llama-70b
 steps: 40
 temperature: 0.2
