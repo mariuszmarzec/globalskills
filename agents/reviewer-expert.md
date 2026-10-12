@@ -1,6 +1,6 @@
 ---
 description: Reviewer escalation (EXPERT tier). Deep review of security-critical, architectural, or high-risk changes. Read-only.
-mode: subagent
+mode: primary
 model: litellm/big-pickle
 steps: 50
 temperature: 0
