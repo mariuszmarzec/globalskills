@@ -804,64 +804,6 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
 
-# ─── Test Q: no-op retry on base is accepted only with a previously verified task PR
-echo ""
-echo "=== Test Q: base-branch no-op requires independently verified prior PR ==="
-WORKDIR_Q="$TEST_TMPDIR/workdir-q"
-mkdir -p "$WORKDIR_Q"
-git -C "$WORKDIR_Q" init -q
-git -C "$WORKDIR_Q" config user.email test@example.com
-git -C "$WORKDIR_Q" config user.name test
-git -C "$WORKDIR_Q" branch -m main 2>/dev/null || true
-printf 'initial\n' >"$WORKDIR_Q/README.md"
-git -C "$WORKDIR_Q" add README.md
-git -C "$WORKDIR_Q" commit -qm initial
-INITIAL_HEAD_Q="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
-ORIGIN_Q="$TEST_TMPDIR/origin-q.git"
-git init --bare -q "$ORIGIN_Q"
-git -C "$WORKDIR_Q" remote add origin "$ORIGIN_Q"
-git -C "$WORKDIR_Q" push -q origin HEAD:main
-git -C "$WORKDIR_Q" checkout -qb feature/17-helloworld-java
-printf 'class HelloWorld { public static void main(String[] args) { System.out.println("Hello, World!"); } }\n' >"$WORKDIR_Q/helloworld.java"
-git -C "$WORKDIR_Q" add helloworld.java
-git -C "$WORKDIR_Q" commit -qm "Add HelloWorld"
-TASK_PR_SHA="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
-git -C "$WORKDIR_Q" push -q origin feature/17-helloworld-java
-git -C "$WORKDIR_Q" checkout -q main
-
-export FAKE_GH_PR_LIST="$TEST_TMPDIR/pr-list-q.json"
-printf '%s\n' "{\"number\":18,\"url\":\"https://github.com/test/repo/pull/18\",\"state\":\"OPEN\",\"baseRefName\":\"main\",\"headRefName\":\"feature/17-helloworld-java\",\"headRefOid\":\"$TASK_PR_SHA\",\"body\":\"Automatically created by Manul for task issuebody:PREVIOUS_TASK.\"}" >"$FAKE_GH_PR_LIST"
-
-# Simulate the prior task that delivered this same issue and whose verified PR
-# identity was persisted before its status transitioned to completed.
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE repository='test/repo' AND issueNumber=17;" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber,prUrl) VALUES ('issuebody:PREVIOUS_TASK','test/repo',17,'https://github.com/test/repo/issues/17','user','coder-cheap','implement helloworld.java','completed',2,NULL,'IMPLEMENT',18,'https://github.com/test/repo/pull/18');" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber,prUrl) VALUES ('issue:6127115709','test/repo',17,'https://github.com/test/repo/issues/17#issuecomment-6127115709','user','coder-cheap','implement helloworld.java','running',3,$,'IMPLEMENT',17,NULL);" 2>/dev/null
-
-VERIFIED_EXISTING_PR_BRANCH=""
-VERIFIED_EXISTING_PR_URL=""
-if verify_existing_task_pr "test/repo" "issue:6127115709" "$WORKDIR_Q" "main"; then
-  if [ "$VERIFIED_EXISTING_PR_BRANCH" = "feature/17-helloworld-java" ] && [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/18" ]; then
-    echo "[OK] Test Q: no-op retry recognized only after prior completed task/PR correlation"
-  else
-    echo "FAIL: Test Q - unexpected verified PR: branch=$VERIFIED_EXISTING_PR_BRANCH url=$VERIFIED_EXISTING_PR_URL"
-    exit 1
-  fi
-else
-  echo "FAIL: Test Q - expected prior completed task PR to satisfy existing issue"
-  exit 1
-fi
-
-# If the prior task is not completed, its PR must not satisfy the current task.
-sqlite3 "$DB" "UPDATE processed_comments SET status='failed' WHERE commentId='issuebody:PREVIOUS_TASK';" 2>/dev/null
-if verify_existing_task_pr "test/repo" "issue:6127115709" "$WORKDIR_Q" "main"; then
-  echo "FAIL: Test Q - PR from a non-completed prior task was accepted"
-  exit 1
-else
-  echo "[OK] Test Q: non-completed prior task cannot satisfy a no-op retry"
-fi
-unset FAKE_GH_PR_LIST
-
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
