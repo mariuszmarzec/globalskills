@@ -1090,7 +1090,11 @@ cat >"$OC_CONFIG" <<'JSON'
       "~/litellm/**": "allow",
       "~/.npm/**": "allow"
     },
-    "bash": "ask"
+    "bash": "ask",
+    "read": "allow",
+    "edit": "ask",
+    "glob": "allow",
+    "grep": "allow"
   }
 }
 JSON
@@ -1152,7 +1156,7 @@ else
   echo "$OC_OUTPUT"
 fi
 
-if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask" and .permission.edit["~/.manul/logs/**"] == "deny"' "$OC_CONFIG" >/dev/null 2>&1; then
+if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask" and .permission.read["*"] == "allow" and .permission.edit["*"] == "ask" and .permission.glob["*"] == "allow" and .permission.grep["*"] == "allow" and .permission.edit["~/.manul/logs/**"] == "deny"' "$OC_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup preserves unrelated provider configuration"
 else
   fail "OpenCode setup changed unrelated provider configuration"
