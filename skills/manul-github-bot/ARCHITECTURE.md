@@ -207,7 +207,7 @@ OpenCode, Claude Code, Tabnine and other runtimes retain their native
 configuration/state locations unless an adapter has a concrete reason to own
 additional Manul-specific data.
 
-For unattended Manul execution, the installer/repair path may apply the minimum required provider configuration without moving that configuration into `~/.manul`. The current OpenCode setup ensures the provider-owned global permission rule `/tmp/**: "allow"` when OpenCode configuration is available. Manul does not own or persist `opencode.json` in its runtime state.
+For unattended Manul execution, the installer/repair path may apply the minimum required provider configuration without moving that configuration into `~/.manul`. `OPENCODE_CONFIG` is an explicitly supported variable in `~/.manul/.env`, so installer/repair and background daemon/watchdog use the same effective OpenCode config. The configuration keeps `/tmp/**` for scratch work, adds `/tmp/manul-diagnostics/**` for local diagnostic artifacts, grants read/search but denies edit for `~/.manul/logs/**` during explicitly authorized operator-side diagnosis, and keeps Gradle access limited to the dependency module cache. Ordinary Manul task prompts still prohibit inspection of Manul runtime state/logs. Manul does not own or persist `opencode.json` in its runtime state.
 
 The hermetic `test_agent_execution_smoke.sh` suite exercises the production
 execution boundary through `manul-daemon.sh`, `agent-task-runner.sh`,

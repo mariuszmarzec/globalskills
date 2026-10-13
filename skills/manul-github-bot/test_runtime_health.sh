@@ -1090,7 +1090,11 @@ cat >"$OC_CONFIG" <<'JSON'
       "~/litellm/**": "allow",
       "~/.npm/**": "allow"
     },
-    "bash": "ask"
+    "bash": "ask",
+    "read": "allow",
+    "edit": "ask",
+    "glob": "allow",
+    "grep": "allow"
   }
 }
 JSON
@@ -1123,6 +1127,28 @@ else
   echo "$OC_OUTPUT"
 fi
 
+if [ "$OC_RC" -eq 0 ] && jq -e '
+  .permission.external_directory["/tmp/manul-diagnostics/**"] == "allow" and
+  .permission.read["/tmp/manul-diagnostics/**"] == "allow" and
+  .permission.edit["/tmp/manul-diagnostics/**"] == "allow"
+' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode allows read/write in the dedicated diagnostics output directory"
+else
+  fail "OpenCode diagnostics output-directory permissions are incomplete"
+fi
+
+if [ "$OC_RC" -eq 0 ] && jq -e '
+  .permission.external_directory["~/.manul/logs/**"] == "allow" and
+  .permission.read["~/.manul/logs/**"] == "allow" and
+  .permission.glob["~/.manul/logs/**"] == "allow" and
+  .permission.grep["~/.manul/logs/**"] == "allow" and
+  .permission.edit["~/.manul/logs/**"] == "deny"
+' "$OC_CONFIG" >/dev/null 2>&1; then
+  ok "OpenCode grants log read/search and explicitly denies file editing"
+else
+  fail "OpenCode log permissions are not read-only as intended"
+fi
+
 if [ "$OC_RC" -eq 0 ] && jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup adds Gradle dependency-cache allow rule"
 else
@@ -1130,7 +1156,7 @@ else
   echo "$OC_OUTPUT"
 fi
 
-if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask"' "$OC_CONFIG" >/dev/null 2>&1; then
+if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask" and .permission.read["*"] == "allow" and .permission.edit["*"] == "ask" and .permission.glob["*"] == "allow" and .permission.grep["*"] == "allow" and .permission.edit["~/.manul/logs/**"] == "deny"' "$OC_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup preserves unrelated provider configuration"
 else
   fail "OpenCode setup changed unrelated provider configuration"
@@ -1162,7 +1188,7 @@ CUSTOM_OUTPUT="$(HOME="$OC_HOME" OPENCODE_CONFIG="$CUSTOM_OC_CONFIG" OPENCODE_BI
 CUSTOM_RC=$?
 set -e
 if [ "$CUSTOM_RC" -eq 0 ] && \
-   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/custom/**"] == "allow"' "$CUSTOM_OC_CONFIG" >/dev/null 2>&1; then
+   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/.manul/logs/**"] == "allow" and .permission.external_directory["~/custom/**"] == "allow"' "$CUSTOM_OC_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup respects explicitly configured OPENCODE_CONFIG path"
 else
   fail "OpenCode setup did not modify explicitly configured OPENCODE_CONFIG (rc=$CUSTOM_RC)"
@@ -1188,7 +1214,7 @@ FALLBACK_OUTPUT="$(unset OPENCODE_CONFIG; HOME="$DEFAULT_FALLBACK_HOME" OPENCODE
 FALLBACK_RC=$?
 set -e
 if [ "$FALLBACK_RC" -eq 0 ] && \
-   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/fallback/**"] == "allow"' "$DEFAULT_FALLBACK_CONFIG" >/dev/null 2>&1; then
+   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/.manul/logs/**"] == "allow" and .permission.external_directory["~/fallback/**"] == "allow"' "$DEFAULT_FALLBACK_CONFIG" >/dev/null 2>&1; then
   ok "OpenCode setup defaults to \$HOME/.config/opencode/opencode.json when OPENCODE_CONFIG is unset"
 else
   fail "OpenCode setup did not use default config path when OPENCODE_CONFIG unset (rc=$FALLBACK_RC)"

@@ -217,6 +217,13 @@ The agent execution boundary exposes only the task-owned workspace path (`WORKDI
 
 ## 14. Agent task access boundary
 
+An explicitly authorized operator-side maintenance session running **outside a
+Manul-managed task** may inspect read-only logs under `~/.manul/logs/**` to
+diagnose runtime failures and may write sanitized evidence under
+`/tmp/manul-diagnostics/**`. Do not delegate this workflow to an ordinary
+`/manul` worker task; it must never expose credentials or copy secrets into
+diagnostic artifacts.
+
 Every generated implementation/review-fix prompt must enforce a least-privilege task boundary, independently of how brief or detailed the user's `/manul` comment is:
 
 - The assigned task workspace (`WORKDIR`) is the only local repository tree the agent may inspect or modify.

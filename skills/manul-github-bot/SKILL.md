@@ -338,17 +338,25 @@ The installer currently:
 - installs the watchdog cron;
 - installs the zsh shell integration.
 
-For OpenCode, the installer/repair path ensures the provider-owned configuration
-contains `permission.external_directory["/tmp/**"] = "allow"` and
-`permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"`
-when an OpenCode configuration is available. The Gradle rule is strictly scoped to
-the module cache (dependency artifacts such as JARs) and never the whole Gradle home.
-Existing OpenCode settings are preserved and no broad permission bypass such as
-`--auto` is enabled. The provider configuration remains outside `~/.manul`.
+For OpenCode, the installer/repair path updates the effective provider config
+selected by `OPENCODE_CONFIG` (when configured) and preserves unrelated settings.
+The supported unattended environment persists `OPENCODE_CONFIG` in
+`~/.manul/.env`, so the daemon/watchdog and installer use the same file. Rules
+include `/tmp/**` for task scratch space, the dedicated
+`/tmp/manul-diagnostics/**` directory for local diagnostic artifacts,
+read/search-only access to `~/.manul/logs/**`, and the narrowly scoped Gradle
+module cache. File editing of the log directory is explicitly denied. No broad
+permission bypass such as `--auto` is enabled, and the provider config remains
+outside `~/.manul`.
 
-The operator `.env` is runtime-owned and mode 600. It carries only the
-provider variables explicitly supported by the installer, such as custom
-OpenClaw state/config paths.
+The log-read permission is for explicitly authorized **local operator diagnostics**.
+It does not authorize ordinary Manul worker tasks to inspect runtime state: the
+generated task boundary in `CONTRACTS.md` continues to prohibit that. Keep
+diagnostic archives under `/tmp/manul-diagnostics`, ensure that directory is
+user-owned and mode `700`, and redact credentials before sharing artifacts.
+
+The operator `.env` is runtime-owned and mode 600. It carries only explicitly
+supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`.
 
 The current installer deliberately does not start the daemon automatically.
 

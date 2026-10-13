@@ -150,6 +150,14 @@ if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
+# Use the exact persisted provider config that the daemon/watchdog will load.
+# In particular, do not silently drop OPENCODE_CONFIG between install and run.
+# shellcheck source=manul-env.sh
+source "$CANONICAL_DIR/manul-env.sh"
+if ! manul_env_load "$RUNTIME_DIR"; then
+    fail "Could not load $RUNTIME_DIR/.env for provider configuration"
+fi
+
 # 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.
 echo
 echo "  Preparing OpenCode provider permissions..."
