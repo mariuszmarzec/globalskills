@@ -42,6 +42,9 @@ grep -q 'manul_env_load' "$SCRIPT_DIR/manul-daemon.sh"   && ok "Daemon loads the
 
 grep -q 'manul_env_load' "$SCRIPT_DIR/watchdog.sh"   && ok "Watchdog loads the runtime operator environment"   || fail "Watchdog does not load the runtime operator environment"
 
+grep -q 'manul_env_load' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer reloads persisted provider environment before configuring OpenCode"   || fail "Installer skips persisted provider environment"
+grep -q 'manul_env_load' "$SCRIPT_DIR/repair-manul-runtime.sh"   && ok "Repair reloads persisted provider environment before configuring OpenCode"   || fail "Repair skips persisted provider environment"
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -51,6 +54,7 @@ OPENCLAW_STATE_DIR="$TMP/openclaw state"
 OPENCLAW_CONFIG_PATH="$TMP/openclaw/config with spaces.json"
 OPENCLAW_BIN="$TMP/bin/openclaw-custom"
 OPENCODE_BIN="$TMP/bin/opencode-custom"
+OPENCODE_CONFIG="$TMP/custom opencode config.json"
 UNSAFE_SECRET="must-not-be-copied"
 CUSTOM_JIRA_USER="custom-jira-user"
 CUSTOM_JIRA_PASSWORD="custom-jira-password"
@@ -59,7 +63,7 @@ cat > "$RUNTIME/config.json" <<'EOF'
 {"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -70,6 +74,7 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
    ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
+   ! grep -q '^OPENCODE_CONFIG=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
@@ -84,12 +89,13 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG
   source "$ENV_FILE"
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
   [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
   [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
+  [ "$OPENCODE_CONFIG" = "$TMP/custom opencode config.json" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
@@ -102,19 +108,22 @@ PRESERVE="$TMP/preserve"
 mkdir -p "$PRESERVE"
 cat > "$PRESERVE/.env" <<'EOF'
 OPENCLAW_STATE_DIR=/operator/chosen/state
+OPENCODE_CONFIG=/operator/chosen/opencode.json
 EOF
 chmod 600 "$PRESERVE/.env"
 
 OPENCLAW_STATE_DIR="/installer/current/state"
 OPENCLAW_CONFIG_PATH="/installer/current/config.json"
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+OPENCODE_CONFIG="/installer/current/opencode.json"
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
   source "$ENV_FILE2"
   [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
-  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ]
+  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
+  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
 ); then
   ok "Existing operator provider configuration is preserved"
 else
