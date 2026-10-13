@@ -40,6 +40,27 @@ mkdir -p "$WORKSPACE"
 PROMPT_FILE="$MANUL_DIR/state/tasks/smoke.prompt.md"
 printf '%s\n' 'Execute the executor-boundary smoke test.' >"$PROMPT_FILE"
 
+# Regression guard: the prompt contract must keep implementation agents inside
+# their task workspace and must not direct them to read private/global paths.
+if ! grep -Fq '## Working Directory and Local-Access Boundary' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: generated task prompt is missing the local-access boundary" >&2
+  exit 1
+fi
+if grep -Fq 'read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md`' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: generated task prompt still directs agents to read a global skill path" >&2
+  exit 1
+fi
+if grep -Fq 'Your skills are available at: ~/.agents/skills' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: generated task prompt still advertises the global skills directory" >&2
+  exit 1
+fi
+for protected_path in '~/.manul/**' '~/.agents/**' '~/.config/opencode/**'; do
+  if ! grep -Fq "$protected_path" "$SCRIPT_DIR/manul-daemon.sh"; then
+    echo "FAIL: generated task prompt does not protect $protected_path" >&2
+    exit 1
+  fi
+done
+
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 PROOF_FILE="$TEST_ROOT/openclaw-proof"
