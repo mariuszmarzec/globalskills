@@ -215,6 +215,20 @@ Workspace reclamation must use the same liveness/lease semantics as task recover
 
 The agent execution boundary exposes only the task-owned workspace path (`WORKDIR`) to the agent as its repository working directory. Manul's internal repository preparation directory (`REPO_DIR`) is an orchestration detail and must not be included in the generated agent prompt. Git and file operations performed by the agent must stay inside `WORKDIR` unless the task explicitly requires an approved external dependency.
 
+## 14. Agent task access boundary
+
+Every generated implementation/review-fix prompt must enforce a least-privilege task boundary, independently of how brief or detailed the user's `/manul` comment is:
+
+- The assigned task workspace (`WORKDIR`) is the only local repository tree the agent may inspect or modify.
+- Do not read/list/search/probe home-directory state or global agent/skill directories, including `~/.manul/**`, `~/.agents/**`, and `~/.config/opencode/**`; this includes Manul databases, prompts, logs, adapters, daemon state and runtime permissions/configuration.
+- Do not follow symlinks or use shell/file/skill tools to reach those locations indirectly.
+- Do not inspect Manul task state or runtime artifacts to prove routing/role selection. Those are operator-owned diagnostics collected outside the implementation session.
+- Prefer repository-local instructions and skills. Global skills may only be used when their contents are explicitly supplied to the agent as task context; never tell the agent to open a global skill path.
+- If a required policy/dependency is genuinely unavailable inside the workspace and was not supplied in context, state the missing input and stop instead of probing protected paths or asking for broader permissions.
+- Do not change runtime configuration or permissions to work around this boundary.
+
+These restrictions are part of the default task contract, not requirements that the user must repeat in every GitHub comment. The generated prompt must not contain conflicting instructions that tell the agent to load `~/.agents/**` or inspect private runtime state.
+
 ## 14. Watchdog contract
 
 The watchdog is a liveness/recovery mechanism, not a general task scheduler.
