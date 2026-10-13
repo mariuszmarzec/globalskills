@@ -164,7 +164,7 @@ fi
 # Assert that the real IMPLEMENT evaluator has a no-op path guarded by the
 # verifier, skips ordinary branch/PR verification after it qualifies, and still
 # validates the canonical PR URL before declaring success.
-evaluator_block="$(sed -n '/elif \\[ "\\$TASK_ACTION" = "IMPLEMENT" \\]; then/,+42p' "$SCRIPT_DIR/manul-daemon.sh")"
+evaluator_block="$(grep -F -A 42 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
 grep -q 'already_satisfied" != "true"' <<<"$evaluator_block"
