@@ -107,6 +107,13 @@ if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
+# The permission helper must use the same custom OpenCode config as daemon/watchdog.
+# shellcheck source=manul-env.sh
+source "$CANONICAL_DIR/manul-env.sh"
+if ! manul_env_load "$RUNTIME_DIR"; then
+    fail "Could not load $RUNTIME_DIR/.env for provider configuration"
+fi
+
 echo
 echo "  Preparing OpenCode provider permissions..."
 if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
