@@ -3357,13 +3357,21 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
     # Update prompt to include authoritative repository path and branch policy
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
-## Working Directory
-This is the ONLY repository directory you may inspect or modify:
+## Working Directory and Local-Access Boundary
+This is the ONLY repository directory you may inspect or modify for this task:
 __WORKDIR__
 
-All git commands and file operations for this task MUST be performed in this directory.
+All repository file reads/writes, shell commands that inspect the repository, and all git commands MUST run in this directory. Do not inspect or modify another local repository/worktree path managed internally by Manul.
 
-Do NOT access or modify any other local repository/worktree path managed internally by Manul.
+Treat local Manul/OpenCode/operator state as outside your task boundary. Do NOT read, list, search, probe, or follow paths in the home directory or runtime internals, including (but not limited to):
+- ~/.manul/** (task state, DB, prompts, logs, adapters, config, symlinks, runtime artifacts)
+- ~/.config/opencode/** (provider configuration and permissions)
+- ~/.agents/** or other global agent/skill directories
+- daemon logs, process environments, agent runtime internals, or other tasks' workspaces
+
+Do not use shell commands, file tools, skill tools, symlinks, or indirect access to bypass this boundary. Do not attempt to diagnose or prove runtime routing from inside the implementation session. Manul/operator diagnostics must gather that evidence separately, outside this agent run.
+
+Use repository-local documentation and skills when present. If a task genuinely requires an external dependency or a policy/document that exists only outside the workspace, stop and explain the exact missing input; do not inspect private paths or broaden permissions. Do not change runtime configuration or access permissions to get around this boundary.
 
 ## Branch Policy
 PROMPT_APPEND
@@ -3388,7 +3396,7 @@ PROMPT_APPEND
 - The daemon does NOT create your task branch for you
 - First determine whether this is informational or requires repository changes
 - For informational tasks: do NOT modify the repository and do NOT create a branch; post the answer to GitHub and finish
-- For repository changes: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy
+- For repository changes: follow the repository's documented branching conventions and any relevant skill already available in the task context/workspace. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
 - Create the branch yourself before committing or pushing changes
 - If the task explicitly requires another branch as the base, including another feature branch, use it as the base and update it from the remote before creating your branch
 - Never commit or push repository changes directly to the prepared/base/default branch
@@ -3408,8 +3416,7 @@ PROMPT_APPEND
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
 ## Skills
-Your skills are available at: ~/.agents/skills
-Use relevant skills when appropriate to guide your implementation.
+Use relevant repository-local instructions and skills available within the assigned workspace. Do not browse or load global skills from `~/.agents/**`; only use externally provided skill content if it is explicitly included in this task prompt/context. If an unavailable external skill is essential, report the missing input rather than searching outside the workspace.
 PROMPT_APPEND
 
     # Substitute all single-line placeholders with actual runtime values
