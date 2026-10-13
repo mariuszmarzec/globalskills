@@ -1206,7 +1206,10 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
-    [ -n "$prompt" ] || continue
+    # A bare trigger ("/manul" with no following text) legitimately yields an
+    # empty prompt — the issue/PR body supplies the task via conversation
+    # context. Only a bare CONTINUE (no answer) is not a real task.
+    if [ -z "$prompt" ] && [ "$action" = "CONTINUE" ]; then continue; fi
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
@@ -1297,7 +1300,9 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
-    [ -n "$prompt" ] || continue
+    # A bare trigger in the issue body legitimately yields an empty prompt —
+    # the issue description itself is the task via conversation context.
+    if [ -z "$prompt" ] && [ "$action" = "CONTINUE" ]; then continue; fi
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1378,7 +1383,10 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
-    [ -n "$prompt" ] || continue
+    # A bare trigger on a review comment legitimately yields an empty prompt —
+    # the review thread supplies the task via conversation context. Only a
+    # bare CONTINUE (no answer) is not a real task.
+    if [ -z "$prompt" ] && [ "$action" = "CONTINUE" ]; then continue; fi
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
