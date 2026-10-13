@@ -52,7 +52,8 @@ manul_env_bootstrap() {
 #
 # This file is loaded by unattended Manul processes (daemon/watchdog).
 # Keep provider-specific paths here when they are not available from cron,
-# for example OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH.
+# for example OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCODE_CONFIG,
+# and OPENCODE_BIN. Only explicitly supported variables are persisted.
 #
 # The installer only copies a small allowlist of provider variables from the
 # current process environment. Existing entries are always preserved.
@@ -71,6 +72,7 @@ EOF
     OPENCLAW_GATEWAY_PORT \
     OPENCLAW_BIN \
     OPENCODE_BIN \
+    OPENCODE_CONFIG \
     MANUL_JIRA_USER \
     MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
