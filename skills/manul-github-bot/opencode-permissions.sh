@@ -6,12 +6,16 @@
 # unrelated user configuration.
 #
 # Required rules (idempotent, additive):
-#   /tmp/**                                  - scratch space for cloned repos
-#   ~/.gradle/caches/modules-2/files-2.1/**  - dependency artifacts (JARs) that
-#                                              agents must read to understand
-#                                              library APIs. Scoped to the module
-#                                              cache only, never the whole Gradle
-#                                              home, which may hold credentials.
+#   /tmp/**                                  - existing task workspace scratch space
+#   /tmp/manul-diagnostics/**                - local operator diagnostic artifacts
+#   ~/.manul/logs/**                         - read/search-only operator diagnostics
+#   ~/.gradle/caches/modules-2/files-2.1/**  - dependency artifacts (JARs), scoped
+#                                              to this cache only (not all Gradle
+#                                              state, which may contain credentials).
+#
+# The log rule enables an explicitly authorized LOCAL operator diagnostic run.
+# It does not override Manul's generated task contract, which prohibits worker
+# tasks from inspecting Manul runtime state/logs.
 
 set -euo pipefail
 
@@ -20,6 +24,14 @@ set -euo pipefail
 # it never removes or rewrites any other rule.
 REQUIRED_PERMISSION_RULES=(
   '.permission.external_directory["/tmp/**"] = "allow"'
+  '.permission.external_directory["/tmp/manul-diagnostics/**"] = "allow"'
+  '.permission.read["/tmp/manul-diagnostics/**"] = "allow"'
+  '.permission.edit["/tmp/manul-diagnostics/**"] = "allow"'
+  '.permission.external_directory["~/.manul/logs/**"] = "allow"'
+  '.permission.read["~/.manul/logs/**"] = "allow"'
+  '.permission.glob["~/.manul/logs/**"] = "allow"'
+  '.permission.grep["~/.manul/logs/**"] = "allow"'
+  '.permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
 )
 
@@ -27,6 +39,8 @@ REQUIRED_PERMISSION_RULES=(
 # with REQUIRED_PERMISSION_RULES above.
 REQUIRED_PERMISSION_PATHS=(
   '/tmp/**'
+  '/tmp/manul-diagnostics/**'
+  '~/.manul/logs/**'
   '~/.gradle/caches/modules-2/files-2.1/**'
 )
 
@@ -101,3 +115,18 @@ for i in "${!REQUIRED_PERMISSION_PATHS[@]}"; do
     exit 1
   fi
 done
+
+# Verify tool-level permissions against the EFFECTIVE config too. The external
+# directory rule grants access outside the workspace; edit deny keeps logs
+# read-only for OpenCode file tools.
+if ! "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null | jq -e '
+  .permission.read["~/.manul/logs/**"] == "allow" and
+  .permission.glob["~/.manul/logs/**"] == "allow" and
+  .permission.grep["~/.manul/logs/**"] == "allow" and
+  .permission.edit["~/.manul/logs/**"] == "deny" and
+  .permission.read["/tmp/manul-diagnostics/**"] == "allow" and
+  .permission.edit["/tmp/manul-diagnostics/**"] == "allow"
+' >/dev/null 2>&1; then
+  echo "ERROR: OpenCode effective config lacks the required read-only log/diagnostic permissions" >&2
+  exit 1
+fi
