@@ -10,8 +10,9 @@ mkdir -p "$MANUL_DIR"
 cat >"$MANUL_DIR/config.json" <<'JSON'
 {"automation":{"heartbeatInterval":60,"heartbeatTimeout":900,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
 JSON
-# Configure all runtime paths before sourcing: manul-daemon.sh initializes its
-# DB/schema during source, so use only the test's isolated SQLite/log files.
+# Isolate the production verifier without starting the daemon CLI loop.
+# Extract the actual function body from manul-daemon.sh so the regression test
+# exercises production logic while keeping runtime bootstrap outside the fixture.
 DB="$TMP/processed-comments.sqlite"
 LOG="$TMP/daemon.log"
 LIFECYCLE_LOG="$TMP/lifecycle.log"
@@ -21,16 +22,19 @@ export DB LOG LIFECYCLE_LOG CONFIG GH_API_TIMEOUT
 mkdir -p "$(dirname "$DB")"
 : >"$LOG"
 : >"$LIFECYCLE_LOG"
-export MANUL_TESTING=true
-set +e
-source "$SCRIPT_DIR/manul-daemon.sh" 2>"$TMP/source.err"
-source_rc=$?
-set -e
-if [ "$source_rc" -ne 0 ]; then
-  echo "FAIL: sourcing manul-daemon.sh returned rc=$source_rc"
-  cat "$TMP/source.err" 2>/dev/null || true
+
+sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+log() { echo "$*" >>"$LOG"; }
+lc_log() { echo "$*" >>"$LIFECYCLE_LOG"; }
+
+verifier_source="$(sed -n '/^verify_existing_task_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+if [ -z "$verifier_source" ]; then
+  echo "FAIL: verify_existing_task_pr() was not found in manul-daemon.sh" >&2
   exit 1
 fi
+eval "$verifier_source"
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
@@ -157,11 +161,14 @@ else
   exit 1
 fi
 
-# The evaluator must not route an accepted no-op back through the workspace's
-# base-branch-only check for verify_required_pr.
-evaluator_block="$(sed -n '/elif \\[ "\$TASK_ACTION" = "IMPLEMENT" \\] ; then/,$p' "$SCRIPT_DIR/manul-daemon.sh" 2>/dev/null || true)"
-grep -q 'already_satisfied.*true' "$SCRIPT_DIR/manul-daemon.sh"
-grep -q 'verify_existing_task_pr' "$SCRIPT_DIR/manul-daemon.sh"
-echo "PASS: IMPLEMENT evaluator has a dedicated already-satisfied path"
+# Assert that the real IMPLEMENT evaluator has a no-op path guarded by the
+# verifier, skips ordinary branch/PR verification after it qualifies, and still
+# validates the canonical PR URL before declaring success.
+evaluator_block="$(sed -n '/elif \\[ "\\$TASK_ACTION" = "IMPLEMENT" \\]; then/,+42p' "$SCRIPT_DIR/manul-daemon.sh")"
+grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
+grep -q 'already_satisfied="true"' <<<"$evaluator_block"
+grep -q 'already_satisfied" != "true"' <<<"$evaluator_block"
+grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
+echo "PASS: IMPLEMENT evaluator verifies an existing PR and retains canonical URL validation"
 
 echo "All existing-task PR regression tests passed."
