@@ -11,6 +11,7 @@ It watches configured repositories, reacts to `/manul` in issue bodies, issue/PR
 
 - creates or resumes a task;
 - prepares an isolated workspace;
+- gives the agent a task-scoped local-access boundary: repository operations stay in the assigned workspace, and private runtime/global-skill directories are off-limits;
 - lets the agent determine whether the request is informational or requires repository changes;
 - executes the task through the current agent runtime;
 - verifies the result;
