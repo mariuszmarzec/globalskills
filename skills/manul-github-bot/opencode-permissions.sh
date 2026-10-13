@@ -25,13 +25,13 @@ set -euo pipefail
 REQUIRED_PERMISSION_RULES=(
   '.permission.external_directory["/tmp/**"] = "allow"'
   '.permission.external_directory["/tmp/manul-diagnostics/**"] = "allow"'
-  '.permission.read["/tmp/manul-diagnostics/**"] = "allow"'
-  '.permission.edit["/tmp/manul-diagnostics/**"] = "allow"'
+  '.permission.read |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.read["/tmp/manul-diagnostics/**"] = "allow"'
+  '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["/tmp/manul-diagnostics/**"] = "allow"'
   '.permission.external_directory["~/.manul/logs/**"] = "allow"'
-  '.permission.read["~/.manul/logs/**"] = "allow"'
-  '.permission.glob["~/.manul/logs/**"] = "allow"'
-  '.permission.grep["~/.manul/logs/**"] = "allow"'
-  '.permission.edit["~/.manul/logs/**"] = "deny"'
+  '.permission.read |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.read["~/.manul/logs/**"] = "allow"'
+  '.permission.glob |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.glob["~/.manul/logs/**"] = "allow"'
+  '.permission.grep |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.grep["~/.manul/logs/**"] = "allow"'
+  '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
 )
 
