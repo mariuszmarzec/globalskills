@@ -688,7 +688,7 @@ generate_prompt \
     "master" \
     "master"
 
-if assert_file_contains "task workspace injected" "$WORK/prompt.md" "This is the ONLY repository directory you may inspect or modify:"; then
+if assert_file_contains "task workspace injected" "$WORK/prompt.md" "This is the ONLY repository directory you may inspect or modify for this task:"; then
     :
 else
     :
