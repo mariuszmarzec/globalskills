@@ -219,13 +219,34 @@ PROMPT_EOF
 
     cat >> "$out_file" <<'PROMPT_APPEND'
 
-## Working Directory
-This is the ONLY repository directory you may inspect or modify:
+## Working Directory and Local-Access Boundary
+This is the ONLY repository directory you may inspect or modify for this task:
 __WORKDIR__
 
-All git commands and file operations for this task MUST be performed in this directory.
+All repository file reads/writes, shell commands that inspect the repository, and all git commands MUST run in this directory. Do not inspect or modify another local repository/worktree path managed internally by Manul.
 
-Do NOT access or modify any other local repository/worktree path managed internally by Manul.
+Treat local Manul/OpenCode/operator state as outside your task boundary. Do NOT read, list, search, probe, or follow paths in the home directory or runtime internals, including (but not limited to):
+- ~/.manul/** (task state, DB, prompts, logs, adapters, config, symlinks, runtime artifacts)
+- ~/.config/opencode/** (provider configuration and permissions)
+- ~/.agents/** or other global agent/skill directories
+- daemon logs, process environments, agent runtime internals, or other tasks' workspaces
+
+Do not use shell commands, file tools, skill tools, symlinks, or indirect access to bypass this boundary. Do not attempt to diagnose or prove runtime routing from inside the implementation session. Manul/operator diagnostics must gather that evidence separately, outside this agent run.
+
+Use repository-local documentation and skills when present. If a task genuinely requires an external dependency or a policy/document that exists only outside the workspace, stop and explain the exact missing input; do not inspect private paths or broaden permissions. Do not change runtime configuration or access permissions to get around this boundary.
+
+## Scope-First Investigation and Host-System Boundary
+Start with the task request and the smallest relevant evidence set inside WORKDIR: repository docs, source, tests, build/dependency declarations, and documented project commands. Search narrowly and expand only when a concrete finding proves it is needed. Do not perform broad host/environment reconnaissance just to understand an ordinary repository task.
+
+For ordinary implementation, PR review, and test tasks, do NOT inspect host OS/service configuration outside the authorized workspace, including /etc/**, /var/**, /run/**, /proc/**, /sys/**, host database configuration (for example /etc/mysql/**), other users' home directories, or unrelated host process/service/container state.
+
+You may run repository-declared build/test/dependency commands (including the repository's documented Docker Compose setup) when required by the task. This does NOT authorize reading host configuration, probing unrelated services, or starting/stopping host-level services. If a documented project command fails because a dependency is unavailable, capture the exact error and report the blocker instead of diagnosing the host installation.
+
+Keep shell/tool calls focused on one diagnostic purpose. Avoid compound commands that mix repository work with unrelated filesystem or system probes.
+
+If a tool call is denied by the permission policy, do not retry the same restricted operation through another tool, path, symlink, or reshaped command, and do not ask for broader permissions just to continue routine work. Record the exact denied operation and continue only with independent in-scope work; otherwise report the blocker.
+
+These limits apply to all delegated/subagents too. Pass the same scope boundary into every delegated task prompt.
 
 ## Branch Policy
 PROMPT_APPEND
@@ -246,7 +267,7 @@ PROMPT_APPEND
 - The daemon prepares an up-to-date base but does NOT create the task branch
 - First determine whether this is informational or requires repository changes
 - For informational tasks: do NOT modify the repository and do NOT create a branch
-- For repository changes: read and follow `~/.agents/skills/feature-branching-strategy/SKILL.md` as the authoritative branching policy
+- For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories
 - Create the branch yourself before committing or pushing changes
 - Never commit or push changes directly to the base/default branch
 PROMPT_APPEND
@@ -255,8 +276,7 @@ PROMPT_APPEND
     cat >> "$out_file" <<'PROMPT_APPEND'
 
 ## Skills
-Your skills are available at: ~/.agents/skills
-Use relevant skills when appropriate to guide your implementation.
+Use relevant repository-local instructions and skills available within the assigned workspace. Do not browse or load global skills from `~/.agents/**`; only use externally provided skill content if it is explicitly included in this task prompt/context. If an unavailable external skill is essential, report the missing input rather than searching outside the workspace.
 PROMPT_APPEND
 
     # Substitute all single-line placeholders with actual runtime values
@@ -531,7 +551,7 @@ else
 fi
 
 # Test G: standalone issue prompt delegates branch creation to the agent and
-# points it at the authoritative branching skill.
+# relies only on repository-local or explicitly supplied branching guidance.
 echo -n "Test: standalone prompt delegates branch creation to agent ... "
 rm -f "$WORK/prompt.md"
 generate_prompt \
@@ -560,7 +580,12 @@ if assert_file_not_contains "agent must not be told to avoid branch creation" "$
 else
     :
 fi
-if assert_file_contains "agent told to use feature branching skill" "$WORK/prompt.md" "~/.agents/skills/feature-branching-strategy/SKILL.md"; then
+if assert_file_contains "agent told to use repository-local/provided branching guidance" "$WORK/prompt.md" "follow repository-local branching guidance or skill content explicitly supplied in the task context"; then
+    :
+else
+    :
+fi
+if assert_file_not_contains "global branching skill path is not exposed" "$WORK/prompt.md" "~/.agents/skills/feature-branching-strategy/SKILL.md"; then
     :
 else
     :
@@ -683,6 +708,11 @@ if assert_file_not_contains "legacy authoritative repository section removed" "$
 else
     :
 fi
+if assert_file_contains "scope-first investigation required" "$WORK/prompt.md" "Search narrowly and expand only when a concrete finding proves it is needed"; then :; else :; fi
+if assert_file_contains "host system paths are explicitly out of scope" "$WORK/prompt.md" "/etc/**, /var/**, /run/**, /proc/**, /sys/**"; then :; else :; fi
+if assert_file_contains "documented project dependencies remain allowed" "$WORK/prompt.md" "repository-declared build/test/dependency commands"; then :; else :; fi
+if assert_file_contains "permission denial must not be bypassed" "$WORK/prompt.md" "do not retry the same restricted operation through another tool"; then :; else :; fi
+if assert_file_contains "scope boundary applies to delegated agents" "$WORK/prompt.md" "Pass the same scope boundary into every delegated task prompt"; then :; else :; fi
 
 
 # ─── Results summary ───────────────────────────────────────────────────────────
