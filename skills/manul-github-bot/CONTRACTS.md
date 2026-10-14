@@ -234,6 +234,15 @@ Every generated implementation/review-fix prompt must enforce a least-privilege 
 - If a required policy/dependency is genuinely unavailable inside the workspace and was not supplied in context, state the missing input and stop instead of probing protected paths or asking for broader permissions.
 - Do not change runtime configuration or permissions to work around this boundary.
 
+### Scope-first investigation and host-system boundary
+
+- Start with the smallest relevant evidence set: the task request, `WORKDIR`, repository-local documentation, source, tests, build/dependency files, and documented project commands. Search narrowly and expand only when a concrete finding shows it is necessary. Do not perform broad host/environment reconnaissance just to understand an ordinary repository task.
+- For ordinary implementation, review, and test tasks, host OS/service configuration is out of scope. Do not inspect paths outside the authorized workspace merely because a dependency is unavailable. In particular, do not inspect `/etc/**`, `/var/**`, `/run/**`, `/proc/**`, `/sys/**`, host database configuration such as `/etc/mysql/**`, other users' home directories, or enumerate unrelated host processes/services/containers. The exception is a task that explicitly targets host/system administration and expressly authorizes that access; do not infer such authorization from a generic coding task or a dependency failing to start.
+- Repository-declared build/test/dependency commands (including a repository's own documented Docker Compose setup) may be used when required by the task. This does not authorize reading host configuration, probing unrelated services, or starting/stopping host-level services. If the documented project command cannot run, capture its error and report the precise blocker rather than diagnosing the host installation.
+- Keep shell/tool calls focused on one diagnostic purpose. Avoid compound commands that mix in-workspace work with unrelated filesystem or system probes.
+- After a permission denial, do not retry the same restricted operation through another tool, path, symlink, or reshaped command, and do not ask for broader permissions just to continue routine work. Record the exact denied operation and continue only with independent in-scope work; otherwise report the blocker.
+- These restrictions also apply to delegated/subagents. Preserve the same boundary in every delegated task prompt.
+
 These restrictions are part of the default task contract, not requirements that the user must repeat in every GitHub comment. The generated prompt must not contain conflicting instructions that tell the agent to load `~/.agents/**` or inspect private runtime state.
 
 ## 14. Watchdog contract

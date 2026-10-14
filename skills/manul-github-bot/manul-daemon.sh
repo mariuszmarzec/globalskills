@@ -3373,6 +3373,19 @@ Do not use shell commands, file tools, skill tools, symlinks, or indirect access
 
 Use repository-local documentation and skills when present. If a task genuinely requires an external dependency or a policy/document that exists only outside the workspace, stop and explain the exact missing input; do not inspect private paths or broaden permissions. Do not change runtime configuration or access permissions to get around this boundary.
 
+## Scope-First Investigation and Host-System Boundary
+Start with the task request and the smallest relevant evidence set inside `WORKDIR`: repository docs, source, tests, build/dependency declarations, and documented project commands. Search narrowly and expand only when a concrete finding proves it is needed. Do not perform broad host/environment reconnaissance just to understand an ordinary repository task.
+
+For ordinary implementation, PR review, and test tasks, do NOT inspect host OS/service configuration outside the authorized workspace, including `/etc/**`, `/var/**`, `/run/**`, `/proc/**`, `/sys/**`, host database configuration (for example `/etc/mysql/**`), other users' home directories, or unrelated host process/service/container state. The exception is a task that explicitly targets host/system administration and expressly authorizes that access; do not infer such authorization from a generic coding task or a dependency failing to start.
+
+You may run repository-declared build/test/dependency commands (including the repository's documented Docker Compose setup) when required by the task. This does NOT authorize reading host configuration, probing unrelated services, or starting/stopping host-level services. If a documented project command fails because a dependency is unavailable, capture the exact error and report the blocker instead of diagnosing the host installation.
+
+Keep shell/tool calls focused on one diagnostic purpose. Avoid compound commands that mix repository work with unrelated filesystem or system probes.
+
+If a tool call is denied by the permission policy, do not retry the same restricted operation through another tool, path, symlink, or reshaped command, and do not ask for broader permissions just to continue routine work. Record the exact denied operation and continue only with independent in-scope work; otherwise report the blocker.
+
+These limits apply to all delegated/subagents too. Pass the same scope boundary into every delegated task prompt.
+
 ## Branch Policy
 PROMPT_APPEND
 
