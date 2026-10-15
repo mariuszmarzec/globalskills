@@ -93,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=29
+  local expected_tests=30
   local actual_tests
   actual_tests=$(grep -Ec "^test_[a-zA-Z0-9_]+\(\)[[:space:]]*(\{|\()" "$0" 2>/dev/null || echo 0)
 
@@ -599,11 +599,37 @@ test_invalid_ownership_blocks_dispatch() {
 }
 run_and_test "Test 21: Invalid ownership blocks dispatch" test_invalid_ownership_blocks_dispatch
 
+# Test 22: an otherwise-valid lease must not authorize a different workspace path.
+echo ""
+echo "=== Test 22: Lease ID must match the executor's physical workspace ==="
+test_workspace_id_must_match_candidate_path() {
+  workspace_pool_init 2 reset
 
-# Test 22: exact thread context reclaims the same workspace and keeps
+  local ws_a ws_b path_a path_b
+  ws_a="$(workspace_lease "task-A")"
+  ws_b="$(workspace_lease "task-B")"
+  [ -n "$ws_a" ] && [ -n "$ws_b" ] && [ "$ws_a" != "$ws_b" ] || return 1
+
+  path_a="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$ws_a';")"
+  path_b="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$ws_b';")"
+  [ -d "$path_a" ] && [ -d "$path_b" ] || return 1
+
+  workspace_owned_path_matches "$ws_a" "task-A" "$path_a" || return 1
+  if workspace_owned_path_matches "$ws_a" "task-A" "$path_b"; then
+    echo "workspace guard incorrectly accepted a second extant checkout" >&2
+    return 1
+  fi
+
+  workspace_release "$ws_a" "task-A"
+  workspace_release "$ws_b" "task-B"
+}
+run_and_test "Test 22: Lease ID must match executor workspace path" test_workspace_id_must_match_candidate_path
+
+
+# Test 23: exact thread context reclaims the same workspace and keeps
 # uncommitted changes between separate tasks.
 echo ""
-echo "=== Test 22: Thread context preserves uncommitted work ==="
+echo "=== Test 23: Thread context preserves uncommitted work ==="
 test_thread_context_reclaims_workspace() {
   workspace_pool_init 2 reset
 
@@ -625,12 +651,12 @@ test_thread_context_reclaims_workspace() {
   grep -Fxq "local uncommitted change" "$path/local-thread.txt" || return 1
   workspace_release "$ws2" "task-thread-2"
 }
-run_and_test "Test 22: Thread context preserves uncommitted work" test_thread_context_reclaims_workspace
+run_and_test "Test 23: Thread context preserves uncommitted work" test_thread_context_reclaims_workspace
 
-# Test 23: a thread without its own prior workspace inherits the PR root
+# Test 24: a thread without its own prior workspace inherits the PR root
 # workspace, preserving the root's local changes.
 echo ""
-echo "=== Test 23: Review thread falls back to PR context ==="
+echo "=== Test 24: Review thread falls back to PR context ==="
 test_thread_context_falls_back_to_pr() {
   workspace_pool_init 2 reset
 
@@ -650,11 +676,11 @@ test_thread_context_falls_back_to_pr() {
   grep -Fxq "PR local work" "$path/local-pr.txt" || return 1
   workspace_release "$ws_thread" "task-thread-1"
 }
-run_and_test "Test 23: Review thread falls back to PR context" test_thread_context_falls_back_to_pr
+run_and_test "Test 24: Review thread falls back to PR context" test_thread_context_falls_back_to_pr
 
-# Test 24: mapped workspaces are not stolen by unrelated new contexts.
+# Test 25: mapped workspaces are not stolen by unrelated new contexts.
 echo ""
-echo "=== Test 24: Mapped workspace is protected from unrelated contexts ==="
+echo "=== Test 25: Mapped workspace is protected from unrelated contexts ==="
 test_mapped_workspace_not_stolen() {
   workspace_pool_init 2 reset
 
@@ -668,12 +694,12 @@ test_mapped_workspace_not_stolen() {
   [ "$ws_other" != "$ws_pr" ] || return 1
   workspace_release "$ws_other" "task-other"
 }
-run_and_test "Test 24: Mapped workspace protected from unrelated contexts" test_mapped_workspace_not_stolen
+run_and_test "Test 25: Mapped workspace protected from unrelated contexts" test_mapped_workspace_not_stolen
 
-# Test 25: idle context workspaces survive stale cleanup so local changes
+# Test 26: idle context workspaces survive stale cleanup so local changes
 # remain available for a later comment.
 echo ""
-echo "=== Test 25: Context workspace survives stale cleanup ==="
+echo "=== Test 26: Context workspace survives stale cleanup ==="
 test_context_workspace_survives_stale_cleanup() {
   workspace_pool_init 1 reset
 
@@ -692,11 +718,11 @@ test_context_workspace_survives_stale_cleanup() {
   [ -d "$path/.git" ] || true
   [ -f "$path/local.txt" ] || return 1
 }
-run_and_test "Test 25: Context workspace survives stale cleanup" test_context_workspace_survives_stale_cleanup
+run_and_test "Test 26: Context workspace survives stale cleanup" test_context_workspace_survives_stale_cleanup
 
-# Test 26: PR branch preparation never discards dirty local changes.
+# Test 27: PR branch preparation never discards dirty local changes.
 echo ""
-echo "=== Test 26: PR branch preparation preserves dirty work ==="
+echo "=== Test 27: PR branch preparation preserves dirty work ==="
 test_pr_branch_preparation_preserves_dirty_work() (
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
@@ -719,13 +745,13 @@ test_pr_branch_preparation_preserves_dirty_work() (
   grep -Fxq "dirty local work" "$work/file.txt" || return 1
   [ "$(git -C "$work" symbolic-ref --short HEAD)" = "feature/test" ] || return 1
 )
-run_and_test "Test 26: PR branch preparation preserves dirty work" test_pr_branch_preparation_preserves_dirty_work
+run_and_test "Test 27: PR branch preparation preserves dirty work" test_pr_branch_preparation_preserves_dirty_work
 
 
-# Test 27: a new context can get a fresh workspace even when the configured
+# Test 28: a new context can get a fresh workspace even when the configured
 # pool is fully occupied by idle persistent contexts.
 echo ""
-echo "=== Test 27: New context gets fresh workspace after context pool is full ==="
+echo "=== Test 28: New context gets fresh workspace after context pool is full ==="
 test_new_context_gets_fresh_workspace() {
   MAX_CONCURRENT_TASKS=1
   workspace_pool_init 1 reset
@@ -741,7 +767,7 @@ test_new_context_gets_fresh_workspace() {
   sqlite3 "$DB" "SELECT workspaceId FROM workspace_contexts WHERE contextId='conv-repo-issue-99';" | grep -qx "$ws_new" || return 1
   workspace_release "$ws_new" "task-new"
 }
-run_and_test "Test 27: New context gets fresh workspace after context pool is full" test_new_context_gets_fresh_workspace
+run_and_test "Test 28: New context gets fresh workspace after context pool is full" test_new_context_gets_fresh_workspace
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"
