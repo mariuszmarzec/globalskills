@@ -142,7 +142,7 @@ mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/
 log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
 
 # ProcessRunner is the only process boundary. The raw JSONL is retained as a
 # per-attempt diagnostic artifact; OPT_STDOUT_FILE is rewritten below into plain
@@ -156,7 +156,7 @@ ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
 local_runner_result="$(ProcessRunner.run \
     --timeout "$AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
-    -- "$OPENCODE_BIN" run \
+    -- env -u PYTHONPATH -u PYTHONHOME "$OPENCODE_BIN" run \
         "${SESSION_ARGS[@]}" \
         "${AGENT_ARGS[@]}" \
         --format json \
@@ -260,13 +260,24 @@ if [ -s "$RAW_STDOUT_FILE" ]; then
         permission_operation="$(printf '%s' "$permission_detail" | sed -nE 's/.*permission requested: ([^;]+).*/\1/ip' | head -n1)"
     fi
 fi
-# Stderr permission detection is a fallback only. When the runtime already
-# emitted a structured JSONL error event (e.g. ProviderError), that takes
-# precedence so incidental permission text in stderr does not override the
-# stronger structured diagnostic.
-if [ "$permission_blocked" -eq 0 ] && [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
-    if grep -Eqi 'permission requested: [^;]+; auto-rejecting' "$OPT_STDERR_FILE" 2>/dev/null; then
-        permission_blocked=1
+# Use stderr to enrich a generic structured permission rejection when the
+# JSONL event omits the concrete target. Do not let incidental stderr text
+# override a specific, structured non-permission error (for example, ProviderError).
+stderr_permission_line=""
+stderr_permission_operation=""
+if [ -s "$OPT_STDERR_FILE" ]; then
+    stderr_permission_line="$(grep -Ei 'permission requested: [^;]+; auto-rejecting' "$OPT_STDERR_FILE" 2>/dev/null | tail -n 1 | tr '\n\r' '  ' | cut -c1-400 || true)"
+    if [ -n "$stderr_permission_line" ]; then
+        stderr_permission_operation="$(printf '%s' "$stderr_permission_line" | sed -nE 's/.*permission requested: ([^;]+); auto-rejecting.*/\1/ip' | head -n 1)"
+        if [ "$permission_blocked" -eq 0 ] && [ -z "$error_message" ]; then
+            permission_blocked=1
+        fi
+        if [ "$permission_blocked" -eq 1 ]; then
+            [ -n "$permission_operation" ] || permission_operation="$stderr_permission_operation"
+            if [ -z "$permission_tool" ] && [ -n "$stderr_permission_operation" ]; then
+                permission_tool="$(printf '%s' "$stderr_permission_operation" | awk '{print $1}')"
+            fi
+        fi
     fi
 fi
 if [ "$permission_blocked" -eq 1 ]; then
@@ -390,7 +401,8 @@ jq -cn \
     --arg raw_log "$RAW_STDOUT_FILE" \
     --arg permission_tool "$permission_tool" \
     --arg permission_operation "$permission_operation" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,raw_log:$raw_log}}'
+    --arg selected_agent "$OPT_AGENT" \
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,selected_agent:$selected_agent,raw_log:$raw_log}}'
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
