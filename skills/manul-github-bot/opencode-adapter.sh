@@ -239,9 +239,25 @@ fi
 # marker. Surface it as an explicit recoverable failure so the daemon retries with
 # a different approach instead of silently treating it as "session can continue".
 permission_blocked=0
+permission_operation=""
+permission_detail=""
+permission_tool=""
+# Extract a compact description of the denied operation, not the raw event.
+# OpenCode event shapes differ across versions; avoid publishing arguments,
+# prompt contents, or arbitrary event JSON to GitHub.
 if [ -s "$RAW_STDOUT_FILE" ]; then
-    if jq -e 'select(.type == "tool_use") | select(.part.state.status == "error") | select(.part.state.error | test("permission|rejected|auto-reject"; "i"))' "$RAW_STDOUT_FILE" >/dev/null 2>&1; then
+    permission_event="$(jq -c '
+      select(.type == "tool_use")
+      | select(.part.state.status == "error")
+      | select((.part.state.error // "") | tostring | test("permission|rejected|auto-reject"; "i"))
+    ' "$RAW_STDOUT_FILE" 2>/dev/null | tail -n 1 || true)"
+    if [ -n "$permission_event" ]; then
         permission_blocked=1
+        permission_tool="$(printf '%s' "$permission_event" | jq -r '.part.tool // .part.name // .part.state.tool // .tool // empty' 2>/dev/null)"
+        permission_tool="$(printf '%s' "$permission_tool" | tr '\n\r' '  ' | cut -c1-80)"
+        permission_detail="$(printf '%s' "$permission_event" | jq -r '.part.state.error // .part.error // .error // empty' 2>/dev/null)"
+        permission_detail="$(printf '%s' "$permission_detail" | tr '\n\r' '  ' | sed -E 's/(Bearer|token|api[_ -]?key|password|secret)[=: ]+[^ ]+/\1=[REDACTED]/Ig' | cut -c1-300)"
+        permission_operation="$(printf '%s' "$permission_detail" | sed -nE 's/.*permission requested: ([^;]+).*/\1/ip' | head -n1)"
     fi
 fi
 # Stderr permission detection is a fallback only. When the runtime already
@@ -256,8 +272,15 @@ fi
 if [ "$permission_blocked" -eq 1 ]; then
     error_type="RUNTIME_PERMISSION_BLOCKED"
     error_source="runtime_jsonl"
-    if [ -z "$error_message" ]; then
-        error_message="OpenCode tool call rejected by runtime permission policy"
+    if [ -n "$permission_operation" ]; then
+        error_message="Denied access: $permission_operation"
+    elif [ -n "$permission_detail" ]; then
+        error_message="$permission_detail"
+    else
+        error_message="OpenCode tool call rejected by runtime permission policy; operation details were not present in captured diagnostics"
+    fi
+    if [ -n "$permission_tool" ]; then
+        error_message="$error_message (tool: $permission_tool)"
     fi
 fi
 if [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
@@ -293,7 +316,8 @@ elif grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
 elif [ "$permission_blocked" -eq 1 ]; then
     _status="FAILED"
     _exit_code=1
-    _summary="OpenCode tool call was rejected by the runtime permission policy; the agent could not complete the task as instructed"
+    _summary="OpenCode permission policy rejected a tool call; the agent could not complete the task as instructed"
+    [ -n "$error_message" ] && _summary+="; diagnostic=$error_message"
 else
     step_limit_detected="false"
     if [ -s "$RAW_STDOUT_FILE" ]; then
@@ -364,7 +388,9 @@ jq -cn \
     --arg last_event_type "$last_event_type" \
     --arg failure_code "$failure_code" \
     --arg raw_log "$RAW_STDOUT_FILE" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,raw_log:$raw_log}}'
+    --arg permission_tool "$permission_tool" \
+    --arg permission_operation "$permission_operation" \
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,raw_log:$raw_log}}'
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
