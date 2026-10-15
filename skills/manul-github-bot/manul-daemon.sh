@@ -3046,6 +3046,17 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 7. Do NOT modify `manul.db`.
 8. Do NOT manage Manul task state.
 
+## PR Description Freshness (MANDATORY DELIVERY CONTRACT)
+
+A pushed commit is not fully delivered until the GitHub PR description reflects the complete current PR and has been read back from GitHub.
+
+- For a standalone task, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—update the description of that same PR before continuing the task or reporting the push as delivered.
+- Rebuild the body from the cumulative PR diff and current verification results, not just the latest commit. Keep Summary, Changes, Testing, and related-issue references accurate; preserve still-valid issue-closing links. Do not blindly append bullets, which can leave stale or duplicated content.
+- Write the full Markdown body to a temporary file and use `gh pr edit <PR_NUMBER> --body-file "$BODY_FILE"` (or the equivalent safe `--body-file` option for PR creation); never interpolate a body directly into a double-quoted shell argument.
+- Read back with `gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid`. Verify the body is non-empty and accurate, the URL is the expected PR, the head/base are correct, and the head SHA matches the pushed commit.
+- For an existing-PR task, update the original PR, never create a second PR. If creating/updating or read-back verification fails, report the precise blocker and do NOT emit `TASK_DONE`.
+
 ## GitHub Comment Posting (CRITICAL)
 You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
 
