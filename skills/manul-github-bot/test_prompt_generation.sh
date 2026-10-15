@@ -734,7 +734,7 @@ if assert_file_contains "generated prompt refreshes after every later push" "$WO
 if assert_file_contains "generated prompt uses cumulative PR diff" "$WORK/prompt.md" "Rebuild the body from the cumulative PR diff and current verification results"; then :; else :; fi
 if assert_file_contains "generated prompt requires safe body-file edit" "$WORK/prompt.md" 'gh pr edit <PR_NUMBER> --body-file "$BODY_FILE"'; then :; else :; fi
 if assert_file_contains "generated prompt requires PR head/body read-back" "$WORK/prompt.md" "gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid"; then :; else :; fi
-if assert_file_contains "generated prompt blocks TASK_DONE when description verification fails" "$WORK/prompt.md" "do NOT emit `TASK_DONE`"; then :; else :; fi
+if assert_file_contains "generated prompt blocks TASK_DONE when description verification fails" "$WORK/prompt.md" 'do NOT emit `TASK_DONE`'; then :; else :; fi
 if assert_file_contains "production daemon contains mandatory PR description policy" "$SCRIPT_DIR/manul-daemon.sh" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
 if assert_file_contains "production daemon refreshes after every later push" "$SCRIPT_DIR/manul-daemon.sh" "After EVERY later push to a branch with an open PR"; then :; else :; fi
 
