@@ -235,7 +235,7 @@ jq -n \
   --arg workspace "$WORKSPACE" \
   --arg stdoutFile "$OPENCODE_STDOUT_FILE" \
   --arg stderrFile "$OPENCODE_STDERR_FILE" \
-  --arg agent "coder" \
+  --arg agent "coder-cheap" \
   '{
     taskId: $taskId,
     prompt: $prompt,
@@ -268,7 +268,7 @@ jq -e --arg taskId "smoke-opencode-role" \
     exit 1
   }
 grep -q '^called$' "$OPENCODE_PROOF_FILE" || { echo "FAIL: fake OpenCode was not invoked" >&2; exit 1; }
-grep -q '^args=.*--agent coder' "$OPENCODE_PROOF_FILE" || {
+grep -q '^args=.*--agent coder-cheap' "$OPENCODE_PROOF_FILE" || {
   echo "FAIL: selected coder role did not reach OpenCode CLI" >&2
   cat "$OPENCODE_PROOF_FILE" >&2
   exit 1
@@ -289,7 +289,7 @@ jq -n \
   --arg workspace "$WORKSPACE" \
   --arg stdoutFile "$ROLE_STDOUT_FILE" \
   --arg stderrFile "$ROLE_STDERR_FILE" \
-  --arg agent "coder" \
+  --arg agent "coder-cheap" \
   '{
     taskId: $taskId,
     prompt: $prompt,
@@ -331,7 +331,7 @@ if [ "$(grep -c '^called$' "$OPENCODE_PROOF_FILE")" -ne 2 ]; then
   cat "$OPENCODE_PROOF_FILE" >&2
   exit 1
 fi
-grep -q '^args=.*--agent coder' "$OPENCODE_PROOF_FILE" || {
+grep -q '^args=.*--agent coder-cheap' "$OPENCODE_PROOF_FILE" || {
   echo "FAIL: selected coder role did not reach OpenCode CLI" >&2
   cat "$OPENCODE_PROOF_FILE" >&2
   exit 1
