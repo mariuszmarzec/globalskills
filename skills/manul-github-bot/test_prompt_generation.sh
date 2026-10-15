@@ -18,6 +18,7 @@
 set -uo pipefail
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 PASS=0; FAIL=0; TOTAL=0
 
