@@ -174,7 +174,9 @@ Repository-change tasks:
 - create a dedicated task branch according to the feature/bugfix branching policy;
 - never commit directly to a base/default branch;
 - push the task branch;
-- deliver changes through a real GitHub PR.
+- deliver changes through a real GitHub PR with a meaningful description immediately after the first push;
+- after every later push to a branch with a PR, including checkpoints and review/CI fixes, refresh the same PR description from the cumulative diff and current verification results;
+- read back and verify the description and PR identity/head SHA before reporting delivery; stale or unverified description means delivery is incomplete.
 
 ### PR review/conversation tasks
 
@@ -190,9 +192,10 @@ Issue numbers and PR numbers are independent.
 A repository-change task is not successfully delivered until the PR has been verified as a real GitHub PR with:
 - the expected head branch;
 - the expected base branch;
-- the concrete GitHub PR URL.
+- the concrete GitHub PR URL;
+- a non-empty description that matches the cumulative changes and current verification results after the latest push.
 
-`/compare` and `/pull/new` links are not valid completion evidence.
+The agent must refresh the same PR body after every push (including checkpoints), read it back from GitHub, and confirm the pushed head SHA. `/compare` and `/pull/new` links are not valid completion evidence.
 
 ## 12. Source revalidation
 
