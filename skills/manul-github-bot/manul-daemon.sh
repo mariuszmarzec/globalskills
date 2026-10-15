@@ -3231,7 +3231,7 @@ PROMPT_EOF
 
     # Get workspace path from lease
     local workspace_path
-    workspace_path="$(workspace_get_path "$COMMENT_ID")"
+    workspace_path="$(workspace_get_path "$COMMENT_ID" "$WORKSPACE_ID")"
     if [ -z "$workspace_path" ]; then
       log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
@@ -3330,8 +3330,8 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
      ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
      ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
      ws_path_check="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
-     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ]; then
-       log "ERROR: workspace ownership invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} path=$WORKDIR)"
+     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$WORKDIR"; then
+       log "ERROR: workspace ownership/path invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} registered_path=${ws_path_check:-none} candidate_path=$WORKDIR)"
        lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
        log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
        stop_heartbeat "$COMMENT_ID"
