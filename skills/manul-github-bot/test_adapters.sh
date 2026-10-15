@@ -443,7 +443,7 @@ MOCK
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' '{"type":"tool_use","timestamp":2000,"sessionID":"ses_perm_stderr","part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
-printf '%s\n' '! permission requested: bash (cd /workspace/ws-old && git log); auto-rejecting' >&2
+printf '%s\n' '! permission requested: bash (cd /home/marzec/.manul/workspace/ws-old/src && git log); auto-rejecting' >&2
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -456,12 +456,19 @@ MOCK
       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
   rc2=$?
   assert_json_status "$out2" "FAILED" "Generic JSONL permission denial remains a failure"
-  printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty' | grep -Fxq 'bash (cd /workspace/ws-old && git log)' \
-    && ok "stderr enriches a generic JSONL denial with the exact target" \
-    || fail "stderr permission target was lost: $(printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty')"
-  printf '%s' "$out2" | jq -r '.summary' | grep -Fq '/workspace/ws-old' \
-    && ok "User-facing diagnostic contains the denied workspace path" \
-    || fail "Denied workspace path missing from summary"
+  printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty' | grep -Fxq 'bash (external workspace: /home/marzec/.manul/workspace/ws-old; command redacted)' \
+    && ok "stderr enriches a generic JSONL denial with a sanitized workspace target" \
+    || fail "sanitized permission target was lost: $(printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty')"
+  local summary2
+  summary2="$(printf '%s' "$out2" | jq -r '.summary')"
+  printf '%s' "$summary2" | grep -Fq '/home/marzec/.manul/workspace/ws-old' \
+    && ok "User-facing diagnostic contains the denied workspace root" \
+    || fail "Denied workspace root missing from summary"
+  if printf '%s' "$summary2" | grep -Fq 'git log'; then
+    fail "User-facing diagnostic leaked bash tool arguments"
+  else
+    ok "User-facing diagnostic redacts bash tool arguments"
+  fi
   [ "$rc2" -eq 1 ] && ok "Enriched permission denial remains a failure" || fail "Enriched permission rc=$rc2"
 }
 
