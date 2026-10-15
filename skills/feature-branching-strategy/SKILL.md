@@ -130,6 +130,7 @@ gh pr create --base <parent-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION> 
   - Title: concise, imperative or descriptive, e.g. `Add mock mode to vitalia.py`.
   - Body: a brief summary of what changed and why, plus verification steps if useful (e.g. test results). No walls of text.
 - Link the issue in the body when one exists: `Closes #<ISSUE_NUMBER>`.
+- After the first push of a standalone task branch, create a meaningful PR immediately. After EVERY later push to a branch with an open PR (including checkpoints and fixes), follow `pr-description-management` to refresh the full description from the cumulative diff and current verification, then read it back to verify it; never leave description maintenance until the final push.
 
 ## Never
 
