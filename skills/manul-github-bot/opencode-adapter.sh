@@ -288,7 +288,7 @@ if [ "$permission_blocked" -eq 1 ]; then
     # publish those tool arguments; retain only a recognizable Manul workspace
     # root where present so an out-of-scope workspace access is still actionable.
     if [ "$permission_tool" = "bash" ] || printf '%s' "$permission_operation" | grep -Eq '^bash([[:space:]]|\\()'; then
-        denied_workspace_path="$(printf '%s' "$permission_operation" | grep -oE '/[^[:space:];()&]*/\\.manul/workspace/ws-[^/[:space:);&]+' | head -n 1 || true)"
+        denied_workspace_path="$(printf '%s' "$permission_operation" | grep -oE '/[^[:space:];()&]*/\\.manul/workspace/ws-[^/[:space:]();&]+' | head -n 1 || true)"
         if [ -n "$denied_workspace_path" ]; then
             permission_operation="bash (external workspace: $denied_workspace_path; command redacted)"
         else
