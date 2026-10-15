@@ -230,7 +230,7 @@ while true; do
 
     current_permission_blocked="false"
     if [ -s "$CURRENT_RUN_STDOUT_FILE" ] && \
-       jq -e 'select(.type == "tool_use") | select(.part.state.status == "error") | select((.part.state.error // "" | tostring) | test("permission|rejected|auto-reject"; "i"))' \
+       jq -s -e 'any(.[]; .type == "tool_use" and .part.state.status == "error" and ((.part.state.error // "" | tostring) | test("permission|rejected|auto-reject"; "i")))' \
           "$CURRENT_RUN_STDOUT_FILE" >/dev/null 2>&1; then
         current_permission_blocked="true"
     elif [ -s "$CURRENT_RUN_STDERR_FILE" ] && \
