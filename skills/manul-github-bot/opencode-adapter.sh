@@ -284,6 +284,18 @@ if [ -s "$OPT_STDERR_FILE" ]; then
     fi
 fi
 if [ "$permission_blocked" -eq 1 ]; then
+    # A bash permission target can contain the full shell command. Never
+    # publish those tool arguments; retain only a recognizable Manul workspace
+    # root where present so an out-of-scope workspace access is still actionable.
+    if [ "$permission_tool" = "bash" ] || printf '%s' "$permission_operation" | grep -Eq '^bash([[:space:]]|\\()'; then
+        denied_workspace_path="$(printf '%s' "$permission_operation" | grep -oE '/[^[:space:];()&]*/\\.manul/workspace/ws-[^/[:space:);&]+' | head -n 1 || true)"
+        if [ -n "$denied_workspace_path" ]; then
+            permission_operation="bash (external workspace: $denied_workspace_path; command redacted)"
+        else
+            permission_operation="bash (command details redacted)"
+        fi
+        [ -n "$permission_tool" ] || permission_tool="bash"
+    fi
     error_type="RUNTIME_PERMISSION_BLOCKED"
     error_source="runtime_jsonl"
     if [ -n "$permission_operation" ]; then
