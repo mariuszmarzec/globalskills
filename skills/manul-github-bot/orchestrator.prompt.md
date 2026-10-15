@@ -135,7 +135,7 @@ Use:
 
 ```bash
 BODY_FILE="$(mktemp)"
-cat >"$BODY_FILE" <<\'PR_BODY_EOF\'
+cat >"$BODY_FILE" <<'PR_BODY_EOF'
 <Meaningful complete PR description>
 PR_BODY_EOF
 gh pr create --base <actual-base-branch> --head <your-task-branch> \
