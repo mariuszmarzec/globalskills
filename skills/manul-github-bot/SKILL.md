@@ -125,14 +125,17 @@ See `task-source.sh` and `task-source-jira-tasks.sh` for the provider contract.
 4. Repository-change tasks create the required feature/bugfix branch using the branching strategy skill.
 5. Commit only on the task branch.
 6. Push the task branch.
-7. Open and verify a real GitHub PR targeting the branch used as the task base.
-8. Do not report successful completion when the required PR cannot be verified.
+7. Immediately after its first successful push, create a real GitHub PR with a meaningful, non-empty description targeting the branch used as the task base. This applies even if the first push is a progress checkpoint.
+8. After EVERY subsequent push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—refresh that same PR's description from the cumulative current PR diff and current verification results. Do not blindly append the latest commit or leave stale/duplicate entries.
+9. Read the description back from GitHub and verify its content, the PR URL, head/base branches, and head SHA against the pushed commit.
+10. Do not report successful completion or accept `TASK_DONE` if PR creation/update or read-back verification fails; report the exact blocker.
 
 ### Existing PR review/conversation task
 
 Reuse the PR's existing head branch. Do not create an unrelated task branch.
 
 The task must update the same PR.
+After every push to its head branch, refresh and read back the description of that same PR; never create a second PR or treat a checkpoint as delivered while the description is stale/unverified.
 
 ## Progress checkpoints
 
@@ -148,7 +151,7 @@ Checkpoints do not imply task completion.
 For existing PR tasks, checkpoints MUST be pushed to the PR's existing head
 branch. Always distinguish local/uncommitted changes from committed-but-
 unpushed changes and from changes actually visible on the GitHub PR. After each
-checkpoint push, verify the remote/PR head SHA.
+checkpoint push, verify the remote/PR head SHA. Immediately refresh/read back the PR description to match the cumulative diff and current test results. If no PR exists yet for a standalone task, create it after this first push.
 
 When useful, leave a concise PR comment describing what the checkpoint
 establishes and whether the overall task remains in progress. Preserve
