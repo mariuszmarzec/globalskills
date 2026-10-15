@@ -533,6 +533,11 @@ test_opencode_continuation() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/bin"
+  # This test covers the legacy cross-attempt recovery path. Disable the new
+  # same-attempt resume loop so the first adapter invocation returns
+  # NEEDS_CONTINUATION, then the second invocation resumes the persisted session.
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":0}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
