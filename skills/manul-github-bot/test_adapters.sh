@@ -402,7 +402,7 @@ test_opencode_permission_blocked() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s
-' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
+' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","tool":"external_directory","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -417,6 +417,11 @@ MOCK
   error_type="$(printf '%s' "$out" | jq -r '.diagnostics.error_type // empty')"
   [ "$failure_code" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection gets RUNTIME_PERMISSION_BLOCKED"     || fail "Permission rejection failure_code=$failure_code"
   [ "$error_type" = "RUNTIME_PERMISSION_BLOCKED" ]     && ok "OpenCode permission rejection preserves classified diagnostic"     || fail "Permission rejection error_type=$error_type"
+  permission_operation="$(printf '%s' "$out" | jq -r '.diagnostics.permission_operation // empty')"
+  [ "$permission_operation" = "external_directory (/etc/*)" ] && ok "OpenCode permission diagnostics identify the denied target" || fail "Permission target=$permission_operation"
+  permission_tool="$(printf '%s' "$out" | jq -r '.diagnostics.permission_tool // empty')"
+  [ "$permission_tool" = "external_directory" ] && ok "OpenCode permission diagnostics identify the tool" || fail "Permission tool=$permission_tool"
+  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'external_directory (/etc/*)' && ok "User-facing failure summary contains the denied permission target" || fail "Permission target missing from user-facing summary"
   [ "$rc" -eq 1 ] && ok "OpenCode permission rejection remains retryable"     || fail "Permission rejection rc=$rc"
 }
 
