@@ -81,38 +81,42 @@ gh pr view <PR_NUMBER> --json body --jq '.body'
 Closes #<ISSUE_NUMBER> (if applicable)
 ```
 
-### 2. Update PR Description (Subsequent Pushes)
-After pushing additional commits to an existing PR branch, immediately update the PR description. Use the same heredoc pattern to avoid the backtick command-substitution pitfall:
+### 2. Refresh the description after EVERY subsequent push
+After every additional push to an existing PR branch, immediately update that same PR's description. This includes checkpoint pushes, review fixes, CI fixes, and any later implementation change. The body must describe the cumulative current PR diff, not just the latest commit.
+
+1. Inspect the complete current PR diff and commit range, plus the verification performed since the last update.
+2. Rewrite the complete body so Summary, Changes, Testing, and related-issue links are accurate; preserve valid issue-closing references. Do not append blindly to the previous body.
+3. Save the complete Markdown body to a temporary file using a quoted heredoc so backticks, `$(...)`, and other content remain literal:
 
 ```bash
-# Push changes
-git push origin <branch-name>
-
-# Update PR description to reflect new changes (heredoc — safe for backticks)
-gh pr edit <PR_NUMBER> \
-  --body "$(cat <<'EOF'
-<UPDATED_PR_DESCRIPTION>
-EOF
-)"
-```
-
-**Updated Description Template:**
-```markdown
+PR_NUMBER="<existing PR number>"
+BODY_FILE="$(mktemp)"
+cat >"$BODY_FILE" <<'PR_BODY_EOF'
 ## Summary
-<Brief description of what this PR does>
+<Current overall purpose of the PR>
 
 ## Changes
-- <Change 1>
-- <Change 2>
-- <Change 3>
-- <New change from latest commit>
+- <All relevant changes in the current PR, with no duplicate/stale entries>
 
 ## Testing
-- <How to test / what was tested>
+- <Current verification and results>
 
 ## Related Issues
 Closes #<ISSUE_NUMBER> (if applicable)
+PR_BODY_EOF
+
+gh pr edit "$PR_NUMBER" --body-file "$BODY_FILE"
+gh pr view "$PR_NUMBER" --json body,url,headRefName,baseRefName,headRefOid
+ACTUAL_BODY="$(gh pr view "$PR_NUMBER" --json body --jq '.body')"
+EXPECTED_BODY="$(cat "$BODY_FILE")"
+[[ "$ACTUAL_BODY" == "$EXPECTED_BODY" ]] || {
+  echo "PR description read-back does not match the submitted body" >&2
+  exit 1
+}
+rm -f "$BODY_FILE"
 ```
+
+Verify that the body is non-empty and current, that the URL/head/base identify the expected PR, and that `headRefOid` equals the pushed commit. If any update or verification fails, the push is not fully delivered and the blocker must be reported.
 
 ### 3. Get PR Number for Current Branch
 ```bash
@@ -124,43 +128,47 @@ gh pr view --json number --jq '.number'
 ```
 
 ## Automation Script
-Create a helper script for consistent PR management:
+Use a helper that replaces the body with a complete, freshly reviewed description. Do not append one line to the old body: repeated runs can duplicate entries and leave stale details.
 
 ```bash
 #!/bin/bash
-# pr-update.sh - Update PR description after push
-# Usage: ./pr-update.sh "New change description"
-
+# pr-update.sh - replace a PR description with the complete current description
+# Usage: ./pr-update.sh path/to/complete-pr-description.md
 set -euo pipefail
 
-BRANCH=$(git branch --show-current)
-PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
-
-if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
-  echo "No PR found for branch $BRANCH"
+BRANCH="$(git branch --show-current)"
+BODY_FILE="${1:?Usage: $0 path/to/complete-pr-description.md}"
+if [[ ! -s "$BODY_FILE" ]]; then
+  echo "PR description file is missing or empty: $BODY_FILE" >&2
   exit 1
 fi
 
-# Get current PR body
-CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body')
+PR_NUMBER="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
+  echo "No open PR found for branch $BRANCH" >&2
+  exit 1
+fi
 
-# Append new change to Changes section
-NEW_CHANGE="$1"
-UPDATED_BODY=$(echo "$CURRENT_BODY" | sed "/## Changes/a\\- $NEW_CHANGE")
+gh pr edit "$PR_NUMBER" --body-file "$BODY_FILE"
+EXPECTED_BODY="$(cat "$BODY_FILE")"
+ACTUAL_BODY="$(gh pr view "$PR_NUMBER" --json body --jq '.body')"
+if [[ "$ACTUAL_BODY" != "$EXPECTED_BODY" ]]; then
+  echo "PR #$PR_NUMBER body does not match the submitted description" >&2
+  exit 1
+fi
 
-# Update PR
-gh pr edit "$PR_NUMBER" --body "$UPDATED_BODY"
-echo "PR #$PR_NUMBER description updated"
+gh pr view "$PR_NUMBER" --json body,url,headRefName,baseRefName,headRefOid
+echo "PR #$PR_NUMBER description updated and read-back verified"
 ```
 
 ## Rules
 1. **Always** create PR with `--body` flag, never rely on default template
-2. **Always** update PR description after pushing new commits to an existing PR
+2. **Always** update and read back the full, cumulative PR description immediately after every push to an existing PR, including checkpoints and review/CI fixes; do not append blindly
 3. Use descriptive commit messages that can be reflected in PR description
 4. Reference related issues with `Closes #<NUMBER>` or `Refs #<NUMBER>`
 5. Keep "Changes" section in sync with actual commits
 6. Run tests/lint before pushing and note results in description
-7. **Always verify the PR body after creation or edit** — backticks and special characters in `--body` can be silently mangled by shell command substitution
+7. **Always verify the PR body after creation or edit** — backticks and special characters can be mangled by unsafe shell interpolation; prefer `--body-file` and read the body back
 
 ## Verification
 After creating/updating PR:
