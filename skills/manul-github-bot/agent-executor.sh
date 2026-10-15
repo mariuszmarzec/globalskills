@@ -50,6 +50,7 @@ AgentExecutor.execute() {
     attempt="$(jq -r '.attempt // 1' "$ctx_file" 2>/dev/null)"
     timeout="$(jq -r '.timeout // 0' "$ctx_file" 2>/dev/null)"
     session_id="$(jq -r '.session_id // ""' "$ctx_file" 2>/dev/null)"
+    auto_accept="$(jq -r '.autoAccept // false' "$ctx_file" 2>/dev/null)"
 
     # Derive stdout/stderr files. The caller (daemon) may supply explicit paths
     # in the context JSON; otherwise fall back to MANUL_TASKS_DIR. The daemon
@@ -112,7 +113,7 @@ AgentExecutor.execute() {
         # OpenClaw's --agent selects an OpenClaw config entry, not a Markdown
         # worker role. Keep that distinction explicit until a native OpenClaw
         # role adapter exists, rather than dispatching the role to "main".
-        if [ "$execution_runtime" = "openclaw" ]; then
+        if [ "$execution_runtime" = "openclaw" ] && [ "$auto_accept" != "true" ]; then
             local routing_error
             routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to 'opencode' or MANUL_ROLE_RUNTIME=opencode"
             jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
@@ -120,6 +121,12 @@ AgentExecutor.execute() {
             AgentExecutor_ExitCode=1
             return 1
         fi
+    fi
+
+    # --auto belongs to OpenCode. It overrides the automatic runtime and
+    # roleRuntime for this task, and is never passed to the OpenClaw adapter.
+    if [ "$auto_accept" = "true" ]; then
+        execution_runtime="opencode"
     fi
 
     # Route to the selected automatic runtime or the configured role runtime.
@@ -144,8 +151,11 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    # Execute the adapter, passing all parameters
-    # The adapter writes its ExecutionResult JSON to stdout.
+    local -a adapter_auto_args=()
+    if [ "$auto_accept" = "true" ]; then
+        adapter_auto_args=(--auto)
+    fi
+    # Execute the adapter; it writes its ExecutionResult JSON to stdout.
     local adapter_output
     adapter_output="$(bash "$adapter_script" \
         --task-id "$task_id" \
@@ -157,6 +167,7 @@ AgentExecutor.execute() {
         --session-id "$session_id" \
         --stdout-file "$stdout_file" \
         --stderr-file "$stderr_file" \
+        "${adapter_auto_args[@]}" \
         2>"$stderr_file")"
 
     local rc=$?

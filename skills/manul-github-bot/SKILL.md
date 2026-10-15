@@ -92,6 +92,11 @@ OpenCode's native `--agent` option. This is direct CLI routing, not an ACP
 session spawned by OpenClaw. Setting `automation.roleRuntime` to `openclaw`
 fails closed for explicit roles until a native OpenClaw role adapter exists.
 
+Use `/manul --auto run <task>` to run one task directly through OpenCode's
+native `opencode run --auto` option. Manul persists this per-task choice in
+the queue and passes the flag only to the OpenCode adapter; it overrides the
+normal runtime and role-runtime settings. OpenClaw does not support this mode.
+
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
 depend on each other. The adapter owns runtime-specific session invocation and

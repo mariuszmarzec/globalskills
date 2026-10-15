@@ -262,12 +262,13 @@ MOCK
     MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
-      --agent build --attempt 1 --timeout 30 --session-id "" \
+      --agent build --attempt 1 --timeout 30 --session-id "" --auto \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenCodeAdapter completes JSON-mode TASK_DONE"
   grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
   grep -q -- '--dir '"$tmp" "$tmp/args" && ok "OpenCodeAdapter passes workspace with --dir" || fail "OpenCodeAdapter did not pass --dir workspace"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
+  grep -q -- '--auto' "$tmp/args" && ok "OpenCodeAdapter forwards native --auto" || fail "OpenCodeAdapter ignored --auto"
   grep -q '^TASK_DONE opencode completed$' "$tmp/stdout" \
     && ok "OpenCodeAdapter normalizes text events to task output" \
     || fail "OpenCodeAdapter lost TASK_DONE marker"

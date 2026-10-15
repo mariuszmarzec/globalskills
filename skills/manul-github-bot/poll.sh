@@ -161,12 +161,14 @@ AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
 PARSE='($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
 | (.body | split("\n")) as $lines
 | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
-| ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
+| ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0_raw
+| ($rest0_raw | test("(^|[ \\t])--auto([ \\t]|$)")) as $auto_accept
+| ($rest0_raw | gsub("(^|[ \\t])--auto([ \\t]|$)"; " ") | sub("^[ \\t]+"; "") | sub("[ \\t]+$"; "")) as $rest0
 | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
 | ($rest | split(" ")[0]) as $tok
 | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
 | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt
-| {agent: $agent, prompt: $prompt}'
+| {agent: $agent, prompt: $prompt, autoAccept: $auto_accept}'
 
 # Only these GitHub logins may invoke manul. Default: repo owner.
 #
@@ -697,6 +699,7 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS processed_comments (
     agent TEXT,
     prompt TEXT NOT NULL,
     context TEXT,
+    autoAccept INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'queued',
     attempts INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT,
@@ -717,6 +720,11 @@ fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|context|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN context TEXT;" 2>>"$LOG"
     log "migration: added context column"
+fi
+# migration for per-task OpenCode --auto mode
+if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|autoAccept|'; then
+    sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN autoAccept INTEGER NOT NULL DEFAULT 0;" 2>>"$LOG"
+    log "migration: added autoAccept column"
 fi
 if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|taskSourceType|'; then
     sqlite3 "$DB" "ALTER TABLE processed_comments ADD COLUMN taskSourceType TEXT;" 2>>"$LOG"
@@ -1206,6 +1214,8 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
+    auto_accept=0
+    if [ "$(jq -r '.autoAccept // false' <<<"$obj")" = "true" ]; then auto_accept=1; fi
     # A bare trigger ("/manul" with no following text) legitimately yields an
     # empty prompt — the issue/PR body supplies the task via conversation
     # context. Only a bare CONTINUE (no answer) is not a real task.
@@ -1213,6 +1223,7 @@ process_repo_body() {
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
+    prompt="$(printf '%s' "$prompt" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g')
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1233,7 +1244,7 @@ process_repo_body() {
       action="CONTINUE"
     fi
 
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
@@ -1249,7 +1260,9 @@ process_repo_body() {
     | .[] | select(.created_at >= $base) | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + $trig_re + "([ \\t\\r\\n]|$)")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
-    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0_raw
+    | ($rest0_raw | test("(^|[ \\t])--auto([ \\t]|$)")) as $auto_accept
+    | ($rest0_raw | gsub("(^|[ \\t])--auto([ \\t]|$)"; " ") | sub("^[ \\t]+"; "") | sub("[ \\t]+$"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1284,6 +1297,7 @@ process_repo_body() {
       issueNumber: $issue_num,
       agent: ($actx.agent // $agent),
       action: $action,
+      autoAccept: $auto_accept,
       prompt: $actx.prompt,
       fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; "")) end)
     }' 2>>"$LOG" || true)
@@ -1300,6 +1314,8 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
+    auto_accept=0
+    if [ "$(jq -r '.autoAccept // false' <<<"$obj")" = "true" ]; then auto_accept=1; fi
     # A bare trigger in the issue body legitimately yields an empty prompt —
     # the issue description itself is the task via conversation context.
     if [ -z "$prompt" ] && [ "$action" = "CONTINUE" ]; then continue; fi
@@ -1313,7 +1329,7 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
@@ -1326,7 +1342,9 @@ process_repo_body() {
     | .[] | select(.pull_request | not) | select(.created_at >= $base) | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + $trig_re + "([ \\t\\r\\n]|$)")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
-    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0_raw
+    | ($rest0_raw | test("(^|[ \\t])--auto([ \\t]|$)")) as $auto_accept
+    | ($rest0_raw | gsub("(^|[ \\t])--auto([ \\t]|$)"; " ") | sub("^[ \\t]+"; "") | sub("[ \\t]+$"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1355,6 +1373,7 @@ process_repo_body() {
       issueNumber: .number,
       agent: ($actx.agent // $agent),
       action: $action,
+      autoAccept: $auto_accept,
       prompt: $actx.prompt
     }' 2>>"$LOG" || true)
 
@@ -1383,6 +1402,8 @@ process_repo_body() {
     prompt="$(jq -r '.prompt' <<<"$obj")"
     agent="$(jq -r '.agent // ""' <<<"$obj")"
     action="$(jq -r '.action // ""' <<<"$obj")"
+    auto_accept=0
+    if [ "$(jq -r '.autoAccept // false' <<<"$obj")" = "true" ]; then auto_accept=1; fi
     # A bare trigger on a review comment legitimately yields an empty prompt —
     # the review thread supplies the task via conversation context. Only a
     # bare CONTINUE (no answer) is not a real task.
@@ -1416,7 +1437,7 @@ process_repo_body() {
       action="CONTINUE"
     fi
 
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id'); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
@@ -1438,7 +1459,9 @@ process_repo_body() {
     | .[] | select(.created_at >= $base) | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + $trig_re + "([ \\t\\r\\n]|$)")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
-    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0
+    | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0_raw
+    | ($rest0_raw | test("(^|[ \\t])--auto([ \\t]|$)")) as $auto_accept
+    | ($rest0_raw | gsub("(^|[ \\t])--auto([ \\t]|$)"; " ") | sub("^[ \\t]+"; "") | sub("[ \\t]+$"; "")) as $rest0
     | (if $rest0 == "" then ($lines[$idx+1:] | join("\n")) else ($rest0 + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $rest
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
@@ -1469,6 +1492,7 @@ process_repo_body() {
       issueNumber: (.html_url | capture("pull/(?<n>[0-9]+)").n | tonumber),
       agent: ($actx.agent // $agent),
       action: $action,
+      autoAccept: $auto_accept,
       prompt: $actx.prompt,
       fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")) end),
       path: (.path // ""),

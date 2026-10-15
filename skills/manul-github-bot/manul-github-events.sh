@@ -8,6 +8,7 @@
 # Command Grammar:
 #   /manul run <task>                    - Submit new implementation task
 #   /manul run --agent <agent> <task>    - Submit with specific agent
+#   /manul --auto run <task>             - Run via OpenCode with --auto
 #   /manul review-fix <feedback>         - Submit review-fix task
 #   /manul continue                      - Continue with parent task's PR
 #   /manul verify                        - Request verification
@@ -120,6 +121,13 @@ parse_command() {
   local cmd
   cmd="$(echo "$command_line" | sed -E "s#^[[:space:]]*$trigger([[:space:]]+|$)##")"
 
+  # --auto is an OpenCode-only per-task mode. Strip it before parsing the task.
+  local auto_accept=false
+  if [[ "$cmd" =~ (^|[[:space:]])--auto([[:space:]]|$) ]]; then
+    auto_accept=true
+    cmd="$(printf '%s\n' "$cmd" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  fi
+
   # Parse command structure
   local action="IMPLEMENT"
   local agent=""
@@ -207,12 +215,14 @@ parse_command() {
     --arg agent "${agent:-}" \
     --arg agentSelection "$agent_selection" \
     --arg raw_command "$cmd" \
+    --argjson autoAccept "$auto_accept" \
     '{
       valid: true,
       action: $action,
       prompt: $prompt,
       agent: $agent,
       agentSelection: $agentSelection,
+      autoAccept: $autoAccept,
       rawCommand: $raw_command
     }')
 

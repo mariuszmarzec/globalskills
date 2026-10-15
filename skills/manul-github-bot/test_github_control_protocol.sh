@@ -1036,6 +1036,30 @@ test_unknown_agent_flag_is_not_silently_discarded() {
   [ "$agent" = "missing-role" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "do the task" ]
 }
 
+
+# Test 43: /manul --auto runs with OpenCode mode and is removed from the prompt
+test_auto_flag_before_run_is_parsed() {
+  local now output auto prompt action
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "315" --body "/manul --auto run add unit tests" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  auto="$(echo "$output" | jq -r '.command.autoAccept // false')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  action="$(echo "$output" | jq -r '.command.action // empty')"
+  [ "$auto" = "true" ] && [ "$prompt" = "add unit tests" ] && [ "$action" = "IMPLEMENT" ]
+}
+
+# Test 44: --auto may accompany an explicit --agent without entering the prompt
+test_auto_flag_with_explicit_agent_is_parsed() {
+  local now output auto agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "101" --comment-id "316" --body "/manul run --agent coder --auto add unit tests" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  auto="$(echo "$output" | jq -r '.command.autoAccept // false')"
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ "$auto" = "true" ] && [ "$agent" = "coder" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "add unit tests" ]
+}
+
 # ============================================================
 # Run Tests
 # ============================================================
@@ -1097,6 +1121,8 @@ run_test "Test 39: --agent flag routes explicit role" test_run_agent_flag_routes
 run_test "Test 40: no --agent selects automatic runtime entry point" test_run_without_agent_is_automatic
 run_test "Test 41: shorthand role routes explicitly" test_shorthand_agent_routes_explicit_role
 run_test "Test 42: unknown --agent is preserved for fail-closed validation" test_unknown_agent_flag_is_not_silently_discarded
+run_test "Test 43: --auto before run is parsed and stripped" test_auto_flag_before_run_is_parsed
+run_test "Test 44: --auto with --agent is parsed and stripped" test_auto_flag_with_explicit_agent_is_parsed
 
 # End-to-end test
 echo ""

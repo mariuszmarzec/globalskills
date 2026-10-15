@@ -274,10 +274,9 @@ grep -q '^args=.*--agent coder-cheap' "$OPENCODE_PROOF_FILE" || {
   exit 1
 }
 
-# With OpenClaw as the automatic runtime, an explicit canonical role routes
-# through the configured role runtime (OpenCode) and its native --agent switch.
+# --auto is OpenCode-only: it overrides both OpenClaw runtime settings.
 export AGENT_RUNTIME=openclaw
-export ROLE_RUNTIME=opencode
+export ROLE_RUNTIME=openclaw
 ROLE_CTX_FILE="$MANUL_DIR/state/tasks/openclaw-role.ctx.json"
 ROLE_RESULT_FILE="$MANUL_DIR/state/tasks/openclaw-role.executor-result"
 ROLE_STDOUT_FILE="$MANUL_DIR/state/tasks/openclaw-role.stdout"
@@ -296,6 +295,7 @@ jq -n \
     workspace: $workspace,
     agent: $agent,
     agentSelection: "explicit",
+    autoAccept: true,
     attempt: 1,
     timeout: 30,
     session_id: "",
@@ -331,10 +331,20 @@ if [ "$(grep -c '^called$' "$OPENCODE_PROOF_FILE")" -ne 2 ]; then
   cat "$OPENCODE_PROOF_FILE" >&2
   exit 1
 fi
+grep -q '^args=.*--auto' "$OPENCODE_PROOF_FILE" || {
+  echo "FAIL: --auto was not forwarded to OpenCode for the auto task" >&2
+  cat "$OPENCODE_PROOF_FILE" >&2
+  exit 1
+}
+if [ "$(grep -c '^args=.*--auto' "$OPENCODE_PROOF_FILE")" -ne 1 ]; then
+  echo "FAIL: --auto must reach exactly the task that requested it" >&2
+  cat "$OPENCODE_PROOF_FILE" >&2
+  exit 1
+fi
 grep -q '^args=.*--agent coder-cheap' "$OPENCODE_PROOF_FILE" || {
   echo "FAIL: selected coder role did not reach OpenCode CLI" >&2
   cat "$OPENCODE_PROOF_FILE" >&2
   exit 1
 }
 
-echo "PASS: explicit roles route through OpenCode even when the automatic runtime is OpenClaw"
+echo "PASS: --auto overrides OpenClaw routing and reaches OpenCode's native CLI flag"

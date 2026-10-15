@@ -27,6 +27,7 @@ OPT_TIMEOUT=0
 OPT_SESSION_ID=""
 OPT_STDOUT_FILE=""
 OPT_STDERR_FILE=""
+OPT_AUTO=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --session-id)  OPT_SESSION_ID="$2";  shift 2 ;;
         --stdout-file) OPT_STDOUT_FILE="$2"; shift 2 ;;
         --stderr-file) OPT_STDERR_FILE="$2"; shift 2 ;;
+        --auto)       OPT_AUTO=true; shift ;;
         *) echo "ERROR: unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -134,6 +136,10 @@ AGENT_ARGS=()
 if [ -n "$OPT_AGENT" ]; then
     AGENT_ARGS=(--agent "$OPT_AGENT")
 fi
+AUTO_ARGS=()
+if [ "$OPT_AUTO" = "true" ]; then
+    AUTO_ARGS=(--auto)
+fi
 
 RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
 # Keep RAW_STDOUT_FILE as the canonical per-attempt runtime diagnostic artifact.
@@ -142,7 +148,7 @@ mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/
 log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
 
 # ProcessRunner is the only process boundary. The raw JSONL is retained as a
 # per-attempt diagnostic artifact; OPT_STDOUT_FILE is rewritten below into plain
@@ -160,6 +166,7 @@ local_runner_result="$(ProcessRunner.run \
     --timeout "$AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
     -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+        "${AUTO_ARGS[@]}" \
         "${SESSION_ARGS[@]}" \
         "${AGENT_ARGS[@]}" \
         --format json \

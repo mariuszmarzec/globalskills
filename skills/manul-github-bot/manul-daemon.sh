@@ -2851,6 +2851,9 @@ run_once() {
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
+    local TASK_AUTO_ACCEPT
+    TASK_AUTO_ACCEPT="$(sqlite3 "$DB" "SELECT autoAccept FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    case "$TASK_AUTO_ACCEPT" in 1|true|TRUE) TASK_AUTO_ACCEPT=1 ;; *) TASK_AUTO_ACCEPT=0 ;; esac
 
     # Self-heal legacy issuebody tasks whose issueNumber contains the GitHub
     # API object ID instead of the human-facing issue number.
@@ -3510,12 +3513,13 @@ PROMPT_APPEND
        --arg workspace "$WORKDIR" \
        --arg agent "${AGENT:-}" \
        --arg agentSelection "$AGENT_SELECTION" \
+       --argjson autoAccept "$TASK_AUTO_ACCEPT" \
        --argjson attempt "$current_attempt" \
        --argjson timeout "$AGENT_TIMEOUT" \
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, agentSelection: $agentSelection, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      local executor_output

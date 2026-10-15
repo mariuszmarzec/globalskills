@@ -20,6 +20,7 @@ Issue/PR comments beginning with `/manul` are parsed as:
 |---|---|---|
 | `/manul run <task>` | `IMPLEMENT` | Submit an implementation task |
 | `/manul run --agent <agent> <task>` | `IMPLEMENT` | Submit with a specific configured role agent |
+| `/manul --auto run <task>` | `IMPLEMENT` | Run directly via OpenCode's native `opencode run --auto` mode |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` | Create a task for PR review feedback |
 | `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input |
 | `/manul verify <prompt>` | `VERIFY` | Create a verification task |
@@ -52,6 +53,13 @@ closed for explicit canonical worker roles rather than silently executing them
 under `main`. Unknown/unconfigured roles also fail before a runtime starts;
 they must not be converted into prompt text or silently fall back to another
 role.
+
+The per-task `--auto` flag can be placed immediately after `/manul` (for
+example, `/manul --auto run add tests`) or inside the run arguments. Manul
+stores the flag with the queued task and routes that task directly to OpenCode,
+passing its native `opencode run --auto` option. This mode deliberately bypasses
+both automatic runtime selection and `automation.roleRuntime`; the OpenClaw
+adapter does not implement `--auto`.
 
 ## Event format
 
