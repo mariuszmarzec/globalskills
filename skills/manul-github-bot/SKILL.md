@@ -45,6 +45,13 @@ named canonical roles (default: `opencode`). The config keys are
 `automation.agentRuntime` and `automation.roleRuntime`. There is no
 `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
+The OpenCode adapter can resume an existing session internally when the
+runtime explicitly reports its step limit. The maximum number of additional
+same-session resumes is configured by
+`automation.opencodeMaxStepLimitContinuations` in `~/.manul/config.json`
+(default: 3, valid range: 0..20). These internal resumes share the original
+execution timeout and do not consume additional Manul attempts.
+
 The installer deploys the runtime scripts as symlinks.
 
 Canonical source:
