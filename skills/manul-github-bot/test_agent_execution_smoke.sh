@@ -27,7 +27,7 @@ mkdir -p "$MANUL_DIR/state/tasks" "$MANUL_DIR/state/locks" "$MANUL_DIR/logs"
 
 cat >"$MANUL_DIR/config.json" <<'JSON'
 {
-  "agents": ["coder"],
+  "agents": ["coder", "coder-cheap"],
   "automation": {
     "agentRuntime": "openclaw"
   }
