@@ -53,6 +53,7 @@ Do not accidentally break:
 - Exactly one user-facing result comment per agent attempt.
 - Correct routing of top-level comments vs PR review-thread replies.
 - Issue-task branch creation and PR requirements.
+- Refresh and read back the same PR's complete description after every push, including checkpoint and review-fix pushes.
 - Reuse of an existing PR head branch for PR review/conversation tasks.
 - Source revalidation for stale/closed GitHub objects.
 - Workspace/repository lock ownership.
