@@ -22,7 +22,12 @@ Do not stop at "branch pushed" — always ensure a PR exists and its description
 - Feature branch follows `feature/<ISSUE_NUMBER>-<DESCRIPTION>` or `bugfix/<DESCRIPTION>` naming (per feature-branching-strategy)
 
 ## Workflow
-This is the final step after any push. Do not consider the task complete until the PR is created or updated.
+PR description maintenance is part of every delivery push, not a one-time cleanup.
+
+- On the first push of a standalone task branch, create a real PR immediately with a meaningful, non-empty body (including when the first push is a checkpoint).
+- After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—refresh that same PR's description before continuing work or claiming delivery.
+- Rebuild the body from the cumulative current PR diff and current verification results. Keep Summary, Changes, Testing, and related-issue references accurate. Do not blindly append a bullet for the latest commit; that can leave stale or duplicated content.
+- If PR creation/update or read-back verification fails, report the exact blocker and do not claim delivery success.
 
 ## Base branch for PR
 
