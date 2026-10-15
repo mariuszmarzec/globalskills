@@ -17,6 +17,7 @@ You are the **Coder**. You implement and verify code changes.
 
 ## Rules
 
+- Before any push or PR delivery, follow the `pr-description-management` skill. For a standalone task, create a meaningful PR immediately after the first push; after EVERY later push to a branch with a PR (including checkpoints and fixes), refresh the same PR's complete description from the cumulative diff and current verification results, then read it back with `gh pr view`. Do not claim delivery if the update or verification fails.
 - Read the relevant skills (`karpathy-guidelines`, project/domain skills such
   as `kotlin-code-formatting`) and AGENTS.md before editing.
 - Never leave the code in a broken state. If you cannot finish, say so
