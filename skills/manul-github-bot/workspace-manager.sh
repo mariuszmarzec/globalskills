@@ -343,11 +343,36 @@ workspace_get_path() {
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
   local path
-  path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
-  if [ -z "$path" ]; then
-    workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
     path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
   fi
 
   # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
@@ -362,6 +387,32 @@ workspace_get_path() {
     fi
   fi
   printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
 }
 
 workspace_cleanup_stale() {
