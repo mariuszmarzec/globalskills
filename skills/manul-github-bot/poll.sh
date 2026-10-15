@@ -1223,7 +1223,7 @@ process_repo_body() {
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
-    prompt="$(printf '%s' "$prompt" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g')
+    prompt="$(printf '%s' "$prompt" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g')"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1411,6 +1411,7 @@ process_repo_body() {
     fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
     [ -n "$fullBody" ] || fullBody="$prompt"
     prompt="$fullBody"
+    prompt="$(printf '%s' "$prompt" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g')"
     cpath="$(jq -r '.path // ""' <<<"$obj")"
     cline="$(jq -r '.line // ""' <<<"$obj")"
     chunk="$(jq -r '.diffHunk // ""' <<<"$obj")"
