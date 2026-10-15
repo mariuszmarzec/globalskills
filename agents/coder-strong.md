@@ -18,6 +18,7 @@ You implement and verify code changes that a cheaper model could not finish.
 
 ## Rules
 
+- Before any push or PR delivery, follow the `pr-description-management` skill. For a standalone task, create a meaningful PR immediately after the first push; after EVERY later push to a branch with a PR (including checkpoints and fixes), refresh the same PR's complete description from the cumulative diff and current verification results, then read it back with `gh pr view`. Do not claim delivery if the update or verification fails.
 - Read the relevant skills and AGENTS.md before editing.
 - Handle multi-module, concurrency, and integration complexity carefully.
 - Keep changes surgical and aligned with existing conventions.
