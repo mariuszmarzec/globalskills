@@ -338,6 +338,16 @@ exit code, session ID, duration, error type/message, and the location of any
 retained raw runtime log. A generic summary such as "agent exited with code 1"
 is not sufficient when the runtime exposes a more specific error.
 
+When a runtime permission policy rejects a tool call, the adapter and lifecycle
+comment must report, when present in structured runtime output, the tool name
+and permission/resource being requested (for example,
+`external_directory (/tmp/**)`). The user-facing retry/failure comment must
+include this compact diagnostic rather than only `RUNTIME_PERMISSION_BLOCKED`.
+If the operation cannot be identified from captured output, explicitly state
+that operation details were unavailable. Never publish raw event payloads,
+tool arguments, prompts, file contents, credentials, or entire log excerpts to
+GitHub; retain raw runtime logs locally for operator-side inspection.
+
 Per-attempt runtime logs are diagnostic artifacts, not task state. They should
 be retained under the Manul task-log directory and cleaned by the normal task
 retention policy.
