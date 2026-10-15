@@ -81,6 +81,10 @@ Follow the minimum sufficient workflow process:
   → return to implementation/review stage. Delivery failure → resolve
   delivery problem only.
 
+### PR description freshness (mandatory)
+
+Before closing delivery, follow `pr-description-management`: create a meaningful PR immediately after the first standalone-branch push, then refresh and read back the full, cumulative description after EVERY later push to that PR branch, including checkpoints and fixes. A successful push alone is not successful delivery.
+
 ### Risk-based reviewer selection
 - **LOW RISK**: `coder` → `reviewer` (or `coder` → `reviewer` with verification)
 - **NORMAL FEATURE**: `architect` → `coder` → `tester` → `reviewer`
