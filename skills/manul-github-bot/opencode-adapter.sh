@@ -150,13 +150,16 @@ log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automati
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"
 ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
 
+# Replace any inherited Python path with this task's checkout roots. This
+# prevents a stale workspace injected by the daemon's environment from taking
+# precedence over the source being tested. Keep PYTHONHOME unset as well.
 # Capture ProcessRunner output so its protocol line cannot leak into the
 # adapter stdout. AgentExecutor/AgentExecutionController expect stdout to
 # contain exactly one final ExecutionResult JSON document.
 local_runner_result="$(ProcessRunner.run \
     --timeout "$AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
-    -- env -u PYTHONPATH -u PYTHONHOME "$OPENCODE_BIN" run \
+    -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
         "${SESSION_ARGS[@]}" \
         "${AGENT_ARGS[@]}" \
         --format json \
