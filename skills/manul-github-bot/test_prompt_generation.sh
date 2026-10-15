@@ -8,6 +8,7 @@
 #   D. Multiline task/context survives unchanged
 #   E. Malicious $(touch /tmp/should-not-exist) does NOT execute
 #   F. Generated prompt is inspected as an actual file
+#   G. PR description freshness is mandatory in the generated and production prompt
 #
 # Uses isolated temp environment, fake gh, fake OpenClaw. No production state touched.
 #
@@ -138,6 +139,17 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 5. If you cannot complete the task, output exactly: `TASK_FAILED: <brief reason>`
 6. Do NOT modify `manul.db`.
 7. Do NOT manage Manul task state.
+
+## PR Description Freshness (MANDATORY DELIVERY CONTRACT)
+
+A pushed commit is not fully delivered until the GitHub PR description reflects the complete current PR and has been read back from GitHub.
+
+- For a standalone task, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—update the description of that same PR before continuing the task or reporting the push as delivered.
+- Rebuild the body from the cumulative PR diff and current verification results, not just the latest commit. Keep Summary, Changes, Testing, and related-issue references accurate; preserve still-valid issue-closing links. Do not blindly append bullets, which can leave stale or duplicated content.
+- Write the full Markdown body to a temporary file and use `gh pr edit <PR_NUMBER> --body-file "$BODY_FILE"` (or the equivalent safe `--body-file` option for PR creation); never interpolate a body directly into a double-quoted shell argument.
+- Read back with `gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid`. Verify the body is non-empty and accurate, the URL is the expected PR, the head/base are correct, and the head SHA matches the pushed commit.
+- For an existing-PR task, update the original PR, never create a second PR. If creating/updating or read-back verification fails, report the precise blocker and do NOT emit `TASK_DONE`.
 
 ## GitHub Comment Posting (CRITICAL)
 You MUST post exactly one user-facing result comment to GitHub using the `run` tool.
@@ -714,6 +726,17 @@ if assert_file_contains "documented project dependencies remain allowed" "$WORK/
 if assert_file_contains "permission denial must not be bypassed" "$WORK/prompt.md" "do not retry the same restricted operation through another tool"; then :; else :; fi
 if assert_file_contains "scope boundary applies to delegated agents" "$WORK/prompt.md" "Pass the same scope boundary into every delegated task prompt"; then :; else :; fi
 
+
+# Test K: PR description freshness is part of the generated worker prompt and
+# the real daemon's production prompt template.
+if assert_file_contains "generated prompt requires PR description freshness" "$WORK/prompt.md" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
+if assert_file_contains "generated prompt refreshes after every later push" "$WORK/prompt.md" "After EVERY later push to a branch with an open PR"; then :; else :; fi
+if assert_file_contains "generated prompt uses cumulative PR diff" "$WORK/prompt.md" "Rebuild the body from the cumulative PR diff and current verification results"; then :; else :; fi
+if assert_file_contains "generated prompt requires safe body-file edit" "$WORK/prompt.md" 'gh pr edit <PR_NUMBER> --body-file "$BODY_FILE"'; then :; else :; fi
+if assert_file_contains "generated prompt requires PR head/body read-back" "$WORK/prompt.md" "gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid"; then :; else :; fi
+if assert_file_contains "generated prompt blocks TASK_DONE when description verification fails" "$WORK/prompt.md" "do NOT emit `TASK_DONE`"; then :; else :; fi
+if assert_file_contains "production daemon contains mandatory PR description policy" "$SCRIPT_DIR/manul-daemon.sh" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
+if assert_file_contains "production daemon refreshes after every later push" "$SCRIPT_DIR/manul-daemon.sh" "After EVERY later push to a branch with an open PR"; then :; else :; fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
