@@ -179,8 +179,10 @@ done
 # ── Test 2: No old machine-specific runtime paths ─────────────────────────────
 echo
 echo "Test 2: No hardcoded runtime paths"
-HARDCODED_PATHS="$(grep -REn '(/home/marzec/\.manul|/mnt/f/ubuntu-workspace/\.manul)' \
-  "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -v 'test_runtime_health.sh' || true)"
+# Only production scripts are subject to this guard. Test fixtures intentionally
+# contain historical paths to exercise diagnostic sanitization.
+HARDCODED_PATHS="$(grep -En '(/home/marzec/\.manul|/mnt/f/ubuntu-workspace/\.manul)' \
+  "$SCRIPT_DIR"/*.sh 2>/dev/null | grep -vE '/test_[^/]+\.sh:' || true)"
 if [ -z "$HARDCODED_PATHS" ]; then
   ok "No hardcoded absolute runtime paths found"
 else
