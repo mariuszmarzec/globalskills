@@ -245,6 +245,8 @@ test_opencode_success() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
+printf 'PYTHONPATH=%s\n' "${PYTHONPATH-<unset>}" > "$MOCK_ENV_FILE"
+printf 'PYTHONHOME=%s\n' "${PYTHONHOME-<unset>}" >> "$MOCK_ENV_FILE"
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_success","part":{"type":"step-start"}}'
 printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_success","part":{"type":"text","text":"TASK_DONE opencode completed"}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_success","part":{"type":"step-finish"}}'
@@ -257,7 +259,7 @@ MOCK
 
   local out
   out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
-    MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
       --agent build --attempt 1 --timeout 30 --session-id "" \
@@ -272,6 +274,18 @@ MOCK
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_success' \
     && ok "OpenCodeAdapter returns runtime session ID" \
     || fail "OpenCodeAdapter did not return session ID"
+  printf '%s' "$out" | jq -r '.diagnostics.selected_agent' | grep -qx 'build' \
+    && ok "OpenCodeAdapter records the selected role in its diagnostics" \
+    || fail "OpenCodeAdapter selected role diagnostic missing"
+  grep -Fq 'role=build' "$tmp/stderr" \
+    && ok "OpenCodeAdapter startup log records the selected role" \
+    || fail "OpenCodeAdapter startup log omitted the selected role"
+  grep -qx 'PYTHONPATH=<unset>' "$tmp/env" \
+    && ok "OpenCode process does not inherit stale PYTHONPATH" \
+    || fail "OpenCode inherited PYTHONPATH: $(cat "$tmp/env" 2>/dev/null || true)"
+  grep -qx 'PYTHONHOME=<unset>' "$tmp/env" \
+    && ok "OpenCode process does not inherit stale PYTHONHOME" \
+    || fail "OpenCode inherited PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------------------
@@ -423,6 +437,32 @@ MOCK
   [ "$permission_tool" = "external_directory" ] && ok "OpenCode permission diagnostics identify the tool" || fail "Permission tool=$permission_tool"
   printf '%s' "$out" | jq -r '.summary' | grep -Fq 'external_directory (/etc/*)' && ok "User-facing failure summary contains the denied permission target" || fail "Permission target missing from user-facing summary"
   [ "$rc" -eq 1 ] && ok "OpenCode permission rejection remains retryable"     || fail "Permission rejection rc=$rc"
+
+  # Regression: JSONL may identify the denied tool but omit the requested path;
+  # stderr often contains the actionable target that must be preserved.
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_use","timestamp":2000,"sessionID":"ses_perm_stderr","part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
+printf '%s\n' '! permission requested: bash (cd /workspace/ws-old && git log); auto-rejecting' >&2
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+
+  local out2 rc2
+  out2="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-perm-stderr --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
+  rc2=$?
+  assert_json_status "$out2" "FAILED" "Generic JSONL permission denial remains a failure"
+  printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty' | grep -Fxq 'bash (cd /workspace/ws-old && git log)' \
+    && ok "stderr enriches a generic JSONL denial with the exact target" \
+    || fail "stderr permission target was lost: $(printf '%s' "$out2" | jq -r '.diagnostics.permission_operation // empty')"
+  printf '%s' "$out2" | jq -r '.summary' | grep -Fq '/workspace/ws-old' \
+    && ok "User-facing diagnostic contains the denied workspace path" \
+    || fail "Denied workspace path missing from summary"
+  [ "$rc2" -eq 1 ] && ok "Enriched permission denial remains a failure" || fail "Enriched permission rc=$rc2"
 }
 
 # ---------------------------------------------------------------------------
