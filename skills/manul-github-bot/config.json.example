@@ -93,6 +93,7 @@
     "agentRuntime": "openclaw",
     "roleRuntime": "opencode",
     "agentTimeoutSeconds": 43500,
+    "opencodeMaxStepLimitContinuations": 3,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,

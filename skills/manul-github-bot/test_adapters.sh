@@ -299,6 +299,9 @@ test_opencode_no_marker_continuation() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf '%s\n' "$count" >"$MOCK_COUNT_FILE"
 printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_no_marker","error":{"message":"maximum steps reached"}}'
 exit 1
 MOCK
@@ -307,6 +310,7 @@ MOCK
 
   local out rc
   out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_COUNT_FILE="$tmp/count" \
     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-no-marker --prompt "$tmp/prompt" --workspace "$tmp" \
@@ -318,6 +322,54 @@ MOCK
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_no_marker' \
     && ok "OpenCode no-marker continuation retains session ID" \
     || fail "OpenCode no-marker continuation lost session ID"
+  [ "$(cat "$tmp/count")" = "4" ] \
+    && ok "OpenCode retries three times internally by default without returning between step-limit hits" \
+    || fail "OpenCode invocation count was $(cat "$tmp/count" 2>/dev/null || echo missing), expected 4"
+}
+
+# ---------------------------------------------------------------------------
+# 8b. OpenCode reaches TASK_DONE through an internal same-session continuation
+# ---------------------------------------------------------------------------
+test_opencode_step_limit_resumes_inside_attempt() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/runtime"
+  printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":1}}' >"$tmp/runtime/config.json"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf '%s\n' "$count" >"$MOCK_COUNT_FILE"
+printf '%s\n' "$*" >>"$MOCK_ARGS_FILE"
+if [ "$count" -eq 1 ]; then
+  printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_internal","error":{"message":"maximum steps reached"}}'
+  exit 1
+fi
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_internal","part":{"type":"text","text":"TASK_DONE resumed after step limit"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_internal","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" >"$tmp/prompt"
+
+  local out rc
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_COUNT_FILE="$tmp/count" MOCK_ARGS_FILE="$tmp/args" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-internal-resume --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+
+  assert_json_status "$out" "COMPLETED" "OpenCode completes the task after an internal step-limit continuation"
+  [ "$rc" -eq 0 ] && ok "Internal continuation returns success to the same Manul attempt" || fail "Internal continuation rc=$rc"
+  [ "$(cat "$tmp/count")" = "2" ] && ok "Configured limit allows one internal continuation" || fail "Internal invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
+  grep -Fq -- '--session ses_internal' "$tmp/args" && ok "Internal continuation resumes the original OpenCode session" || fail "Internal continuation did not pass the session ID"
+  printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_internal' && ok "Final result retains the resumed OpenCode session identity" || fail "Final session identity missing"
+  grep -Fq "TASK_DONE resumed after step limit" "$tmp/stdout" && ok "Final text/control marker is normalized from the resumed run" || fail "TASK_DONE marker missing from normalized output"
+  [ -f "$tmp/runtime/logs/tasks/task-oc-internal-resume.attempt-1.opencode.jsonl" ] && ok "All inner invocations are retained in the same attempt log" || fail "Aggregated per-attempt runtime log missing"
 }
 
 # ---------------------------------------------------------------------------
@@ -481,6 +533,11 @@ test_opencode_continuation() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/bin"
+  # This test covers the legacy cross-attempt recovery path. Disable the new
+  # same-attempt resume loop so the first adapter invocation returns
+  # NEEDS_CONTINUATION, then the second invocation resumes the persisted session.
+  mkdir -p "$tmp/runtime"
+  printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":0}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
@@ -654,6 +711,7 @@ test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
 test_opencode_no_marker_continuation
+test_opencode_step_limit_resumes_inside_attempt
 test_opencode_stop_without_marker
 test_opencode_failure
 test_opencode_permission_blocked
@@ -782,6 +840,7 @@ test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
 test_opencode_no_marker_continuation
+test_opencode_step_limit_resumes_inside_attempt
 test_opencode_stop_without_marker
 test_opencode_failure
 test_opencode_permission_blocked

@@ -303,6 +303,8 @@ The example configuration currently defines:
 - retry/context limits;
 - CI-fix limits;
 - agent timeout;
+- `automation.opencodeMaxStepLimitContinuations` — maximum internal OpenCode
+  same-session resumes after step-limit events (default 3, valid range 0..20);
 - heartbeat timeout;
 - lease timeout;
 - maximum attempts;
@@ -334,6 +336,19 @@ the active claim token so an expired worker cannot overwrite newer task state.
 Clearing the pointer must not delete the task's workspace/context mapping.
 This internal continuation is distinct from the user-input flow
 `blocked_user` → `/manul continue <answer>`.
+
+For OpenCode, `automation.opencodeMaxStepLimitContinuations` (default `3`,
+valid range `0..20`) sets the maximum number of additional same-session
+`opencode run --session <id>` invocations the adapter may perform after an
+explicit step-limit event. These invocations stay inside the same adapter
+execution and Manul task attempt; they do not update task state or increment
+the attempt count. The initial call and all internal continuations share one
+overall wall-clock timeout. Only a confirmed step-limit event with a known
+session is eligible; permission denials, provider/runtime errors, normal stops,
+completion/user-input markers, and timeouts must not trigger this retry loop.
+When the configured internal budget is exhausted and OpenCode still reports a
+step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
+the daemon's existing retry/session handling remains authoritative.
 
 Every adapter failure result should preserve actionable diagnostics in its
 `ExecutionResult` when the runtime provides them, including the runtime,

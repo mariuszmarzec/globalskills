@@ -120,18 +120,7 @@ if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then
 fi
 
 PROMPT_CONTENT="$(cat "$OPT_PROMPT")"
-if [ -n "$OPT_SESSION_ID" ]; then
-    # A continuation already has the complete task history in the OpenCode
-    # session. Replaying the large original prompt can make the model reopen
-    # the plan instead of finishing the pending work.
-    RUN_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
-else
-    RUN_PROMPT="$PROMPT_CONTENT"
-fi
-SESSION_ARGS=()
-if [ -n "$OPT_SESSION_ID" ]; then
-    SESSION_ARGS=(--session "$OPT_SESSION_ID")
-fi
+CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 AGENT_ARGS=()
 if [ -n "$OPT_AGENT" ]; then
     AGENT_ARGS=(--agent "$OPT_AGENT")
@@ -142,47 +131,131 @@ if [ "$OPT_AUTO" = "true" ]; then
 fi
 
 RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
-# Keep RAW_STDOUT_FILE as the canonical per-attempt runtime diagnostic artifact.
-mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/null || true
+CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
+CURRENT_RUN_STDERR_FILE="${RAW_STDOUT_FILE%.jsonl}.current.stderr"
+# Aggregate all runtime events from the initial call and same-session resumes.
+mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" "$(dirname "$RAW_STDOUT_FILE")" 2>/dev/null || true
 
 log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${OPT_SESSION_ID:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE"
 
-# ProcessRunner is the only process boundary. The raw JSONL is retained as a
-# per-attempt diagnostic artifact; OPT_STDOUT_FILE is rewritten below into plain
-# agent text/control markers.
-ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"
-ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
-
-# Replace any inherited Python path with this task's checkout roots. This
-# prevents a stale workspace injected by the daemon's environment from taking
-# precedence over the source being tested. Keep PYTHONHOME unset as well.
-# Capture ProcessRunner output so its protocol line cannot leak into the
-# adapter stdout. AgentExecutor/AgentExecutionController expect stdout to
-# contain exactly one final ExecutionResult JSON document.
-local_runner_result="$(ProcessRunner.run \
-    --timeout "$AGENT_TIMEOUT" \
-    --cwd "$OPT_WORKSPACE" \
-    -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
-        "${AUTO_ARGS[@]}" \
-        "${SESSION_ARGS[@]}" \
-        "${AGENT_ARGS[@]}" \
-        --format json \
-        --dir "$OPT_WORKSPACE" \
-        "$RUN_PROMPT")"
-pr_rc=$?
-: "$local_runner_result"
-
-session_id=""
-if [ -f "$RAW_STDOUT_FILE" ]; then
-    session_id="$(jq -Rr 'try fromjson catch empty | .sessionID // empty' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
-fi
-if [ -z "$session_id" ]; then
-    session_id="$OPT_SESSION_ID"
+STEP_LIMIT_CONTINUATIONS_MAX="$(jq -r '.automation.opencodeMaxStepLimitContinuations // 3' "$MANUL_CONFIG" 2>/dev/null || echo 3)"
+if ! [[ "$STEP_LIMIT_CONTINUATIONS_MAX" =~ ^[0-9]+$ ]] || [ "$STEP_LIMIT_CONTINUATIONS_MAX" -gt 20 ]; then
+    log "WARN: invalid automation.opencodeMaxStepLimitContinuations=${STEP_LIMIT_CONTINUATIONS_MAX}; using default 3 (valid range 0..20)"
+    STEP_LIMIT_CONTINUATIONS_MAX=3
 fi
 
+: >"$RAW_STDOUT_FILE"
+session_id="$OPT_SESSION_ID"
+pr_rc=1
+final_step_limit_detected="false"
+internal_continuations_used=0
+run_index=0
+execution_start_epoch="$(date +%s)"
+
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
+
+# One timeout budget spans the first call and all internal continuations.
+# These resumes happen before the adapter returns, so they do not finish or
+# increment a Manul attempt.
+while true; do
+    now_epoch="$(date +%s)"
+    remaining_timeout=$((AGENT_TIMEOUT - (now_epoch - execution_start_epoch)))
+    if [ "$remaining_timeout" -lt 1 ]; then
+        pr_rc=124
+        final_step_limit_detected="false"
+        log "total execution timeout exhausted task=$OPT_TASK_ID internal_continuations=$internal_continuations_used"
+        break
+    fi
+
+    RUN_PROMPT="$PROMPT_CONTENT"
+    if [ "$run_index" -gt 0 ] || [ -n "$session_id" ]; then
+        RUN_PROMPT="$CONTINUATION_PROMPT"
+    fi
+    SESSION_ARGS=()
+    if [ -n "$session_id" ]; then
+        SESSION_ARGS=(--session "$session_id")
+    fi
+
+    : >"$CURRENT_RUN_STDOUT_FILE"
+    : >"$CURRENT_RUN_STDERR_FILE"
+    ProcessRunner_TmpStdout="$CURRENT_RUN_STDOUT_FILE"
+    ProcessRunner_TmpStderr="$CURRENT_RUN_STDERR_FILE"
+
+    # Keep ProcessRunner's protocol line out of AgentExecutor's JSON result.
+    local_runner_result="$(ProcessRunner.run \
+        --timeout "$remaining_timeout" \
+        --cwd "$OPT_WORKSPACE" \
+        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+            "${AUTO_ARGS[@]}" \
+            "${SESSION_ARGS[@]}" \
+            "${AGENT_ARGS[@]}" \
+            --format json \
+            --dir "$OPT_WORKSPACE" \
+            "$RUN_PROMPT")"
+    pr_rc=$?
+    : "$local_runner_result"
+
+    if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
+        cat "$CURRENT_RUN_STDOUT_FILE" >>"$RAW_STDOUT_FILE"
+    fi
+    if [ -s "$CURRENT_RUN_STDERR_FILE" ]; then
+        cat "$CURRENT_RUN_STDERR_FILE" >>"$OPT_STDERR_FILE"
+    fi
+
+    current_session_id=""
+    if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
+        current_session_id="$(jq -Rr 'try fromjson catch empty | .sessionID // empty' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null | awk 'length { value=$0 } END { print value }')"
+    fi
+    if [ -n "$current_session_id" ]; then
+        session_id="$current_session_id"
+    fi
+
+    current_step_limit_detected="false"
+    if [ "$pr_rc" -ne 124 ] && [ -s "$CURRENT_RUN_STDOUT_FILE" ] && \
+       grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null; then
+        current_step_limit_detected="true"
+    fi
+    final_step_limit_detected="$current_step_limit_detected"
+
+    current_text_events=""
+    if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
+        current_text_events="$(jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null || true)"
+    fi
+    current_has_control_marker="false"
+    if printf '%s\n' "$current_text_events" | grep -qE '^TASK_DONE([[:space:]]|$)|^TASK_FAILED([[:space:]:]|$)|^TASK_NEEDS_USER_BEGIN([[:space:]]|$)|^TASK_NEEDS_USER_END([[:space:]]|$)'; then
+        current_has_control_marker="true"
+    fi
+
+    current_permission_blocked="false"
+    if [ -s "$CURRENT_RUN_STDOUT_FILE" ] && \
+       jq -s -e 'any(.[]; .type == "tool_use" and .part.state.status == "error" and ((.part.state.error // "" | tostring) | test("permission|rejected|auto-reject"; "i")))' \
+          "$CURRENT_RUN_STDOUT_FILE" >/dev/null 2>&1; then
+        current_permission_blocked="true"
+    elif [ -s "$CURRENT_RUN_STDERR_FILE" ] && \
+         grep -Eqi 'permission requested: [^;]+; auto-rejecting|permission denied|auto-rejecting' "$CURRENT_RUN_STDERR_FILE" 2>/dev/null; then
+        current_permission_blocked="true"
+    fi
+
+    # Resume only when this invocation explicitly hit its step limit, the
+    # runtime exposes a session ID, and no completion/failure/user/permission
+    # event means we should stop and report the actual result.
+    if [ "$current_step_limit_detected" = "true" ] && \
+       [ -n "$session_id" ] && \
+       [ "$internal_continuations_used" -lt "$STEP_LIMIT_CONTINUATIONS_MAX" ] && \
+       [ "$current_has_control_marker" = "false" ] && \
+       [ "$current_permission_blocked" = "false" ]; then
+        internal_continuations_used=$((internal_continuations_used + 1))
+        run_index=$((run_index + 1))
+        log "OpenCode reached its step limit; resuming session internally ($internal_continuations_used/$STEP_LIMIT_CONTINUATIONS_MAX) for task=$OPT_TASK_ID attempt=$OPT_ATTEMPT session=$session_id"
+        continue
+    fi
+
+    break
+done
+
+rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" 2>/dev/null || true
 : >"$OPT_STDOUT_FILE"
 if [ -f "$RAW_STDOUT_FILE" ]; then
     jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' \
@@ -352,12 +425,7 @@ elif [ "$permission_blocked" -eq 1 ]; then
     _summary="OpenCode permission policy rejected a tool call; the agent could not complete the task as instructed"
     [ -n "$error_message" ] && _summary+="; diagnostic=$error_message"
 else
-    step_limit_detected="false"
-    if [ -s "$RAW_STDOUT_FILE" ]; then
-        if grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$RAW_STDOUT_FILE" 2>/dev/null; then
-            step_limit_detected="true"
-        fi
-    fi
+    step_limit_detected="$final_step_limit_detected"
 
     if [ -n "$session_id" ] && [ "$step_limit_detected" = "true" ]; then
         # Only an explicit runtime step-limit condition is a continuation.
