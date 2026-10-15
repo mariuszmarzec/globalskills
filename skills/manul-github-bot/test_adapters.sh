@@ -241,7 +241,7 @@ test_opencode_success() {
   local tmp
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin"
+  mkdir -p "$tmp/bin" "$tmp/src"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
@@ -280,9 +280,9 @@ MOCK
   grep -Fq 'role=build' "$tmp/stderr" \
     && ok "OpenCodeAdapter startup log records the selected role" \
     || fail "OpenCodeAdapter startup log omitted the selected role"
-  grep -qx 'PYTHONPATH=<unset>' "$tmp/env" \
-    && ok "OpenCode process does not inherit stale PYTHONPATH" \
-    || fail "OpenCode inherited PYTHONPATH: $(cat "$tmp/env" 2>/dev/null || true)"
+  grep -Fxq "PYTHONPATH=$tmp/src:$tmp" "$tmp/env" \
+    && ok "OpenCode process gets only the current task's Python import roots" \
+    || fail "OpenCode PYTHONPATH was not task-scoped: $(cat "$tmp/env" 2>/dev/null || true)"
   grep -qx 'PYTHONHOME=<unset>' "$tmp/env" \
     && ok "OpenCode process does not inherit stale PYTHONHOME" \
     || fail "OpenCode inherited PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
