@@ -332,6 +332,10 @@ Do NOT restart coding/review because a delivery operation was requested.
 
 Once implementation has passed required verification/review, delivery should be final.
 
+### PR description freshness (mandatory)
+
+Use the `pr-description-management` skill for every repository delivery. Create a meaningful, non-empty PR immediately after the first push of a standalone task branch. After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—refresh the same PR's description from the cumulative current diff and current verification results. Do not merely append the latest commit, and do not create a second PR for an existing-PR task. Read back the body and verify it, together with URL, head/base branch, and head SHA, using `gh pr view --json body,url,headRefName,baseRefName,headRefOid`. If update or verification fails, delivery is blocked; report the exact blocker and resolve the delivery problem without restarting implementation.
+
 ## Delivery failure vs implementation failure
 
 **Implementation failure:**
