@@ -584,21 +584,46 @@ workspace_get_path() {
     fi
   fi
 
-  # Validate legacy root checkouts and new nested primary checkouts. Preserve a
-  # mismatched nested checkout: it may contain unpushed PR work.
+  # Resolve and validate the workspace root before probing any checkout.
+  # A DB value or symlink must never make this helper inspect another workspace.
+  if [ -n "$path" ]; then
+    local root_real expected_path expected_real registered_real
+    if [ -z "$expected_ws_id" ]; then
+      expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+    fi
+    root_real="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null || true)"
+    expected_path="$WORKSPACES_DIR/$expected_ws_id"
+    expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
+    registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+    if [ -z "$root_real" ] || [ -z "$expected_ws_id" ] || [ -L "$expected_path" ] || [ -L "$path" ] || [ -z "$expected_real" ] || [ "$expected_real" != "$root_real/$expected_ws_id" ] || [ "$registered_real" != "$expected_real" ]; then
+      path=""
+    fi
+  fi
+  [ -n "$path" ] || { printf '\\n'; return 0; }
+
+  # Validate root and nested primary checkouts. Preserve mismatched checkout
+  # state because it may contain unpushed PR commits or uncommitted changes.
   if [ -n "$path" ]; then
     local task_repo actual_repo candidate_checkout relative
     task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
     candidate_checkout="$path"
     if [ -n "$task_repo" ] && [ ! -e "$path/.git" ]; then
       relative="$(workspace_repo_relative_path "$task_repo" 2>/dev/null || true)"
-      [ -z "$relative" ] || candidate_checkout="$path/$relative"
+      if [ -z "$relative" ]; then
+        path=""
+      else
+        local owner_component
+        owner_component="$(printf '%s' "$relative" | cut -d/ -f2)"
+        if [ -L "$path/repos" ] || [ -L "$path/repos/$owner_component" ] || [ -L "$path/$relative" ]; then
+          path=""
+        else
+          candidate_checkout="$path/$relative"
+        fi
+      fi
     fi
-    if [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
+    if [ -n "$path" ] && [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
       actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
       if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
-        # Do not clear the workspace: a mismatched checkout can contain local
-        # commits or uncommitted work. Fail closed and preserve its contents.
         path=""
       fi
     fi
