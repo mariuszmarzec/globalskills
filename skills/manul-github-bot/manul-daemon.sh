@@ -484,7 +484,10 @@ update_task_completion() {
       update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
       ;;
     queued)
-      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
+      # A retry must become schedulable again. Without nextAttemptAt, the
+      # scheduler's "attempts > 0 AND nextAttemptAt <= now" predicate ignores
+      # NULL forever, silently stranding early-failure retries.
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
       ;;
   esac
 
