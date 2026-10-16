@@ -76,6 +76,9 @@ generate_prompt() {
     local DEFAULT_BRANCH="${15}"
     local PR_NUMBER="${16:-$ISSUE_NUM}"
     local REPLY_TO="${17:-}"
+    local WORKSPACE_ROOT="${18:-$WORKDIR}"
+    local RELATED_REPOSITORIES="${19:-}"
+    local RELATED_UNAVAILABLE="${20:-}"
 
     # Top of prompt (static text + placeholders for single-line runtime values)
     cat > "$out_file" <<'PROMPT_EOF'
@@ -232,14 +235,22 @@ PROMPT_EOF
 
     cat >> "$out_file" <<'PROMPT_APPEND'
 
-## Working Directory and Local-Access Boundary
-This is the ONLY repository directory you may inspect or modify for this task:
+## Task Workspace and Local-Access Boundary
+The leased task workspace root (your only permitted repository-access boundary) is:
+__WORKSPACE_ROOT__
+
+The primary repository checkout is the only repository that may be edited, committed, pushed, or delivered by default:
 __WORKDIR__
 
-All repository file reads/writes, shell commands that inspect the repository, and all git commands MUST run in this directory. Do not inspect or modify another local repository/worktree path managed internally by Manul.
+Additional repositories prepared inside this workspace for READ-ONLY inspection:
+__RELATED_REPOSITORIES__
 
-Treat local Manul/OpenCode/operator state as outside your task boundary. Do NOT read, list, search, probe, or follow paths in the home directory or runtime internals, including (but not limited to):
-- ~/.manul/** (task state, DB, prompts, logs, adapters, config, symlinks, runtime artifacts)
+Configured related repositories unavailable in this attempt:
+__RELATED_UNAVAILABLE__
+
+All repository file access must stay inside the exact task workspace root above. Run primary-repository build, test, git, commit, push, and PR commands from the primary checkout at `__WORKDIR__`. Related checkouts, if listed, are read-only context. Do not edit, commit, branch, or push a related checkout by default. If the task genuinely requires changing another repository, stop and request an explicit delivery policy for that repository/branch/PR before changing it. If a required related repository is unavailable, report the exact repository and blocker; do not search for its shared cache or another task's checkout.
+
+Treat local Manul/OpenCode/operator state as outside the task boundary. Under ~/.manul/**, the ONLY permitted path is the exact task workspace root shown above and its descendants. Do NOT inspect sibling workspace directories or shared repository-cache directories, databases, prompts, logs, runtime artifacts, adapters, or symlinks. Also do NOT read, list, search, probe, or follow paths in:
 - ~/.config/opencode/** (provider configuration and permissions)
 - ~/.agents/** or other global agent/skill directories
 - daemon logs, process environments, agent runtime internals, or other tasks' workspaces
@@ -304,6 +315,9 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
     prompt_content="${prompt_content//__REPO_DIR__/$REPO_DIR}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
+    prompt_content="${prompt_content//__WORKSPACE_ROOT__/$WORKSPACE_ROOT}"
+    prompt_content="${prompt_content//__RELATED_REPOSITORIES__/$RELATED_REPOSITORIES}"
+    prompt_content="${prompt_content//__RELATED_UNAVAILABLE__/$RELATED_UNAVAILABLE}"
     prompt_content="${prompt_content//__PR_HEAD_BRANCH__/$PR_HEAD_BRANCH}"
     prompt_content="${prompt_content//__TIMESTAMP__/$timestamp}"
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
@@ -695,13 +709,18 @@ generate_prompt \
     "Some context here." \
     "1" \
     "/tmp/manul-internal-repo" \
-    "/tmp/manul-task-workspace" \
+    "/tmp/manul-task-workspace/repos/test-owner/test-repo" \
     "" \
     "1234567890" \
     "master" \
-    "master"
+    "master" \
+    "42" \
+    "" \
+    "/tmp/manul-task-workspace" \
+    "- test-owner/related: repos/test-owner/related (read-only)" \
+    "- test-owner/missing: cache unavailable"
 
-if assert_file_contains "task workspace injected" "$WORK/prompt.md" "This is the ONLY repository directory you may inspect or modify for this task:"; then
+if assert_file_contains "task workspace injected" "$WORK/prompt.md" "The leased task workspace root (your only permitted repository-access boundary) is:"; then
     :
 else
     :
@@ -711,6 +730,10 @@ if assert_file_contains "task workspace path injected" "$WORK/prompt.md" "/tmp/m
 else
     :
 fi
+if assert_file_contains "primary checkout path injected" "$WORK/prompt.md" "/tmp/manul-task-workspace/repos/test-owner/test-repo"; then :; else :; fi
+if assert_file_contains "related checkout read-only path injected" "$WORK/prompt.md" "test-owner/related: repos/test-owner/related (read-only)"; then :; else :; fi
+if assert_file_contains "unavailable related repo blocker injected" "$WORK/prompt.md" "test-owner/missing: cache unavailable"; then :; else :; fi
+if assert_file_contains "secondary checkout read-only rule enforced" "$WORK/prompt.md" "Related checkouts, if listed, are read-only context"; then :; else :; fi
 if assert_file_not_contains "internal repo path not exposed" "$WORK/prompt.md" "/tmp/manul-internal-repo"; then
     :
 else
