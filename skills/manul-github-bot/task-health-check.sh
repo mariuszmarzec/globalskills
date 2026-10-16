@@ -46,6 +46,10 @@ get_db_query() {
 }
 
 post_terminal_failure_feedback() {
+    if [ "${MANUL_MODE:-bot}" = "human" ]; then
+        log "terminal failure status comment suppressed in human mode for $1"
+        return 0
+    fi
     local comment_id="$1" repo="$2" issue_num="$3" error="$4"
     local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
     if [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then args+=(--pr-number "$issue_num"); fi
