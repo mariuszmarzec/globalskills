@@ -3256,31 +3256,31 @@ PROMPT_EOF
       return 0
     fi
 
-    # Clone repository into workspace if needed
-    if [ ! -d "$workspace_path/.git" ]; then
-      log "dispatch: cloning repository into workspace $workspace_path from $REPO_DIR"
-      git clone --local "$REPO_DIR" "$workspace_path" 2>/dev/null || {
-        log "dispatch: failed to clone repository into workspace, releasing and failing"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        stop_heartbeat "$COMMENT_ID"
-        release_task_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
-        return 0
-      }
-      # Fix origin remote: git clone --local sets origin to the local path,
-      # but the agent needs to push to GitHub. Update origin to point to GitHub.
-      git -C "$workspace_path" remote set-url origin "https://github.com/${REPO}" 2>>"$LOG"
-      log "dispatch: updated workspace origin to https://github.com/${REPO}"
+    # The lease owns a workspace root, not a single repository checkout.
+    # Migrate legacy root checkouts without discarding changes, then prepare the
+    # primary repository below repos/<owner>/<name>.
+    local primary_checkout_rc=0
+    WORKDIR="$(workspace_prepare_primary_checkout "$workspace_path" "$REPO" "$REPO_DIR")" || primary_checkout_rc=$?
+    if [ "$primary_checkout_rc" -ne 0 ] || [ -z "$WORKDIR" ]; then
+      log "dispatch: failed to prepare primary checkout for $REPO in task workspace $workspace_path (rc=$primary_checkout_rc); preserving existing data"
+      lc_log "WORKSPACE_PRIMARY_CHECKOUT_FAILED" "task=$COMMENT_ID repo=$REPO workspace=$WORKSPACE_ID rc=$primary_checkout_rc"
+      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
+      stop_heartbeat "$COMMENT_ID"
+      release_task_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
     fi
 
-    # The agent works only in its isolated workspace from this point on.
-    # Releasing the shared repo-cache lock here allows another task for the
-    # same repository to prepare its own workspace concurrently.
-    release_task_repo_lock "$REPO"
+    # Prepare related repos only inside this lease. Shared caches are internal
+    # clone sources and are never exposed as working directories to the agent.
+    workspace_prepare_related_checkouts "$workspace_path" "$REPO" "${REPOS[@]}"
+    local RELATED_REPOSITORIES="${WORKSPACE_RELATED_PATHS:-}"
+    local RELATED_UNAVAILABLE="${WORKSPACE_RELATED_UNAVAILABLE:-}"
 
-# Use the workspace as the working directory for the agent
-     WORKDIR="$workspace_path"
+    # Agent operates from the workspace root. Git branch/PR setup and delivery
+    # below intentionally continue to target WORKDIR (the primary checkout).
+    release_task_repo_lock "$REPO"
 
      # PR workspaces are persistent contexts. Never reset a dirty checkout or
      # discard local commits that have not reached the remote PR branch.
@@ -3344,8 +3344,8 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
      ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
      ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
      ws_path_check="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
-     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$WORKDIR" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$WORKDIR"; then
-       log "ERROR: workspace ownership/path invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} registered_path=${ws_path_check:-none} candidate_path=$WORKDIR)"
+     if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$workspace_path" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$workspace_path"; then
+       log "ERROR: workspace ownership/path invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} registered_path=${ws_path_check:-none} candidate_path=$workspace_path)"
        lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
        log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
        stop_heartbeat "$COMMENT_ID"
@@ -3487,7 +3487,7 @@ PROMPT_APPEND
 
      local prev_dir
      prev_dir="$(pwd)"
-     cd "$WORKDIR" || {
+     cd "$workspace_path" || {
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        stop_heartbeat "$COMMENT_ID"
        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
@@ -3510,7 +3510,7 @@ PROMPT_APPEND
      jq -n \
        --arg taskId "$COMMENT_ID" \
        --arg prompt "$TASK_PROMPT_FILE" \
-       --arg workspace "$WORKDIR" \
+       --arg workspace "$workspace_path" \
        --arg agent "${AGENT:-}" \
        --arg agentSelection "$AGENT_SELECTION" \
        --argjson autoAccept "$TASK_AUTO_ACCEPT" \
