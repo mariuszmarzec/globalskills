@@ -139,7 +139,37 @@ assert_contains "Top-level lifecycle targets PR #43 conversation" "$top_cmd" "AR
 assert_not_contains "Top-level lifecycle does not use review reply endpoint" "$top_cmd" "pulls/43/comments"
 assert_not_contains "Top-level lifecycle has no in_reply_to routing" "$top_cmd" "in_reply_to="
 
+# Terminal failures must use the same correct routing and expose the actual
+# failure reason; Markdown newlines must be real newlines before JSON encoding.
+: > "$GH_LOG"
+review_failed_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
+  --repo mariuszmarzec/shoppingListGenerator \
+  --issue 43 \
+  --comment-id review:4103894743 \
+  --task-id review:4103894743 \
+  --pr-number 43 \
+  --error "workspace path missing" \
+  --json 2>&1)"
+review_failed_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
+assert_contains "Terminal review failure uses the review-thread endpoint" "$review_failed_cmd" "ARG:repos/mariuszmarzec/shoppingListGenerator/pulls/43/comments"
+assert_contains "Terminal review failure retains TASK_FAILED marker" "$review_failed_cmd" "TASK_FAILED"
+assert_contains "Terminal review failure includes its concrete reason" "$review_failed_cmd" "workspace path missing"
+assert_contains "Terminal review failure formats the error block with Markdown newlines" "$review_failed_cmd" '**Error:**\n```text\nworkspace path missing\n```'
+assert_contains "Terminal review failure JSON routes to original review comment" "$review_failed_cmd" '"in_reply_to":4103894743'
 
+: > "$GH_LOG"
+top_failed_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
+  --repo mariuszmarzec/shoppingListGenerator \
+  --issue 43 \
+  --comment-id issue:5831560162 \
+  --task-id issue:5831560162 \
+  --pr-number 43 \
+  --error "checkout failed" \
+  --json 2>&1)"
+top_failed_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
+assert_contains "Terminal issue failure uses a top-level issue comment" "$top_failed_cmd" "ARG:issue comment 43"
+assert_not_contains "Terminal issue failure does not use review-thread endpoint" "$top_failed_cmd" "pulls/43/comments"
+assert_contains "Terminal issue failure includes its concrete reason" "$top_failed_cmd" "checkout failed"
 
 if [ "$FAIL" -eq 0 ]; then
   echo "All $PASS tests passed."
