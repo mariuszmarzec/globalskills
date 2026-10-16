@@ -331,8 +331,348 @@ cmd_post_failed() {
   comment_body+="**Attempt:** ${attempt}/${max_attempts}"
   comment_body+=$'\n\n'
   if [ -n "${ERROR_MSG:-}" ]; then
-    comment_body+="**Error:**\n\`\`\`\n${ERROR_MSG}\n\`\`\`"
-    comment_body+=$'\n\n'
+    comment_body+="**Error:**"
+    comment_body+=
+  comment_body+="---"
+  comment_body+=$'\n'
+  comment_body+="${SIGNATURE}"
+
+  local result
+  result=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --arg error "${ERROR_MSG:0:200}" \
+    --argjson prNumber "${PR_NUMBER:-null}" \
+    --argjson attempt "$attempt" \
+    --arg marker "$event_marker" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      status: "failed",
+      attempt: $attempt,
+      prNumber: $prNumber,
+      eventMarker: $marker,
+      hasError: ($error != "")
+    }')
+
+  # Post the comment to GitHub
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
+
+  echo "$result" | jq .
+}
+
+# Post TASK_STARTED event
+cmd_post_started() {
+  if [ -z "$REPO" ] || [ -z "$TASK_ID" ]; then
+    error_exit "post-started requires --repo and --task-id" 3
+  fi
+
+  local attempt
+  attempt="$(get_task_attempt "$TASK_ID")"
+
+  local conv_id
+  conv_id="$(get_task_conversation "$TASK_ID")"
+
+  # Build event data
+  local event_data
+  event_data=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --argjson attempt "$attempt" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      attempt: $attempt
+    }')
+
+  # Build event marker
+  local event_marker
+  event_marker="$(build_event_marker "TASK_STARTED" "$event_data")"
+
+  # Build human-readable comment
+  local comment_body=""
+  comment_body+="${event_marker}"
+  comment_body+=$'\n\n'
+  comment_body+="🔄 **Task Started**"
+  comment_body+=$'\n\n'
+  comment_body+="**Task:** ${TASK_ID}"
+  comment_body+=$'\n'
+  if [ -n "${conv_id:-}" ]; then
+    comment_body+="**Conversation:** ${conv_id}"
+    comment_body+=$'\n'
+  fi
+  comment_body+="**Attempt:** ${attempt}"
+  comment_body+=$'\n\n'
+  comment_body+="---"
+  comment_body+=$'\n'
+  comment_body+="${SIGNATURE}"
+
+  local result
+  result=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --argjson attempt "$attempt" \
+    --arg marker "$event_marker" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      status: "started",
+      attempt: $attempt,
+      eventMarker: $marker
+    }')
+
+  # Post the comment to GitHub
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
+
+  echo "$result" | jq .
+}
+
+# Verify that a comment contains the expected event marker
+cmd_verify_marker() {
+  if [ -z "$REPO" ] || [ -z "$COMMENT_ID" ] || [ -z "$TASK_ID" ]; then
+    error_exit "verify-marker requires --repo, --comment-id, and --task-id" 3
+  fi
+
+  local found=false
+  local match_attempt=""
+
+  # Query GitHub for the comment
+  local comment_body=""
+  if command -v gh >/dev/null 2>&1; then
+    comment_body="$(gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --jq '.body // ""' 2>/dev/null || echo "")"
+  fi
+
+  # Extract event markers
+  local event_marker
+  event_marker="$(grep -oE '<!-- manul:event [^>]+ -->' <<< "$comment_body" 2>/dev/null | head -1 || echo "")"
+
+  if [ -n "$event_marker" ]; then
+    found=true
+    # Extract attempt from marker if present
+    match_attempt="$(echo "$event_marker" | grep -oP '(?<="attempt":)[0-9]+' || echo "")"
+  fi
+
+  # Check if task ID matches
+  local task_match=false
+  if echo "$event_marker" | grep -q "$TASK_ID"; then
+    task_match=true
+  fi
+
+  local result
+  result=$(jq -n \
+    --arg commentId "$COMMENT_ID" \
+    --arg taskId "$TASK_ID" \
+    --argjson found "$found" \
+    --argjson taskMatch "$task_match" \
+    --arg expectedAttempt "${EXPECTED_ATTEMPT:-}" \
+    --arg actualAttempt "${match_attempt:-}" \
+    --arg marker "$event_marker" \
+    '{
+      commentId: $commentId,
+      taskId: $taskId,
+      hasMarker: $found,
+      taskMatch: $taskMatch,
+      expectedAttempt: $expectedAttempt,
+      actualAttempt: $actualAttempt,
+      marker: $marker,
+      valid: ($found and $taskMatch)
+    }')
+
+  echo "$result" | jq .
+}
+
+# Main dispatch
+case "${ACTION:-}" in
+  post-done) cmd_post_done ;;
+  post-failed) cmd_post_failed ;;
+  post-started) cmd_post_started ;;
+  verify-marker) cmd_verify_marker ;;
+  "")
+    echo "Usage: manul-result-feedback.sh <command> [options]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  post-done        Post TASK_DONE event and comment" >&2
+    echo "  post-failed      Post TASK_FAILED event and comment" >&2
+    echo "  post-started     Post TASK_STARTED event and comment" >&2
+    echo "  verify-marker    Verify event marker in a comment" >&2
+    exit 3
+    ;;
+  *)
+    error_exit "Unknown command: $ACTION" 3
+    ;;
+esac
+\n```text\n'
+    comment_body+="$ERROR_MSG"
+    comment_body+=
+  comment_body+="---"
+  comment_body+=$'\n'
+  comment_body+="${SIGNATURE}"
+
+  local result
+  result=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --arg error "${ERROR_MSG:0:200}" \
+    --argjson prNumber "${PR_NUMBER:-null}" \
+    --argjson attempt "$attempt" \
+    --arg marker "$event_marker" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      status: "failed",
+      attempt: $attempt,
+      prNumber: $prNumber,
+      eventMarker: $marker,
+      hasError: ($error != "")
+    }')
+
+  # Post the comment to GitHub
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
+
+  echo "$result" | jq .
+}
+
+# Post TASK_STARTED event
+cmd_post_started() {
+  if [ -z "$REPO" ] || [ -z "$TASK_ID" ]; then
+    error_exit "post-started requires --repo and --task-id" 3
+  fi
+
+  local attempt
+  attempt="$(get_task_attempt "$TASK_ID")"
+
+  local conv_id
+  conv_id="$(get_task_conversation "$TASK_ID")"
+
+  # Build event data
+  local event_data
+  event_data=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --argjson attempt "$attempt" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      attempt: $attempt
+    }')
+
+  # Build event marker
+  local event_marker
+  event_marker="$(build_event_marker "TASK_STARTED" "$event_data")"
+
+  # Build human-readable comment
+  local comment_body=""
+  comment_body+="${event_marker}"
+  comment_body+=$'\n\n'
+  comment_body+="🔄 **Task Started**"
+  comment_body+=$'\n\n'
+  comment_body+="**Task:** ${TASK_ID}"
+  comment_body+=$'\n'
+  if [ -n "${conv_id:-}" ]; then
+    comment_body+="**Conversation:** ${conv_id}"
+    comment_body+=$'\n'
+  fi
+  comment_body+="**Attempt:** ${attempt}"
+  comment_body+=$'\n\n'
+  comment_body+="---"
+  comment_body+=$'\n'
+  comment_body+="${SIGNATURE}"
+
+  local result
+  result=$(jq -n \
+    --arg taskId "$TASK_ID" \
+    --arg conversationId "${conv_id:-}" \
+    --argjson attempt "$attempt" \
+    --arg marker "$event_marker" \
+    '{
+      taskId: $taskId,
+      conversationId: $conversationId,
+      status: "started",
+      attempt: $attempt,
+      eventMarker: $marker
+    }')
+
+  # Post the comment to GitHub
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
+
+  echo "$result" | jq .
+}
+
+# Verify that a comment contains the expected event marker
+cmd_verify_marker() {
+  if [ -z "$REPO" ] || [ -z "$COMMENT_ID" ] || [ -z "$TASK_ID" ]; then
+    error_exit "verify-marker requires --repo, --comment-id, and --task-id" 3
+  fi
+
+  local found=false
+  local match_attempt=""
+
+  # Query GitHub for the comment
+  local comment_body=""
+  if command -v gh >/dev/null 2>&1; then
+    comment_body="$(gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --jq '.body // ""' 2>/dev/null || echo "")"
+  fi
+
+  # Extract event markers
+  local event_marker
+  event_marker="$(grep -oE '<!-- manul:event [^>]+ -->' <<< "$comment_body" 2>/dev/null | head -1 || echo "")"
+
+  if [ -n "$event_marker" ]; then
+    found=true
+    # Extract attempt from marker if present
+    match_attempt="$(echo "$event_marker" | grep -oP '(?<="attempt":)[0-9]+' || echo "")"
+  fi
+
+  # Check if task ID matches
+  local task_match=false
+  if echo "$event_marker" | grep -q "$TASK_ID"; then
+    task_match=true
+  fi
+
+  local result
+  result=$(jq -n \
+    --arg commentId "$COMMENT_ID" \
+    --arg taskId "$TASK_ID" \
+    --argjson found "$found" \
+    --argjson taskMatch "$task_match" \
+    --arg expectedAttempt "${EXPECTED_ATTEMPT:-}" \
+    --arg actualAttempt "${match_attempt:-}" \
+    --arg marker "$event_marker" \
+    '{
+      commentId: $commentId,
+      taskId: $taskId,
+      hasMarker: $found,
+      taskMatch: $taskMatch,
+      expectedAttempt: $expectedAttempt,
+      actualAttempt: $actualAttempt,
+      marker: $marker,
+      valid: ($found and $taskMatch)
+    }')
+
+  echo "$result" | jq .
+}
+
+# Main dispatch
+case "${ACTION:-}" in
+  post-done) cmd_post_done ;;
+  post-failed) cmd_post_failed ;;
+  post-started) cmd_post_started ;;
+  verify-marker) cmd_verify_marker ;;
+  "")
+    echo "Usage: manul-result-feedback.sh <command> [options]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  post-done        Post TASK_DONE event and comment" >&2
+    echo "  post-failed      Post TASK_FAILED event and comment" >&2
+    echo "  post-started     Post TASK_STARTED event and comment" >&2
+    echo "  verify-marker    Verify event marker in a comment" >&2
+    exit 3
+    ;;
+  *)
+    error_exit "Unknown command: $ACTION" 3
+    ;;
+esac
+\n```\n\n'
   fi
   comment_body+="---"
   comment_body+=$'\n'
