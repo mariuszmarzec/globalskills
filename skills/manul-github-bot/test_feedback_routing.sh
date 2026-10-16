@@ -155,7 +155,7 @@ assert_contains "Terminal review failure uses the review-thread endpoint" "$revi
 assert_contains "Terminal review failure retains TASK_FAILED marker" "$review_failed_cmd" "TASK_FAILED"
 assert_contains "Terminal review failure includes its concrete reason" "$review_failed_cmd" "workspace path missing"
 assert_contains "Terminal review failure formats the error block with Markdown newlines" "$review_failed_cmd" '**Error:**\n```text\nworkspace path missing\n```'
-assert_contains "Terminal review failure JSON routes to original review comment" "$review_failed_cmd" '"in_reply_to":4103894743'
+assert_matches "Terminal review failure JSON routes to original review comment" "$review_failed_cmd" '"in_reply_to"[[:space:]]*:[[:space:]]*4103894743'
 
 : > "$GH_LOG"
 top_failed_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
