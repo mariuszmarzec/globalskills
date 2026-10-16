@@ -151,6 +151,34 @@ test_github_pagination_logged() {
   fi
 }
 
+# Test 7: every terminal failure recovery path delegates to the shared GitHub feedback.
+test_terminal_failure_feedback_wiring() {
+  local daemon="$SCRIPT_DIR/manul-daemon.sh"
+  local failures=0
+
+  if grep -q 'handle_pre_execution_failure' "$daemon" && grep -q 'post_task_failure_feedback' "$daemon"; then
+    pass "daemon pre-agent failures use the shared terminal feedback path"
+  else
+    fail "daemon pre-agent feedback path missing"
+    failures=$((failures + 1))
+  fi
+  for script in watchdog.sh task-health-check.sh task-recovery.sh; do
+    if grep -q 'post_terminal_failure_feedback' "$SCRIPT_DIR/$script" && grep -q 'manul-result-feedback.sh' "$SCRIPT_DIR/$script"; then
+      pass "$script delegates terminal failures to shared GitHub feedback"
+    else
+      fail "$script terminal feedback path missing"
+      failures=$((failures + 1))
+    fi
+  done
+  if grep -q "SELECT changes();" "$daemon" && grep -q "TASK_FAILURE_COMMENT_FAILED" "$daemon"; then
+    pass "daemon verifies ownership/state transition and logs comment-post failures"
+  else
+    fail "daemon transition/comment failure observability missing"
+    failures=$((failures + 1))
+  fi
+  return "$failures"
+}
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Error Observability Regression Tests"
@@ -163,6 +191,7 @@ test_successful_path_unchanged
 test_intentional_fallback_preserved
 test_cleanup_patterns_unchanged
 test_github_pagination_logged
+test_terminal_failure_feedback_wiring || true
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
