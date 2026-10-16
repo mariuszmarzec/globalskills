@@ -36,6 +36,17 @@ FAKE_BIN="$TEST_DIR/bin"
 mkdir -p "$FAKE_BIN"
 printf "#!/usr/bin/env bash\\nexit 0\\n" > "$FAKE_BIN/openclaw"
 chmod +x "$FAKE_BIN/openclaw"
+GH_LOG="$TEST_DIR/gh.log"
+export GH_LOG
+cat >"$FAKE_BIN/gh" <<'GH'
+#!/usr/bin/env bash
+printf 'COMMAND:%s\n' "$*" >> "$GH_LOG"
+if [ "${1:-}" = "issue" ] && [ "${2:-}" = "comment" ]; then
+  exit 0
+fi
+exit 1
+GH
+chmod +x "$FAKE_BIN/gh"
 export PATH="$FAKE_BIN:$PATH"
 # Source under a controlled errexit boundary so a future daemon initialization
 # regression is reported in this test instead of terminating the shell silently.
@@ -301,6 +312,27 @@ assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHER
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
+if grep -q 'Task Failed' "$GH_LOG" && grep -q 'stale heartbeat/lease recovery' "$GH_LOG"; then
+  echo "PASS: stale-lease terminal failure is posted to GitHub with its cause"
+else
+  echo "FAIL: stale-lease terminal failure comment missing or lacks its cause" >&2
+  cat "$GH_LOG" >&2
+  exit 1
+fi
+
+# 5b) Early workspace failures use the same attempt limit and publish a final
+# failure comment instead of leaving the task running for the watchdog to guess.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,$CURRENT_TEST_PID,'early-fail-token');"
+handle_pre_execution_failure "early-fail" "early-fail-token" "$REPO" 81 "" "" "Workspace unavailable: primary checkout could not be prepared." "" 3
+assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-fail';")" "pre-agent failure transitions to failed"
+assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery does not double-count attempts"
+if grep -q 'Workspace unavailable: primary checkout could not be prepared.' "$GH_LOG"; then
+  echo "PASS: pre-agent terminal failure comment contains the concrete cause"
+else
+  echo "FAIL: pre-agent terminal failure comment missing the concrete cause" >&2
+  cat "$GH_LOG" >&2
+  exit 1
+fi
 
 # 6) PR verification rejects a missing PR and accepts a real PR.
 WORKTREE="$TEST_DIR/repo"
