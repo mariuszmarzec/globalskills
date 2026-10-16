@@ -339,12 +339,13 @@ workspace_repo_matches() {
   return 1
 }
 
+
 # Convert a GitHub owner/repository identifier to a safe workspace-relative path.
 workspace_repo_relative_path() {
-  local repository="${1:-}" owner repo_name
+  local repository="$1" owner repo_name
   [[ "$repository" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
-  owner="${BASH_REMATCH[1]}"
-  repo_name="${BASH_REMATCH[2]}"
+  owner="$(printf '%s' "$repository" | cut -d/ -f1)"
+  repo_name="$(printf '%s' "$repository" | cut -d/ -f2)"
   [ "$owner" != "." ] && [ "$owner" != ".." ] || return 1
   [ "$repo_name" != "." ] && [ "$repo_name" != ".." ] || return 1
   printf 'repos/%s/%s\n' "$owner" "$repo_name"
@@ -362,15 +363,12 @@ workspace_primary_repo_path() {
   [ ! -L "$repos_path" ] || return 1
   mkdir -p "$repos_path" || return 1
   [ "$(realpath -e "$repos_path" 2>/dev/null)" = "$root_real/repos" ] || return 1
-
-  owner="${relative#repos/}"
-  owner="${owner%%/*}"
-  repo_name="${relative##*/}"
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
   owner_path="$repos_path/$owner"
   [ ! -L "$owner_path" ] || return 1
   mkdir -p "$owner_path" || return 1
   [ "$(realpath -e "$owner_path" 2>/dev/null)" = "$repos_path/$owner" ] || return 1
-
   checkout_path="$owner_path/$repo_name"
   [ ! -L "$checkout_path" ] || return 1
   resolved="$(realpath -m "$checkout_path" 2>/dev/null)" || return 1
@@ -379,11 +377,11 @@ workspace_primary_repo_path() {
   printf '%s\n' "$checkout_path"
 }
 
-# Migrate legacy workspaces where the workspace root itself was the primary
-# Git repository. Rename the entire checkout to preserve all local/unpushed work.
+# Migrate a legacy workspace root that is itself a Git checkout. Moving the
+# entire directory preserves local edits, commits, ignored files, and PR work.
 workspace_migrate_legacy_checkout() {
   local workspace_root="$1" repository="$2"
-  local relative root_real actual_root actual_origin workspace_parent workspace_name staging
+  local relative root_real actual_root actual_origin workspace_parent workspace_name staging owner repo_name
   root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
   [ -e "$root_real/.git" ] || return 0
   [ ! -L "$root_real/.git" ] || return 1
@@ -392,19 +390,20 @@ workspace_migrate_legacy_checkout() {
   actual_origin="$(git -C "$root_real" remote get-url origin 2>/dev/null || true)"
   workspace_repo_matches "$repository" "$actual_origin" || return 2
   relative="$(workspace_repo_relative_path "$repository")" || return 1
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
   workspace_parent="$(dirname "$root_real")"
   workspace_name="$(basename "$root_real")"
-  staging="$workspace_parent/.${workspace_name}.migration.$BASHPID"
+  printf -v staging '%s/.%s.migration.%s' "$workspace_parent" "$workspace_name" "$"
   [ ! -e "$staging" ] || return 1
-
   mv "$root_real" "$staging" || return 1
-  if ! mkdir -p "$root_real/repos/${relative#repos/}"; then
+  if ! mkdir -p "$root_real/repos/$owner"; then
     rmdir "$root_real" 2>/dev/null || true
     mv "$staging" "$root_real" 2>/dev/null || true
     return 1
   fi
-  if ! mv "$staging" "$root_real/$relative"; then
-    rmdir "$root_real/repos/${relative#repos/}" "$root_real/repos" "$root_real" 2>/dev/null || true
+  if ! mv "$staging" "$root_real/repos/$owner/$repo_name"; then
+    rmdir "$root_real/repos/$owner" "$root_real/repos" "$root_real" 2>/dev/null || true
     mv "$staging" "$root_real" 2>/dev/null || true
     return 1
   fi
@@ -418,7 +417,6 @@ workspace_prepare_primary_checkout() {
   local checkout actual_origin
   workspace_migrate_legacy_checkout "$workspace_root" "$repository" || return $?
   checkout="$(workspace_primary_repo_path "$workspace_root" "$repository")" || return 1
-
   if [ -e "$checkout" ]; then
     if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
       return 2
@@ -437,10 +435,10 @@ workspace_prepare_primary_checkout() {
   printf '%s\n' "$checkout"
 }
 
-# Populate task-scoped related repositories from Manul's configured list. The
-# shared cache is a clone/fetch source only; related checkouts live under this
-# lease and are read-only by task contract. Unavailable repos are disclosed to
-# the worker instead of granting access to shared cache paths.
+# Populate configured related repositories inside this task's lease. Shared
+# caches are sources only; the worker never receives their paths. Related
+# checkouts are read-only by task contract. Existing edits or divergent commits
+# are preserved and reported rather than overwritten during reuse.
 workspace_prepare_related_checkouts() {
   local workspace_root="$1" primary_repository="$2"
   shift 2
@@ -449,10 +447,12 @@ workspace_prepare_related_checkouts() {
   local repository cache cache_rc checkout relative actual_origin branch local_head cache_head
   for repository in "$@"; do
     [ -n "$repository" ] || continue
-    [ "${repository,,}" != "${primary_repository,,}" ] || continue
+    if [ "$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$primary_repository" | tr '[:upper:]' '[:lower:]')" ]; then
+      continue
+    fi
     relative="$(workspace_repo_relative_path "$repository" 2>/dev/null || true)"
     if [ -z "$relative" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -488,24 +488,14 @@ workspace_prepare_related_checkouts() {
     fi
   fi
 
-  # Workspaces are pooled across repositories. Validate legacy and nested primary
-  # checkouts. Never erase a nested checkout on mismatch; it may have unpushed work.
-  if [ -n "$path" ]; then
-    local task_repo actual_repo candidate_checkout relative
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
     task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
-    candidate_checkout="$path"
-    if [ -n "$task_repo" ] && [ ! -e "$path/.git" ]; then
-      relative="$(workspace_repo_relative_path "$task_repo" 2>/dev/null || true)"
-      [ -z "$relative" ] || candidate_checkout="$path/$relative"
-    fi
-    if [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
-      actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
       if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
-        if [ "$candidate_checkout" = "$path" ]; then
-          rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
-        else
-          WORKSPACE_LAYOUT_ERROR="Primary checkout origin mismatch for ${task_repo}; existing data was preserved"
-        fi
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
       fi
     fi
   fi
@@ -613,12 +603,13 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: invalid repository identifier"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: invalid repository identifier"
       continue
     fi
     checkout="$(workspace_primary_repo_path "$workspace_root" "$repository" 2>/dev/null || true)"
     if [ -z "$checkout" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -769,14 +760,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: unsafe checkout path"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: unsafe checkout path"
       continue
     fi
-
     cache_rc=0
     cache="$(ensure_repo "$repository")" || cache_rc=$?
     if [ "$cache_rc" -ne 0 ] || [ -z "$cache" ] || [ ! -d "$cache/.git" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -927,15 +918,15 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: shared cache unavailable (status $cache_rc)"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: shared cache unavailable (status $cache_rc)"
       continue
     fi
-
     if [ ! -e "$checkout" ]; then
       if git clone --local --no-hardlinks "$cache" "$checkout" >/dev/null 2>&1; then
         if ! git -C "$checkout" remote set-url origin "https://github.com/$repository" >/dev/null 2>&1; then
           rm -rf -- "$checkout"
-          WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1086,13 +1077,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: failed to configure origin"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: failed to configure origin"
           release_repo_lock "$repository"
           continue
         fi
       else
         [ ! -e "$checkout" ] || rm -rf -- "$checkout"
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1243,13 +1235,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: clone failed"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: clone failed"
         release_repo_lock "$repository"
         continue
       fi
     else
       if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1400,13 +1393,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout is not a Git repository; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is not a Git repository; preserved"
         release_repo_lock "$repository"
         continue
       fi
       actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
       if ! workspace_repo_matches "$repository" "$actual_origin"; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1557,12 +1551,13 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout origin mismatch; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout origin mismatch; preserved"
         release_repo_lock "$repository"
         continue
       fi
       if ! git -C "$checkout" diff --quiet 2>/dev/null || ! git -C "$checkout" diff --cached --quiet 2>/dev/null; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1713,13 +1708,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout has tracked changes; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout has tracked changes; preserved"
         release_repo_lock "$repository"
         continue
       fi
       branch="$(git -C "$cache" symbolic-ref --short HEAD 2>/dev/null || git -C "$cache" branch --show-current 2>/dev/null || true)"
       if [ -z "$branch" ] || [ "$(git -C "$checkout" symbolic-ref --short HEAD 2>/dev/null || true)" != "$branch" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1870,12 +1866,13 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout is on a different/detached branch; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is on a different/detached branch; preserved"
         release_repo_lock "$repository"
         continue
       fi
       if ! git -C "$checkout" fetch --quiet "$cache" "+refs/heads/$branch:refs/remotes/manul-cache/$branch" 2>/dev/null; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2026,14 +2023,15 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: could not refresh from the current cache"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: could not refresh from the current cache"
         release_repo_lock "$repository"
         continue
       fi
       local_head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
       cache_head="$(git -C "$checkout" rev-parse "refs/remotes/manul-cache/$branch" 2>/dev/null || true)"
       if [ -z "$cache_head" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2184,13 +2182,14 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: refreshed branch ref is missing"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: refreshed branch ref is missing"
         release_repo_lock "$repository"
         continue
       elif [ "$local_head" != "$cache_head" ]; then
         if git -C "$checkout" merge-base --is-ancestor "$local_head" "$cache_head" 2>/dev/null; then
           if ! git -C "$checkout" merge --ff-only "$cache_head" >/dev/null 2>&1; then
-            WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+            [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2341,12 +2340,13 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: fast-forward refresh failed; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+            WORKSPACE_RELATED_UNAVAILABLE+="- $repository: fast-forward refresh failed; preserved"
             release_repo_lock "$repository"
             continue
           fi
         else
-          WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2497,15 +2497,15 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: local commits would be overwritten by refresh; preserved"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: local commits would be overwritten by refresh; preserved"
           release_repo_lock "$repository"
           continue
         fi
       fi
     fi
-
     release_repo_lock "$repository"
-    WORKSPACE_RELATED_PATHS+="${WORKSPACE_RELATED_PATHS:+
+    [ -z "$WORKSPACE_RELATED_PATHS" ] || WORKSPACE_RELATED_PATHS+=
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2656,11 +2656,11 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: \`$relative\` (read-only)"
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\n'
+    WORKSPACE_RELATED_PATHS+="- $repository: $relative (read-only)"
   done
   return 0
 }
-
 
 workspace_get_path() {
   local task_id="$1"
