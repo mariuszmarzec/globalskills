@@ -621,6 +621,9 @@ workspace_get_path() {
         fi
       fi
     fi
+    if [ -n "$path" ] && [ -L "$candidate_checkout/.git" ]; then
+      path=""
+    fi
     if [ -n "$path" ] && [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
       actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
       if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
