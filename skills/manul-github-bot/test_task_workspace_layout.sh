@@ -30,6 +30,10 @@ check() {
 }
 assert_eq() { [ "$1" = "$2" ]; }
 assert_contains() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+assert_rejected() {
+  "$@" >/dev/null 2>&1 && return 1
+  return 0
+}
 
 make_repo() {
   local dir="$1" repo="$2"
@@ -49,10 +53,10 @@ make_repo "$PRIMARY_CACHE" "test-owner/primary"
 make_repo "$RELATED_CACHE" "test-owner/related"
 
 check "valid repository id maps to owner/name under repos" assert_eq "$(workspace_repo_relative_path "test-owner/primary")" "repos/test-owner/primary"
-check "rejects path traversal in owner" workspace_repo_relative_path "../escape/primary" 
-check "rejects path traversal in repository" workspace_repo_relative_path "test-owner/../escape"
-check "rejects extra repository path segments" workspace_repo_relative_path "test-owner/primary/extra"
-check "rejects empty repository identifier" workspace_repo_relative_path ""
+check "rejects path traversal in owner" assert_rejected workspace_repo_relative_path "../escape/primary" 
+check "rejects path traversal in repository" assert_rejected workspace_repo_relative_path "test-owner/../escape"
+check "rejects extra repository path segments" assert_rejected workspace_repo_relative_path "test-owner/primary/extra"
+check "rejects empty repository identifier" assert_rejected workspace_repo_relative_path ""
 
 WORKSPACE="$MANUL_WORKSPACE/ws-layout-test"
 mkdir -p "$WORKSPACE"
@@ -88,7 +92,7 @@ ESCAPE_ROOT="$TEST_DIR/escape-root"
 SYMLINK_WORKSPACE="$MANUL_WORKSPACE/ws-symlink-test"
 mkdir -p "$ESCAPE_ROOT" "$SYMLINK_WORKSPACE"
 ln -s "$ESCAPE_ROOT" "$SYMLINK_WORKSPACE/repos"
-check "rejects symlinked repos root" workspace_primary_repo_path "$SYMLINK_WORKSPACE" "test-owner/primary"
+check "rejects symlinked repos root" assert_rejected workspace_primary_repo_path "$SYMLINK_WORKSPACE" "test-owner/primary"
 check "symlink rejection leaves outside directory untouched" test -z "$(find "$ESCAPE_ROOT" -mindepth 1 -print -quit)"
 
 # Migration renames a legacy checkout as a unit and preserves dirt/unpushed work.
