@@ -216,7 +216,9 @@ Workspaces must be isolated per active task and released after task completion/f
 
 Workspace reclamation must use the same liveness/lease semantics as task recovery.
 
-The agent execution boundary exposes only the task-owned workspace path (`WORKDIR`) to the agent as its repository working directory. Manul's internal repository preparation directory (`REPO_DIR`) is an orchestration detail and must not be included in the generated agent prompt. Git and file operations performed by the agent must stay inside `WORKDIR` unless the task explicitly requires an approved external dependency.
+The leased `ws-*` path is the task workspace root. It contains task-scoped repository checkouts under `repos/<owner>/<name>/` and task-local scratch under `tmp/`. The primary checkout path (`WORKDIR`) is passed separately and remains authoritative for branch setup, commits, pushes, PR metadata, dirty-state checks, and completion verification. Manul's shared repository cache (`REPO_DIR`) is an internal clone source and must never appear in the generated agent prompt.
+
+The agent may read/search configured related repository checkouts inside the leased workspace. Those secondary checkouts are read-only by default; only the primary checkout may be modified or delivered unless the user explicitly approves a separate delivery policy for another repository. An unavailable required checkout must be reported as a concrete blocker. Agents must not access sibling workspaces, shared caches, or other Manul runtime state.
 
 ## 14. Agent task access boundary
 
@@ -229,9 +231,10 @@ diagnostic artifacts.
 
 Every generated implementation/review-fix prompt must enforce a least-privilege task boundary, independently of how brief or detailed the user's `/manul` comment is:
 
-- The assigned task workspace (`WORKDIR`) is the only local repository tree the agent may inspect or modify.
-- Do not read/list/search/probe home-directory state or global agent/skill directories, including `~/.manul/**`, `~/.agents/**`, and `~/.config/opencode/**`; this includes Manul databases, prompts, logs, adapters, daemon state and runtime permissions/configuration.
-- Do not follow symlinks or use shell/file/skill tools to reach those locations indirectly.
+- The exact assigned task workspace root is the only local repository-access boundary. The primary checkout (`WORKDIR`) is authoritative for all default repository edits, commits, pushes and PR delivery.
+- Related checkouts explicitly listed in the generated prompt may be inspected/searched but are read-only by default. No changes may be delivered from a secondary checkout unless the user has explicitly approved that repository's branch/PR/delivery policy.
+- Within `~/.manul/**`, only the exact leased task workspace root and its descendants are permitted. Sibling workspaces, shared repository caches, databases, prompts, logs, adapters, daemon state and runtime artifacts remain prohibited. Also do not read/list/search/probe `~/.agents/**` or `~/.config/opencode/**`.
+- Do not follow symlinks or use shell/file/skill tools to reach paths outside the task workspace indirectly.
 - Do not inspect Manul task state or runtime artifacts to prove routing/role selection. Those are operator-owned diagnostics collected outside the implementation session.
 - Prefer repository-local instructions and skills. Global skills may only be used when their contents are explicitly supplied to the agent as task context; never tell the agent to open a global skill path.
 - If a required policy/dependency is genuinely unavailable inside the workspace and was not supplied in context, state the missing input and stop instead of probing protected paths or asking for broader permissions.
