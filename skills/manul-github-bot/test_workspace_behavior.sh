@@ -541,11 +541,11 @@ test_fresh_lease_survives_stale_reuse() {
   [ -n "$ws_b" ] || return 1
   workspace_release "$ws_b"
   sqlite3 "$DB" "UPDATE workspaces SET currentTaskId=NULL, status='IDLE' WHERE workspaceId='$ws_b';"
-  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-prev','repo',1,'completed','$ws_b',datetime('now'));"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-prev','test-owner/repo',1,'completed','$ws_b',datetime('now'));"
 
   # 3. Simulate the post-lease dispatch state: task T points at ws_a, ws_a
   #    is BUSY with currentTaskId=task-T. The fix must NOT touch ws_a.
-  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-T','repo',1,'running','$ws_a',datetime('now'));"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, status, workspaceId, processedAt) VALUES('task-T','test-owner/repo',1,'running','$ws_a',datetime('now'));"
 
   # 4. Assert ws_a is still leased to task-T and ws_b is idle/untouched.
   local owner_a state_a
