@@ -294,7 +294,6 @@ cmd_post_failed() {
   local conv_id
   conv_id="$(get_task_conversation "$TASK_ID")"
 
-  # Build event data
   local event_data
   event_data=$(jq -n \
     --arg taskId "$TASK_ID" \
@@ -303,20 +302,11 @@ cmd_post_failed() {
     --argjson prNumber "${PR_NUMBER:-null}" \
     --argjson attempt "$attempt" \
     --argjson maxAttempts "$max_attempts" \
-    '{
-      taskId: $taskId,
-      conversationId: $conversationId,
-      error: $error,
-      prNumber: $prNumber,
-      attempt: $attempt,
-      maxAttempts: $maxAttempts
-    }')
+    '{taskId:$taskId,conversationId:$conversationId,error:$error,prNumber:$prNumber,attempt:$attempt,maxAttempts:$maxAttempts}')
 
-  # Build event marker
   local event_marker
   event_marker="$(build_event_marker "TASK_FAILED" "$event_data")"
 
-  # Build human-readable comment
   local comment_body=""
   comment_body+="${event_marker}"
   comment_body+=$'\n\n'
@@ -332,7 +322,11 @@ cmd_post_failed() {
   comment_body+=$'\n\n'
   if [ -n "${ERROR_MSG:-}" ]; then
     comment_body+="**Error:**"
-    comment_body+=
+    comment_body+=$'\n```text\n'
+    comment_body+="$ERROR_MSG"
+    comment_body+=$'\n```\n\n'
+  fi
+  comment_body+="---"
   comment_body+=$'\n'
   comment_body+="${SIGNATURE}"
 
@@ -344,22 +338,11 @@ cmd_post_failed() {
     --argjson prNumber "${PR_NUMBER:-null}" \
     --argjson attempt "$attempt" \
     --arg marker "$event_marker" \
-    '{
-      taskId: $taskId,
-      conversationId: $conversationId,
-      status: "failed",
-      attempt: $attempt,
-      prNumber: $prNumber,
-      eventMarker: $marker,
-      hasError: ($error != "")
-    }')
+    '{taskId:$taskId,conversationId:$conversationId,status:"failed",attempt:$attempt,prNumber:$prNumber,eventMarker:$marker,hasError:($error != "")}')
 
-  # Post the comment to GitHub
   post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
-
   echo "$result" | jq .
 }
-
 # Post TASK_STARTED event
 cmd_post_started() {
   if [ -z "$REPO" ] || [ -z "$TASK_ID" ]; then
