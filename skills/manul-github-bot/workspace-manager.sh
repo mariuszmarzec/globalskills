@@ -339,13 +339,12 @@ workspace_repo_matches() {
   return 1
 }
 
-
 # Convert a GitHub owner/repository identifier to a safe workspace-relative path.
 workspace_repo_relative_path() {
-  local repository="\${1:-}" owner repo_name
+  local repository="${1:-}" owner repo_name
   [[ "$repository" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
-  owner="\${BASH_REMATCH[1]}"
-  repo_name="\${BASH_REMATCH[2]}"
+  owner="${BASH_REMATCH[1]}"
+  repo_name="${BASH_REMATCH[2]}"
   [ "$owner" != "." ] && [ "$owner" != ".." ] || return 1
   [ "$repo_name" != "." ] && [ "$repo_name" != ".." ] || return 1
   printf 'repos/%s/%s\n' "$owner" "$repo_name"
@@ -364,9 +363,9 @@ workspace_primary_repo_path() {
   mkdir -p "$repos_path" || return 1
   [ "$(realpath -e "$repos_path" 2>/dev/null)" = "$root_real/repos" ] || return 1
 
-  owner="\${relative#repos/}"
-  owner="\${owner%%/*}"
-  repo_name="\${relative##*/}"
+  owner="${relative#repos/}"
+  owner="${owner%%/*}"
+  repo_name="${relative##*/}"
   owner_path="$repos_path/$owner"
   [ ! -L "$owner_path" ] || return 1
   mkdir -p "$owner_path" || return 1
@@ -395,17 +394,17 @@ workspace_migrate_legacy_checkout() {
   relative="$(workspace_repo_relative_path "$repository")" || return 1
   workspace_parent="$(dirname "$root_real")"
   workspace_name="$(basename "$root_real")"
-  staging="$workspace_parent/.\${workspace_name}.migration.\${BASHPID:-$}"
+  staging="$workspace_parent/.${workspace_name}.migration.$BASHPID"
   [ ! -e "$staging" ] || return 1
 
   mv "$root_real" "$staging" || return 1
-  if ! mkdir -p "$root_real/repos/\${relative#repos/}"; then
+  if ! mkdir -p "$root_real/repos/${relative#repos/}"; then
     rmdir "$root_real" 2>/dev/null || true
     mv "$staging" "$root_real" 2>/dev/null || true
     return 1
   fi
   if ! mv "$staging" "$root_real/$relative"; then
-    rmdir "$root_real/repos/\${relative#repos/}" "$root_real/repos" "$root_real" 2>/dev/null || true
+    rmdir "$root_real/repos/${relative#repos/}" "$root_real/repos" "$root_real" 2>/dev/null || true
     mv "$staging" "$root_real" 2>/dev/null || true
     return 1
   fi
@@ -450,10 +449,10 @@ workspace_prepare_related_checkouts() {
   local repository cache cache_rc checkout relative actual_origin branch local_head cache_head
   for repository in "$@"; do
     [ -n "$repository" ] || continue
-    [ "\${repository,,}" != "\${primary_repository,,}" ] || continue
+    [ "${repository,,}" != "${primary_repository,,}" ] || continue
     relative="$(workspace_repo_relative_path "$repository" 2>/dev/null || true)"
     if [ -z "$relative" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -505,7 +504,7 @@ workspace_prepare_related_checkouts() {
         if [ "$candidate_checkout" = "$path" ]; then
           rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
         else
-          WORKSPACE_LAYOUT_ERROR="Primary checkout origin mismatch for \${task_repo}; existing data was preserved"
+          WORKSPACE_LAYOUT_ERROR="Primary checkout origin mismatch for ${task_repo}; existing data was preserved"
         fi
       fi
     fi
@@ -619,7 +618,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
     fi
     checkout="$(workspace_primary_repo_path "$workspace_root" "$repository" 2>/dev/null || true)"
     if [ -z "$checkout" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -777,7 +776,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
     cache_rc=0
     cache="$(ensure_repo "$repository")" || cache_rc=$?
     if [ "$cache_rc" -ne 0 ] || [ -z "$cache" ] || [ ! -d "$cache/.git" ]; then
-      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+      WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -936,7 +935,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       if git clone --local --no-hardlinks "$cache" "$checkout" >/dev/null 2>&1; then
         if ! git -C "$checkout" remote set-url origin "https://github.com/$repository" >/dev/null 2>&1; then
           rm -rf -- "$checkout"
-          WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+          WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1093,7 +1092,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
         fi
       else
         [ ! -e "$checkout" ] || rm -rf -- "$checkout"
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1250,7 +1249,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       fi
     else
       if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1407,7 +1406,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       fi
       actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
       if ! workspace_repo_matches "$repository" "$actual_origin"; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1563,7 +1562,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
         continue
       fi
       if ! git -C "$checkout" diff --quiet 2>/dev/null || ! git -C "$checkout" diff --cached --quiet 2>/dev/null; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1720,7 +1719,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       fi
       branch="$(git -C "$cache" symbolic-ref --short HEAD 2>/dev/null || git -C "$cache" branch --show-current 2>/dev/null || true)"
       if [ -z "$branch" ] || [ "$(git -C "$checkout" symbolic-ref --short HEAD 2>/dev/null || true)" != "$branch" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -1876,7 +1875,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
         continue
       fi
       if ! git -C "$checkout" fetch --quiet "$cache" "+refs/heads/$branch:refs/remotes/manul-cache/$branch" 2>/dev/null; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2034,7 +2033,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       local_head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
       cache_head="$(git -C "$checkout" rev-parse "refs/remotes/manul-cache/$branch" 2>/dev/null || true)"
       if [ -z "$cache_head" ]; then
-        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+        WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2191,7 +2190,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
       elif [ "$local_head" != "$cache_head" ]; then
         if git -C "$checkout" merge-base --is-ancestor "$local_head" "$cache_head" 2>/dev/null; then
           if ! git -C "$checkout" merge --ff-only "$cache_head" >/dev/null 2>&1; then
-            WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+            WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2347,7 +2346,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
             continue
           fi
         else
-          WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+          WORKSPACE_RELATED_UNAVAILABLE+="${WORKSPACE_RELATED_UNAVAILABLE:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2506,7 +2505,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
     fi
 
     release_repo_lock "$repository"
-    WORKSPACE_RELATED_PATHS+="\${WORKSPACE_RELATED_PATHS:+
+    WORKSPACE_RELATED_PATHS+="${WORKSPACE_RELATED_PATHS:+
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -2661,6 +2660,7 @@ export -f workspace_init workspace_pool_init workspace_lease workspace_release w
   done
   return 0
 }
+
 
 workspace_get_path() {
   local task_id="$1"
