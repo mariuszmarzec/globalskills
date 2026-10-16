@@ -566,6 +566,17 @@ test_fresh_lease_survives_stale_reuse() {
   expected_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$ws_a';")"
   [ "$resolved" = "$expected_path" ] || return 1
 
+  # If the directory disappeared while the DB still has a valid lease, restore
+  # only that exact task-owned workspace root so dispatch can rebuild its checkout.
+  local missing_backup="${resolved}.missing-test-backup"
+  mv "$resolved" "$missing_backup" || return 1
+  local restored
+  restored="$(workspace_get_path "task-T")"
+  [ "$restored" = "$expected_path" ] || { mv "$missing_backup" "$resolved" 2>/dev/null || true; return 1; }
+  [ -d "$restored" ] || { mv "$missing_backup" "$resolved" 2>/dev/null || true; return 1; }
+  [ ! -L "$restored" ] || { mv "$missing_backup" "$resolved" 2>/dev/null || true; return 1; }
+  rm -rf -- "$missing_backup"
+
   workspace_release "$ws_a"
 }
 run_and_test "Test 20: Fresh lease survives stale conversation reuse" test_fresh_lease_survives_stale_reuse
