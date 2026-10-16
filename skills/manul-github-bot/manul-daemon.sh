@@ -1502,6 +1502,80 @@ post_lifecycle_comment() {
   post_github_comment "$@"
 }
 
+# Publish terminal failures through the shared feedback handler so all failure
+# paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
+post_task_failure_feedback() {
+  local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}"
+  local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+
+  if [[ "$comment_id" =~ ^review:[0-9]+$ ]] && ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+    pr_number="$issue_num"
+  fi
+  if [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+    args+=(--pr-number "$pr_number")
+  fi
+
+  if [ "$MANUL_MODE" = "human" ]; then
+    lc_log "TASK_FAILURE_COMMENT_SUPPRESSED" "task=$comment_id repo=$repo issue=$issue_num mode=human"
+    return 0
+  fi
+
+  local post_attempt
+  for post_attempt in 1 2 3; do
+    if MANUL_DIR="$MANUL_DIR" bash "$DAEMON_SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
+      lc_log "TASK_FAILURE_COMMENT_POSTED" "task=$comment_id repo=$repo issue=$issue_num try=$post_attempt"
+      return 0
+    fi
+    log "WARN: failed to post terminal failure comment for $comment_id (try=$post_attempt/3)"
+    if [ "$post_attempt" -lt 3 ]; then sleep "$post_attempt"; fi
+  done
+  lc_log "TASK_FAILURE_COMMENT_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=github_post_failed"
+  return 1
+}
+
+# Finish a pre-execution failure through the same attempt/ownership state machine
+# as agent failures. This prevents early workspace/repository errors from leaving
+# tasks running until the watchdog silently marks them failed.
+handle_pre_execution_failure() {
+  local comment_id="$1" claim_token="$2" repo="$3" issue_num="$4"
+  local workspace_id="${5:-}" reply_to="${6:-}" reason="$7" pr_number="${8:-}" attempt_fallback="${9:-1}"
+  local attempts max_attempts target_status
+
+  attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="$attempt_fallback"
+  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then max_attempts=3; fi
+  if [ "$attempts" -ge "$max_attempts" ]; then target_status="failed"; else target_status="queued"; fi
+
+  # Prove current-claim ownership before touching heartbeat/workspace/locks.
+  if ! update_task_completion "$comment_id" "$target_status" "$reason" "$claim_token"; then
+    log "ERROR: could not finalize pre-execution failure for $comment_id (target=$target_status)"
+    lc_log "TASK_ERROR" "task=$comment_id reason=pre_execution_finalization_failed"
+    release_task_lock
+    return 1
+  fi
+
+  stop_heartbeat "$comment_id"
+  if [ -n "$workspace_id" ]; then
+    workspace_release "$workspace_id" "$comment_id" || log "WARN: workspace release after pre-execution failure did not match task $comment_id"
+  fi
+  release_task_repo_lock "$repo"
+  release_task_lock
+  set_activity "none" "idle"
+
+  if [ "$target_status" = "failed" ]; then
+    log "dispatch: task $comment_id failed before agent startup after $attempts/$max_attempts attempts: $reason"
+    lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
+    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" || true
+  else
+    local retry_comment="⚠️ Manul could not start the task and will retry (attempt $attempts/$max_attempts). Reason: $reason"
+    log "dispatch: task $comment_id requeued after pre-execution failure ($attempts/$max_attempts): $reason"
+    lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
+    post_lifecycle_comment "$repo" "$issue_num" "$retry_comment" "$reply_to" || log "WARN: failed to post retry comment for $comment_id"
+  fi
+  return 0
+}
+
 # Verify the agent posted a result comment to GitHub for THIS exact task/attempt.
 # Uses deterministic task/attempt marker: <!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
 # Fails closed on any error (missing commentUrl, API failure, no matching comment).
@@ -3157,14 +3231,8 @@ PROMPT_EOF
     fi
 
     if [ "$ensure_repo_rc" -ne 0 ]; then
-      log "dispatch: FAILED to ensure repository $REPO, failing task"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_unavailable repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      local FINAL_COMMENT="❌ Manul failed to access the repository $REPO."
-      post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
-      stop_heartbeat "$COMMENT_ID"
-      release_task_lock
-      set_activity "none" "idle"
+      log "dispatch: FAILED to ensure repository $REPO (rc=$ensure_repo_rc)"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not prepare the shared repository checkout (ensure_repo rc=$ensure_repo_rc)." "${PR_NUM_FROM_URL:-}" "$current_attempt"
       return 0
     fi
 
@@ -3174,15 +3242,8 @@ PROMPT_EOF
 
     # Verify repository integrity
     if ! verify_repo "$REPO" "$REPO_DIR"; then
-      log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO, failing task"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=repo_verification_failed repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      local FINAL_COMMENT="❌ Manul repository verification failed for $REPO."
-      post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO" || log "WARN: failed to post lifecycle comment for $COMMENT_ID"
-      stop_heartbeat "$COMMENT_ID"
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      log "dispatch: REPOSITORY VERIFICATION FAILED for $REPO"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Repository verification failed for the prepared shared checkout." "${PR_NUM_FROM_URL:-}" "$current_attempt"
       return 0
     fi
 
@@ -3210,9 +3271,7 @@ PROMPT_EOF
       WORKSPACE_ID="$(workspace_reclaim "$COMMENT_ID" 2>/dev/null || true)"
       if [ -z "$WORKSPACE_ID" ]; then
         log "dispatch: continuation session has no reclaimable workspace for task $COMMENT_ID"
-        release_task_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Continuation session has no reclaimable workspace; the previous execution cannot be resumed." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
       log "dispatch: reclaimed exact workspace $WORKSPACE_ID for continuation task $COMMENT_ID"
@@ -3247,12 +3306,8 @@ PROMPT_EOF
     local workspace_path
     workspace_path="$(workspace_get_path "$COMMENT_ID" "$WORKSPACE_ID")"
     if [ -z "$workspace_path" ]; then
-      log "dispatch: could not get workspace path for $COMMENT_ID, releasing and failing"
-      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-      stop_heartbeat "$COMMENT_ID"
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      log "dispatch: could not get a safe path for workspace $WORKSPACE_ID owned by task $COMMENT_ID"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Workspace path is missing or failed ownership/path validation (workspace=$WORKSPACE_ID)." "${PR_NUM_FROM_URL:-}" "$current_attempt"
       return 0
     fi
 
@@ -3266,11 +3321,7 @@ PROMPT_EOF
     if [ -z "$early_ws_path" ] || [ "$early_ws_owner" != "$COMMENT_ID" ] || [ "$early_ws_state" != "BUSY" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$workspace_path"; then
       log "ERROR: refused checkout preparation for unowned workspace root (task=$COMMENT_ID workspace=$WORKSPACE_ID registered_path=${early_ws_path:-none} candidate_path=$workspace_path)"
       lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID phase=preparation"
-      workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || true
-      stop_heartbeat "$COMMENT_ID"
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Workspace lease ownership or canonical path validation failed (workspace=$WORKSPACE_ID)." "${PR_NUM_FROM_URL:-}" "$current_attempt"
       return 0
     fi
 
@@ -3282,11 +3333,7 @@ PROMPT_EOF
     if [ "$primary_checkout_rc" -ne 0 ] || [ -z "$WORKDIR" ]; then
       log "dispatch: failed to prepare primary checkout for $REPO in task workspace $workspace_path (rc=$primary_checkout_rc); preserving existing data"
       lc_log "WORKSPACE_PRIMARY_CHECKOUT_FAILED" "task=$COMMENT_ID repo=$REPO workspace=$WORKSPACE_ID rc=$primary_checkout_rc"
-      workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-      stop_heartbeat "$COMMENT_ID"
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the primary checkout for $REPO (rc=$primary_checkout_rc). Existing workspace data was preserved." "${PR_NUM_FROM_URL:-}" "$current_attempt"
       return 0
     fi
 
@@ -3306,21 +3353,14 @@ PROMPT_EOF
       log "dispatch: preparing persistent PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
       if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" 2>>"$LOG"; then
         log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH without destroying local work, releasing"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        stop_heartbeat "$COMMENT_ID"
-        release_task_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not safely check out PR head branch '$PR_HEAD_BRANCH'; local workspace changes were preserved." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
       local verify_branch
       verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
       if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
         log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
-        workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-        release_task_repo_lock "$REPO"
-        release_task_lock
-        set_activity "none" "idle"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "PR workspace branch mismatch: expected '$PR_HEAD_BRANCH', got '${verify_branch:-detached}'." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
       log "dispatch: verified persistent PR head branch $verify_branch in workspace"
@@ -3337,20 +3377,24 @@ PROMPT_EOF
        log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
        if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
          log "ERROR: failed to fetch origin before task setup on $REPO"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not fetch origin before task setup for $REPO; see daemon diagnostics for the Git error." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+         return 0
        fi
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
        if ! git -C "$WORKDIR" checkout -B "$base_branch" "origin/$base_branch" 2>>"$LOG"; then
          log "ERROR: failed to checkout base branch '$base_branch' for task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not check out base branch '$base_branch'; Git refused to switch the existing workspace. Existing changes were not forcibly discarded." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+         return 0
        fi
        if ! git -C "$WORKDIR" reset --hard "origin/$base_branch" --quiet 2>>"$LOG"; then
          log "ERROR: failed to reset workspace to origin/$base_branch for task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not reset workspace to origin/$base_branch." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+         return 0
        fi
        if ! git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG"; then
          log "ERROR: failed to clean workspace before task $COMMENT_ID"
-         workspace_release "$WORKSPACE_ID" "$COMMENT_ID"; stop_heartbeat "$COMMENT_ID"; release_task_repo_lock "$REPO"; release_task_lock; set_activity "none" "idle"; return 0
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not clean untracked workspace files safely." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+         return 0
        fi
      fi
 log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
@@ -3365,12 +3409,7 @@ log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORK
      if [ -z "$WORKSPACE_ID" ] || [ -z "$ws_path_check" ] || [ "$ws_owner" != "$COMMENT_ID" ] || [ "$ws_state" != "BUSY" ] || [ ! -d "$workspace_path" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$workspace_path"; then
        log "ERROR: workspace ownership/path invalid for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none} registered_path=${ws_path_check:-none} candidate_path=$workspace_path)"
        lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID owner=${ws_owner:-none} state=${ws_state:-none}"
-       log "dispatch: workspace validation failed for task $COMMENT_ID, failing task via retry path"
-       stop_heartbeat "$COMMENT_ID"
-       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-       release_task_repo_lock "$REPO"
-       release_task_lock
-       set_activity "none" "idle"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Workspace lease or checkout path validation failed before agent startup." "${PR_NUM_FROM_URL:-}" "$current_attempt"
        return 0
      fi
      log "dispatch: workspace validated for task $COMMENT_ID (workspace=$WORKSPACE_ID owner=$ws_owner state=$ws_state path=$WORKDIR)"
@@ -3518,11 +3557,7 @@ PROMPT_APPEND
      prev_dir="$(pwd)"
      cd "$workspace_path" || {
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
-       stop_heartbeat "$COMMENT_ID"
-       workspace_release "$WORKSPACE_ID" "$COMMENT_ID"
-       release_task_repo_lock "$REPO"
-       release_task_lock
-       set_activity "none" "idle"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The validated task workspace could not be entered by the daemon." "${PR_NUM_FROM_URL:-}" "$current_attempt"
        return 0
      }
 
