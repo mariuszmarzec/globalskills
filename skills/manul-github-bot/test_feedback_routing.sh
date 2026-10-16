@@ -167,7 +167,9 @@ top_failed_out="$(bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
   --error "checkout failed" \
   --json 2>&1)"
 top_failed_cmd="$(cat "$GH_LOG" 2>/dev/null || true)"
-assert_contains "Terminal issue failure uses a top-level issue comment" "$top_failed_cmd" "ARG:issue comment 43"
+assert_contains "Terminal issue failure invokes gh issue comment" "$top_failed_cmd" "ARG:issue"
+assert_contains "Terminal issue failure uses the comment subcommand" "$top_failed_cmd" "ARG:comment"
+assert_contains "Terminal issue failure targets issue #43" "$top_failed_cmd" "ARG:43"
 assert_not_contains "Terminal issue failure does not use review-thread endpoint" "$top_failed_cmd" "pulls/43/comments"
 assert_contains "Terminal issue failure includes its concrete reason" "$top_failed_cmd" "checkout failed"
 
