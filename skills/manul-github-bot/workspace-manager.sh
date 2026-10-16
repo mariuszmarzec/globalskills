@@ -339,6 +339,2329 @@ workspace_repo_matches() {
   return 1
 }
 
+
+# Convert a GitHub owner/repository identifier to a safe workspace-relative path.
+workspace_repo_relative_path() {
+  local repository="\${1:-}" owner repo_name
+  [[ "$repository" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
+  owner="\${BASH_REMATCH[1]}"
+  repo_name="\${BASH_REMATCH[2]}"
+  [ "$owner" != "." ] && [ "$owner" != ".." ] || return 1
+  [ "$repo_name" != "." ] && [ "$repo_name" != ".." ] || return 1
+  printf 'repos/%s/%s\n' "$owner" "$repo_name"
+}
+
+# Return a checkout path strictly below the real task workspace root. Refuse
+# symlinked path components so repository identifiers cannot escape the lease.
+workspace_primary_repo_path() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real owner repo_name repos_path owner_path checkout_path resolved
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -d "$root_real" ] || return 1
+  repos_path="$root_real/repos"
+  [ ! -L "$repos_path" ] || return 1
+  mkdir -p "$repos_path" || return 1
+  [ "$(realpath -e "$repos_path" 2>/dev/null)" = "$root_real/repos" ] || return 1
+
+  owner="\${relative#repos/}"
+  owner="\${owner%%/*}"
+  repo_name="\${relative##*/}"
+  owner_path="$repos_path/$owner"
+  [ ! -L "$owner_path" ] || return 1
+  mkdir -p "$owner_path" || return 1
+  [ "$(realpath -e "$owner_path" 2>/dev/null)" = "$repos_path/$owner" ] || return 1
+
+  checkout_path="$owner_path/$repo_name"
+  [ ! -L "$checkout_path" ] || return 1
+  resolved="$(realpath -m "$checkout_path" 2>/dev/null)" || return 1
+  case "$resolved" in "$root_real"/*) ;; *) return 1 ;; esac
+  [ "$resolved" = "$checkout_path" ] || return 1
+  printf '%s\n' "$checkout_path"
+}
+
+# Migrate legacy workspaces where the workspace root itself was the primary
+# Git repository. Rename the entire checkout to preserve all local/unpushed work.
+workspace_migrate_legacy_checkout() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real actual_root actual_origin workspace_parent workspace_name staging
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -e "$root_real/.git" ] || return 0
+  [ ! -L "$root_real/.git" ] || return 1
+  actual_root="$(git -C "$root_real" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$actual_root" ] && [ "$(realpath -e "$actual_root" 2>/dev/null)" = "$root_real" ] || return 1
+  actual_origin="$(git -C "$root_real" remote get-url origin 2>/dev/null || true)"
+  workspace_repo_matches "$repository" "$actual_origin" || return 2
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  workspace_parent="$(dirname "$root_real")"
+  workspace_name="$(basename "$root_real")"
+  staging="$workspace_parent/.\${workspace_name}.migration.\${BASHPID:-$}"
+  [ ! -e "$staging" ] || return 1
+
+  mv "$root_real" "$staging" || return 1
+  if ! mkdir -p "$root_real/repos/\${relative#repos/}"; then
+    rmdir "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv "$staging" "$root_real/$relative"; then
+    rmdir "$root_real/repos/\${relative#repos/}" "$root_real/repos" "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+# Prepare the primary checkout below the task root. On mismatch or corruption,
+# fail closed instead of deleting a checkout that may contain unpushed PR work.
+workspace_prepare_primary_checkout() {
+  local workspace_root="$1" repository="$2" repo_cache="$3"
+  local checkout actual_origin
+  workspace_migrate_legacy_checkout "$workspace_root" "$repository" || return $?
+  checkout="$(workspace_primary_repo_path "$workspace_root" "$repository")" || return 1
+
+  if [ -e "$checkout" ]; then
+    if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+      return 2
+    fi
+    actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+    workspace_repo_matches "$repository" "$actual_origin" || return 2
+  else
+    [ -d "$repo_cache/.git" ] || return 1
+    if ! git clone --local --no-hardlinks "$repo_cache" "$checkout" 2>/dev/null; then
+      [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+      return 1
+    fi
+    git -C "$checkout" remote set-url origin "https://github.com/$repository" || return 1
+  fi
+  mkdir -p "$(realpath -e "$workspace_root")/tmp" || return 1
+  printf '%s\n' "$checkout"
+}
+
+# Populate task-scoped related repositories from Manul's configured list. The
+# shared cache is a clone/fetch source only; related checkouts live under this
+# lease and are read-only by task contract. Unavailable repos are disclosed to
+# the worker instead of granting access to shared cache paths.
+workspace_prepare_related_checkouts() {
+  local workspace_root="$1" primary_repository="$2"
+  shift 2
+  WORKSPACE_RELATED_PATHS=""
+  WORKSPACE_RELATED_UNAVAILABLE=""
+  local repository cache cache_rc checkout relative actual_origin branch local_head cache_head
+  for repository in "$@"; do
+    [ -n "$repository" ] || continue
+    [ "\${repository,,}" != "\${primary_repository,,}" ] || continue
+    relative="$(workspace_repo_relative_path "$repository" 2>/dev/null || true)"
+    if [ -z "$relative" ]; then
+      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Validate legacy and nested primary
+  # checkouts. Never erase a nested checkout on mismatch; it may have unpushed work.
+  if [ -n "$path" ]; then
+    local task_repo actual_repo candidate_checkout relative
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    candidate_checkout="$path"
+    if [ -n "$task_repo" ] && [ ! -e "$path/.git" ]; then
+      relative="$(workspace_repo_relative_path "$task_repo" 2>/dev/null || true)"
+      [ -z "$relative" ] || candidate_checkout="$path/$relative"
+    fi
+    if [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        if [ "$candidate_checkout" = "$path" ]; then
+          rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+        else
+          WORKSPACE_LAYOUT_ERROR="Primary checkout origin mismatch for \${task_repo}; existing data was preserved"
+        fi
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: invalid repository identifier"
+      continue
+    fi
+    checkout="$(workspace_primary_repo_path "$workspace_root" "$repository" 2>/dev/null || true)"
+    if [ -z "$checkout" ]; then
+      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: unsafe checkout path"
+      continue
+    fi
+
+    cache_rc=0
+    cache="$(ensure_repo "$repository")" || cache_rc=$?
+    if [ "$cache_rc" -ne 0 ] || [ -z "$cache" ] || [ ! -d "$cache/.git" ]; then
+      WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: shared cache unavailable (status $cache_rc)"
+      continue
+    fi
+
+    if [ ! -e "$checkout" ]; then
+      if git clone --local --no-hardlinks "$cache" "$checkout" >/dev/null 2>&1; then
+        if ! git -C "$checkout" remote set-url origin "https://github.com/$repository" >/dev/null 2>&1; then
+          rm -rf -- "$checkout"
+          WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: failed to configure origin"
+          release_repo_lock "$repository"
+          continue
+        fi
+      else
+        [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: clone failed"
+        release_repo_lock "$repository"
+        continue
+      fi
+    else
+      if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout is not a Git repository; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+      if ! workspace_repo_matches "$repository" "$actual_origin"; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout origin mismatch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" diff --quiet 2>/dev/null || ! git -C "$checkout" diff --cached --quiet 2>/dev/null; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout has tracked changes; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      branch="$(git -C "$cache" symbolic-ref --short HEAD 2>/dev/null || git -C "$cache" branch --show-current 2>/dev/null || true)"
+      if [ -z "$branch" ] || [ "$(git -C "$checkout" symbolic-ref --short HEAD 2>/dev/null || true)" != "$branch" ]; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: existing checkout is on a different/detached branch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" fetch --quiet "$cache" "+refs/heads/$branch:refs/remotes/manul-cache/$branch" 2>/dev/null; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: could not refresh from the current cache"
+        release_repo_lock "$repository"
+        continue
+      fi
+      local_head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+      cache_head="$(git -C "$checkout" rev-parse "refs/remotes/manul-cache/$branch" 2>/dev/null || true)"
+      if [ -z "$cache_head" ]; then
+        WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: refreshed branch ref is missing"
+        release_repo_lock "$repository"
+        continue
+      elif [ "$local_head" != "$cache_head" ]; then
+        if git -C "$checkout" merge-base --is-ancestor "$local_head" "$cache_head" 2>/dev/null; then
+          if ! git -C "$checkout" merge --ff-only "$cache_head" >/dev/null 2>&1; then
+            WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: fast-forward refresh failed; preserved"
+            release_repo_lock "$repository"
+            continue
+          fi
+        else
+          WORKSPACE_RELATED_UNAVAILABLE+="\${WORKSPACE_RELATED_UNAVAILABLE:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: local commits would be overwritten by refresh; preserved"
+          release_repo_lock "$repository"
+          continue
+        fi
+      fi
+    fi
+
+    release_repo_lock "$repository"
+    WORKSPACE_RELATED_PATHS+="\${WORKSPACE_RELATED_PATHS:+
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
+  if [ -n "$path" ] && [ -d "$path/.git" ]; then
+    local task_repo actual_repo
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    if [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+  fi
+
+  # Broken workspaces are disposable. Idle context-bound workspaces are
+  # intentionally persistent so uncommitted PR/thread work survives between
+  # comments and daemon restarts.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN'
+       OR (
+         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
+         AND status='IDLE'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspace_contexts wc
+           WHERE wc.workspaceId=workspaces.workspaceId
+         )
+       );
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\n'}- $repository: \`$relative\` (read-only)"
+  done
+  return 0
+}
+
 workspace_get_path() {
   local task_id="$1"
   local safe_task_id
