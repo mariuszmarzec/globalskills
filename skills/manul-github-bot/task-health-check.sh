@@ -16,8 +16,11 @@
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-# DB on native ext4 (NOT on 9p /mnt/f)
-MANUL_DB="${MANUL_DIR}/manul.db"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+# DB on native ext4 (NOT on 9p /mnt/f); honor an explicit test/operator override.
+MANUL_DB="${DB:-$MANUL_DB}"
+LOG="$MANUL_LOG_DIR/task-health.log"
 
 # Configuration defaults (can be overridden via config.json)
 DEFAULT_MAX_RUNNING_TIME=1800      # 30 minutes max task runtime
@@ -35,23 +38,58 @@ if [ -f "$MANUL_DIR/config.json" ]; then
 fi
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${RETRY_DELAY_SECONDS:-60}}"
 
-log() { echo "[$(date -Is)] $*" >> "$MANUL_DIR/task-health.log"; }
+log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
 # Function: get_db_query - run sqlite3 query against manul.db
 get_db_query() {
     sqlite3 "$MANUL_DB" "$1" 2>/dev/null || echo ""
 }
 
-# Function: mark_task_failed - mark task as failed, increment attempts
+post_terminal_failure_feedback() {
+    local comment_id="$1" repo="$2" issue_num="$3" error="$4"
+    local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+    if [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then args+=(--pr-number "$issue_num"); fi
+    local try
+    for try in 1 2 3; do
+        if MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
+            log "terminal failure comment posted for $comment_id (try=$try)"
+            return 0
+        fi
+        log "WARN: terminal failure comment failed for $comment_id (try=$try/3)"
+        [ "$try" -lt 3 ] && sleep "$try"
+    done
+    log "ERROR: terminal failure comment could not be posted for $comment_id"
+    return 1
+}
+
+# Function: mark_task_failed - finalize a stuck task after its claim budget is used.
+# Attempts count actual claims, so recovery must not increment it again.
 mark_task_failed() {
     local comment_id="$1"
     local attempts="$2"
-    sqlite3 "$MANUL_DB" "
+    local safe_comment_id repo issue_num current_attempt row changed
+    safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
+    row="$(sqlite3 "$MANUL_DB" "SELECT repository || '|' || issueNumber || '|' || attempts FROM processed_comments WHERE commentId='$safe_comment_id' AND status='running' LIMIT 1;" 2>>"$LOG" || true)"
+    if [ -z "$row" ]; then
+        log "WARN: refusing to mark task failed because it is no longer running: $comment_id"
+        return 1
+    fi
+    IFS='|' read -r repo issue_num current_attempt <<< "$row"
+    [[ "$current_attempt" =~ ^[0-9]+$ ]] || current_attempt="$attempts"
+
+    changed="$(sqlite3 "$MANUL_DB" "
         UPDATE processed_comments
-        SET status='failed', attempts=attempts+1, processedAt=NULL, nextAttemptAt=NULL
-        WHERE commentId='$comment_id';
-    " 2>/dev/null
-    log "FAILED task: $comment_id (attempts=$((attempts+1)))"
+        SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL
+        WHERE commentId='$safe_comment_id' AND status='running' AND attempts >= $DEFAULT_MAX_FAILURES;
+        SELECT changes();
+    " 2>>"$LOG" | tail -n 1)"
+    if [ "${changed:-0}" -ne 1 ]; then
+        log "WARN: task $comment_id was not marked failed; state/attempt count changed or retry budget remains"
+        return 1
+    fi
+
+    log "FAILED task: $comment_id (attempts=$current_attempt/$DEFAULT_MAX_FAILURES)"
+    post_terminal_failure_feedback "$comment_id" "$repo" "$issue_num" "Task exceeded the maximum runtime of ${DEFAULT_MAX_RUNNING_TIME}s after ${current_attempt}/$DEFAULT_MAX_FAILURES attempts." || true
 }
 
 # Function: reset_task_to_queued - reset stuck task to queued state
