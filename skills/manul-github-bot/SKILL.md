@@ -11,7 +11,7 @@ It watches configured repositories, reacts to `/manul` in issue bodies, issue/PR
 
 - creates or resumes a task;
 - prepares an isolated workspace;
-- gives the agent a task-scoped local-access boundary: repository operations stay in the assigned workspace, and private runtime/global-skill directories are off-limits;
+- gives the agent a task-scoped workspace root, a separate primary checkout, and read-only related repository checkouts; private runtime/global-skill directories and other tasks’ workspaces remain off-limits;
 - lets the agent determine whether the request is informational or requires repository changes;
 - executes the task through the current agent runtime;
 - verifies the result;
@@ -82,6 +82,31 @@ boundary. Provider-specific environment such as `OPENCLAW_STATE_DIR` or
 installation/repair. Existing `.env` entries are preserved; arbitrary
 environment variables are never copied. Unattended daemon/watchdog processes
 load this file because cron/systemd does not load `~/.zshrc`.
+
+A leased workspace is a task-owned **root**, not a Git repository itself. The
+workspace layout is:
+
+```
+~/.manul/workspace/ws-<id>-<timestamp>/
+├── repos/
+│   └── <owner>/<repository>/    # primary and task-scoped related checkouts
+└── tmp/                         # scratch owned by this task/context
+```
+
+The primary checkout lives at `repos/<owner>/<repository>` and remains the only
+checkout used for branch setup, commit/push, PR validation, and task delivery.
+Configured related repositories may also be cloned under the same workspace
+root for context and dependency inspection. They are read-only by default; a
+task must not modify or deliver a secondary repository without explicit user
+authorization and a separate delivery policy.
+
+The workspace root is the security and lifecycle boundary. Never grant agents
+access to all of `~/.manul/**`: they may access only the exact leased workspace
+and descendants, not sibling workspaces, shared repository caches, logs, DB,
+configuration, adapters, or global skills. Related-repository paths are
+normalized to GitHub `owner/repository` identifiers; traversal and symlink
+escapes are rejected. Existing work and unpushed commits are preserved when a
+workspace is migrated or a checkout cannot be verified.
 
 ## Agent execution boundary
 

@@ -339,6 +339,215 @@ workspace_repo_matches() {
   return 1
 }
 
+
+# Convert a GitHub owner/repository identifier to a safe workspace-relative path.
+workspace_repo_relative_path() {
+  local repository="${1:-}" owner repo_name
+  [[ "$repository" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
+  owner="$(printf '%s' "$repository" | cut -d/ -f1)"
+  repo_name="$(printf '%s' "$repository" | cut -d/ -f2)"
+  [ "$owner" != "." ] && [ "$owner" != ".." ] || return 1
+  [ "$repo_name" != "." ] && [ "$repo_name" != ".." ] || return 1
+  printf 'repos/%s/%s\n' "$owner" "$repo_name"
+}
+
+# Resolve a nested checkout path strictly inside the leased workspace root.
+# Symlinked path components are rejected to prevent path traversal.
+workspace_primary_repo_path() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real owner repo_name repos_path owner_path checkout_path resolved
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -d "$root_real" ] || return 1
+  repos_path="$root_real/repos"
+  [ ! -L "$repos_path" ] || return 1
+  mkdir -p "$repos_path" || return 1
+  [ "$(realpath -e "$repos_path" 2>/dev/null)" = "$root_real/repos" ] || return 1
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
+  owner_path="$repos_path/$owner"
+  [ ! -L "$owner_path" ] || return 1
+  mkdir -p "$owner_path" || return 1
+  [ "$(realpath -e "$owner_path" 2>/dev/null)" = "$repos_path/$owner" ] || return 1
+  checkout_path="$owner_path/$repo_name"
+  [ ! -L "$checkout_path" ] || return 1
+  resolved="$(realpath -m "$checkout_path" 2>/dev/null)" || return 1
+  case "$resolved" in "$root_real"/*) ;; *) return 1 ;; esac
+  [ "$resolved" = "$checkout_path" ] || return 1
+  printf '%s\n' "$checkout_path"
+}
+
+# Move an existing legacy root checkout as one unit. This preserves .git,
+# ignored files, local commits, and dirty PR work across the layout migration.
+workspace_migrate_legacy_checkout() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real actual_root actual_origin workspace_parent workspace_name staging owner repo_name
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -e "$root_real/.git" ] || return 0
+  [ ! -L "$root_real/.git" ] || return 1
+  actual_root="$(git -C "$root_real" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$actual_root" ] && [ "$(realpath -e "$actual_root" 2>/dev/null)" = "$root_real" ] || return 1
+  actual_origin="$(git -C "$root_real" remote get-url origin 2>/dev/null || true)"
+  workspace_repo_matches "$repository" "$actual_origin" || return 2
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
+  workspace_parent="$(dirname "$root_real")"
+  workspace_name="$(basename "$root_real")"
+  staging="$workspace_parent/.${workspace_name}.migration.$$"
+  [ ! -e "$staging" ] || return 1
+  mv "$root_real" "$staging" || return 1
+  if ! mkdir -p "$root_real/repos/$owner"; then
+    rmdir "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv "$staging" "$root_real/repos/$owner/$repo_name"; then
+    rmdir "$root_real/repos/$owner" "$root_real/repos" "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+# Prepare the primary checkout inside the task root. Never erase an existing
+# mismatched checkout because it may hold unpushed commits or user changes.
+workspace_prepare_primary_checkout() {
+  local workspace_root="$1" repository="$2" repo_cache="$3"
+  local checkout actual_origin
+  workspace_migrate_legacy_checkout "$workspace_root" "$repository" || return $?
+  checkout="$(workspace_primary_repo_path "$workspace_root" "$repository")" || return 1
+  if [ -e "$checkout" ]; then
+    if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+      return 2
+    fi
+    actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+    workspace_repo_matches "$repository" "$actual_origin" || return 2
+  else
+    [ -d "$repo_cache/.git" ] || return 1
+    if ! git clone --local --no-hardlinks "$repo_cache" "$checkout" 2>/dev/null; then
+      [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+      return 1
+    fi
+    git -C "$checkout" remote set-url origin "https://github.com/$repository" || return 1
+  fi
+  mkdir -p "$(realpath -e "$workspace_root")/tmp" || return 1
+  printf '%s\n' "$checkout"
+}
+
+# Clone configured related repositories into this task's workspace. The shared
+# cache is a source only. Related repos are read-only by default; dirty/diverged
+# prior checkouts are preserved and reported instead of destructively reset.
+workspace_prepare_related_checkouts() {
+  local workspace_root="$1" primary_repository="$2"
+  shift 2
+  WORKSPACE_RELATED_PATHS=""
+  WORKSPACE_RELATED_UNAVAILABLE=""
+  local repository cache cache_rc checkout relative actual_origin branch local_head cache_head
+  for repository in "$@"; do
+    [ -n "$repository" ] || continue
+    if [ "$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$primary_repository" | tr '[:upper:]' '[:lower:]')" ]; then
+      continue
+    fi
+    relative="$(workspace_repo_relative_path "$repository" 2>/dev/null || true)"
+    if [ -z "$relative" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: invalid repository identifier"
+      continue
+    fi
+    checkout="$(workspace_primary_repo_path "$workspace_root" "$repository" 2>/dev/null || true)"
+    if [ -z "$checkout" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: unsafe checkout path"
+      continue
+    fi
+    cache_rc=0
+    cache="$(ensure_repo "$repository")" || cache_rc=$?
+    if [ "$cache_rc" -ne 0 ] || [ -z "$cache" ] || [ ! -d "$cache/.git" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: shared cache unavailable (status $cache_rc)"
+      continue
+    fi
+
+    if [ ! -e "$checkout" ]; then
+      if git clone --local --no-hardlinks "$cache" "$checkout" >/dev/null 2>&1; then
+        if ! git -C "$checkout" remote set-url origin "https://github.com/$repository" >/dev/null 2>&1; then
+          rm -rf -- "$checkout"
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: failed to configure origin"
+          release_repo_lock "$repository"
+          continue
+        fi
+      else
+        [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: clone failed"
+        release_repo_lock "$repository"
+        continue
+      fi
+    else
+      if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is not a Git repository; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+      if ! workspace_repo_matches "$repository" "$actual_origin"; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout origin mismatch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" diff --quiet 2>/dev/null || ! git -C "$checkout" diff --cached --quiet 2>/dev/null; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout has tracked changes; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      branch="$(git -C "$cache" symbolic-ref --short HEAD 2>/dev/null || git -C "$cache" branch --show-current 2>/dev/null || true)"
+      if [ -z "$branch" ] || [ "$(git -C "$checkout" symbolic-ref --short HEAD 2>/dev/null || true)" != "$branch" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is on a different/detached branch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" fetch --quiet "$cache" "+refs/heads/$branch:refs/remotes/manul-cache/$branch" 2>/dev/null; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: could not refresh from the current cache"
+        release_repo_lock "$repository"
+        continue
+      fi
+      local_head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+      cache_head="$(git -C "$checkout" rev-parse "refs/remotes/manul-cache/$branch" 2>/dev/null || true)"
+      if [ -z "$cache_head" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: refreshed branch ref is missing"
+        release_repo_lock "$repository"
+        continue
+      elif [ "$local_head" != "$cache_head" ]; then
+        if git -C "$checkout" merge-base --is-ancestor "$local_head" "$cache_head" 2>/dev/null; then
+          if ! git -C "$checkout" merge --ff-only "$cache_head" >/dev/null 2>&1; then
+            [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+            WORKSPACE_RELATED_UNAVAILABLE+="- $repository: fast-forward refresh failed; preserved"
+            release_repo_lock "$repository"
+            continue
+          fi
+        else
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: local commits would be overwritten by refresh; preserved"
+          release_repo_lock "$repository"
+          continue
+        fi
+      fi
+    fi
+    release_repo_lock "$repository"
+    [ -z "$WORKSPACE_RELATED_PATHS" ] || WORKSPACE_RELATED_PATHS+=$'\n'
+    WORKSPACE_RELATED_PATHS+="- $repository: $relative (read-only)"
+  done
+  return 0
+}
+
 workspace_get_path() {
   local task_id="$1"
   local safe_task_id
@@ -375,14 +584,50 @@ workspace_get_path() {
     fi
   fi
 
-  # Workspaces are pooled across repositories. Do not let a task inherit a different repo checkout.
-  if [ -n "$path" ] && [ -d "$path/.git" ]; then
-    local task_repo actual_repo
+  # Resolve and validate the workspace root before probing any checkout.
+  # A DB value or symlink must never make this helper inspect another workspace.
+  if [ -n "$path" ]; then
+    local root_real expected_path expected_real registered_real
+    if [ -z "$expected_ws_id" ]; then
+      expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+    fi
+    root_real="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null || true)"
+    expected_path="$WORKSPACES_DIR/$expected_ws_id"
+    expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
+    registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+    if [ -z "$root_real" ] || [ -z "$expected_ws_id" ] || [ -L "$expected_path" ] || [ -L "$path" ] || [ -z "$expected_real" ] || [ "$expected_real" != "$root_real/$expected_ws_id" ] || [ "$registered_real" != "$expected_real" ]; then
+      path=""
+    fi
+  fi
+  [ -n "$path" ] || { printf '\n'; return 0; }
+
+  # Validate root and nested primary checkouts. Preserve mismatched checkout
+  # state because it may contain unpushed PR commits or uncommitted changes.
+  if [ -n "$path" ]; then
+    local task_repo actual_repo candidate_checkout relative
     task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
-    if [ -n "$task_repo" ]; then
-      actual_repo="$(git -C "$path" remote get-url origin 2>/dev/null || true)"
+    candidate_checkout="$path"
+    if [ -n "$task_repo" ] && [ ! -e "$path/.git" ]; then
+      relative="$(workspace_repo_relative_path "$task_repo" 2>/dev/null || true)"
+      if [ -z "$relative" ]; then
+        path=""
+      else
+        local owner_component
+        owner_component="$(printf '%s' "$relative" | cut -d/ -f2)"
+        if [ -L "$path/repos" ] || [ -L "$path/repos/$owner_component" ] || [ -L "$path/$relative" ]; then
+          path=""
+        else
+          candidate_checkout="$path/$relative"
+        fi
+      fi
+    fi
+    if [ -n "$path" ] && [ -L "$candidate_checkout/.git" ]; then
+      path=""
+    fi
+    if [ -n "$path" ] && [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
       if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
-        rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
+        path=""
       fi
     fi
   fi
@@ -490,4 +735,4 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null

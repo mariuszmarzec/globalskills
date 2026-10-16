@@ -42,7 +42,7 @@ printf '%s\n' 'Execute the executor-boundary smoke test.' >"$PROMPT_FILE"
 
 # Regression guard: the prompt contract must keep implementation agents inside
 # their task workspace and must not direct them to read private/global paths.
-if ! grep -Fq '## Working Directory and Local-Access Boundary' "$SCRIPT_DIR/manul-daemon.sh"; then
+if ! grep -Fq '## Task Workspace and Local-Access Boundary' "$SCRIPT_DIR/manul-daemon.sh"; then
   echo "FAIL: generated task prompt is missing the local-access boundary" >&2
   exit 1
 fi
