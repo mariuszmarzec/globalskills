@@ -3256,6 +3256,24 @@ PROMPT_EOF
       return 0
     fi
 
+    # Validate the lease/root before migrating or creating any checkout beneath
+    # it. This prevents a corrupt DB path or symlink from steering filesystem
+    # changes outside the exact task-owned workspace.
+    local early_ws_owner early_ws_state early_ws_path
+    early_ws_owner="$(sqlite3 "$DB" "SELECT currentTaskId FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    early_ws_state="$(sqlite3 "$DB" "SELECT status FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    early_ws_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$(sql_escape "$WORKSPACE_ID")' AND currentTaskId='$(sql_escape "$COMMENT_ID")' AND status='BUSY' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ -z "$early_ws_path" ] || [ "$early_ws_owner" != "$COMMENT_ID" ] || [ "$early_ws_state" != "BUSY" ] || ! workspace_owned_path_matches "$WORKSPACE_ID" "$COMMENT_ID" "$workspace_path"; then
+      log "ERROR: refused checkout preparation for unowned workspace root (task=$COMMENT_ID workspace=$WORKSPACE_ID registered_path=${early_ws_path:-none} candidate_path=$workspace_path)"
+      lc_log "WORKSPACE_INVALID" "task=$COMMENT_ID workspace=$WORKSPACE_ID phase=preparation"
+      workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || true
+      stop_heartbeat "$COMMENT_ID"
+      release_task_repo_lock "$REPO"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
+
     # The lease owns a workspace root, not a single repository checkout.
     # Migrate legacy root checkouts without discarding changes, then prepare the
     # primary repository below repos/<owner>/<name>.
