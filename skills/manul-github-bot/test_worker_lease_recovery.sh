@@ -309,6 +309,7 @@ update_task_completion live completed "" new-token
 assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "current claim can finalize"
 
 # 5) Max attempts on dead worker becomes failed.
+: > "$GH_LOG"
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
@@ -319,6 +320,14 @@ else
   cat "$GH_LOG" >&2
   exit 1
 fi
+
+# 5a) An early failure below the retry limit must be requeued with nextAttemptAt,
+# otherwise the scheduler's NULL comparison can strand the task forever.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-retry','$REPO',80,'https://github.com/$REPO/issues/80','running',1,$CURRENT_TEST_PID,'early-retry-token');"
+handle_pre_execution_failure "early-retry" "early-retry-token" "$REPO" 80 "" "" "Workspace unavailable on first attempt." "" 1
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-retry';")" "pre-agent recoverable failure transitions to queued"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry has nextAttemptAt"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','-2 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry is scheduled"
 
 # 5b) Early workspace failures use the same attempt limit and publish a final
 # failure comment instead of leaving the task running for the watchdog to guess.
