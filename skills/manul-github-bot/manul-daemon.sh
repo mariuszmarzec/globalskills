@@ -698,7 +698,7 @@ recover_stale_tasks() {
       changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)"
       if [ "${changed:-0}" -eq 1 ]; then
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
-        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "$issue_num" || true
+        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" || true
       else
         log "WARN: stale task $comment_id was no longer owned by this recovery pass; failure comment skipped"
       fi
