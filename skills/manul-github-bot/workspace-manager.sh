@@ -595,6 +595,25 @@ workspace_get_path() {
     expected_path="$WORKSPACES_DIR/$expected_ws_id"
     expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
     registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+
+    # A persisted BUSY lease may outlive the physical workspace directory (for
+    # example after a runtime cleanup or host restart). Recreate only the exact
+    # canonical directory owned by this task; never follow a symlink or trust a
+    # path supplied only by the database. The repository checkout is rebuilt
+    # later from its shared cache, while all ownership checks remain fail-closed.
+    if [ -n "$root_real" ] &&
+       [[ "$expected_ws_id" =~ ^ws-[A-Za-z0-9._-]+$ ]] &&
+       [ "$path" = "$expected_path" ] &&
+       [ -z "$expected_real" ] &&
+       [ ! -e "$expected_path" ] &&
+       [ ! -L "$expected_path" ] &&
+       [ "$(realpath -e "$(dirname "$expected_path")" 2>/dev/null || true)" = "$root_real" ]; then
+      if mkdir -- "$expected_path" 2>/dev/null; then
+        expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
+        registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+      fi
+    fi
+
     if [ -z "$root_real" ] || [ -z "$expected_ws_id" ] || [ -L "$expected_path" ] || [ -L "$path" ] || [ -z "$expected_real" ] || [ "$expected_real" != "$root_real/$expected_ws_id" ] || [ "$registered_real" != "$expected_real" ]; then
       path=""
     fi
