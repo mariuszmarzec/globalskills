@@ -46,6 +46,23 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*" >> "$LOG"; }
 
+post_terminal_failure_feedback() {
+    local comment_id="$1" repo="$2" issue_num="$3" error="$4"
+    local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+    if [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then args+=(--pr-number "$issue_num"); fi
+    local try
+    for try in 1 2 3; do
+        if MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
+            log "terminal failure comment posted for $comment_id (try=$try)"
+            return 0
+        fi
+        log "WARN: terminal failure comment failed for $comment_id (try=$try/3)"
+        [ "$try" -lt 3 ] && sleep "$try"
+    done
+    log "ERROR: terminal failure comment could not be posted for $comment_id"
+    return 1
+}
+
 terminate_task_executor() {
     local comment_id="$1"
     local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
@@ -168,11 +185,17 @@ if [ -f "$DB" ]; then
 
             if [ "${attempts:-0}" -ge "$MAX_ATTEMPTS" ]; then
                 log "  → marking as FAILED (max attempts: $MAX_ATTEMPTS)"
-                sqlite3 "$DB" "
+                changed="$(sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
+                    SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
                     WHERE commentId='$comment_id' AND status='running' $ownership_clause;
-                " 2>/dev/null
+                    SELECT changes();
+                " 2>>"$LOG" | tail -n 1)"
+                if [ "${changed:-0}" -eq 1 ]; then
+                    post_terminal_failure_feedback "$comment_id" "$repo" "$issue_num" "Task exhausted $attempts/$MAX_ATTEMPTS attempts; stale heartbeat/lease recovery stopped the worker (heartbeat=${heartbeat_at:-missing}, lease=${lease_at:-missing})." || true
+                else
+                    log "WARN: task $comment_id was no longer owned by this recovery pass; failure comment skipped"
+                fi
             else
                 log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
                 sqlite3 "$DB" "
