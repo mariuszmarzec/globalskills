@@ -54,10 +54,17 @@ if ! pgrep -f '[l]itellm' >/dev/null; then
         set +a
     fi
     echo "Starting LiteLLM..."
-    nohup litellm \
-        --config "$HOME/litellm/config.yaml" \
-        --port 4000 \
-        >/tmp/litellm.log 2>&1 &
+    if [ -x /home/marzec/.local/bin/litellm ]; then
+        nohup python3.12 /home/marzec/.local/bin/litellm \
+            --config "$HOME/litellm/config.yaml" \
+            --port 4000 \
+            >/tmp/litellm.log 2>&1 &
+    else
+        nohup litellm \
+            --config "$HOME/litellm/config.yaml" \
+            --port 4000 \
+            >/tmp/litellm.log 2>&1 &
+    fi
     sleep 3
 fi
 
