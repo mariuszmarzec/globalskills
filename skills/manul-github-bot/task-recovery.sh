@@ -20,6 +20,23 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*"; }
 
+post_terminal_failure_feedback() {
+    local comment_id="$1" repo="$2" issue_num="$3" error="$4"
+    local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+    if [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then args+=(--pr-number "$issue_num"); fi
+    local try
+    for try in 1 2 3; do
+        if MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
+            log "terminal failure comment posted for $comment_id (try=$try)"
+            return 0
+        fi
+        log "WARN: terminal failure comment failed for $comment_id (try=$try/3)"
+        [ "$try" -lt 3 ] && sleep "$try"
+    done
+    log "ERROR: terminal failure comment could not be posted for $comment_id"
+    return 1
+}
+
 terminate_task_executor() {
     local comment_id="$1"
     local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
@@ -58,13 +75,27 @@ reset_task() {
 
 mark_task_failed() {
     local comment_id="$1"
+    local safe_comment_id repo issue_num attempts row changed
+    safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
+    row="$(sqlite3 "$DB" "SELECT repository || '|' || issueNumber || '|' || attempts FROM processed_comments WHERE commentId='$safe_comment_id' AND status='running' LIMIT 1;" 2>>"$LOG" || true)"
+    if [ -z "$row" ]; then
+        log "Refusing to mark task $comment_id failed because it is no longer running"
+        return 1
+    fi
+    IFS='|' read -r repo issue_num attempts <<< "$row"
     log "Marking task $comment_id as failed"
     terminate_task_executor "$comment_id"
-    sqlite3 "$DB" "
+    changed="$(sqlite3 "$DB" "
         UPDATE processed_comments
-        SET status='failed', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
-        WHERE commentId='$comment_id' AND status='running';
-    " 2>/dev/null
+        SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL
+        WHERE commentId='$safe_comment_id' AND status='running';
+        SELECT changes();
+    " 2>>"$LOG" | tail -n 1)"
+    if [ "${changed:-0}" -ne 1 ]; then
+        log "WARN: task $comment_id was not marked failed because its state changed"
+        return 1
+    fi
+    post_terminal_failure_feedback "$comment_id" "$repo" "$issue_num" "Task was manually marked failed by task-recovery.sh after ${attempts:-unknown} execution attempt(s)." || true
 }
 
 retry_failed_task() {
