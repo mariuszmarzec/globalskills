@@ -597,11 +597,9 @@ workspace_get_path() {
     if [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
       actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
       if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
-        if [ "$candidate_checkout" = "$path" ]; then
-          rm -rf "$path"/* "$path"/.[!.]* "$path"/..?* 2>/dev/null || true
-        else
-          WORKSPACE_LAYOUT_ERROR="Primary checkout origin mismatch for $task_repo; existing data was preserved"
-        fi
+        # Do not clear the workspace: a mismatched checkout can contain local
+        # commits or uncommitted work. Fail closed and preserve its contents.
+        path=""
       fi
     fi
   fi
@@ -709,4 +707,4 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_get_path workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
+export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
