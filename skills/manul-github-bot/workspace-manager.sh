@@ -599,7 +599,7 @@ workspace_get_path() {
       path=""
     fi
   fi
-  [ -n "$path" ] || { printf '\\n'; return 0; }
+  [ -n "$path" ] || { printf '\n'; return 0; }
 
   # Validate root and nested primary checkouts. Preserve mismatched checkout
   # state because it may contain unpushed PR commits or uncommitted changes.
