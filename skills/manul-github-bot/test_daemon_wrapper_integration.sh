@@ -120,8 +120,8 @@ if [[ "$1" == "api" ]]; then
                 issue_num="${issue_num%%/*}"
                 case "$issue_num" in
                     42)
-                        # Test A: valid result for COMMENT_1
-                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        # Test A and Q: verified task reports for explicit report-only paths
+                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result — manul 🐈","in_reply_to_id":null}]'
                         ;;
                     43)
                         # Test B: no result comment (missing result)
