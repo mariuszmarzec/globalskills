@@ -252,6 +252,14 @@ else
   fail "Installer does not declare agent-session-state.sh (session helper missing from runtime)"
 fi
 
+# The failure publisher and legacy health checker source this helper from runtime.
+if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
+     | grep -q '"manul-failure-utils.sh"'; then
+  ok "Installer declares manul-failure-utils.sh"
+else
+  fail "Installer does not declare manul-failure-utils.sh (runtime failure reporting would break)"
+fi
+
 # ── Test 3b: installer self-healing (idempotent, safe to run repeatedly) ───────
 echo
 echo "Test 3b: Installer self-healing"
