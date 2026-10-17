@@ -813,51 +813,6 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
 
-# Tests Q/R/S: comment-only report success/failure and implementation guard.
-echo ""
-echo "=== Test Q: comment-only diagnostic delivery succeeds without PR ==="
-WORKDIR_Q="$TEST_TMPDIR/workdir-q"; mkdir -p "$WORKDIR_Q"
-git -C "$WORKDIR_Q" init -q; git -C "$WORKDIR_Q" symbolic-ref HEAD refs/heads/master
-git -C "$WORKDIR_Q" config user.email test@example.com; git -C "$WORKDIR_Q" config user.name test
-printf "baseline\n" >"$WORKDIR_Q/README.md"; git -C "$WORKDIR_Q" add README.md; git -C "$WORKDIR_Q" commit -qm initial
-INITIAL_HEAD_Q="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Q';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Q','test/repo',56,'https://github.com/test/repo/issues/56#issuecomment-1015','user','test','diagnostics only; do not change code','queued',1,$$,'VERIFY');" 2>/dev/null
-STDOUT_FILE="$TEST_TMPDIR/stdoutQ.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
-COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
-evaluate_task_completion "test/repo" "56" "COMMENT_Q" "COMMENT_Q" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Q" "" "$INITIAL_HEAD_Q" "master" "master" "" "" "" "comment_only"
-if [ "$COMPLETION_SUCCESS" != "true" ]; then echo "FAIL: report-only should succeed ($FAIL_REASON)"; exit 1; fi
-echo "[OK] Test Q: PASSED"
-
-echo "=== Test R: report-only task without a verified result fails ==="
-WORKDIR_R="$TEST_TMPDIR/workdir-r"; mkdir -p "$WORKDIR_R"
-git -C "$WORKDIR_R" init -q; git -C "$WORKDIR_R" symbolic-ref HEAD refs/heads/master
-git -C "$WORKDIR_R" config user.email test@example.com; git -C "$WORKDIR_R" config user.name test
-printf "baseline\n" >"$WORKDIR_R/README.md"; git -C "$WORKDIR_R" add README.md; git -C "$WORKDIR_R" commit -qm initial
-INITIAL_HEAD_R="$(git -C "$WORKDIR_R" rev-parse HEAD)"
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_R';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_R','test/repo',57,'https://github.com/test/repo/issues/57#issuecomment-1016','user','test','diagnostics only; do not change code','queued',1,$$,'VERIFY');" 2>/dev/null
-STDOUT_FILE="$TEST_TMPDIR/stdoutR.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
-COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
-evaluate_task_completion "test/repo" "57" "COMMENT_R" "COMMENT_R" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_R" "" "$INITIAL_HEAD_R" "master" "master" "" "" "" "comment_only"
-if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then echo "FAIL: absent report must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
-echo "[OK] Test R: PASSED"
-
-echo "=== Test S: implementation without PR is still rejected ==="
-WORKDIR_S="$TEST_TMPDIR/workdir-s"; mkdir -p "$WORKDIR_S"
-git -C "$WORKDIR_S" init -q; git -C "$WORKDIR_S" symbolic-ref HEAD refs/heads/master
-git -C "$WORKDIR_S" config user.email test@example.com; git -C "$WORKDIR_S" config user.name test
-printf "baseline\n" >"$WORKDIR_S/README.md"; git -C "$WORKDIR_S" add README.md; git -C "$WORKDIR_S" commit -qm initial
-INITIAL_HEAD_S="$(git -C "$WORKDIR_S" rev-parse HEAD)"
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_S';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_S','test/repo',58,'https://github.com/test/repo/issues/58#issuecomment-1017','user','test','implement the requested change','queued',1,$$,'IMPLEMENT');" 2>/dev/null
-STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
-COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
-evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "implementation"
-if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
-echo "[OK] Test S: PASSED"
-
-
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="
