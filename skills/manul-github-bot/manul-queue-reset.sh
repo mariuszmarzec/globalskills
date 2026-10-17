@@ -263,6 +263,11 @@ if [ "$SCOPE" = "all-tasks" ]; then
   else
     fail "could not find Manul automation/daemon stop command; no task data was deleted"
   fi
+
+  [ -x "$DAEMON_CONTROL" ] || fail "cannot verify daemon shutdown; no task data was deleted"
+  DAEMON_STATUS="$("$DAEMON_CONTROL" status 2>/dev/null || true)"
+  [ "$DAEMON_STATUS" = "not running" ] || fail "Manul daemon is not confirmed stopped (status: ${DAEMON_STATUS:-unknown}); no task data was deleted"
+
   stop_recorded_task_executors
 fi
 
