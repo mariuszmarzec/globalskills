@@ -228,6 +228,8 @@ export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG="$SCRIPT_DIR/conf
 
 # DEFAULT_BRANCH is a global set by the production dispatch path; tests must set it.
 DEFAULT_BRANCH="master"
+# Completion evaluation also branches on the claimed task action; default fixtures emulate IMPLEMENT.
+TASK_ACTION="IMPLEMENT"
 
 # Real git workdir so verify_required_pr can resolve the task branch and (when
 # autoCreatePr is enabled) auto-create a PR. The daemon's autoCreatePr path
