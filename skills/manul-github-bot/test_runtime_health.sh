@@ -105,6 +105,7 @@ DIRECT_ENTRYPOINTS=(
   manul-daemon.sh
   watchdog.sh
   task-recovery.sh
+  manul-queue-reset.sh
   agent-task-runner.sh
   poll.sh
   manul-status.sh
@@ -172,6 +173,7 @@ for script in \
   workspace-manager.sh \
   watchdog.sh \
   task-recovery.sh \
+  manul-queue-reset.sh \
   task-health-check.sh; do
   assert_cmd "$script has valid shell syntax" bash -n "$SCRIPT_DIR/$script"
 done
