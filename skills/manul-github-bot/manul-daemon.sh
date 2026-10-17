@@ -2509,6 +2509,208 @@ evaluate_task_completion() {
   # comment is malformed, the verified PR metadata is still persisted before the
   # task is rejected for violating the exactly-one-result-comment contract.
 
+  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+  if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
+    local repo_state_clean="true"
+    local repo_state_issues=""
+
+    # Check for staged changes
+    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="staged_changes "
+    fi
+
+    # Check for unstaged changes
+    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="unstaged_changes "
+    fi
+
+    # Check for untracked files (ignoring build artifacts like __pycache__)
+    local untracked
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+    if [ -n "$untracked" ]; then
+      repo_state_clean="false"
+      repo_state_issues+="untracked_files "
+    fi
+
+    if [ "$repo_state_clean" = "false" ]; then
+      # Keep SUCCESS intact so the delivery classifier below can distinguish
+      # uncommitted work from a generic workspace validation failure.
+      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
+    fi
+  fi
+  
+  # 7.6 Determine whether the agent actually changed repository state.
+  # Informational tasks may legitimately finish without a branch or PR.
+  # Every repository change must be verified through the full PR/result pipeline,
+  # including issue-body tasks (issuebody:*). The task identifier format must
+  # never weaken the implementation PR requirement.
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
+    local repo_changed="false"
+    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
+    if [ "$repo_changed" = "true" ]; then
+      local current_branch
+      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+      if [ -z "$current_branch" ]; then
+        SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
+        FAIL_REASON="Repository changed but the agent is not on a named branch"
+        log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
+      elif [ -n "$PR_HEAD_BRANCH" ]; then
+        # PR-tied tasks are intentionally executed on the existing PR head branch.
+        # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
+        if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
+          log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
+        else
+          log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
+        fi
+      elif [ "$current_branch" = "$DEFAULT_BRANCH" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ]; then
+        SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
+        FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
+        log "dispatch: task $COMMENT_ID changed repository on forbidden base branch $current_branch"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
+      elif [ "$repo_state_clean" != "true" ]; then
+        SUCCESS="false"
+        FAILURE_CODE="DELIVERY_NOT_COMMITTED"
+        FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
+      elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        SUCCESS="false"
+        FAILURE_CODE="VERIFICATION_FAILED"
+        FAIL_REASON="Implementation task did not produce a real PR against its branch base"
+        log "dispatch: task $COMMENT_ID PR verification failed"
+else
+         local verified_base
+         verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+           SUCCESS="false"
+           FAILURE_CODE="VERIFICATION_FAILED"
+           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+         else
+           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
+         fi
+       fi
+
+       # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
+       # repository change must have committed AND pushed its work. Distinguish the
+       # concrete delivery states so retry/failure comments explain exactly what is
+       # missing instead of collapsing everything to a generic verification failure.
+       # Only runs when the repository actually changed; informational tasks with no
+       # diff have nothing to deliver and must not be rejected here.
+       if [ "$SUCCESS" = "true" ]; then
+         local has_origin_remote="false"
+         local remote_branch_sha=""
+         if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
+           has_origin_remote="true"
+           remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
+         fi
+
+         if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
+           SUCCESS="false"
+           FAILURE_CODE="DELIVERY_NOT_PUSHED"
+           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
+           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
+         elif [ "$has_origin_remote" = "true" ] && [ -n "$remote_branch_sha" ] \
+           && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
+           SUCCESS="false"
+           FAILURE_CODE="DELIVERY_NOT_PUSHED"
+           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
+           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
+         else
+           log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
+         fi
+       fi
+     elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+      # IMPLEMENT work normally must finish on its own feature branch. A no-op
+      # on the base branch is accepted only when an existing PR for this same
+      # issue has been independently re-verified.
+      local already_satisfied="false"
+      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+      if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
+        if verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+          already_satisfied="true"
+          current_branch="$VERIFIED_EXISTING_PR_BRANCH"
+          log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
+          lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
+        else
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing task PR"
+          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing task PR was verified"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
+        fi
+      fi
+
+      if [ "$SUCCESS" = "true" ] && [ "$already_satisfied" != "true" ]; then
+        if ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Implementation task completed without a verified PR from its task branch"
+          log "dispatch: task $COMMENT_ID has no verified PR despite reporting success without repository diff"
+          lc_log "MISSING_PR" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
+        fi
+      fi
+      if [ "$SUCCESS" = "true" ]; then
+        local verified_base
+        if [ "$already_satisfied" = "true" ]; then
+          verified_base="$INITIAL_BASE_BRANCH"
+        else
+          verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        fi
+        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        fi
+      fi
+    else
+      # A TASK_DONE from an IMPLEMENT task is only informational when the agent
+      # genuinely made no repository changes. Keep this explicit so issuebody:*
+      # tasks cannot accidentally bypass the repository/PR verification above.
+      log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
+      lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+    fi
+  fi
+
+  # Explicit report-only delivery path for VERIFY tasks.
+  # Normal IMPLEMENT tasks continue through branch/commit/PR verification above.
+  if [ "$DELIVERY_MODE" = "comment_only" ] && [ "$rc" -eq 0 ] && [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
+    local report_repo_changed="false"
+    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then report_repo_changed="true"; fi
+    if [ "$report_repo_changed" = "true" ]; then
+      SUCCESS="false"
+      FAILURE_CODE="VERIFICATION_FAILED"
+      FAIL_REASON="Comment-only task modified the repository; report-only delivery must leave code unchanged"
+      log "dispatch: task $COMMENT_ID report-only validation failed: repository changed"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_repository_changed"
+    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      SUCCESS="false"
+      FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+      FAIL_REASON="Report-only task did not publish a verified result comment"
+      log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
+    elif ! verify_nonempty_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      SUCCESS="false"
+      FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      FAIL_REASON="Report-only task result comment is empty or contains only the marker/signature"
+      log "dispatch: task $COMMENT_ID report-only validation failed: empty report"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
+    else
+      log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
+      lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+    fi
+  fi
+
+
   # Result-comment marker validation is a correlation/presentation safeguard,
   # not a reason to discard already-verified repository delivery. By this point
   # the PR/branch/remote state has been verified. A missing marker is repaired
