@@ -175,7 +175,7 @@ Preview which unfinished, externally-replayable tasks can be rebuilt:
 manul-queue-reset.sh --dry-run
 ```
 
-Execute the reset only when the preview is understood. The command asks for the exact confirmation `RESET QUEUE`, creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records and their trigger-message dedupe rows, then invokes `poll.sh` once.
+Execute the reset only when the preview is understood. The command asks for the exact confirmation `RESET QUEUE`, waits up to 300 seconds for a running poll to finish (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records and their trigger-message dedupe rows, then invokes `poll.sh` once. If the lock remains held at timeout, it exits without changing queue state.
 
 ```bash
 manul-queue-reset.sh --execute
