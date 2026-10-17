@@ -97,6 +97,7 @@ SCRIPTS=(
     "agent-execution-controller.sh"
     "agent-session-state.sh"
     "manul-paths.sh"
+    "manul-failure-utils.sh"
     "manul-env.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
