@@ -176,23 +176,29 @@ manul-queue-reset.sh --dry-run
 manul-queue-reset.sh --execute
 ```
 
-The normal mode asks for `RESET QUEUE`, creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records plus their trigger-message dedupe rows, and invokes `poll.sh` once. Running/completed/blocked/manual tasks and conversation/workspace mappings survive.
+The normal mode asks for `RESET QUEUE`, creates a verified SQLite backup, removes replayable queued/failed/stale task records and matching trigger-message dedupe rows, then invokes `poll.sh` once. Running/completed/blocked/manual tasks, conversation mappings, workspace state, and the install baseline survive.
 
-To wipe the complete task history/state and poll configured sources from scratch, preview the full reset:
+To preview a full reset:
 
 ```bash
 manul-queue-reset.sh --all-tasks --dry-run
 ```
 
-Then execute it only after reviewing the preview:
+To leave Manul with an empty task/conversation database:
 
 ```bash
 manul-queue-reset.sh --all-tasks --execute
 ```
 
-This mode requires the exact confirmation `DELETE ALL TASKS`. It backs up the DB, deletes all `processed_comments` rows (including completed and manual tasks), clears `conversation_messages` dedupe/context, `conversation_links`, and `conversations` routing rows, then calls `poll.sh` once. It refuses the reset without changes if any task is running or has worker ownership metadata; finish or safely recover those workers first. The install baseline, configuration, workspace state and unrelated runtime state are preserved. Polling still honors the existing baseline and configured source filters, so this does not force historical items older than that baseline to be ingested.
+The full reset requires the exact confirmation `DELETE ALL TASKS`. It stops Manul automation and the watchdog, terminates recorded detached executors after validating their process identity, waits for polling and task-dispatch locks, creates a verified backup, and clears all rows from `processed_comments`, `conversation_messages`, `conversation_links`, and `conversations`. Stale running/worker metadata no longer blocks the reset after automation has stopped and locks are acquired. **It does not poll afterward** and keeps automation stopped, leaving the task tables empty.
 
-Both modes wait up to 300 seconds for the current poll to release its lock (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`) and retain a verified SQLite backup.
+A one-time rediscovery is explicitly opt-in:
+
+```bash
+manul-queue-reset.sh --all-tasks --execute --poll-after
+```
+
+This invokes `poll.sh` once after the wipe but does not restart the daemon. The source baseline, configuration, workspace state, logs, and unrelated runtime state are preserved. Polling obeys the existing baseline and configured source filters. The verified backup retains the deleted task history. Use `start-manul-automation.sh start` when you are ready to start automation again.
 
 ## Manual task recovery
 

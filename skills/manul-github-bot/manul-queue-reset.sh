@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# manul-queue-reset.sh — Reset Manul task state and poll configured sources.
+# manul-queue-reset.sh — Reset Manul task state.
 #
-# Default mode previews replayable unfinished tasks. --all-tasks offers an
-# explicit full task-state reset after a verified SQLite backup. Both modes
-# wait for an existing poll and invoke poll.sh after making their changes.
+# Default mode rebuilds replayable unfinished tasks and polls configured
+# sources. --all-tasks stops automation/workers, backs up SQLite, wipes task
+# and conversation state, and leaves it empty unless --poll-after is supplied.
 
 set -euo pipefail
 
@@ -15,24 +15,28 @@ POLL_SCRIPT="${MANUL_POLL_SCRIPT:-$MANUL_DIR/poll.sh}"
 MODE="dry-run"
 SCOPE="replayable"
 POLL_LOCK_WAIT_SECONDS="${MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS:-300}"
+POLL_AFTER_FULL_RESET=0
 
 usage() {
   cat <<'USAGE'
-Usage: manul-queue-reset.sh [--dry-run|--execute] [--all-tasks]
+Usage: manul-queue-reset.sh [--dry-run|--execute] [--all-tasks] [--poll-after]
 
   --dry-run    Preview replayable queued/failed/stale tasks (default)
-  --execute    Require confirmation, wait for polling, back up the DB,
-               apply the selected reset and run poll.sh once
-  --all-tasks  With --dry-run, preview a FULL task-state reset. With --execute,
-               delete all task rows (including completed/blocked/manual rows)
-               and clear message dedupe/context plus conversation routing rows.
+  --execute    Require confirmation, back up the DB, apply the selected reset,
+               and poll once (replayable mode only)
+  --all-tasks  Preview or wipe ALL task/conversation state. Execute mode stops
+               Manul automation and workers, then leaves the task DB empty.
+  --poll-after With --all-tasks --execute, explicitly poll configured sources
+               once after the wipe. Automation remains stopped.
 
-  MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS  Max seconds to wait for a current poll (default: 300)
+  MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS  Max seconds to wait for poll/dispatch locks (default: 300)
 
-The full reset refuses to modify data while any task is running or still has
-worker ownership metadata. The verified backup is retained. The configured
-source baseline, config, logs, workspace state and unrelated runtime state are
-preserved. The poller still obeys the configured baseline and source filters.
+The full reset creates a verified backup, stops the daemon/watchdog and recorded
+task executors, waits for poll/dispatch locks, and deletes all task rows plus
+conversation message/context and routing rows. By default it does NOT poll
+afterward, so the database stays empty. --poll-after is an explicit opt-in.
+The install baseline, config, logs, workspace state and unrelated runtime state
+are preserved; any optional poll still obeys existing baselines/source filters.
 USAGE
 }
 
@@ -41,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) MODE="dry-run"; shift ;;
     --execute) MODE="execute"; shift ;;
     --all-tasks) SCOPE="all-tasks"; shift ;;
+    --poll-after) POLL_AFTER_FULL_RESET=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -56,7 +61,47 @@ fail() {
   exit 1
 }
 
-for cmd in sqlite3 flock; do
+if [ "$POLL_AFTER_FULL_RESET" -eq 1 ] && [ "$SCOPE" != "all-tasks" ]; then
+  fail "--poll-after is supported only with --all-tasks"
+fi
+
+# Terminate detached agent executors left behind after the daemon stops. Only
+# signal a PID when its current command line still identifies our task runner;
+# stale PID files must never cause an unrelated, reused PID to be killed.
+stop_recorded_task_executors() {
+  local pid_file executor_pid process_args attempt
+  local -a pid_files=()
+  shopt -s nullglob
+  pid_files=( "$MANUL_DIR"/task-*.executor.pid )
+  shopt -u nullglob
+
+  for pid_file in "${pid_files[@]}"; do
+    executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ "$executor_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$executor_pid" 2>/dev/null; then
+      process_args="$(ps -p "$executor_pid" -o args= 2>/dev/null || true)"
+      if [[ "$process_args" == *agent-task-runner.sh* ]]; then
+        echo "Stopping detached task executor (pid=$executor_pid)..."
+        kill -TERM -- "-$executor_pid" 2>/dev/null || kill -TERM "$executor_pid" 2>/dev/null || true
+        for attempt in {1..30}; do
+          process_args="$(ps -p "$executor_pid" -o args= 2>/dev/null || true)"
+          [[ "$process_args" == *agent-task-runner.sh* ]] || break
+          sleep 0.1
+        done
+        if [[ "$process_args" == *agent-task-runner.sh* ]]; then
+          kill -KILL -- "-$executor_pid" 2>/dev/null || kill -KILL "$executor_pid" 2>/dev/null || true
+          sleep 0.1
+          process_args="$(ps -p "$executor_pid" -o args= 2>/dev/null || true)"
+        fi
+        [[ "$process_args" != *agent-task-runner.sh* ]] || fail "task executor $executor_pid did not stop; no task rows were deleted"
+      else
+        echo "WARN: ignoring stale executor PID file (PID $executor_pid is not agent-task-runner.sh): $pid_file" >&2
+      fi
+    fi
+    rm -f "$pid_file"
+  done
+}
+
+for cmd in sqlite3 flock ps; do
   command -v "$cmd" >/dev/null 2>&1 || fail "required command not found: $cmd"
 done
 
@@ -189,7 +234,7 @@ show_full_counts() {
 if [ "$MODE" = "dry-run" ]; then
   if [ "$SCOPE" = "all-tasks" ]; then
     show_full_counts
-    echo "No changes made. Run with --all-tasks --execute to clear all task state and re-poll configured sources."
+    echo "No changes made. Run with --all-tasks --execute to stop automation and leave task state empty; add --poll-after only if rediscovery is wanted immediately."
   else
     show_counts "Manul queue reset preview (read-only):"
     echo "No changes made. Run with --execute to rebuild the replayable queue."
@@ -205,11 +250,39 @@ else
   [ "$CONFIRMATION" = "RESET QUEUE" ] || fail "confirmation did not match; no changes made"
 fi
 
+if [ "$SCOPE" = "all-tasks" ]; then
+  AUTOMATION_CONTROL="$MANUL_DIR/start-manul-automation.sh"
+  DAEMON_CONTROL="$MANUL_DIR/manul-daemon.sh"
+  if [ -x "$AUTOMATION_CONTROL" ]; then
+    echo "Stopping Manul automation and watchdog..."
+    "$AUTOMATION_CONTROL" stop || fail "could not stop Manul automation; no task data was deleted"
+  elif [ -x "$DAEMON_CONTROL" ]; then
+    echo "Stopping Manul daemon..."
+    rm -f "$MANUL_DIR/.enabled"
+    "$DAEMON_CONTROL" stop || fail "could not stop Manul daemon; no task data was deleted"
+  else
+    fail "could not find Manul automation/daemon stop command; no task data was deleted"
+  fi
+
+  [ -x "$DAEMON_CONTROL" ] || fail "cannot verify daemon shutdown; no task data was deleted"
+  DAEMON_STATUS="$("$DAEMON_CONTROL" status 2>/dev/null || true)"
+  [ "$DAEMON_STATUS" = "not running" ] || fail "Manul daemon is not confirmed stopped (status: ${DAEMON_STATUS:-unknown}); no task data was deleted"
+
+  stop_recorded_task_executors
+fi
+
 mkdir -p "$MANUL_LOCKS_DIR" "$MANUL_STATE_DIR/backups"
 POLL_LOCK_FILE="$MANUL_LOCKS_DIR/poll.flock"
 exec 200>"$POLL_LOCK_FILE"
 echo "Waiting up to ${POLL_LOCK_WAIT_SECONDS}s for the current poll to finish..."
 flock -w "$POLL_LOCK_WAIT_SECONDS" 200 || fail "poll.sh still holds the poll lock after ${POLL_LOCK_WAIT_SECONDS}s; no queue changes were made. Inspect the holder with: lslocks -o PID,COMMAND,TYPE,MODE,PATH | grep poll.flock"
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  DISPATCH_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
+  exec 201>"$DISPATCH_LOCK_FILE"
+  echo "Waiting up to ${POLL_LOCK_WAIT_SECONDS}s for task dispatch to finish..."
+  flock -w "$POLL_LOCK_WAIT_SECONDS" 201 || fail "task dispatcher still holds its lock after ${POLL_LOCK_WAIT_SECONDS}s; no task data was deleted"
+fi
 
 BACKUP_SCOPE="replayable"
 [ "$SCOPE" = "all-tasks" ] && BACKUP_SCOPE="all-tasks"
@@ -239,44 +312,44 @@ backup_database || fail "could not create a verified database backup"
 echo "Backup: $BACKUP_FILE"
 
 if [ "$SCOPE" = "all-tasks" ]; then
-  # Check worker ownership and delete all task/conversation state under one
-  # SQLite write transaction. Active rows make every DELETE a no-op.
+  # Automation is stopped and both poll/dispatch locks are held. Wipe the
+  # task/conversation tables unconditionally; stale worker metadata is exactly
+  # what this administrative reset is intended to remove.
   FULL_RESET_SQL="BEGIN IMMEDIATE;
-CREATE TEMP TABLE full_reset_guard AS
-  SELECT COUNT(*) AS active_count FROM processed_comments WHERE $ACTIVE_TASK_PREDICATE;
-SELECT 'active_worker_rows=' || active_count FROM full_reset_guard;
 "
   if has_table conversation_links; then
-    FULL_RESET_SQL+=$'DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'DELETE FROM conversation_links;\n'
     FULL_RESET_SQL+=$'SELECT \'deleted_conversation_links=\' || changes();\n'
   fi
   if has_table conversation_messages; then
-    FULL_RESET_SQL+=$'DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'DELETE FROM conversation_messages;\n'
     FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
   fi
-  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments;\n'
   FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
   if has_table conversations; then
-    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'DELETE FROM conversations;\n'
     FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
   fi
-  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  FULL_RESET_SQL+=$'COMMIT;'
   SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
-  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
   DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
   DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
   DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
   DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
-  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
   DELETED_TASKS="${DELETED_TASKS:-0}"
   DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
   DELETED_LINKS="${DELETED_LINKS:-0}"
   DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
-  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
   [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
-  if [ "$ACTIVE_COUNT" -gt 0 ]; then
-    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
-  fi
+
+  for table in processed_comments conversation_messages conversation_links conversations; do
+    if has_table "$table"; then
+      REMAINING="$(sqlite3 "$DB" "SELECT COUNT(*) FROM \"$table\";" 2>/dev/null)"
+      [ "$REMAINING" = "0" ] || fail "full reset verification failed: $table still contains $REMAINING rows"
+    fi
+  done
+
 else
   BASE_EXPR="NULL"
   has_column processed_comments baseId && BASE_EXPR="baseId"
@@ -322,6 +395,10 @@ SQL
   [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
 fi
 
+if [ "$SCOPE" = "all-tasks" ]; then
+  flock -u 201 || true
+  exec 201>&-
+fi
 flock -u 200 || true
 exec 200>&-
 
@@ -331,11 +408,19 @@ if [ "$SCOPE" = "all-tasks" ]; then
   echo "Removed conversation-link rows: $DELETED_LINKS"
   echo "Removed conversation rows: $DELETED_CONVERSATIONS"
   echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+  echo "Manul automation and its watchdog remain stopped."
 else
   echo "Replayable tasks found: $CANDIDATE_COUNT"
   echo "Removed replayable tasks: $DELETED_TASKS"
   echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
 fi
+if [ "$SCOPE" = "all-tasks" ] && [ "$POLL_AFTER_FULL_RESET" -eq 0 ]; then
+  echo "Polling intentionally skipped; task and conversation state remains empty."
+  echo "Manul automation remains stopped. Start it explicitly when ready: $MANUL_DIR/start-manul-automation.sh start"
+  echo "Full reset complete. Backup retained at: $BACKUP_FILE"
+  exit 0
+fi
+
 echo "Running the configured poller now..."
 
 POLL_OUTPUT=""
