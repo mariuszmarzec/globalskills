@@ -89,9 +89,9 @@ export PATH="$TEST_DIR/bin:$PATH"
 # Export a gh function so child Bash processes use the mock even when the
 # production health checker intentionally prepends standard system paths.
 gh() {
-  printf 'CALL:%s\\n' "$*" >> "$GH_CALL_LOG"
+  printf 'CALL:%s\n' "$*" >> "$GH_CALL_LOG"
   if [[ "${1:-}" == "api" ]]; then
-    if [ -s "$GH_COMMENTS_JSONL" ]; then jq -s '.' "$GH_COMMENTS_JSONL"; else printf '[]\\n'; fi
+    if [ -s "$GH_COMMENTS_JSONL" ]; then jq -s '.' "$GH_COMMENTS_JSONL"; else printf '[]\n'; fi
     return 0
   fi
   if [[ "${1:-}" == "issue" && "${2:-}" == "comment" ]]; then
