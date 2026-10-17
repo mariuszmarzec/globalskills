@@ -869,7 +869,7 @@ git -C "$WORKDIR_T" config user.email test@example.com; git -C "$WORKDIR_T" conf
 printf "baseline\\n" >"$WORKDIR_T/README.md"; git -C "$WORKDIR_T" add README.md; git -C "$WORKDIR_T" commit -qm initial
 INITIAL_HEAD_T="$(git -C "$WORKDIR_T" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_T';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_T','test/repo',59,'https://github.com/test/repo/issues/59#issuecomment-1018','user','test','diagnostics only; do not change code','running',1,$,'VERIFY');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_T','test/repo',59,'https://github.com/test/repo/issues/59#issuecomment-1018','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutT.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
 evaluate_task_completion "test/repo" "59" "COMMENT_T" "COMMENT_T" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_T" "" "$INITIAL_HEAD_T" "master" "master" "" "" "" "" "comment_only"
