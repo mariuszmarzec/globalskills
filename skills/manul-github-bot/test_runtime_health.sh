@@ -105,6 +105,7 @@ DIRECT_ENTRYPOINTS=(
   manul-daemon.sh
   watchdog.sh
   task-recovery.sh
+  manul-queue-reset.sh
   agent-task-runner.sh
   poll.sh
   manul-status.sh
