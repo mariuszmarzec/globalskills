@@ -18,6 +18,7 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
+source "$SCRIPT_DIR/manul-failure-utils.sh"
 # DB on native ext4 (NOT on 9p /mnt/f); honor an explicit test/operator override.
 MANUL_DB="${DB:-$MANUL_DB}"
 LOG="$MANUL_LOG_DIR/task-health.log"
@@ -50,13 +51,14 @@ post_terminal_failure_feedback() {
         log "terminal failure status comment suppressed in human mode for $1"
         return 0
     fi
-    local comment_id="$1" repo="$2" issue_num="$3" error="$4"
-    local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+    local comment_id="$1" repo="$2" issue_num="$3" error="$4" stage="${5:-task_health_check}"
+    error="$(manul_redact_failure_details "$error")"
+    local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error" --stage "$stage")
     if [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then args+=(--pr-number "$issue_num"); fi
     local try
     for try in 1 2 3; do
         if MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
-            log "terminal failure comment posted for $comment_id (try=$try)"
+            log "terminal failure comment confirmed for $comment_id at stage task_health_check (new or already published, try=$try)"
             return 0
         fi
         log "WARN: terminal failure comment failed for $comment_id (try=$try/3)"
@@ -93,7 +95,7 @@ mark_task_failed() {
     fi
 
     log "FAILED task: $comment_id (attempts=$current_attempt/$DEFAULT_MAX_FAILURES)"
-    post_terminal_failure_feedback "$comment_id" "$repo" "$issue_num" "Task exceeded the maximum runtime of ${DEFAULT_MAX_RUNNING_TIME}s after ${current_attempt}/$DEFAULT_MAX_FAILURES attempts." || true
+    post_terminal_failure_feedback "$comment_id" "$repo" "$issue_num" "Task exceeded the maximum runtime of ${DEFAULT_MAX_RUNNING_TIME}s after ${current_attempt}/$DEFAULT_MAX_FAILURES attempts." "task_health_check" || true
 }
 
 # Function: reset_task_to_queued - reset stuck task to queued state

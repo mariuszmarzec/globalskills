@@ -42,9 +42,11 @@ TASK_ID=""
 SUMMARY=""
 ERROR_MSG=""
 PR_NUMBER=""
+STAGE=""
 EXPECTED_ATTEMPT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
+source "$SCRIPT_DIR/manul-failure-utils.sh"
 SIGNATURE="— manul 🐈"
 
 while [[ $# -gt 0 ]]; do
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     --summary) SUMMARY="$2"; shift 2 ;;
     --error) ERROR_MSG="$2"; shift 2 ;;
     --pr-number) PR_NUMBER="$2"; shift 2 ;;
+    --stage) STAGE="$2"; shift 2 ;;
     --expected-attempt) EXPECTED_ATTEMPT="$2"; shift 2 ;;
     --signature) SIGNATURE="$2"; shift 2 ;;
     post-done|post-failed|post-started|verify-marker) ACTION="$1"; shift ;;
@@ -134,41 +137,117 @@ build_event_marker() {
 }
 
 # Post a comment to GitHub
-post_feedback_comment() {
+# Post a comment to GitHub using the correct issue/PR/review-thread route.
+post_comment_to_github() {
   local repo="$1"
   local issue="$2"
   local body="$3"
-  local task_id="${4:-}"
+  local reply_to="${4:-}"
   local pr_number="${5:-}"
 
-  if [ "$MANUL_MODE" = "human" ]; then
-    # Human mode does not publish orchestration lifecycle/status/error comments.
-    return 0
-  fi
-
-  local reply_to=""
-  if [ -n "$task_id" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
-    # Review tasks are persisted as review:<root-comment-id>. The original
-    # inline review comment is the only valid parent for their lifecycle/result.
-    reply_to="${BASH_REMATCH[1]}"
-  fi
-
-  if [ -n "$reply_to" ] && [ -n "$pr_number" ]; then
-    local signature="— manul 🐈"
+  if [ -n "$reply_to" ] && [[ "$pr_number" =~ ^[0-9]+$ ]]; then
     local signed_body
-    if [[ "$body" == *"$signature" ]]; then
+    if [[ "$body" == *"$SIGNATURE" ]]; then
       signed_body="$body"
     else
-      signed_body="${body}"$'\n\n'"$signature"
+      signed_body="${body}"$'\n\n'"$SIGNATURE"
     fi
-
-    # Send the body as literal JSON input so Markdown, quotes, and shell
-    # metacharacters cannot be reinterpreted by the shell.
     printf '%s' "$signed_body" |
       jq -Rs --argjson reply_id "$reply_to" '{body:., in_reply_to:$reply_id}' |
       gh api "repos/$repo/pulls/$pr_number/comments" --input - 2>/dev/null
   else
     post_comment "$repo" "$issue" "$body"
+  fi
+}
+
+# TASK_FAILED comments can be observed by overlapping recovery/health handlers.
+# Serialize publication per task attempt and persist a receipt only after GitHub
+# accepts the comment. Failed posts remain retryable.
+post_failure_comment_once() {
+  local repo="$1" issue="$2" body="$3" task_id="$4" pr_number="$5" reply_to="$6" attempt="$7"
+  local safe_task_id safe_attempt lock_dir lock_file posted_file safe_db_id existing
+
+  safe_task_id="$(printf '%s' "$task_id" | sha256sum | cut -c1-24)"
+  safe_db_id="$(sql_escape "$task_id")"
+  safe_attempt="$attempt"
+  [[ "$safe_attempt" =~ ^[0-9]+$ ]] || safe_attempt=1
+  lock_dir="$MANUL_DIR/state/locks"
+  lock_file="$lock_dir/task-failure-${safe_task_id}-${safe_attempt}.lock"
+  posted_file="${lock_file}.posted"
+
+  if ! mkdir -p "$lock_dir"; then
+    echo "ERROR: cannot create failure-comment lock directory for task $task_id" >&2
+    return 1
+  fi
+  exec 209>"$lock_file" || {
+    echo "ERROR: cannot open failure-comment lock for task $task_id" >&2
+    return 1
+  }
+  if ! flock 209; then
+    echo "ERROR: cannot acquire failure-comment lock for task $task_id" >&2
+    exec 209>&-
+    return 1
+  fi
+
+  if [ -f "$posted_file" ]; then
+    echo "INFO: duplicate TASK_FAILED comment suppressed for task $task_id attempt $safe_attempt" >&2
+    flock -u 209 || true
+    exec 209>&-
+    return 0
+  fi
+
+  # A SQLite receipt is an extra durable guard, but its failure must not suppress the
+  # GitHub notification. The lock + sidecar still provide a local idempotency fallback.
+  local db_receipt_available=false
+  if [ -f "$DB" ]; then
+    if sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS manul_failure_comment_publications (taskId TEXT NOT NULL, attempt INTEGER NOT NULL, postedAt TEXT NOT NULL, PRIMARY KEY(taskId, attempt));" >/dev/null 2>&1; then
+      db_receipt_available=true
+      existing="$(sqlite3 "$DB" "SELECT 1 FROM manul_failure_comment_publications WHERE taskId='$safe_db_id' AND attempt=$safe_attempt LIMIT 1;" 2>/dev/null)" || {
+        echo "WARN: cannot read SQLite failure-comment receipt for task $task_id; using lock-file receipt" >&2
+        db_receipt_available=false
+        existing=""
+      }
+      if [ "$db_receipt_available" = "true" ] && [ "$existing" = "1" ]; then
+        : > "$posted_file" 2>/dev/null || true
+        echo "INFO: duplicate TASK_FAILED comment suppressed for task $task_id attempt $safe_attempt" >&2
+        flock -u 209 || true
+        exec 209>&-
+        return 0
+      fi
+    else
+      echo "WARN: cannot initialize SQLite failure-comment receipt for task $task_id; using lock-file receipt" >&2
+    fi
+  fi
+
+  if ! post_comment_to_github "$repo" "$issue" "$body" "$reply_to" "$pr_number"; then
+    echo "ERROR: GitHub rejected TASK_FAILED comment for task $task_id attempt $safe_attempt" >&2
+    flock -u 209 || true
+    exec 209>&-
+    return 1
+  fi
+
+  : > "$posted_file" 2>/dev/null || echo "WARN: could not persist failure-comment sidecar receipt for task $task_id" >&2
+  if [ "$db_receipt_available" = "true" ] && ! sqlite3 "$DB" "INSERT OR IGNORE INTO manul_failure_comment_publications(taskId, attempt, postedAt) VALUES ('$safe_db_id', $safe_attempt, datetime('now'));" >/dev/null 2>&1; then
+    echo "WARN: GitHub accepted failure comment but SQLite receipt could not be persisted for task $task_id" >&2
+  fi
+  flock -u 209 || true
+  exec 209>&-
+  return 0
+}
+
+post_feedback_comment() {
+  local repo="$1" issue="$2" body="$3" task_id="${4:-}" pr_number="${5:-}" attempt="${6:-1}"
+  if [ "$MANUL_MODE" = "human" ]; then return 0; fi
+
+  local reply_to=""
+  if [ -n "$task_id" ] && [[ "$task_id" =~ ^review:([0-9]+)$ ]]; then
+    reply_to="${BASH_REMATCH[1]}"
+  fi
+
+  if [[ "$body" == *'<!-- manul:event {"type":"TASK_FAILED"'* ]] && [ -n "$task_id" ]; then
+    post_failure_comment_once "$repo" "$issue" "$body" "$task_id" "$pr_number" "$reply_to" "$attempt"
+  else
+    post_comment_to_github "$repo" "$issue" "$body" "$reply_to" "$pr_number"
   fi
 }
 
@@ -181,12 +260,12 @@ post_comment() {
     return 1
   fi
 
-  local signature="— manul 🐈"
+  local signature="$SIGNATURE"
   local signed_body
   if [[ "$body" == *"$signature" ]]; then
     signed_body="$body"
   else
-    signed_body="${body}"$'\n\n'"${signature}"
+    signed_body="${body}"$'\n\n'"$signature"
   fi
 
   gh issue comment "$issue" --repo "$repo" --body "$signed_body" 2>/dev/null
@@ -282,6 +361,9 @@ cmd_post_failed() {
     error_exit "post-failed requires --repo and --task-id" 3
   fi
 
+  ERROR_MSG="$(manul_redact_failure_details "$ERROR_MSG")"
+  STAGE="$(manul_redact_failure_details "${STAGE:-task_execution}")"
+
   local attempt
   attempt="$(get_task_attempt "$TASK_ID")"
 
@@ -294,12 +376,12 @@ cmd_post_failed() {
   local conv_id
   conv_id="$(get_task_conversation "$TASK_ID")"
 
-  # Build event data
   local event_data
   event_data=$(jq -n \
     --arg taskId "$TASK_ID" \
     --arg conversationId "${conv_id:-}" \
     --arg error "${ERROR_MSG:0:500}" \
+    --arg stage "${STAGE:-task_execution}" \
     --argjson prNumber "${PR_NUMBER:-null}" \
     --argjson attempt "$attempt" \
     --argjson maxAttempts "$max_attempts" \
@@ -307,16 +389,15 @@ cmd_post_failed() {
       taskId: $taskId,
       conversationId: $conversationId,
       error: $error,
+      stage: $stage,
       prNumber: $prNumber,
       attempt: $attempt,
       maxAttempts: $maxAttempts
     }')
 
-  # Build event marker
   local event_marker
   event_marker="$(build_event_marker "TASK_FAILED" "$event_data")"
 
-  # Build human-readable comment
   local comment_body=""
   comment_body+="${event_marker}"
   comment_body+=$'\n\n'
@@ -328,6 +409,8 @@ cmd_post_failed() {
     comment_body+="**Conversation:** ${conv_id}"
     comment_body+=$'\n'
   fi
+  comment_body+="**Stage:** ${STAGE:-task_execution}"
+  comment_body+=$'\n'
   comment_body+="**Attempt:** ${attempt}/${max_attempts}"
   comment_body+=$'\n\n'
   if [ -n "${ERROR_MSG:-}" ]; then
@@ -345,6 +428,7 @@ cmd_post_failed() {
     --arg taskId "$TASK_ID" \
     --arg conversationId "${conv_id:-}" \
     --arg error "${ERROR_MSG:0:200}" \
+    --arg stage "${STAGE:-task_execution}" \
     --argjson prNumber "${PR_NUMBER:-null}" \
     --argjson attempt "$attempt" \
     --arg marker "$event_marker" \
@@ -352,14 +436,14 @@ cmd_post_failed() {
       taskId: $taskId,
       conversationId: $conversationId,
       status: "failed",
+      stage: $stage,
       attempt: $attempt,
       prNumber: $prNumber,
       eventMarker: $marker,
       hasError: ($error != "")
     }')
 
-  # Post the comment to GitHub
-  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "${COMMENT_ID}" "${PR_NUMBER}"
+  post_feedback_comment "$REPO" "${ISSUE_NUMBER:-$PR_NUMBER}" "$comment_body" "$COMMENT_ID" "$PR_NUMBER" "$attempt"
 
   echo "$result" | jq .
 }

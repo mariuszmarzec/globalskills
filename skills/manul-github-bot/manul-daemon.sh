@@ -54,6 +54,7 @@ fi
 # The daemon never invokes adapter scripts directly; it goes through
 # AgentExecutor / AgentExecutionController.
 source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
+source "$DAEMON_SCRIPT_DIR/manul-failure-utils.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
@@ -701,7 +702,7 @@ recover_stale_tasks() {
       changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)"
       if [ "${changed:-0}" -eq 1 ]; then
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
-        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" || true
+        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
       else
         log "WARN: stale task $comment_id was no longer owned by this recovery pass; failure comment skipped"
       fi
@@ -1514,8 +1515,9 @@ post_lifecycle_comment() {
 # Publish terminal failures through the shared feedback handler so all failure
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
 post_task_failure_feedback() {
-  local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}"
-  local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error")
+  local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}" stage="${6:-task_execution}"
+  error="$(manul_redact_failure_details "$error")"
+  local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error" --stage "$stage")
 
   if [[ "$comment_id" =~ ^review:[0-9]+$ ]] && ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
     pr_number="$issue_num"
@@ -1532,7 +1534,7 @@ post_task_failure_feedback() {
   local post_attempt
   for post_attempt in 1 2 3; do
     if MANUL_DIR="$MANUL_DIR" bash "$DAEMON_SCRIPT_DIR/manul-result-feedback.sh" "${args[@]}" >>"$LOG" 2>&1; then
-      lc_log "TASK_FAILURE_COMMENT_POSTED" "task=$comment_id repo=$repo issue=$issue_num try=$post_attempt"
+      lc_log "TASK_FAILURE_COMMENT_CONFIRMED" "task=$comment_id repo=$repo issue=$issue_num stage=$stage try=$post_attempt outcome=posted_or_deduplicated"
       return 0
     fi
     log "WARN: failed to post terminal failure comment for $comment_id (try=$post_attempt/3)"
@@ -1547,8 +1549,9 @@ post_task_failure_feedback() {
 # tasks running until the watchdog silently marks them failed.
 handle_pre_execution_failure() {
   local comment_id="$1" claim_token="$2" repo="$3" issue_num="$4"
-  local workspace_id="${5:-}" reply_to="${6:-}" reason="$7" pr_number="${8:-}" attempt_fallback="${9:-1}"
+  local workspace_id="${5:-}" reply_to="${6:-}" reason="$7" pr_number="${8:-}" attempt_fallback="${9:-1}" failure_stage="${10:-pre_execution}"
   local attempts max_attempts target_status
+  reason="$(manul_redact_failure_details "$reason")"
 
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
   [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="$attempt_fallback"
@@ -1575,7 +1578,7 @@ handle_pre_execution_failure() {
   if [ "$target_status" = "failed" ]; then
     log "dispatch: task $comment_id failed before agent startup after $attempts/$max_attempts attempts: $reason"
     lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
-    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" || true
+    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" "$failure_stage" || true
   else
     local retry_comment="⚠️ Manul could not start the task and will retry (attempt $attempts/$max_attempts). Reason: $reason"
     log "dispatch: task $comment_id requeued after pre-execution failure ($attempts/$max_attempts): $reason"
@@ -3377,7 +3380,7 @@ PROMPT_EOF
     workspace_path="$(workspace_get_path "$COMMENT_ID" "$WORKSPACE_ID")"
     if [ -z "$workspace_path" ]; then
       log "dispatch: could not get a safe path for workspace $WORKSPACE_ID owned by task $COMMENT_ID"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Workspace path is missing or failed ownership/path validation (workspace=$WORKSPACE_ID)." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Workspace path is missing or failed ownership/path validation (workspace=$WORKSPACE_ID)." "${PR_NUM_FROM_URL:-}" "$current_attempt" "workspace_path_validation"
       return 0
     fi
 
@@ -3403,7 +3406,7 @@ PROMPT_EOF
     if [ "$primary_checkout_rc" -ne 0 ] || [ -z "$WORKDIR" ]; then
       log "dispatch: failed to prepare primary checkout for $REPO in task workspace $workspace_path (rc=$primary_checkout_rc); preserving existing data"
       lc_log "WORKSPACE_PRIMARY_CHECKOUT_FAILED" "task=$COMMENT_ID repo=$REPO workspace=$WORKSPACE_ID rc=$primary_checkout_rc"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the primary checkout for $REPO (rc=$primary_checkout_rc). Existing workspace data was preserved." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the primary checkout for $REPO (rc=$primary_checkout_rc). Existing workspace data was preserved." "${PR_NUM_FROM_URL:-}" "$current_attempt" "primary_checkout_preparation"
       return 0
     fi
 

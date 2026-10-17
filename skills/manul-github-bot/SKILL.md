@@ -417,6 +417,14 @@ bash skills/manul-github-bot/test_orchestrator.sh
 
 Architecture changes should run the broad relevant test suite rather than only a single focused test.
 
+## Safe deployment of terminal-failure reporting fixes
+
+The canonical Manul scripts are deployed through runtime symlinks under `~/.manul`. Updating the canonical checkout changes the scripts those links resolve to; a running daemon may also have older function definitions loaded in memory. Deploy and restart deliberately rather than restarting automatically after a code change.
+
+Before any daemon restart, inspect `processed_comments` and the workspace lease table for every active task. In particular, preserve tasks `issue:6223712757`, `issue:6223679559`, and `issue:6223643297` when they are still active: verify each task's `status`, `workerPid`, `claimToken`, `heartbeatAt`, and `leaseExpiresAt`, along with its workspace ownership. Do not kill workers, clear leases/locks, manually change task state, or restart the daemon while an active worker depends on that state. Wait until those tasks reach a terminal state, or use a separately verified worker/lease handoff that preserves ownership before restarting. A deployment must not requeue a healthy active task just to apply comment-reporting fixes.
+
+A failure to publish a GitHub comment is a secondary observability error: retain the original terminal `failed` state, log the publication failure separately, and allow the publisher to be retried. The publication receipt suppresses overlapping duplicate comments for the same task attempt; do not delete those receipts during normal rollout.
+
 ## Troubleshooting
 
 ### Daemon not running
