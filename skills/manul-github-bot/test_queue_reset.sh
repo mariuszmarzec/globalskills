@@ -178,6 +178,7 @@ assert_contains "full reset refuses active tasks" "$FULL_BLOCKED_OUTPUT" "No tas
 assert_eq "blocked full reset preserves task rows" "6" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments;")"
 assert_eq "blocked full reset preserves message dedupe/context" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages;")"
 assert_eq "blocked full reset preserves conversations" "2" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversations;")"
+assert_eq "blocked full reset preserves conversation links" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_links;")"
 
 # Simulate an operator verifying that the old running/assigned rows no longer
 # have a live worker, then preview the destructive mode before execution.
@@ -186,6 +187,7 @@ FULL_DRY_OUTPUT="$(MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRI
 assert_contains "full reset preview lists every task row" "$FULL_DRY_OUTPUT" "all_task_rows=6"
 assert_contains "full reset preview lists conversation messages" "$FULL_DRY_OUTPUT" "conversation_messages=1"
 assert_contains "full reset preview lists conversations" "$FULL_DRY_OUTPUT" "conversations=2"
+assert_contains "full reset preview lists conversation links" "$FULL_DRY_OUTPUT" "conversation_links=1"
 assert_eq "full reset preview does not change task rows" "6" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments;")"
 
 FULL_OUTPUT="$(printf 'DELETE ALL TASKS\n' | MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" POLL_CALL_FILE="$POLL_CALL_FILE" bash "$SCRIPT_DIR/manul-queue-reset.sh" --all-tasks --execute)"
@@ -196,6 +198,7 @@ assert_eq "full reset deletes prior task history before re-poll" "1" "$(sqlite3 
 assert_eq "mock poller recreated only its discovered task" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='1001';")"
 assert_eq "full reset clears conversation message dedupe/context" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages;")"
 assert_eq "full reset clears stale conversation routing" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversations;")"
+assert_eq "full reset clears conversation links" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_links;")"
 assert_eq "full reset preserves install baseline" "2026-10-01T00:00:00Z" "$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='baseline';")"
 FULL_BACKUP_PATH="$(printf '%s\n' "$FULL_OUTPUT" | sed -n 's/^Backup: //p' | head -n1)"
 [ -n "$FULL_BACKUP_PATH" ] && [ -f "$FULL_BACKUP_PATH" ] || fail "full-reset database backup exists"
