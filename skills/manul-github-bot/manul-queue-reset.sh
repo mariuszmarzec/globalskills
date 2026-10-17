@@ -211,7 +211,7 @@ flock -w "$POLL_LOCK_WAIT_SECONDS" 200 || fail "poll.sh still holds the poll loc
 
 BACKUP_SCOPE="replayable"
 [ "$SCOPE" = "all-tasks" ] && BACKUP_SCOPE="all-tasks"
-BACKUP_FILE="$MANUL_STATE_DIR/backups/manul-queue-reset-${BACKUP_SCOPE}-$(date -u +%Y%m%dT%H%M%SZ)-$.db"
+BACKUP_FILE="$MANUL_STATE_DIR/backups/manul-queue-reset-${BACKUP_SCOPE}-$(date -u +%Y%m%dT%H%M%SZ)-${BASHPID}.db"
 backup_database() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$DB" "$BACKUP_FILE" <<'PY'
