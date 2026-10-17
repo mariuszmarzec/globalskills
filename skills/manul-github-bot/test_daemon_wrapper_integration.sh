@@ -172,7 +172,7 @@ if [[ "$1" == "api" ]]; then
                         json_output='[{"id":1017,"body":"✅ Manul completed the task successfully.","in_reply_to_id":null}]'
                         ;;
                     59)
-                        json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\\n\\n— manul 🐈","in_reply_to_id":null}]'
+                        json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\n\n— manul 🐈","in_reply_to_id":null}]'
                         ;;
                     55)
                         # Test O: existing PR is verified but the task branch was never pushed.
