@@ -1701,10 +1701,10 @@ verify_nonempty_result_comment() {
   marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
     endpoint="repos/$repo/pulls/$url_issue_num/comments"
-    result_filter='.[] | .body // ""'
+    result_filter='.[] | .body // "" | gsub("\\n"; " ")'
   else
     endpoint="repos/$repo/issues/$url_issue_num/comments"
-    result_filter='.[] | select(.in_reply_to_id == null) | .body // ""'
+    result_filter='.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\\n"; " ")'
   fi
   tmpdir="$(mktemp -d)" || return 1
   bodies_file="$tmpdir/result-bodies.txt"
