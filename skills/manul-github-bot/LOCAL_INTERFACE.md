@@ -175,13 +175,13 @@ Preview which unfinished, externally-replayable tasks can be rebuilt:
 manul-queue-reset.sh --dry-run
 ```
 
-Execute the reset only when the preview is understood. The command asks for the exact confirmation `RESET QUEUE`, creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records and their trigger-message dedupe rows, then invokes `poll.sh` once.
+Execute the reset only when the preview is understood. The command asks for the exact confirmation `RESET QUEUE`, waits up to 300 seconds for a running poll to finish (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records and their trigger-message dedupe rows, then invokes `poll.sh` once. If the lock remains held at timeout, it exits without changing queue state.
 
 ```bash
 manul-queue-reset.sh --execute
 ```
 
-The command preserves live `running` tasks, `done`/`completed` history, `blocked_user` tasks, manually submitted CLI tasks, conversation/workspace mappings, and the install baseline. It refuses to run while another poll holds the poll lock. A normal daemon poll cycle may still run again later. The reset does not erase all of Manul's state and is intentionally limited to items that the configured providers can rediscover.
+The command preserves live `running` tasks, `done`/`completed` history, `blocked_user` tasks, manually submitted CLI tasks, conversation/workspace mappings, and the install baseline. It waits for the current poll to release the lock before touching queue state. A normal daemon poll cycle may still run again later. The reset does not erase all of Manul's state and is intentionally limited to items that the configured providers can rediscover.
 
 ## Manual task recovery
 

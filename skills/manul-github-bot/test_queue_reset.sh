@@ -106,4 +106,32 @@ BACKUP_PATH="$(printf '%s\n' "$EXEC_OUTPUT" | sed -n 's/^Backup: //p' | head -n1
 [ -n "$BACKUP_PATH" ] && [ -f "$BACKUP_PATH" ] || fail "database backup exists"
 assert_eq "database backup passes integrity check" "ok" "$(sqlite3 "$BACKUP_PATH" "PRAGMA integrity_check;")"
 
+# A live poll lock should be waited out, not treated as a stale file to delete.
+sqlite3 "$DB" <<'SQL'
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
+VALUES ('1007','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1007','failed','1007');
+INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
+VALUES ('m7','conv-9','1007','owner/repo',9,'user','/manul retry','https://github.com/owner/repo/issues/9#issuecomment-1007','2026-10-17T10:07:00Z','comment');
+SQL
+
+LOCK_READY="$TEST_ROOT/poll-lock-ready"
+(
+  exec 200>"$MANUL_DIR/state/locks/poll.flock"
+  flock -n 200
+  touch "$LOCK_READY"
+  sleep 2
+) &
+LOCK_PID=$!
+for _ in {1..50}; do
+  [ -f "$LOCK_READY" ] && break
+  sleep 0.1
+done
+[ -f "$LOCK_READY" ] || fail "test poll-lock holder acquired the flock"
+WAIT_OUTPUT="$(printf 'RESET QUEUE\n' | MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" POLL_CALL_FILE="$POLL_CALL_FILE" MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS=5 bash "$SCRIPT_DIR/manul-queue-reset.sh" --execute)"
+wait "$LOCK_PID"
+assert_contains "execute waits for a busy poll lock" "$WAIT_OUTPUT" "Waiting up to 5s for the current poll to finish"
+assert_contains "execute proceeds after poll lock is released" "$WAIT_OUTPUT" "Reset/re-poll complete"
+assert_eq "poll invoked again after lock release" "2" "$(wc -l < "$POLL_CALL_FILE" | tr -d ' ')"
+assert_eq "reset removes the replayable task after waiting for the poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1007';")"
+
 echo "All queue-reset tests passed."
