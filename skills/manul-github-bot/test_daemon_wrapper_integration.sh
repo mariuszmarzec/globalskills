@@ -171,6 +171,9 @@ if [[ "$1" == "api" ]]; then
                     58)
                         json_output='[{"id":1017,"body":"✅ Manul completed the task successfully.","in_reply_to_id":null}]'
                         ;;
+                    59)
+                        json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\\n\\n— manul 🐈","in_reply_to_id":null}]'
+                        ;;
                     55)
                         # Test O: existing PR is verified but the task branch was never pushed.
                         json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
@@ -858,6 +861,20 @@ COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_A
 evaluate_task_completion "test/repo" "57" "COMMENT_R" "COMMENT_R" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_R" "" "$INITIAL_HEAD_R" "master" "master" "" "" "" "" "comment_only"
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then echo "FAIL: absent report must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test R: PASSED"
+
+echo "=== Test T: empty report result is rejected ==="
+WORKDIR_T="$TEST_TMPDIR/workdir-t"; mkdir -p "$WORKDIR_T"
+git -C "$WORKDIR_T" init -q; git -C "$WORKDIR_T" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_T" config user.email test@example.com; git -C "$WORKDIR_T" config user.name test
+printf "baseline\\n" >"$WORKDIR_T/README.md"; git -C "$WORKDIR_T" add README.md; git -C "$WORKDIR_T" commit -qm initial
+INITIAL_HEAD_T="$(git -C "$WORKDIR_T" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_T';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_T','test/repo',59,'https://github.com/test/repo/issues/59#issuecomment-1018','user','test','diagnostics only; do not change code','running',1,$,'VERIFY');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutT.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
+evaluate_task_completion "test/repo" "59" "COMMENT_T" "COMMENT_T" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_T" "" "$INITIAL_HEAD_T" "master" "master" "" "" "" "" "comment_only"
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_EMPTY" ]; then echo "FAIL: empty report must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+echo "[OK] Test T: PASSED"
 
 echo "=== Test S: implementation without PR is still rejected ==="
 WORKDIR_S="$TEST_TMPDIR/workdir-s"; mkdir -p "$WORKDIR_S"
