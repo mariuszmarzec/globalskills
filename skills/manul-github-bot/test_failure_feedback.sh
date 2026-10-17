@@ -96,7 +96,7 @@ assert_eq() {
 }
 
 count_for_task() {
-  jq -s --arg task "$1" '[.[] | select((.body // "") as $body | ($body | contains("\\"type\\":\\"TASK_FAILED\\"") and contains("\\"taskId\\":\\"" + $task + "\\"")))] | length' "$GH_COMMENTS_JSONL"
+  jq -s --arg task "$1" '[.[] | select(((.body // "") | contains("\"type\":\"TASK_FAILED\"")) and ((.body // "") | contains("\"taskId\":\"" + $task + "\"")))] | length' "$GH_COMMENTS_JSONL"
 }
 
 insert_task() {
@@ -114,7 +114,7 @@ MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/manul-result-feedback.sh" post
   --repo test/repo --issue 71 --comment-id early-failure --task-id early-failure \
   --stage workspace_path_validation --error "$sensitive_error" >/dev/null
 assert_eq 1 "$(count_for_task early-failure)" "early workspace failure comment published once"
-body="$(jq -s -r '[.[] | select((.body // "") | contains("\\"taskId\\":\\"early-failure\\""))][0].body' "$GH_COMMENTS_JSONL")"
+body="$(jq -s -r '[.[] | select((.body // "") | contains("\"taskId\":\"early-failure\""))][0].body' "$GH_COMMENTS_JSONL")"
 grep -q '\*\*Task:\*\* early-failure' <<< "$body" || { echo "FAIL: comment missing task id" >&2; exit 1; }
 grep -q '\*\*Stage:\*\* workspace_path_validation' <<< "$body" || { echo "FAIL: comment missing failure stage" >&2; exit 1; }
 grep -q '\[REDACTED\]' <<< "$body" || { echo "FAIL: comment does not show redaction" >&2; exit 1; }
@@ -144,7 +144,7 @@ insert_task "health-stuck" 73 running 1 "datetime('now','-30 seconds')"
 MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/task-health-check.sh" >"$TEST_DIR/health-ok.log" 2>&1
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='health-stuck';")" "health check persists terminal failure"
 assert_eq 1 "$(count_for_task health-stuck)" "health-check terminal failure comment published"
-health_body="$(jq -s -r '[.[] | select((.body // "") | contains("\\"taskId\\":\\"health-stuck\\""))][0].body' "$GH_COMMENTS_JSONL")"
+health_body="$(jq -s -r '[.[] | select((.body // "") | contains("\"taskId\":\"health-stuck\""))][0].body' "$GH_COMMENTS_JSONL")"
 grep -q '\*\*Stage:\*\* task_health_check' <<< "$health_body" || { echo "FAIL: health-check comment missing stage" >&2; exit 1; }
 
 insert_task "health-api-failure" 74 running 1 "datetime('now','-30 seconds')"
