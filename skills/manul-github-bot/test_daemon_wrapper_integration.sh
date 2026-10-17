@@ -297,7 +297,10 @@ FINAL_COMMENT=""
 FAIL_REASON=""
 evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master" "" "" "" "" "implementation"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
-    echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'"
+    echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'" >&2
+    echo "  failure_code=${FAILURE_CODE:-<unset>} reason=${FAIL_REASON:-<empty>}" >&2
+    echo "  daemon log:" >&2
+    tail -n 60 "$LOG_FILE" >&2 || true
     exit 1
 fi
 if [ -z "$FINAL_COMMENT" ]; then
