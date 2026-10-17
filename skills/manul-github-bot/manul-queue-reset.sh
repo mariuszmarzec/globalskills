@@ -93,7 +93,16 @@ if ! has_column processed_comments taskSourceType; then
   )"
 fi
 
-CANDIDATE_PREDICATE="status IN ('queued','failed','stale') AND (($SOURCE_PREDICATE) OR $GITHUB_COMMENT_PREDICATE)"
+WORKER_PREDICATE="1"
+WORKER_PRESERVE_PREDICATE="0"
+if has_column processed_comments workerPid; then
+  # Fail closed for any row that still carries worker ownership metadata,
+  # including stale/queued rows left behind by a crashed or lagging worker.
+  WORKER_PREDICATE="COALESCE(workerPid,0)=0"
+  WORKER_PRESERVE_PREDICATE="COALESCE(workerPid,0)<>0"
+fi
+
+CANDIDATE_PREDICATE="status IN ('queued','failed','stale') AND $WORKER_PREDICATE AND (($SOURCE_PREDICATE) OR $GITHUB_COMMENT_PREDICATE)"
 
 show_counts() {
   echo "$1"
@@ -111,8 +120,12 @@ show_counts() {
     FROM processed_comments WHERE status IN ('done','completed');
     SELECT '  blocked_user_preserved=' || COUNT(*)
     FROM processed_comments WHERE status='blocked_user';
+    SELECT '  worker_assigned_preserved=' || COUNT(*)
+    FROM processed_comments
+    WHERE status IN ('queued','failed','stale') AND $WORKER_PRESERVE_PREDICATE;
     SELECT '  manual_or_unreplayable_preserved=' || COUNT(*)
     FROM processed_comments WHERE status IN ('queued','failed','stale')
+      AND $WORKER_PREDICATE
       AND NOT ($SOURCE_PREDICATE OR $GITHUB_COMMENT_PREDICATE);
   " 2>/dev/null
 }
@@ -203,7 +216,7 @@ exec 200>&-
 
 echo "Replayable tasks found: $CANDIDATE_COUNT"
 echo "Removed replayable tasks: $DELETED_TASKS"
-echo "Preserved running workers, completed tasks, blocked-user tasks, manual submissions, conversations, workspace state, and baseline."
+echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
 echo "Running the configured poller now..."
 
 POLL_OUTPUT=""
