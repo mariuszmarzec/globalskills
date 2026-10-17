@@ -813,24 +813,6 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
 
-# ─── SUMMARY ──────────────────────────────────────────────────────────────────
-echo ""
-echo "=== INTEGRATION TEST SUMMARY ==="
-echo "[OK] Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true"
-echo "[OK] Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false"
-echo "[OK] Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false"
-echo "[OK] Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false"
-echo "[OK] Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
-echo "[OK] Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
-echo "[OK] Test F2: executor summary is preserved as FAIL_REASON"
-echo "[OK] Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> COMPLETION_SUCCESS=true"
-echo "[OK] Test H: autoCreatePr disabled + no PR -> COMPLETION_SUCCESS=false"
-echo "[OK] Test I: agent left on default branch -> verify_required_pr FAILS (regression)"
-echo "[OK] Test J: agent on real task branch -> verify_required_pr ACCEPTS"
-echo "[OK] All tests call real evaluate_task_completion() from manul-daemon.sh"
-echo "=== ALL INTEGRATION TESTS PASSED ==="
-
- 
 # Tests Q/R/S: comment-only report success/failure and implementation guard.
 echo ""
 echo "=== Test Q: comment-only diagnostic delivery succeeds without PR ==="
@@ -874,3 +856,21 @@ COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_A
 evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "implementation"
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test S: PASSED"
+
+
+# ─── SUMMARY ──────────────────────────────────────────────────────────────────
+echo ""
+echo "=== INTEGRATION TEST SUMMARY ==="
+echo "[OK] Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true"
+echo "[OK] Test B: rc=0 + TASK_DONE + missing result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test C: rc=0 + TASK_DONE + unrelated result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test D: rc=0 + no TASK_DONE + valid result -> COMPLETION_SUCCESS=false"
+echo "[OK] Test E: rc=42 + TASK_FAILED -> COMPLETION_SUCCESS=false"
+echo "[OK] Test F: non-zero rc + no TASK_DONE -> COMPLETION_SUCCESS=false"
+echo "[OK] Test F2: executor summary is preserved as FAIL_REASON"
+echo "[OK] Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> COMPLETION_SUCCESS=true"
+echo "[OK] Test H: autoCreatePr disabled + no PR -> COMPLETION_SUCCESS=false"
+echo "[OK] Test I: agent left on default branch -> verify_required_pr FAILS (regression)"
+echo "[OK] Test J: agent on real task branch -> verify_required_pr ACCEPTS"
+echo "[OK] All tests call real evaluate_task_completion() from manul-daemon.sh"
+echo "=== ALL INTEGRATION TESTS PASSED ==="
