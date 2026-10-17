@@ -167,6 +167,22 @@ Its state is persisted in the Manul SQLite database.
 
 This is a higher-level state-machine wrapper around the local Manul task interface. Its own orchestration state is kept in `orchestrator.db` and is documented separately in `ORCHESTRATOR.md`.
 
+## Reset and rebuild the pending queue
+
+Preview which unfinished, externally-replayable tasks can be rebuilt:
+
+```bash
+manul-queue-reset.sh --dry-run
+```
+
+Execute the reset only when the preview is understood. The command asks for the exact confirmation `RESET QUEUE`, creates a verified SQLite backup under `~/.manul/state/backups/`, removes replayable `queued`, `failed`, and `stale` task records and their trigger-message dedupe rows, then invokes `poll.sh` once.
+
+```bash
+manul-queue-reset.sh --execute
+```
+
+The command preserves live `running` tasks, `done`/`completed` history, `blocked_user` tasks, manually submitted CLI tasks, conversation/workspace mappings, and the install baseline. It refuses to run while another poll holds the poll lock. A normal daemon poll cycle may still run again later. The reset does not erase all of Manul's state and is intentionally limited to items that the configured providers can rediscover.
+
 ## Manual task recovery
 
 ### `task-recovery.sh`
