@@ -572,7 +572,7 @@ echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "60" "review:PR_REVIEW" "review:PR_REVIEW" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_PR" "" "$INITIAL_HEAD_PR" "feature/44-manul-e2e-fixture" "master"
+evaluate_task_completion "test/repo" "60" "review:PR_REVIEW" "review:PR_REVIEW" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_PR" "" "$INITIAL_HEAD_PR" "feature/44-manul-e2e-fixture" "master" "" "" "feature/44-manul-e2e-fixture"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: PR-tied task on expected head branch was rejected: $FAIL_REASON"
     exit 1
