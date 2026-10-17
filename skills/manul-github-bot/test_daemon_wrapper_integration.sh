@@ -632,7 +632,7 @@ git -C "$WORKDIR_K" add README.md
 git -C "$WORKDIR_K" commit -qm initial
 INITIAL_HEAD_K="$(git -C "$WORKDIR_K" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','running',1,$,'REVIEW_FIX');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutK.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
