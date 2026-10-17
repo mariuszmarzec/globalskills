@@ -1276,6 +1276,7 @@ process_repo_body() {
             else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
             end)
        elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "verify" then {action: "VERIFY", prompt: ($rest | ltrimstr("verify") | sub("^[ \\t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
        elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
@@ -1358,6 +1359,7 @@ process_repo_body() {
             else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
             end)
        elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "verify" then {action: "VERIFY", prompt: ($rest | ltrimstr("verify") | sub("^[ \\t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
        elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
@@ -1476,6 +1478,7 @@ process_repo_body() {
             else {action: "IMPLEMENT", prompt: ($run_rest | sub("^[ \\t]+"; "")), agent: ""}
             end)
        elif $tok == "review-fix" then {action: "REVIEW_FIX", prompt: ($rest | ltrimstr("review-fix") | sub("^[ \\t]+"; ""))}
+       elif $tok == "verify" then {action: "VERIFY", prompt: ($rest | ltrimstr("verify") | sub("^[ \\t]+"; ""))}
        elif $tok == "fix-impl" then {action: "IMPLEMENT", prompt: ($rest | ltrimstr("fix-impl") | sub("^[ \\t]+"; ""))}
        elif $tok == "continue" then {action: "CONTINUE", prompt: ($rest | ltrimstr("continue") | sub("^[ \\t]+"; ""))}
        elif $agent != "" then {action: "IMPLEMENT", prompt: $prompt_no_agent, agent: $agent}
