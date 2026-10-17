@@ -1689,23 +1689,34 @@ verify_result_comment() {
   return 1
 }
 
-# Verify the task-correlated result contains user-facing content, not just marker/signature.
+# Verify a task-correlated result comment has meaningful user-facing content.
+# The existing marker verifier has already established exact task/attempt correlation;
+# reuse its parsed body instead of making a second, differently-shaped API request.
 verify_nonempty_result_comment() {
-  local repo="$1" comment_id="$2" attempt="$3"
-  local comment_url url_issue_num endpoint marker tmpdir comments_file count body clean
-  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")';" 2>/dev/null)"
+  local repo="$1" comment_id="$2" safe_comment_id="$3" attempt="$4"
+  local comment_url url_issue_num endpoint marker tmpdir bodies_file body clean result_filter
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$safe_comment_id")';" 2>/dev/null)"
   [ -n "$comment_url" ] || return 1
   url_issue_num="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || true)"
   [ -n "$url_issue_num" ] || return 1
   marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
-  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then endpoint="repos/$repo/pulls/$url_issue_num/comments"; else endpoint="repos/$repo/issues/$url_issue_num/comments"; fi
-  tmpdir="$(mktemp -d)" || return 1; comments_file="$tmpdir/comments.json"
-  if ! timeout "${GH_API_TIMEOUT}" gh api "$endpoint" --paginate >"$comments_file" 2>>"$LOG"; then rm -rf "$tmpdir"; return 1; fi
-  count="$(jq --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))] | length' "$comments_file" 2>/dev/null || echo 0)"
-  if [ "$count" != "1" ]; then rm -rf "$tmpdir"; return 1; fi
-  body="$(jq -r --arg marker "$marker" '.[] | select((.body // "") | contains($marker)) | .body // ""' "$comments_file" 2>/dev/null)"
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    endpoint="repos/$repo/pulls/$url_issue_num/comments"
+    result_filter='.[] | .body // ""'
+  else
+    endpoint="repos/$repo/issues/$url_issue_num/comments"
+    result_filter='.[] | select(.in_reply_to_id == null) | .body // ""'
+  fi
+  tmpdir="$(mktemp -d)" || return 1
+  bodies_file="$tmpdir/result-bodies.txt"
+  if ! timeout "${GH_API_TIMEOUT}" gh api "$endpoint" --paginate --jq "$result_filter" >"$bodies_file" 2>>"$LOG"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  body="$(grep -F "$marker" "$bodies_file" | head -n 1 || true)"
   clean="$(printf '%s\n' "$body" | sed "s|$marker||g; s/— manul 🐈//g" | sed '/^[[:space:]]*$/d')"
-  rm -rf "$tmpdir"; [ -n "$clean" ]
+  rm -rf "$tmpdir"
+  [ -n "$clean" ]
 }
 
 # Check whether a concrete GitHub PR exists for the given branch against base.
