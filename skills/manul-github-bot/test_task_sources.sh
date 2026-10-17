@@ -107,6 +107,12 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
 );"
 verify_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#13")')"
 queue_normalized_source_task "$verify_task"
+if [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")" -eq 0 ]; then
+  echo "DEBUG: source task was not inserted; queue log follows:" >&2
+  cat "$LOG" >&2 2>/dev/null || true
+  echo "DEBUG: normalized source payload:" >&2
+  printf '%s\n' "$verify_task" >&2
+fi
 actual_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 actual_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "VERIFY action persists through source queueing" "VERIFY" "$actual_action"
