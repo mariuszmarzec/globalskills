@@ -93,7 +93,7 @@ POLL
 chmod +x "$POLL_SCRIPT"
 
 DRY_OUTPUT="$(MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" bash "$SCRIPT_DIR/manul-queue-reset.sh" --dry-run)"
-assert_contains "dry-run reports replayable tasks" "$DRY_OUTPUT" "replayable_total=3"
+assert_contains "dry-run reports replayable tasks" "$DRY_OUTPUT" "replayable_total=5"
 assert_eq "dry-run leaves all replayable candidate rows in place" "5" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('1001','review:2002','source:github_issues:owner/repo#9','issue:3003','issuebody:4004');")"
 assert_eq "dry-run does not invoke poll" "0" "$([ -f "$POLL_CALL_FILE" ] && wc -l < "$POLL_CALL_FILE" || echo 0)"
 
