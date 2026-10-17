@@ -2500,7 +2500,7 @@ evaluate_task_completion() {
   # task is rejected for violating the exactly-one-result-comment contract.
 
   # VERIFY is report-only; only its explicit delivery mode selects this path.
-  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" = "comment_only" ]; then
+  if [ "$DELIVERY_MODE" = "comment_only" ] && [ "$rc" -eq 0 ] && [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
     local report_repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then report_repo_changed="true"; fi
     if [ "$report_repo_changed" = "true" ]; then
