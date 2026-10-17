@@ -2437,7 +2437,7 @@ evaluate_task_completion() {
   local EXECUTION_SUMMARY="${15:-}"
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
-  local DELIVERY_MODE="${18:-implementation}"
+  local DELIVERY_MODE="${19:-implementation}"
 
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -3716,7 +3716,7 @@ PROMPT_APPEND
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "$delivery_mode"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
