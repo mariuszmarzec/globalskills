@@ -63,6 +63,8 @@ INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,statu
 VALUES ('1004','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1004','completed');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status)
 VALUES ('1005','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1005','blocked_user');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,workerPid)
+VALUES ('1006','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1006','stale',99999999);
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status)
 VALUES ('cli-task','owner/repo',9,'https://github.com/owner/repo/issues/9','queued');
 INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
@@ -96,6 +98,7 @@ assert_eq "unrelated conversation context survives" "1" "$(sqlite3 "$DB" "SELECT
 assert_eq "running task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1003' AND status='running';")"
 assert_eq "completed task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1004' AND status='completed';")"
 assert_eq "blocked-user task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1005' AND status='blocked_user';")"
+assert_eq "stale task carrying worker ownership is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1006' AND status='stale' AND workerPid=99999999;")"
 assert_eq "manually submitted queued task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='cli-task' AND status='queued';")"
 assert_eq "source-backed task is removed for provider re-poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='source:github_issues:owner/repo#9';")"
 
