@@ -873,7 +873,15 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,c
 STDOUT_FILE="$TEST_TMPDIR/stdoutT.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
 evaluate_task_completion "test/repo" "59" "COMMENT_T" "COMMENT_T" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_T" "" "$INITIAL_HEAD_T" "master" "master" "" "" "" "" "comment_only"
-if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_EMPTY" ]; then echo "FAIL: empty report must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_EMPTY" ]; then
+  echo "FAIL: empty report must fail ($FAILURE_CODE $FAIL_REASON)" >&2
+  echo "DEBUG: result endpoint fixture:" >&2
+  gh api repos/test/repo/issues/59/comments --paginate --jq '.[] | .body // ""' >&2 || true
+  echo "DEBUG: task row: $(sqlite3 "$DB" "SELECT commentUrl || ':' || action || ':' || status FROM processed_comments WHERE commentId='COMMENT_T';" 2>/dev/null)" >&2
+  echo "DEBUG: daemon log:" >&2
+  tail -n 50 "$LOG_FILE" >&2 || true
+  exit 1
+fi
 echo "[OK] Test T: PASSED"
 
 echo "=== Test S: implementation without PR is still rejected ==="
