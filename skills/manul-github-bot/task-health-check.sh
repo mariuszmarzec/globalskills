@@ -13,9 +13,7 @@
 #
 # History:
 #   2026-08-25 — Initial version with health monitoring
-# Preserve caller-provided PATH precedence (for controlled test doubles and custom gh
-# installs), while still appending the standard locations required by cron.
-export PATH="${PATH:-}:/usr/local/bin:/usr/bin:/bin"
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
