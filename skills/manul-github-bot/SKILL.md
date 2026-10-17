@@ -238,11 +238,29 @@ Lifecycle comments are separate daemon responsibilities.
 
 ## Queue reset and source replay
 
-Use `manul-queue-reset.sh --dry-run` to inspect replayable unfinished tasks. The normal `manul-queue-reset.sh --execute` mode asks for `RESET QUEUE`, creates a verified SQLite backup, removes replayable queued/failed/stale tasks and their matching trigger-message dedupe rows, and calls `poll.sh` once. It preserves running/completed/blocked/manual task rows, conversation mappings, workspace state, and the install baseline.
+Use `manul-queue-reset.sh --dry-run` to inspect replayable unfinished tasks. The normal `manul-queue-reset.sh --execute` mode asks for `RESET QUEUE`, creates a verified SQLite backup, removes replayable `queued`, `failed`, and `stale` task records plus their trigger-message dedupe rows, and invokes `poll.sh` once. It preserves running/completed/blocked/manual task rows, conversation mappings, workspace state, and the install baseline.
 
-For a full task-state rebuild, preview with `manul-queue-reset.sh --all-tasks --dry-run`. The destructive `manul-queue-reset.sh --all-tasks --execute` mode requires the exact confirmation `DELETE ALL TASKS`, waits up to 300 seconds for a current poll (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), and creates a verified SQLite backup before changes. It deletes **all** `processed_comments` task rows (queued, running, completed, failed, blocked-user and manual tasks), plus all `conversation_messages` dedupe/context rows, `conversation_links`, and `conversations` routing rows, then calls `poll.sh` once. It refuses to delete anything while a task is running or any task row retains worker ownership metadata. Configuration, install baseline, workspace state, logs, and unrelated runtime state are preserved. The full reset removes completed task history from the live DB, but it remains in the retained backup.
+For a full reset, preview the scope first:
 
-Polling still obeys the configured sources, filters and existing install baseline. This is a rediscovery from configured sources, not a reset of the baseline or a guarantee that every historical GitHub item will be eligible again.
+```bash
+manul-queue-reset.sh --all-tasks --dry-run
+```
+
+Execute the full reset with:
+
+```bash
+manul-queue-reset.sh --all-tasks --execute
+```
+
+This mode requires the exact confirmation `DELETE ALL TASKS`. The script itself stops Manul automation and its watchdog, terminates recorded detached task executors after verifying their process identity, waits for polling and task-dispatch locks, creates a verified SQLite backup, then deletes all `processed_comments`, `conversation_messages`, `conversation_links`, and `conversations` rows. Stale `running` status or worker-ownership metadata does not block the wipe after automation has stopped and locks have been acquired.
+
+**The full reset does not run `poll.sh` afterward.** It leaves the task and conversation tables empty and keeps Manul automation stopped, so the queue does not immediately refill. Poll once after the wipe only when explicitly requested:
+
+```bash
+manul-queue-reset.sh --all-tasks --execute --poll-after
+```
+
+The optional poll runs once without restarting the daemon. Both modes preserve the install baseline, configuration, workspace state, logs, and unrelated runtime state. Any poll still obeys the existing baseline and configured source filters. The backup retains the pre-reset task history.
 
 ## State and recovery
 
