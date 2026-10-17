@@ -2535,7 +2535,7 @@ evaluate_task_completion() {
   fi
 
 
-      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
+
     fi
   fi
   
