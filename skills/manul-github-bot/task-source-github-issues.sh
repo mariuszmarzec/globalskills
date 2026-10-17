@@ -40,7 +40,8 @@ task_source_github_issues_poll() {
           | (.body | split("\n")) as $lines
           | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "([ \\t]|$)"))][0]) as $idx
           | ($lines[$idx] | sub("^[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "[ \\t]*"; "")) as $first_prompt
-          | (if $first_prompt == "" then ($lines[$idx+1:] | join("\n")) else ($first_prompt + "\n" + ($lines[$idx+1:] | join("\n"))) end) as $raw_prompt
+          | ($lines[$idx+1:] | join("\n")) as $tail_prompt
+          | (if $first_prompt == "" then $tail_prompt elif $tail_prompt == "" then $first_prompt else ($first_prompt + "\n" + $tail_prompt) end) as $raw_prompt
           | ($raw_prompt | sub("^[ \t\r\n]+"; "")) as $command_prompt
           | (if ($command_prompt | test("^verify([ \t\r\n]|$)")) then "VERIFY"
              elif ($command_prompt | test("^review-fix([ \t\r\n]|$)")) then "REVIEW_FIX"
