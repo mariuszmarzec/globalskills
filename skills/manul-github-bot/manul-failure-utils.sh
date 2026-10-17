@@ -9,7 +9,7 @@ manul_redact_failure_details() {
     -e 's/((password|passwd|access[_-]?token|token|secret|api[_-]?key|client[_-]?secret)[[:space:]]*[:=][[:space:]]*)[^[:space:],;&]+/\1[REDACTED]/Ig' \
     -e 's/(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED_GITHUB_TOKEN]/g' \
     -e 's/(sk-[A-Za-z0-9_-]{20,})/[REDACTED_API_KEY]/g' \
-    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+\/-=]{8,}/\1[REDACTED]/Ig' \
+    -e 's/(Bearer[[:space:]]+)[-A-Za-z0-9._~+\/=]{8,}/\1[REDACTED]/Ig' \
     -e 's#(https?://[^:/@[:space:]]+:)[^@[:space:]]+@#\1[REDACTED]@#g')"
   printf '%s' "$value"
 }
