@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# manul-queue-reset.sh — Replay recoverable Manul queue items from configured sources.
+# manul-queue-reset.sh — Reset Manul task state and poll configured sources.
 #
-# Default mode is a read-only preview. Execution removes only unfinished tasks
-# that polling can recreate, clears the matching trigger-message dedupe records,
-# makes a consistent SQLite backup, and runs poll.sh once.
-# Running/completed/user-blocked tasks and manually submitted CLI tasks survive.
+# Default mode previews replayable unfinished tasks. --all-tasks offers an
+# explicit full task-state reset after a verified SQLite backup. Both modes
+# wait for an existing poll and invoke poll.sh after making their changes.
 
 set -euo pipefail
 
@@ -14,20 +13,27 @@ source "$SCRIPT_DIR/manul-paths.sh"
 DB="${DB:-$MANUL_DB}"
 POLL_SCRIPT="${MANUL_POLL_SCRIPT:-$MANUL_DIR/poll.sh}"
 MODE="dry-run"
+SCOPE="replayable"
 POLL_LOCK_WAIT_SECONDS="${MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS:-300}"
 
 usage() {
   cat <<'USAGE'
-Usage: manul-queue-reset.sh [--dry-run|--execute]
+Usage: manul-queue-reset.sh [--dry-run|--execute] [--all-tasks]
 
-  --dry-run   Preview replayable queued/failed/stale tasks (default)
-  --execute   Require confirmation, wait up to the configured lock timeout,
-              back up the DB, reset replayable tasks, then run poll.sh
+  --dry-run    Preview replayable queued/failed/stale tasks (default)
+  --execute    Require confirmation, wait for polling, back up the DB,
+               apply the selected reset and run poll.sh once
+  --all-tasks  With --dry-run, preview a FULL task-state reset. With --execute,
+               delete all task rows (including completed/blocked/manual rows)
+               and clear conversation-message dedupe/context and conversation
+               routing rows so configured sources can be discovered again.
 
   MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS  Max seconds to wait for a current poll (default: 300)
 
-The install baseline and task history are not reset. Running/completed/
-blocked-user tasks and manually submitted CLI tasks are preserved.
+The full reset refuses to modify data while any task is running or still has
+worker ownership metadata. The verified backup is retained. The configured
+source baseline, config, logs, workspace state and unrelated runtime state are
+preserved. The poller still obeys the configured baseline and source filters.
 USAGE
 }
 
@@ -35,6 +41,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) MODE="dry-run"; shift ;;
     --execute) MODE="execute"; shift ;;
+    --all-tasks) SCOPE="all-tasks"; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -119,11 +126,16 @@ fi
 
 WORKER_PREDICATE="1"
 WORKER_PRESERVE_PREDICATE="0"
+ACTIVE_TASK_PREDICATE="status='running'"
 if has_column processed_comments workerPid; then
   # Fail closed for any row that still carries worker ownership metadata,
   # including stale/queued rows left behind by a crashed or lagging worker.
   WORKER_PREDICATE="COALESCE(workerPid,0)=0"
   WORKER_PRESERVE_PREDICATE="COALESCE(workerPid,0)<>0"
+  ACTIVE_TASK_PREDICATE="$ACTIVE_TASK_PREDICATE OR COALESCE(workerPid,0)<>0"
+fi
+if has_column processed_comments claimToken; then
+  ACTIVE_TASK_PREDICATE="$ACTIVE_TASK_PREDICATE OR COALESCE(claimToken,'')<>''"
 fi
 
 CANDIDATE_PREDICATE="status IN ('queued','failed','stale') AND $WORKER_PREDICATE AND (($SOURCE_PREDICATE) OR $GITHUB_COMMENT_PREDICATE)"
@@ -154,14 +166,42 @@ show_counts() {
   " 2>/dev/null
 }
 
+show_full_counts() {
+  echo "Manul FULL task reset preview (read-only):"
+  sqlite3 "$DB" "
+    SELECT '  all_task_rows=' || COUNT(*) FROM processed_comments;
+    SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+    SELECT '  worker_owned_rows=' || COUNT(*) FROM processed_comments
+      WHERE $ACTIVE_TASK_PREDICATE;
+  " 2>/dev/null
+  if has_table conversation_messages; then
+    echo "  conversation_messages=$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages;" 2>/dev/null)"
+  fi
+  if has_table conversations; then
+    echo "  conversations=$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversations;" 2>/dev/null)"
+  fi
+  echo "  install_baseline=preserved"
+  echo "  workspace_state=preserved"
+}
+
 if [ "$MODE" = "dry-run" ]; then
-  show_counts "Manul queue reset preview (read-only):"
-  echo "No changes made. Run with --execute to rebuild the replayable queue."
+  if [ "$SCOPE" = "all-tasks" ]; then
+    show_full_counts
+    echo "No changes made. Run with --all-tasks --execute to clear all task state and re-poll configured sources."
+  else
+    show_counts "Manul queue reset preview (read-only):"
+    echo "No changes made. Run with --execute to rebuild the replayable queue."
+  fi
   exit 0
 fi
 
-read -r -p "This replays unfinished externally-sourced tasks. Type RESET QUEUE to continue: " CONFIRMATION
-[ "$CONFIRMATION" = "RESET QUEUE" ] || fail "confirmation did not match; no changes made"
+if [ "$SCOPE" = "all-tasks" ]; then
+  read -r -p "This deletes ALL task rows and conversation routing/dedupe state. Type DELETE ALL TASKS to continue: " CONFIRMATION
+  [ "$CONFIRMATION" = "DELETE ALL TASKS" ] || fail "confirmation did not match; no changes made"
+else
+  read -r -p "This replays unfinished externally-sourced tasks. Type RESET QUEUE to continue: " CONFIRMATION
+  [ "$CONFIRMATION" = "RESET QUEUE" ] || fail "confirmation did not match; no changes made"
+fi
 
 mkdir -p "$MANUL_LOCKS_DIR" "$MANUL_STATE_DIR/backups"
 POLL_LOCK_FILE="$MANUL_LOCKS_DIR/poll.flock"
@@ -169,7 +209,9 @@ exec 200>"$POLL_LOCK_FILE"
 echo "Waiting up to ${POLL_LOCK_WAIT_SECONDS}s for the current poll to finish..."
 flock -w "$POLL_LOCK_WAIT_SECONDS" 200 || fail "poll.sh still holds the poll lock after ${POLL_LOCK_WAIT_SECONDS}s; no queue changes were made. Inspect the holder with: lslocks -o PID,COMMAND,TYPE,MODE,PATH | grep poll.flock"
 
-BACKUP_FILE="$MANUL_STATE_DIR/backups/manul-queue-reset-$(date -u +%Y%m%dT%H%M%SZ)-$$.db"
+BACKUP_SCOPE="replayable"
+[ "$SCOPE" = "all-tasks" ] && BACKUP_SCOPE="all-tasks"
+BACKUP_FILE="$MANUL_STATE_DIR/backups/manul-queue-reset-${BACKUP_SCOPE}-$(date -u +%Y%m%dT%H%M%SZ)-$.db"
 backup_database() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$DB" "$BACKUP_FILE" <<'PY'
@@ -194,27 +236,63 @@ PY
 backup_database || fail "could not create a verified database backup"
 echo "Backup: $BACKUP_FILE"
 
-BASE_EXPR="NULL"
-has_column processed_comments baseId && BASE_EXPR="baseId"
-TYPE_EXPR="''"
-has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
-HAS_MESSAGES=0
-has_table conversation_messages && HAS_MESSAGES=1
+if [ "$SCOPE" = "all-tasks" ]; then
+  # Take the active-worker check and deletes under one SQLite write
+  # transaction. When any row is running/worker-owned, every DELETE becomes a
+  # no-op and the command exits without changing task state.
+  FULL_RESET_SQL="BEGIN IMMEDIATE;
+CREATE TEMP TABLE full_reset_guard AS
+  SELECT COUNT(*) AS active_count FROM processed_comments WHERE $ACTIVE_TASK_PREDICATE;
+SELECT 'active_worker_rows=' || active_count FROM full_reset_guard;
+"
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=$'DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
 
-MESSAGE_DELETE_SQL=""
-if [ "$HAS_MESSAGES" -eq 1 ]; then
-  MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
    OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
    OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
    OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
    OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
-fi
+  fi
 
-# Selection and deletion share one write transaction. If a worker claimed a
-# queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
-SQL_OUTPUT="$(
-  sqlite3 -bail "$DB" <<SQL
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
 BEGIN IMMEDIATE;
 CREATE TEMP TABLE queue_reset_candidates AS
   SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
@@ -229,21 +307,29 @@ SELECT 'deleted_tasks=' || changes();
 DROP TABLE queue_reset_candidates;
 COMMIT;
 SQL
-)" || fail "could not reset replayable tasks"
+  )" || fail "could not reset replayable tasks"
 
-CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
-DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
-CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
-DELETED_TASKS="${DELETED_TASKS:-0}"
-[[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
-[[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
 
 flock -u 200 || true
 exec 200>&-
 
-echo "Replayable tasks found: $CANDIDATE_COUNT"
-echo "Removed replayable tasks: $DELETED_TASKS"
-echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
 echo "Running the configured poller now..."
 
 POLL_OUTPUT=""
