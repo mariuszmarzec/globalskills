@@ -536,8 +536,8 @@ if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test I - expected COMPLETION_SUCCESS=false when checked-out branch is the default branch, got '$COMPLETION_SUCCESS'"
     exit 1
 fi
-if ! printf '%s' "$FAIL_REASON" | grep -q "did not produce a real PR"; then
-    echo "FAIL: Test I - expected FAIL_REASON about missing PR, got '$FAIL_REASON'"
+if ! printf '%s' "$FAIL_REASON" | grep -q "base/default branch"; then
+    echo "FAIL: Test I - expected rejection for a direct base/default-branch change, got '$FAIL_REASON'"
     exit 1
 fi
 if ! grep -q "invalid_task_branch\|MISSING_PR\|no PR found" "$LOG_FILE" 2>/dev/null; then
