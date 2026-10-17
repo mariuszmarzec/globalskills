@@ -55,6 +55,10 @@ INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,statu
 VALUES ('1001','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1001','queued','1001');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
 VALUES ('review:2002','owner/repo',12,'https://github.com/owner/repo/pull/12#discussion_r2002','failed','2002');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
+VALUES ('issue:3003','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-3003','queued','issue:3003');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
+VALUES ('issuebody:4004','owner/repo',9,'https://github.com/owner/repo/issues/9','queued','issuebody:4004');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,taskSourceType,taskSourceId)
 VALUES ('source:github_issues:owner/repo#9','owner/repo',9,'https://github.com/owner/repo/issues/9','queued','github_issues','owner/repo#9');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status)
@@ -73,6 +77,10 @@ INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueN
 VALUES ('m2','conv-12','2002','owner/repo',12,'user','/manul review-fix','https://github.com/owner/repo/pull/12#discussion_r2002','2026-10-17T10:01:00Z','review');
 INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
 VALUES ('m3','conv-9','follow-up','owner/repo',9,'user','follow-up context','https://github.com/owner/repo/issues/9#issuecomment-1100','2026-10-17T10:02:00Z','comment');
+INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
+VALUES ('m4','conv-9','3003','owner/repo',9,'user','/manul retry issue comment','https://github.com/owner/repo/issues/9#issuecomment-3003','2026-10-17T10:03:00Z','comment');
+INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
+VALUES ('m5','conv-9','4004','owner/repo',9,'user','/manul issue body','https://github.com/owner/repo/issues/9','2026-10-17T10:04:00Z','issue');
 SQL
 
 cat > "$POLL_SCRIPT" <<'POLL'
@@ -85,8 +93,8 @@ POLL
 chmod +x "$POLL_SCRIPT"
 
 DRY_OUTPUT="$(MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" bash "$SCRIPT_DIR/manul-queue-reset.sh" --dry-run)"
-assert_contains "dry-run reports replayable tasks" "$DRY_OUTPUT" "replayable_total=3"
-assert_eq "dry-run leaves candidate rows in place" "3" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('1001','review:2002','source:github_issues:owner/repo#9');")"
+assert_contains "dry-run reports replayable tasks" "$DRY_OUTPUT" "replayable_total=5"
+assert_eq "dry-run leaves all replayable candidate rows in place" "5" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('1001','review:2002','source:github_issues:owner/repo#9','issue:3003','issuebody:4004');")"
 assert_eq "dry-run does not invoke poll" "0" "$([ -f "$POLL_CALL_FILE" ] && wc -l < "$POLL_CALL_FILE" || echo 0)"
 
 EXEC_OUTPUT="$(printf 'RESET QUEUE\n' | MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" POLL_CALL_FILE="$POLL_CALL_FILE" bash "$SCRIPT_DIR/manul-queue-reset.sh" --execute)"
@@ -95,6 +103,10 @@ assert_eq "poll invoked exactly once" "1" "$(wc -l < "$POLL_CALL_FILE" | tr -d '
 assert_eq "GitHub trigger was rediscovered by poll" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='1001';")"
 assert_eq "failed review trigger dedupe is cleared" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages WHERE commentId='2002';")"
 assert_eq "unrelated conversation context survives" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages WHERE commentId='follow-up';")"
+assert_eq "canonical issue comment task is removed for re-poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:3003';")"
+assert_eq "canonical issue-body task is removed for re-poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issuebody:4004';")"
+assert_eq "raw issue comment dedupe message is cleared" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages WHERE commentId='3003';")"
+assert_eq "raw issue-body dedupe message is cleared" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages WHERE commentId='4004';")"
 assert_eq "running task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1003' AND status='running';")"
 assert_eq "completed task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1004' AND status='completed';")"
 assert_eq "blocked-user task is preserved" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1005' AND status='blocked_user';")"

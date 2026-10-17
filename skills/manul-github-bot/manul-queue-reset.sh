@@ -82,6 +82,14 @@ GITHUB_COMMENT_PREDICATE="(
       commentId <> '' AND commentId NOT GLOB '*[^0-9]*' AND
       (commentUrl LIKE 'https://github.com/%#issuecomment-%' OR commentUrl LIKE 'https://github.com/%#discussion_r%')
     ) OR (
+      commentId LIKE 'issue:%' AND substr(commentId,7) <> '' AND
+      substr(commentId,7) NOT GLOB '*[^0-9]*' AND
+      commentUrl LIKE 'https://github.com/%#issuecomment-%'
+    ) OR (
+      commentId LIKE 'issuebody:%' AND substr(commentId,11) <> '' AND
+      substr(commentId,11) NOT GLOB '*[^0-9]*' AND
+      (commentUrl LIKE 'https://github.com/%/issues/%' OR commentUrl LIKE 'https://github.com/%/pull/%')
+    ) OR (
       commentId LIKE 'review:%' AND substr(commentId,8) <> '' AND
       substr(commentId,8) NOT GLOB '*[^0-9]*' AND
       commentUrl LIKE 'https://github.com/%#discussion_r%'
@@ -93,6 +101,14 @@ if ! has_column processed_comments taskSourceType; then
     (
       commentId <> '' AND commentId NOT GLOB '*[^0-9]*' AND
       (commentUrl LIKE 'https://github.com/%#issuecomment-%' OR commentUrl LIKE 'https://github.com/%#discussion_r%')
+    ) OR (
+      commentId LIKE 'issue:%' AND substr(commentId,7) <> '' AND
+      substr(commentId,7) NOT GLOB '*[^0-9]*' AND
+      commentUrl LIKE 'https://github.com/%#issuecomment-%'
+    ) OR (
+      commentId LIKE 'issuebody:%' AND substr(commentId,11) <> '' AND
+      substr(commentId,11) NOT GLOB '*[^0-9]*' AND
+      (commentUrl LIKE 'https://github.com/%/issues/%' OR commentUrl LIKE 'https://github.com/%/pull/%')
     ) OR (
       commentId LIKE 'review:%' AND substr(commentId,8) <> '' AND
       substr(commentId,8) NOT GLOB '*[^0-9]*' AND
@@ -190,6 +206,8 @@ if [ "$HAS_MESSAGES" -eq 1 ]; then
   MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
    OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
    OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
 fi
 
