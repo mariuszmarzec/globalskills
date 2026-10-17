@@ -2510,7 +2510,7 @@ evaluate_task_completion() {
   # task is rejected for violating the exactly-one-result-comment contract.
 
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-  if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
     local repo_state_issues=""
 
