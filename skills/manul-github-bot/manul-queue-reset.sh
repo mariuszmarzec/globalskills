@@ -14,14 +14,17 @@ source "$SCRIPT_DIR/manul-paths.sh"
 DB="${DB:-$MANUL_DB}"
 POLL_SCRIPT="${MANUL_POLL_SCRIPT:-$MANUL_DIR/poll.sh}"
 MODE="dry-run"
+POLL_LOCK_WAIT_SECONDS="${MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS:-300}"
 
 usage() {
   cat <<'USAGE'
 Usage: manul-queue-reset.sh [--dry-run|--execute]
 
   --dry-run   Preview replayable queued/failed/stale tasks (default)
-  --execute   Require confirmation, back up the DB, remove replayable tasks,
-              clear their trigger-message dedupe entries, then run poll.sh
+  --execute   Require confirmation, wait up to the configured lock timeout,
+              back up the DB, reset replayable tasks, then run poll.sh
+
+  MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS  Max seconds to wait for a current poll (default: 300)
 
 The install baseline and task history are not reset. Running/completed/
 blocked-user tasks and manually submitted CLI tasks are preserved.
@@ -36,6 +39,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+[[ "$POLL_LOCK_WAIT_SECONDS" =~ ^[0-9]+$ ]] && [ "$POLL_LOCK_WAIT_SECONDS" -ge 1 ] || {
+  echo "ERROR: MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS must be a positive integer" >&2
+  exit 2
+}
 
 fail() {
   echo "ERROR: $*" >&2
@@ -142,7 +150,8 @@ read -r -p "This replays unfinished externally-sourced tasks. Type RESET QUEUE t
 mkdir -p "$MANUL_LOCKS_DIR" "$MANUL_STATE_DIR/backups"
 POLL_LOCK_FILE="$MANUL_LOCKS_DIR/poll.flock"
 exec 200>"$POLL_LOCK_FILE"
-flock -n 200 || fail "poll.sh is already running; retry after the current poll finishes"
+echo "Waiting up to ${POLL_LOCK_WAIT_SECONDS}s for the current poll to finish..."
+flock -w "$POLL_LOCK_WAIT_SECONDS" 200 || fail "poll.sh still holds the poll lock after ${POLL_LOCK_WAIT_SECONDS}s; no queue changes were made. Inspect the holder with: lslocks -o PID,COMMAND,TYPE,MODE,PATH | grep poll.flock"
 
 BACKUP_FILE="$MANUL_STATE_DIR/backups/manul-queue-reset-$(date -u +%Y%m%dT%H%M%SZ)-$$.db"
 backup_database() {
