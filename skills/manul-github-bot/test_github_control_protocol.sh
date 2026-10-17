@@ -991,6 +991,17 @@ test_trigger_anchors_continue_subcommand() {
   [ "$action" = "CONTINUE" ] || { echo "Expected action=CONTINUE got=$action"; return 1; }
 }
 
+# Test 45: Verify subcommand selects report-only delivery and strips the command prefix
+test_verify_command_is_parsed() {
+  local now output valid action prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "317" --body '/manul verify diagnose the issue without editing code' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  valid="$(echo "$output" | jq -r '.command.valid')"
+  action="$(echo "$output" | jq -r '.command.action')"
+  prompt="$(echo "$output" | jq -r '.command.prompt')"
+  [ "$valid" = "true" ] && [ "$action" = "VERIFY" ] && [ "$prompt" = "diagnose the issue without editing code" ]
+}
+
 # Test 39: /manul run --agent <role> preserves role and removes selector from task prompt
 test_run_agent_flag_routes_explicit_role() {
   local now output agent selection prompt action
@@ -1117,6 +1128,7 @@ run_test "Test 35: Trigger anchor — prefix command no trigger" test_trigger_an
 run_test "Test 36: Trigger anchor — command with subcommand" test_trigger_anchors_cmd_with_subcommand
 run_test "Test 37: Trigger anchor — bare trigger" test_trigger_anchors_bare_trigger
 run_test "Test 38: Trigger anchor — continue subcommand" test_trigger_anchors_continue_subcommand
+run_test "Test 45: /manul verify selects report-only delivery" test_verify_command_is_parsed
 run_test "Test 39: --agent flag routes explicit role" test_run_agent_flag_routes_explicit_role
 run_test "Test 40: no --agent selects automatic runtime entry point" test_run_without_agent_is_automatic
 run_test "Test 41: shorthand role routes explicitly" test_shorthand_agent_routes_explicit_role
