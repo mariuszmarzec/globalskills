@@ -2532,13 +2532,8 @@ evaluate_task_completion() {
       log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
       lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
     fi
-  fi
-
-
-
-    fi
-  fi
   
+
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
