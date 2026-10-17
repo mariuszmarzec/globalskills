@@ -236,6 +236,10 @@ The daemon verifies this marker against GitHub before accepting completion.
 
 Lifecycle comments are separate daemon responsibilities.
 
+## Queue reset and source replay
+
+Use `manul-queue-reset.sh --dry-run` to inspect unfinished tasks that configured polling can rediscover. To explicitly rebuild that portion of the queue, use `manul-queue-reset.sh --execute` and type `RESET QUEUE` when prompted. The command makes a verified SQLite backup, removes only replayable queued/failed/stale task records plus the matching trigger-message dedupe records, and calls `poll.sh` once. It preserves live workers, completed history, user-blocked tasks, direct CLI submissions, conversations, workspace mappings, and the install baseline. It does not wipe the whole database or replay completed tasks.
+
 ## State and recovery
 
 Core task flow:
@@ -411,6 +415,7 @@ bash skills/manul-github-bot/test_runtime_health.sh
 bash skills/manul-github-bot/test_agent_session_state.sh
 bash skills/manul-github-bot/test_agent_execution_smoke.sh
 bash skills/manul-github-bot/test_manul_cli.sh
+bash skills/manul-github-bot/test_queue_reset.sh
 bash skills/manul-github-bot/test_github_control_protocol.sh
 bash skills/manul-github-bot/test_orchestrator.sh
 ```
