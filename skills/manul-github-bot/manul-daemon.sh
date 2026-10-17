@@ -2509,38 +2509,6 @@ evaluate_task_completion() {
   # comment is malformed, the verified PR metadata is still persisted before the
   # task is rejected for violating the exactly-one-result-comment contract.
 
-  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
-    local repo_state_clean="true"
-    local repo_state_issues=""
-
-    # Check for staged changes
-    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
-      repo_state_clean="false"
-      repo_state_issues+="staged_changes "
-    fi
-
-    # Check for unstaged changes
-    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
-      repo_state_clean="false"
-      repo_state_issues+="unstaged_changes "
-    fi
-
-    # Check for untracked files (ignoring build artifacts like __pycache__)
-    local untracked
-    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
-    if [ -n "$untracked" ]; then
-      repo_state_clean="false"
-      repo_state_issues+="untracked_files "
-    fi
-
-    if [ "$repo_state_clean" = "false" ]; then
-      # Keep SUCCESS intact so the delivery classifier below can distinguish
-      # uncommitted work from a generic workspace validation failure.
-      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
-    fi
-  fi
-
   # VERIFY is report-only; only its explicit delivery mode selects this path.
   if [ "$DELIVERY_MODE" = "comment_only" ] && [ "$rc" -eq 0 ] && [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
     local report_repo_changed="false"
@@ -2647,6 +2615,40 @@ evaluate_task_completion() {
     fi
   fi
 }
+
+  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
+    local repo_state_clean="true"
+    local repo_state_issues=""
+
+    # Check for staged changes
+    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="staged_changes "
+    fi
+
+    # Check for unstaged changes
+    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="unstaged_changes "
+    fi
+
+    # Check for untracked files (ignoring build artifacts like __pycache__)
+    local untracked
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+    if [ -n "$untracked" ]; then
+      repo_state_clean="false"
+      repo_state_issues+="untracked_files "
+    fi
+
+    if [ "$repo_state_clean" = "false" ]; then
+      # Keep SUCCESS intact so the delivery classifier below can distinguish
+      # uncommitted work from a generic workspace validation failure.
+      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
+    fi
+  fi
+
+
 
 run_once() {
   configure_task_retention
