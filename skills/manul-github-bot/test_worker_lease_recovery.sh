@@ -313,7 +313,7 @@ assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHER
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL);"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
-if grep -q 'Task Failed' "$GH_LOG" && grep -q 'stale heartbeat/lease recovery' "$GH_LOG"; then
+if grep -q 'Task Failed' "$GH_LOG" && grep -q 'stale heartbeat/lease recovery' "$GH_LOG" && grep -q '\*\*Stage:\*\* stale_task_recovery' "$GH_LOG"; then
   echo "PASS: stale-lease terminal failure is posted to GitHub with its cause"
 else
   echo "FAIL: stale-lease terminal failure comment missing or lacks its cause" >&2
@@ -332,13 +332,25 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','
 # 5b) Early workspace failures use the same attempt limit and publish a final
 # failure comment instead of leaving the task running for the watchdog to guess.
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,$CURRENT_TEST_PID,'early-fail-token');"
-handle_pre_execution_failure "early-fail" "early-fail-token" "$REPO" 81 "" "" "Workspace unavailable: primary checkout could not be prepared." "" 3
+handle_pre_execution_failure "early-fail" "early-fail-token" "$REPO" 81 "" "" "Workspace path is missing or failed ownership/path validation." "" 3 "workspace_path_validation"
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-fail';")" "pre-agent failure transitions to failed"
 assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery does not double-count attempts"
-if grep -q 'Workspace unavailable: primary checkout could not be prepared.' "$GH_LOG"; then
+if grep -q 'Workspace path is missing or failed ownership/path validation.' "$GH_LOG" && grep -q '\*\*Stage:\*\* workspace_path_validation' "$GH_LOG"; then
   echo "PASS: pre-agent terminal failure comment contains the concrete cause"
 else
   echo "FAIL: pre-agent terminal failure comment missing the concrete cause" >&2
+  cat "$GH_LOG" >&2
+  exit 1
+fi
+
+# 5c) Primary-checkout preparation failures publish their own explicit stage.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('checkout-fail','$REPO',82,'https://github.com/$REPO/issues/82','running',3,$CURRENT_TEST_PID,'checkout-fail-token');"
+handle_pre_execution_failure "checkout-fail" "checkout-fail-token" "$REPO" 82 "" "" "Could not prepare the primary checkout for $REPO (rc=1). Existing workspace data was preserved." "" 3 "primary_checkout_preparation"
+assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='checkout-fail';")" "primary-checkout failure transitions to failed"
+if grep -q 'Could not prepare the primary checkout for' "$GH_LOG" && grep -q '\*\*Stage:\*\* primary_checkout_preparation' "$GH_LOG"; then
+  echo "PASS: primary-checkout failure comment includes stage and cause"
+else
+  echo "FAIL: primary-checkout failure comment missing stage/cause" >&2
   cat "$GH_LOG" >&2
   exit 1
 fi
