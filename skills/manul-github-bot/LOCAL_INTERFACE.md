@@ -190,7 +190,7 @@ Then execute it only after reviewing the preview:
 manul-queue-reset.sh --all-tasks --execute
 ```
 
-This mode requires the exact confirmation `DELETE ALL TASKS`. It backs up the DB, deletes all `processed_comments` rows (including completed and manual tasks), clears `conversation_messages` dedupe/context and `conversations` routing rows, then calls `poll.sh` once. It refuses the reset without changes if any task is running or has worker ownership metadata; finish or safely recover those workers first. The install baseline, configuration, workspace state and unrelated runtime state are preserved. Polling still honors the existing baseline and configured source filters, so this does not force historical items older than that baseline to be ingested.
+This mode requires the exact confirmation `DELETE ALL TASKS`. It backs up the DB, deletes all `processed_comments` rows (including completed and manual tasks), clears `conversation_messages` dedupe/context, `conversation_links`, and `conversations` routing rows, then calls `poll.sh` once. It refuses the reset without changes if any task is running or has worker ownership metadata; finish or safely recover those workers first. The install baseline, configuration, workspace state and unrelated runtime state are preserved. Polling still honors the existing baseline and configured source filters, so this does not force historical items older than that baseline to be ingested.
 
 Both modes wait up to 300 seconds for the current poll to release its lock (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`) and retain a verified SQLite backup.
 
