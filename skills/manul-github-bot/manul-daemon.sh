@@ -2536,6 +2536,37 @@ evaluate_task_completion() {
   
 
 
+  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
+    local repo_state_clean="true"
+    local repo_state_issues=""
+
+    # Check for staged changes
+    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="staged_changes "
+    fi
+
+    # Check for unstaged changes
+    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
+      repo_state_clean="false"
+      repo_state_issues+="unstaged_changes "
+    fi
+
+    # Check for untracked files (ignoring build artifacts like __pycache__)
+    local untracked
+    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
+    if [ -n "$untracked" ]; then
+      repo_state_clean="false"
+      repo_state_issues+="untracked_files "
+    fi
+
+    if [ "$repo_state_clean" = "false" ]; then
+      # Keep SUCCESS intact so the delivery classifier below can distinguish
+      # uncommitted work from a generic workspace validation failure.
+      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
+    fi
+
   # Result-comment marker validation is a correlation/presentation safeguard,
   # not a reason to discard already-verified repository delivery. By this point
   # the PR/branch/remote state has been verified. A missing marker is repaired
@@ -2616,36 +2647,7 @@ evaluate_task_completion() {
   fi
 }
 
-  # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
-  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
-    local repo_state_clean="true"
-    local repo_state_issues=""
 
-    # Check for staged changes
-    if ! git -C "$WORKDIR" diff --cached --quiet 2>/dev/null; then
-      repo_state_clean="false"
-      repo_state_issues+="staged_changes "
-    fi
-
-    # Check for unstaged changes
-    if ! git -C "$WORKDIR" diff --quiet 2>/dev/null; then
-      repo_state_clean="false"
-      repo_state_issues+="unstaged_changes "
-    fi
-
-    # Check for untracked files (ignoring build artifacts like __pycache__)
-    local untracked
-    untracked="$(git -C "$WORKDIR" ls-files --others --exclude-standard 2>/dev/null | grep -v '/__pycache__' | grep -v '/\.pytest_cache' | grep -v '^__pycache__' | grep -v '^\.__pycache__' | grep -v '^\.__pycache__/' | grep -v '^\.pytest_cache' || true)"
-    if [ -n "$untracked" ]; then
-      repo_state_clean="false"
-      repo_state_issues+="untracked_files "
-    fi
-
-    if [ "$repo_state_clean" = "false" ]; then
-      # Keep SUCCESS intact so the delivery classifier below can distinguish
-      # uncommitted work from a generic workspace validation failure.
-      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
-    fi
   fi
 
 
