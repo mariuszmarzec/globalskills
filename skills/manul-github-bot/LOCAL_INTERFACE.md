@@ -181,7 +181,7 @@ Execute the reset only when the preview is understood. The command asks for the 
 manul-queue-reset.sh --execute
 ```
 
-The command preserves live `running` tasks, `done`/`completed` history, `blocked_user` tasks, manually submitted CLI tasks, conversation/workspace mappings, and the install baseline. It refuses to run while another poll holds the poll lock. A normal daemon poll cycle may still run again later. The reset does not erase all of Manul's state and is intentionally limited to items that the configured providers can rediscover.
+The command preserves live `running` tasks, `done`/`completed` history, `blocked_user` tasks, manually submitted CLI tasks, conversation/workspace mappings, and the install baseline. It waits for the current poll to release the lock before touching queue state. A normal daemon poll cycle may still run again later. The reset does not erase all of Manul's state and is intentionally limited to items that the configured providers can rediscover.
 
 ## Manual task recovery
 
