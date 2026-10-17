@@ -238,7 +238,11 @@ Lifecycle comments are separate daemon responsibilities.
 
 ## Queue reset and source replay
 
-Use `manul-queue-reset.sh --dry-run` to inspect unfinished tasks that configured polling can rediscover. To explicitly rebuild that portion of the queue, use `manul-queue-reset.sh --execute` and type `RESET QUEUE` when prompted. The command waits up to 300 seconds for a current poll to finish (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), makes a verified SQLite backup, removes only replayable queued/failed/stale task records plus the matching trigger-message dedupe records, and calls `poll.sh` once. If the lock remains held at timeout, it exits without changing queue state. It preserves live workers, completed history, user-blocked tasks, direct CLI submissions, conversations, workspace mappings, and the install baseline. It does not wipe the whole database or replay completed tasks.
+Use `manul-queue-reset.sh --dry-run` to inspect replayable unfinished tasks. The normal `manul-queue-reset.sh --execute` mode asks for `RESET QUEUE`, creates a verified SQLite backup, removes replayable queued/failed/stale tasks and their matching trigger-message dedupe rows, and calls `poll.sh` once. It preserves running/completed/blocked/manual task rows, conversation mappings, workspace state, and the install baseline.
+
+For a full task-state rebuild, preview with `manul-queue-reset.sh --all-tasks --dry-run`. The destructive `manul-queue-reset.sh --all-tasks --execute` mode requires the exact confirmation `DELETE ALL TASKS`, waits up to 300 seconds for a current poll (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), and creates a verified SQLite backup before changes. It deletes **all** `processed_comments` task rows (queued, running, completed, failed, blocked-user and manual tasks), plus all `conversation_messages` dedupe/context rows, `conversation_links`, and `conversations` routing rows, then calls `poll.sh` once. It refuses to delete anything while a task is running or any task row retains worker ownership metadata. Configuration, install baseline, workspace state, logs, and unrelated runtime state are preserved. The full reset removes completed task history from the live DB, but it remains in the retained backup.
+
+Polling still obeys the configured sources, filters and existing install baseline. This is a rediscovery from configured sources, not a reset of the baseline or a guarantee that every historical GitHub item will be eligible again.
 
 ## State and recovery
 
