@@ -127,7 +127,7 @@ for _ in {1..50}; do
   sleep 0.1
 done
 [ -f "$LOCK_READY" ] || fail "test poll-lock holder acquired the flock"
-WAIT_OUTPUT="$(printf 'RESET QUEUE\\n' | MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" POLL_CALL_FILE="$POLL_CALL_FILE" MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS=5 bash "$SCRIPT_DIR/manul-queue-reset.sh" --execute)"
+WAIT_OUTPUT="$(printf 'RESET QUEUE\n' | MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" POLL_CALL_FILE="$POLL_CALL_FILE" MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS=5 bash "$SCRIPT_DIR/manul-queue-reset.sh" --execute)"
 wait "$LOCK_PID"
 assert_contains "execute waits for a busy poll lock" "$WAIT_OUTPUT" "Waiting up to 5s for the current poll to finish"
 assert_contains "execute proceeds after poll lock is released" "$WAIT_OUTPUT" "Reset/re-poll complete"
