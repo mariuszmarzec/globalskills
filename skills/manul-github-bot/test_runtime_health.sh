@@ -105,7 +105,6 @@ DIRECT_ENTRYPOINTS=(
   manul-daemon.sh
   watchdog.sh
   task-recovery.sh
-  manul-queue-reset.sh
   agent-task-runner.sh
   poll.sh
   manul-status.sh
@@ -145,6 +144,7 @@ mkdir -p "$PERM_CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
+chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 set +e
 MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
@@ -153,6 +153,12 @@ if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/agent-task-runner.sh" ] && [ "$(sta
   ok "Installer restores execute bit on canonical task runner"
 else
   fail "Installer did not restore canonical task runner execute bit (rc=$PERM_RC)"
+fi
+
+if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/manul-queue-reset.sh" ] && [ "$(stat -c "%a" "$PERM_CANON/manul-queue-reset.sh" 2>/dev/null || true)" = "755" ]; then
+  ok "Installer restores execute bit on canonical queue-reset command"
+else
+  fail "Installer did not restore canonical queue-reset execute bit (rc=$PERM_RC)"
 fi
 
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
