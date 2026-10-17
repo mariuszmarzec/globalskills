@@ -1100,6 +1100,11 @@ queue_normalized_source_task() {
   execution_kind="$(jq -r ".execution.kind // \"repository\"" <<<"$task_json")"
   local normalized_prompt
   normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
+  source_action="$(jq -r '.action // "IMPLEMENT"' <<<"$task_json")"
+  case "$source_action" in
+    IMPLEMENT|REVIEW_FIX|VERIFY) ;;
+    *) source_action="IMPLEMENT" ;;
+  esac
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0
   [ "$state" = "OPEN" ] || return 0
 
@@ -1111,7 +1116,7 @@ queue_normalized_source_task() {
     return 0
   fi
 
-  local task_id="source:${source_type}:${source_id}" now lease repo source_context
+  local task_id="source:${source_type}:${source_id}" now lease repo source_context source_action
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
@@ -1124,7 +1129,7 @@ queue_normalized_source_task() {
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",${issue_number},\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) VALUES(\"$(sql_escape "$task_id")\",\"$(sql_escape "$repo")\",${issue_number},\"$(sql_escape "$source_url")\",\"task-source\",\"\",\"$(sql_escape "$normalized_prompt")\",\"queued\",\"$(sql_escape "$created")\",\"$now\",\"$lease\",NULL,\"$(sql_escape "$task_id")\",\"$(sql_escape "$source_type")\",\"$(sql_escape "$source_id")\",\"$(sql_escape "$source_url")\",\"$(sql_escape "$title")\",\"$(sql_escape "$updated")\",\"$(sql_escape "$source_context")\",\"$(sql_escape "$source_action")\"); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
