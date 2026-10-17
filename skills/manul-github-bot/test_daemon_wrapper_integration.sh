@@ -280,12 +280,12 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
 # workerPid must match the test process PID ($$) so the completion path's
 # ownership check (WHERE ... AND workerPid=$$) succeeds. The production
 # claim path sets workerPid to the worker PID; the test inserts rows directly.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_1','test/repo',42,'https://github.com/test/repo/issues/42#issuecomment-1001','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_2','test/repo',43,'https://github.com/test/repo/issues/43#issuecomment-1002','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_3','test/repo',44,'https://github.com/test/repo/issues/44#issuecomment-1003','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_4','test/repo',45,'https://github.com/test/repo/issues/45#issuecomment-1004','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_5','test/repo',46,'https://github.com/test/repo/issues/46#issuecomment-1005','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_6','test/repo',47,'https://github.com/test/repo/issues/47#issuecomment-1006','user','test','task','queued',1,$$);;"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_1','test/repo',42,'https://github.com/test/repo/issues/42#issuecomment-1001','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_2','test/repo',43,'https://github.com/test/repo/issues/43#issuecomment-1002','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_3','test/repo',44,'https://github.com/test/repo/issues/44#issuecomment-1003','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_4','test/repo',45,'https://github.com/test/repo/issues/45#issuecomment-1004','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_5','test/repo',46,'https://github.com/test/repo/issues/46#issuecomment-1005','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_6','test/repo',47,'https://github.com/test/repo/issues/47#issuecomment-1006','user','test','task','running',1,$$);;"
 echo "0" > "$PID_FILE"
 
 # ─── Test A: rc=0 + TASK_DONE + valid result comment -> COMPLETION_SUCCESS=true ─
@@ -417,7 +417,7 @@ echo "=== Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> 
 # The fake gh returns NO pr list results (no PR exists) but a successful
 # pr create (synthesized PR URL). The workdir is checked out on the task branch.
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_G';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_G','test/repo',48,'https://github.com/test/repo/issues/48#issuecomment-1007','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_G','test/repo',48,'https://github.com/test/repo/issues/48#issuecomment-1007','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 
 WORKDIR_G="$TEST_TMPDIR/workdir-g"
 mkdir -p "$WORKDIR_G"
@@ -463,7 +463,7 @@ jq '.autoCreatePr = false' "$SCRIPT_DIR/config.json" > "$CONFIG_DISABLED"
 export CONFIG="$CONFIG_DISABLED"
 
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_H';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_H','test/repo',49,'https://github.com/test/repo/issues/49#issuecomment-1008','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_H','test/repo',49,'https://github.com/test/repo/issues/49#issuecomment-1008','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 
 WORKDIR_H="$TEST_TMPDIR/workdir-h"
 mkdir -p "$WORKDIR_H"
@@ -523,7 +523,7 @@ echo "forbidden direct base change" >> "$WORKDIR_I/README.md"
 git -C "$WORKDIR_I" add README.md
 git -C "$WORKDIR_I" commit -qm "forbidden direct base change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_I';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutI.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -564,7 +564,7 @@ echo "review change" >>"$WORKDIR_PR/README.md"
 git -C "$WORKDIR_PR" add README.md
 git -C "$WORKDIR_PR" commit -qm "review change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_REVIEW';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_REVIEW','test/repo',60,'https://github.com/test/repo/pull/60#discussion_r1234','user','test','task','queued',1,$$,'REVIEW_FIX');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_REVIEW','test/repo',60,'https://github.com/test/repo/pull/60#discussion_r1234','user','test','task','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutPR.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -600,7 +600,7 @@ echo "implementation change" >> "$WORKDIR_J/README.md"
 git -C "$WORKDIR_J" add README.md
 git -C "$WORKDIR_J" commit -qm "implementation change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_J';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutJ.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -627,7 +627,7 @@ git -C "$WORKDIR_K" add README.md
 git -C "$WORKDIR_K" commit -qm initial
 INITIAL_HEAD_K="$(git -C "$WORKDIR_K" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutK.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -661,7 +661,7 @@ INITIAL_HEAD_N="$(git -C "$WORKDIR_N" rev-parse HEAD)"
 git -C "$WORKDIR_N" checkout -qb manul-task-COMMENT_N
 echo "uncommitted implementation" >>"$WORKDIR_N/README.md"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_N';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_N','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1013','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_N','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1013','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutN.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -702,7 +702,7 @@ git -C "$WORKDIR_O" remote add origin "$ORIGIN_O"
 printf '%s %s
 ' "manul-task-COMMENT_O" "master" >>"$FAKE_GH_STATE"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_O';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_O','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1014','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_O','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1014','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutO.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -738,7 +738,7 @@ echo "wrong branch change" >>"$WORKDIR_P/README.md"
 git -C "$WORKDIR_P" add README.md
 git -C "$WORKDIR_P" commit -qm "wrong branch change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_WRONG';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_WRONG','test/repo',61,'https://github.com/test/repo/pull/61#discussion_r5678','user','test','task','queued',1,$,'REVIEW_FIX');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_WRONG','test/repo',61,'https://github.com/test/repo/pull/61#discussion_r5678','user','test','task','running',1,$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutP.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -784,7 +784,7 @@ echo "[OK] Test L: PASSED (issue number replaced with verified PR #37)"
 echo ""
 echo "=== Test M: issuebody task with repository changes requires real PR ==="
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_M';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber) VALUES ('issuebody:COMMENT_M','test/repo',54,'https://github.com/test/repo/issues/54','user','test','task','queued',1,$,'IMPLEMENT',54);" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber) VALUES ('issuebody:COMMENT_M','test/repo',54,'https://github.com/test/repo/issues/54','user','test','task','running',1,$,'IMPLEMENT',54);" 2>/dev/null
 
 WORKDIR_M="$TEST_TMPDIR/workdir-m"
 mkdir -p "$WORKDIR_M"
@@ -826,7 +826,7 @@ git -C "$WORKDIR_Q" config user.email test@example.com; git -C "$WORKDIR_Q" conf
 printf "baseline\\n" >"$WORKDIR_Q/README.md"; git -C "$WORKDIR_Q" add README.md; git -C "$WORKDIR_Q" commit -qm initial
 INITIAL_HEAD_Q="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Q';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Q','test/repo',56,'https://github.com/test/repo/issues/56#issuecomment-1015','user','test','diagnostics only; do not change code','queued',1,$$,'VERIFY');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Q','test/repo',56,'https://github.com/test/repo/issues/56#issuecomment-1015','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutQ.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
 evaluate_task_completion "test/repo" "56" "COMMENT_Q" "COMMENT_Q" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Q" "" "$INITIAL_HEAD_Q" "master" "master" "" "" "" "" "comment_only"
@@ -840,7 +840,7 @@ git -C "$WORKDIR_R" config user.email test@example.com; git -C "$WORKDIR_R" conf
 printf "baseline\\n" >"$WORKDIR_R/README.md"; git -C "$WORKDIR_R" add README.md; git -C "$WORKDIR_R" commit -qm initial
 INITIAL_HEAD_R="$(git -C "$WORKDIR_R" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_R';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_R','test/repo',57,'https://github.com/test/repo/issues/57#issuecomment-1016','user','test','diagnostics only; do not change code','queued',1,$$,'VERIFY');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_R','test/repo',57,'https://github.com/test/repo/issues/57#issuecomment-1016','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutR.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
 evaluate_task_completion "test/repo" "57" "COMMENT_R" "COMMENT_R" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_R" "" "$INITIAL_HEAD_R" "master" "master" "" "" "" "" "comment_only"
@@ -854,7 +854,7 @@ git -C "$WORKDIR_S" config user.email test@example.com; git -C "$WORKDIR_S" conf
 printf "baseline\\n" >"$WORKDIR_S/README.md"; git -C "$WORKDIR_S" add README.md; git -C "$WORKDIR_S" commit -qm initial
 INITIAL_HEAD_S="$(git -C "$WORKDIR_S" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_S';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_S','test/repo',58,'https://github.com/test/repo/issues/58#issuecomment-1017','user','test','implement the requested change','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_S','test/repo',58,'https://github.com/test/repo/issues/58#issuecomment-1017','user','test','implement the requested change','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
 evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" "" "implementation"
