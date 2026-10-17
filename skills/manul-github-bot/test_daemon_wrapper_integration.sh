@@ -297,7 +297,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'" >&2
     echo "  failure_code=${FAILURE_CODE:-<unset>} reason=${FAIL_REASON:-<empty>}" >&2
@@ -318,7 +318,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "43" "COMMENT_2" "COMMENT_2" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "43" "COMMENT_2" "COMMENT_2" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test B - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -337,7 +337,7 @@ echo "some unrelated output" >> "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "44" "COMMENT_3" "COMMENT_3" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "44" "COMMENT_3" "COMMENT_3" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test C - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -351,7 +351,7 @@ echo "some output without marker" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "45" "COMMENT_4" "COMMENT_4" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "45" "COMMENT_4" "COMMENT_4" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test D - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -365,7 +365,7 @@ echo "TASK_FAILED: orchestration error" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "46" "COMMENT_5" "COMMENT_5" "1" "42" "$STDOUT_FILE" "$DB" "" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "46" "COMMENT_5" "COMMENT_5" "1" "42" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test E - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -380,7 +380,7 @@ echo "timeout occurred" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "47" "COMMENT_6" "COMMENT_6" "1" "124" "$STDOUT_FILE" "$DB" "" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "47" "COMMENT_6" "COMMENT_6" "1" "124" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test F - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -440,7 +440,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G" "" "$INITIAL_HEAD_G" "manul-task-COMMENT_G" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G" "" "$INITIAL_HEAD_G" "manul-task-COMMENT_G" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test G - expected COMPLETION_SUCCESS=true (daemon should auto-create PR), got '$COMPLETION_SUCCESS'"
     exit 1
@@ -486,7 +486,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H" "" "$INITIAL_HEAD_H" "manul-task-COMMENT_H" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H" "" "$INITIAL_HEAD_H" "manul-task-COMMENT_H" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test H - expected COMPLETION_SUCCESS=false when autoCreatePr disabled, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -531,7 +531,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I" "" "$INITIAL_HEAD_I" "master" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I" "" "$INITIAL_HEAD_I" "master" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test I - expected COMPLETION_SUCCESS=false when checked-out branch is the default branch, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -608,7 +608,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J" "" "$INITIAL_HEAD_J" "manul-task-COMMENT_J" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J" "" "$INITIAL_HEAD_J" "manul-task-COMMENT_J" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test J - expected COMPLETION_SUCCESS=true on a real task branch, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -672,7 +672,7 @@ COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "55" "COMMENT_N" "COMMENT_N" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_N" "" "$INITIAL_HEAD_N" "manul-task-COMMENT_N" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "55" "COMMENT_N" "COMMENT_N" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_N" "" "$INITIAL_HEAD_N" "manul-task-COMMENT_N" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test N - dirty workspace must not be accepted"
     exit 1
@@ -713,7 +713,7 @@ COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "55" "COMMENT_O" "COMMENT_O" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_O" "" "$INITIAL_HEAD_O" "manul-task-COMMENT_O" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "55" "COMMENT_O" "COMMENT_O" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_O" "" "$INITIAL_HEAD_O" "manul-task-COMMENT_O" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test O - unpushed branch must not be accepted"
     exit 1
@@ -749,7 +749,7 @@ COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "61" "review:PR_WRONG" "review:PR_WRONG" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_P" "" "$INITIAL_HEAD_P" "unexpected-branch" "master" "" "" "feature/expected-pr"
+evaluate_task_completion "test/repo" "61" "review:PR_WRONG" "review:PR_WRONG" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_P" "" "$INITIAL_HEAD_P" "unexpected-branch" "master" "" "" "feature/expected-pr" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test P - unexpected PR branch must not be accepted"
     exit 1
@@ -809,7 +809,8 @@ echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "54" "issuebody:COMMENT_M" "issuebody:COMMENT_M" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_M" "" "$INITIAL_HEAD_M" "manul-task-COMMENT_M" "master" "" "" "" "" "" "implementation"
+export CONFIG="$CONFIG_DISABLED"
+evaluate_task_completion "test/repo" "54" "issuebody:COMMENT_M" "issuebody:COMMENT_M" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_M" "" "$INITIAL_HEAD_M" "manul-task-COMMENT_M" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test M - issuebody task with repository changes must not succeed without a real PR"
     exit 1
@@ -819,6 +820,7 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
     exit 1
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
+export CONFIG="$SCRIPT_DIR/config.json"
 
 
 # Test Q/R/S: report-only delivery and implementation guards.
@@ -861,7 +863,7 @@ sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_S';" 2>/d
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_S','test/repo',58,'https://github.com/test/repo/issues/58#issuecomment-1017','user','test','implement the requested change','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
-evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" "" "implementation"
+evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test S: PASSED"
 
