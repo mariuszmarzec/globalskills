@@ -80,9 +80,12 @@ if [[ "$1" == "api" ]]; then
             body_value="${arg#body=}"
         fi
     done
-    for arg in "$@"; do
-        if [[ "$arg" == "--jq" ]]; then
+    jq_filter=""
+    for ((i=1; i<=$#; i++)); do
+        if [[ "${!i}" == "--jq" ]]; then
             has_jq=true
+            i=$((i+1))
+            jq_filter="${!i}"
             break
         fi
     done
@@ -177,7 +180,7 @@ if [[ "$1" == "api" ]]; then
                         ;;
                 esac
                 if [[ "$has_jq" == "true" ]]; then
-                    echo "$json_output" | jq -r '.[] | select(.in_reply_to_id == null) | .body // ""'
+                    echo "$json_output" | jq -r "$jq_filter"
                 else
                     echo "$json_output"
                 fi
