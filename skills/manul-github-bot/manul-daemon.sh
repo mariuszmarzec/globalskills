@@ -2535,7 +2535,7 @@ evaluate_task_completion() {
   fi
 
 
-irty (${repo_state_issues% })"
+d ${repo_state_issues% })"
     fi
   fi
   
