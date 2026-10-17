@@ -196,25 +196,26 @@ post_failure_comment_once() {
     return 0
   fi
 
+  # A SQLite receipt is an extra durable guard, but its failure must not suppress the
+  # GitHub notification. The lock + sidecar still provide a local idempotency fallback.
+  local db_receipt_available=false
   if [ -f "$DB" ]; then
-    if ! sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS manul_failure_comment_publications (taskId TEXT NOT NULL, attempt INTEGER NOT NULL, postedAt TEXT NOT NULL, PRIMARY KEY(taskId, attempt));" >/dev/null 2>&1; then
-      echo "ERROR: cannot initialize failure-comment publication receipt for task $task_id" >&2
-      flock -u 209 || true
-      exec 209>&-
-      return 1
-    fi
-    existing="$(sqlite3 "$DB" "SELECT 1 FROM manul_failure_comment_publications WHERE taskId='$safe_db_id' AND attempt=$safe_attempt LIMIT 1;" 2>/dev/null)" || {
-      echo "ERROR: cannot read failure-comment publication receipt for task $task_id" >&2
-      flock -u 209 || true
-      exec 209>&-
-      return 1
-    }
-    if [ "$existing" = "1" ]; then
-      : > "$posted_file" 2>/dev/null || true
-      echo "INFO: duplicate TASK_FAILED comment suppressed for task $task_id attempt $safe_attempt" >&2
-      flock -u 209 || true
-      exec 209>&-
-      return 0
+    if sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS manul_failure_comment_publications (taskId TEXT NOT NULL, attempt INTEGER NOT NULL, postedAt TEXT NOT NULL, PRIMARY KEY(taskId, attempt));" >/dev/null 2>&1; then
+      db_receipt_available=true
+      existing="$(sqlite3 "$DB" "SELECT 1 FROM manul_failure_comment_publications WHERE taskId='$safe_db_id' AND attempt=$safe_attempt LIMIT 1;" 2>/dev/null)" || {
+        echo "WARN: cannot read SQLite failure-comment receipt for task $task_id; using lock-file receipt" >&2
+        db_receipt_available=false
+        existing=""
+      }
+      if [ "$db_receipt_available" = "true" ] && [ "$existing" = "1" ]; then
+        : > "$posted_file" 2>/dev/null || true
+        echo "INFO: duplicate TASK_FAILED comment suppressed for task $task_id attempt $safe_attempt" >&2
+        flock -u 209 || true
+        exec 209>&-
+        return 0
+      fi
+    else
+      echo "WARN: cannot initialize SQLite failure-comment receipt for task $task_id; using lock-file receipt" >&2
     fi
   fi
 
@@ -226,7 +227,7 @@ post_failure_comment_once() {
   fi
 
   : > "$posted_file" 2>/dev/null || echo "WARN: could not persist failure-comment sidecar receipt for task $task_id" >&2
-  if [ -f "$DB" ] && ! sqlite3 "$DB" "INSERT OR IGNORE INTO manul_failure_comment_publications(taskId, attempt, postedAt) VALUES ('$safe_db_id', $safe_attempt, datetime('now'));" >/dev/null 2>&1; then
+  if [ "$db_receipt_available" = "true" ] && ! sqlite3 "$DB" "INSERT OR IGNORE INTO manul_failure_comment_publications(taskId, attempt, postedAt) VALUES ('$safe_db_id', $safe_attempt, datetime('now'));" >/dev/null 2>&1; then
     echo "WARN: GitHub accepted failure comment but SQLite receipt could not be persisted for task $task_id" >&2
   fi
   flock -u 209 || true
@@ -243,7 +244,7 @@ post_feedback_comment() {
     reply_to="${BASH_REMATCH[1]}"
   fi
 
-  if [[ "$body" == *'<!-- manul:event {"type":"TASK_FAILED"'* ]] && [ -n "$task_id" ] && [ -f "$DB" ]; then
+  if [[ "$body" == *'<!-- manul:event {"type":"TASK_FAILED"'* ]] && [ -n "$task_id" ]; then
     post_failure_comment_once "$repo" "$issue" "$body" "$task_id" "$pr_number" "$reply_to" "$attempt"
   else
     post_comment_to_github "$repo" "$issue" "$body" "$reply_to" "$pr_number"
