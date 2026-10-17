@@ -132,6 +132,6 @@ wait "$LOCK_PID"
 assert_contains "execute waits for a busy poll lock" "$WAIT_OUTPUT" "Waiting up to 5s for the current poll to finish"
 assert_contains "execute proceeds after poll lock is released" "$WAIT_OUTPUT" "Reset/re-poll complete"
 assert_eq "poll invoked again after lock release" "2" "$(wc -l < "$POLL_CALL_FILE" | tr -d ' ')"
-assert_eq "task becomes replayable after waiting" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='1007';")"
+assert_eq "reset removes the replayable task after waiting for the poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1007';")"
 
 echo "All queue-reset tests passed."
