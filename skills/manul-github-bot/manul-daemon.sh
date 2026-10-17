@@ -1689,6 +1689,25 @@ verify_result_comment() {
   return 1
 }
 
+# Verify the task-correlated result contains user-facing content, not just marker/signature.
+verify_nonempty_result_comment() {
+  local repo="$1" comment_id="$2" attempt="$3"
+  local comment_url url_issue_num endpoint marker tmpdir comments_file count body clean
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")';" 2>/dev/null)"
+  [ -n "$comment_url" ] || return 1
+  url_issue_num="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || true)"
+  [ -n "$url_issue_num" ] || return 1
+  marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then endpoint="repos/$repo/pulls/$url_issue_num/comments"; else endpoint="repos/$repo/issues/$url_issue_num/comments"; fi
+  tmpdir="$(mktemp -d)" || return 1; comments_file="$tmpdir/comments.json"
+  if ! timeout "${GH_API_TIMEOUT}" gh api "$endpoint" --paginate >"$comments_file" 2>>"$LOG"; then rm -rf "$tmpdir"; return 1; fi
+  count="$(jq --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))] | length' "$comments_file" 2>/dev/null || echo 0)"
+  if [ "$count" != "1" ]; then rm -rf "$tmpdir"; return 1; fi
+  body="$(jq -r --arg marker "$marker" '.[] | select((.body // "") | contains($marker)) | .body // ""' "$comments_file" 2>/dev/null)"
+  clean="$(printf '%s\n' "$body" | sed "s|$marker||g; s/— manul 🐈//g" | sed '/^[[:space:]]*$/d')"
+  rm -rf "$tmpdir"; [ -n "$clean" ]
+}
+
 # Check whether a concrete GitHub PR exists for the given branch against base.
 # Returns 0 if a real PR exists, 1 otherwise.
 # A /pull/new/... or /compare/... URL returned by the agent is NOT a concrete PR.
@@ -2418,6 +2437,7 @@ evaluate_task_completion() {
   local EXECUTION_SUMMARY="${15:-}"
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
+  local DELIVERY_MODE="${18:-implementation}"
 
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -2507,7 +2527,33 @@ evaluate_task_completion() {
     if [ "$repo_state_clean" = "false" ]; then
       # Keep SUCCESS intact so the delivery classifier below can distinguish
       # uncommitted work from a generic workspace validation failure.
-      log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
+      log "dispatch: task $COMMENT_ID repository state is d  # VERIFY is report-only; only its explicit delivery mode selects this path.
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" = "comment_only" ]; then
+    local report_repo_changed="false"
+    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then report_repo_changed="true"; fi
+    if [ "$report_repo_changed" = "true" ]; then
+      SUCCESS="false"; FAILURE_CODE="VERIFICATION_FAILED"
+      FAIL_REASON="Comment-only task modified the repository; report-only delivery must leave code unchanged"
+      log "dispatch: task $COMMENT_ID report-only validation failed: repository changed"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_repository_changed"
+    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+      FAIL_REASON="Report-only task did not publish a verified result comment"
+      log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
+    elif ! verify_nonempty_result_comment "$REPO" "$COMMENT_ID" "$current_attempt"; then
+      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      FAIL_REASON="Report-only task result comment is empty or contains only the task marker/signature"
+      log "dispatch: task $COMMENT_ID report-only validation failed: result comment is empty"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
+    else
+      log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
+      lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+    fi
+  fi
+
+
+irty (${repo_state_issues% })"
     fi
   fi
   
@@ -2516,7 +2562,7 @@ evaluate_task_completion() {
   # Every repository change must be verified through the full PR/result pipeline,
   # including issue-body tasks (issuebody:*). The task identifier format must
   # never weaken the implementation PR requirement.
-  if [ "$SUCCESS" = "true" ]; then
+  if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
     local repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
     if [ "$repo_changed" = "true" ]; then
@@ -3668,7 +3714,9 @@ PROMPT_APPEND
      esac
 
      # Call production completion evaluation function
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH"
+          local delivery_mode="implementation"
+     if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "$delivery_mode"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
