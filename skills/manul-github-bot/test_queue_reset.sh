@@ -57,9 +57,21 @@ CREATE TABLE conversations (
   status TEXT NOT NULL,
   activeTaskId TEXT
 );
+CREATE TABLE conversation_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversationId TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  issueNumber INTEGER,
+  prNumber INTEGER,
+  commentId TEXT,
+  taskCommentId TEXT,
+  linkType TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO conversations(conversationId,status,activeTaskId) VALUES ('conv-9','OPEN','1001');
 INSERT INTO conversations(conversationId,status,activeTaskId) VALUES ('conv-12','OPEN','review:2002');
+INSERT INTO conversation_links(conversationId,repo,issueNumber,prNumber,commentId,taskCommentId,linkType,createdAt) VALUES ('conv-9','owner/repo',9,12,'1001','1001','issue-pr','2026-10-17T10:00:00Z');
 INSERT INTO meta(key,value) VALUES ('baseline','2026-10-01T00:00:00Z');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
 VALUES ('1001','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1001','queued','1001');
