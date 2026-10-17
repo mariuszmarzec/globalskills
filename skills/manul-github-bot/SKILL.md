@@ -238,7 +238,7 @@ Lifecycle comments are separate daemon responsibilities.
 
 ## Queue reset and source replay
 
-Use `manul-queue-reset.sh --dry-run` to inspect unfinished tasks that configured polling can rediscover. To explicitly rebuild that portion of the queue, use `manul-queue-reset.sh --execute` and type `RESET QUEUE` when prompted. The command makes a verified SQLite backup, removes only replayable queued/failed/stale task records plus the matching trigger-message dedupe records, and calls `poll.sh` once. It preserves live workers, completed history, user-blocked tasks, direct CLI submissions, conversations, workspace mappings, and the install baseline. It does not wipe the whole database or replay completed tasks.
+Use `manul-queue-reset.sh --dry-run` to inspect unfinished tasks that configured polling can rediscover. To explicitly rebuild that portion of the queue, use `manul-queue-reset.sh --execute` and type `RESET QUEUE` when prompted. The command waits up to 300 seconds for a current poll to finish (override with `MANUL_QUEUE_RESET_LOCK_WAIT_SECONDS`), makes a verified SQLite backup, removes only replayable queued/failed/stale task records plus the matching trigger-message dedupe records, and calls `poll.sh` once. If the lock remains held at timeout, it exits without changing queue state. It preserves live workers, completed history, user-blocked tasks, direct CLI submissions, conversations, workspace mappings, and the install baseline. It does not wipe the whole database or replay completed tasks.
 
 ## State and recovery
 
