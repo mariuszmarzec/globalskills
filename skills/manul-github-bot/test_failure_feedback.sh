@@ -167,7 +167,7 @@ export GH_FAIL_POST=1
 MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/task-health-check.sh" >"$TEST_DIR/health-api-failure.log" 2>&1
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='health-api-failure';")" "GitHub publication error does not roll back task failure"
 assert_eq 0 "$(count_for_task health-api-failure)" "failed GitHub publication is not recorded as posted"
-grep -q 'terminal failure comment could not be posted for health-api-failure' "$TEST_DIR/health-api-failure.log" || {
+grep -q 'terminal failure comment could not be posted for health-api-failure' "$MANUL_DIR/logs/task-health.log" || {
   echo "FAIL: publication failure was not logged separately" >&2
   cat "$TEST_DIR/health-api-failure.log" >&2
   exit 1
