@@ -1088,7 +1088,7 @@ scan_failing_ci() {
 NEW=0
 
 queue_normalized_source_task() {
-  local task_json="$1" source_type source_id source_url title body created updated state execution_kind
+  local task_json="$1" source_type source_id source_url title body created updated state execution_kind source_action
   source_type="$(jq -r ".taskSourceType // empty" <<<"$task_json")"
   source_id="$(jq -r ".taskSourceId // empty" <<<"$task_json")"
   source_url="$(jq -r ".taskSourceUrl // empty" <<<"$task_json")"
@@ -1116,7 +1116,7 @@ queue_normalized_source_task() {
     return 0
   fi
 
-  local task_id="source:${source_type}:${source_id}" now lease repo source_context source_action
+  local task_id="source:${source_type}:${source_id}" now lease repo source_context
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
