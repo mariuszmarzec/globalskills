@@ -250,9 +250,2233 @@ SELECT 'active_worker_rows=' || active_count FROM full_reset_guard;
 "
   if has_table conversation_links; then
     FULL_RESET_SQL+=
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_LINKS="${DELETED_LINKS:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation-link rows: $DELETED_LINKS"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
     FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
   fi
   FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_LINKS="${DELETED_LINKS:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation-link rows: $DELETED_LINKS"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_LINKS="${DELETED_LINKS:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation-link rows: $DELETED_LINKS"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_LINKS="${DELETED_LINKS:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation-link rows: $DELETED_LINKS"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_LINKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_links=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_LINKS="${DELETED_LINKS:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation-link rows: $DELETED_LINKS"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_links WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+SELECT \'deleted_conversation_links=\' || changes();\n'
+  fi
+  if has_table conversation_messages; then
+    FULL_RESET_SQL+=
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM conversation_messages WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversation_messages=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+  FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
+  if has_table conversations; then
+    FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
+    FULL_RESET_SQL+=$'SELECT \'deleted_conversations=\' || changes();\n'
+  fi
+  FULL_RESET_SQL+=$'DROP TABLE full_reset_guard;\nCOMMIT;'
+  SQL_OUTPUT="$(sqlite3 -bail "$DB" <<<"$FULL_RESET_SQL")" || fail "could not perform full task reset"
+
+  ACTIVE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^active_worker_rows=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  DELETED_MESSAGES="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversation_messages=//p' | tail -n1)"
+  DELETED_CONVERSATIONS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_conversations=//p' | tail -n1)"
+  ACTIVE_COUNT="${ACTIVE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  DELETED_MESSAGES="${DELETED_MESSAGES:-0}"
+  DELETED_CONVERSATIONS="${DELETED_CONVERSATIONS:-0}"
+  [[ "$ACTIVE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read active worker count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+  if [ "$ACTIVE_COUNT" -gt 0 ]; then
+    fail "found $ACTIVE_COUNT running/worker-owned task rows. No task data was changed. Finish/stop those workers, verify their state, then retry. Backup retained at: $BACKUP_FILE"
+  fi
+else
+  BASE_EXPR="NULL"
+  has_column processed_comments baseId && BASE_EXPR="baseId"
+  TYPE_EXPR="''"
+  has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceType,'')"
+  HAS_MESSAGES=0
+  has_table conversation_messages && HAS_MESSAGES=1
+
+  MESSAGE_DELETE_SQL=""
+  if [ "$HAS_MESSAGES" -eq 1 ]; then
+    MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+   OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
+   OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
+   OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+
+  # Selection and deletion share one write transaction. If a worker claimed a
+  # queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
+  SQL_OUTPUT="$(
+    sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
+DELETE FROM processed_comments
+WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND status IN ('queued','failed','stale');
+SELECT 'deleted_tasks=' || changes();
+DROP TABLE queue_reset_candidates;
+COMMIT;
+SQL
+  )" || fail "could not reset replayable tasks"
+
+  CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
+  DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+  CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
+  DELETED_TASKS="${DELETED_TASKS:-0}"
+  [[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+  [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+fi
+
+flock -u 200 || true
+exec 200>&-
+
+if [ "$SCOPE" = "all-tasks" ]; then
+  echo "Removed task rows: $DELETED_TASKS"
+  echo "Removed conversation-message rows: $DELETED_MESSAGES"
+  echo "Removed conversation rows: $DELETED_CONVERSATIONS"
+  echo "Preserved install baseline, configuration, workspace state and unrelated runtime state."
+else
+  echo "Replayable tasks found: $CANDIDATE_COUNT"
+  echo "Removed replayable tasks: $DELETED_TASKS"
+  echo "Preserved running workers, completed tasks, blocked-user tasks, worker-assigned rows, manual submissions, conversations, workspace state, and baseline."
+fi
+echo "Running the configured poller now..."
+
+POLL_OUTPUT=""
+POLL_EXIT=0
+POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT" 2>&1)" || POLL_EXIT=$?
+printf '%s\n' "$POLL_OUTPUT"
+
+if [ "$POLL_EXIT" -ne 0 ]; then
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
+  exit "$POLL_EXIT"
+fi
+
+RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
+if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+echo
+echo "Queue after poll:"
+sqlite3 "$DB" "
+  SELECT '  queued=' || COUNT(*) FROM processed_comments WHERE status='queued';
+  SELECT '  running=' || COUNT(*) FROM processed_comments WHERE status='running';
+  SELECT '  failed=' || COUNT(*) FROM processed_comments WHERE status='failed';
+"
+echo "Reset/re-poll complete. Backup retained at: $BACKUP_FILE"
+DELETE FROM processed_comments WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
   FULL_RESET_SQL+=$'SELECT \'deleted_tasks=\' || changes();\n'
   if has_table conversations; then
     FULL_RESET_SQL+=$'DELETE FROM conversations WHERE (SELECT active_count FROM full_reset_guard)=0;\n'
