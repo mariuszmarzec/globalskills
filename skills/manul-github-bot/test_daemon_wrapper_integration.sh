@@ -641,7 +641,10 @@ FAIL_REASON=""
 TASK_ACTION="REVIEW_FIX"
 evaluate_task_completion "test/repo" "52" "COMMENT_K" "COMMENT_K" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_K" "" "$INITIAL_HEAD_K" "master" "master"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
-    echo "FAIL: Test K - expected informational task with no repo changes to succeed, got $COMPLETION_SUCCESS ($FAIL_REASON)"
+    echo "FAIL: Test K - expected informational task with no repo changes to succeed, got $COMPLETION_SUCCESS ($FAIL_REASON)" >&2
+    echo "  failure_code=${FAILURE_CODE:-<unset>} action=${TASK_ACTION:-<unset>} db_row=$(sqlite3 "$DB" "SELECT status || ':' || COALESCE(workerPid,'') || ':' || COALESCE(action,'') FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null)" >&2
+    echo "  daemon log:" >&2
+    tail -n 40 "$LOG_FILE" >&2 || true
     exit 1
 fi
 if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
