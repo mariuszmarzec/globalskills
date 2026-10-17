@@ -160,7 +160,7 @@ if [[ "$1" == "api" ]]; then
                         json_output='[{"id":1011,"body":"<!-- manul-task:COMMENT_K:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
                         ;;
                     56)
-                        json_output='[{"id":1015,"body":"<!-- manul-task:COMMENT_Q:attempt:1 -->\\nDiagnostic report with concrete findings","in_reply_to_id":null}]'
+                        json_output='[{"id":1015,"body":"<!-- manul-task:COMMENT_Q:attempt:1 --> Diagnostic report with concrete findings — manul 🐈","in_reply_to_id":null}]'
                         ;;
                     57)
                         json_output='[]'
