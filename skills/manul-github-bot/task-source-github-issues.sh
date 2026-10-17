@@ -39,15 +39,25 @@ task_source_github_issues_poll() {
           | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "([ \\t\\r\\n]|$)"))
           | (.body | split("\n")) as $lines
           | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "([ \\t]|$)"))][0]) as $idx
-          | ($lines[$idx] | sub("^[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "[ \\t]*"; "")) as $prompt
-          | select(($prompt | gsub("[ \\t\\r\\n]"; "")) != "")
+          | ($lines[$idx] | sub("^[ \\t]*" + ($trigger | gsub("[\\^$.|?+()\\[\\]{}]"; "\\\\$&")) + "[ \\t]*"; "")) as $first_prompt
+          | ($lines[$idx+1:] | join("\n")) as $tail_prompt
+          | (if $first_prompt == "" then $tail_prompt elif $tail_prompt == "" then $first_prompt else ($first_prompt + "\n" + $tail_prompt) end) as $raw_prompt
+          | ($raw_prompt | sub("^[ \t\r\n]+"; "")) as $command_prompt
+          | (if ($command_prompt | test("^verify([ \t\r\n]|$)")) then "VERIFY"
+             elif ($command_prompt | test("^review-fix([ \t\r\n]|$)")) then "REVIEW_FIX"
+             else "IMPLEMENT" end) as $action
+          | (if $action == "VERIFY" then ($command_prompt | sub("^verify([ \t\r\n]+|$)"; ""))
+             elif $action == "REVIEW_FIX" then ($command_prompt | sub("^review-fix([ \t\r\n]+|$)"; ""))
+             else $command_prompt end) as $task_prompt
+          | select(($task_prompt | gsub("[ \t\r\n]"; "")) != "")
           | {
               taskSourceType:"github_issues",
               taskSourceId:($repo + "#" + (.number|tostring)),
               taskSourceUrl:.html_url,
               title:(.title // ""),
               body:(.body // ""),
-              prompt:$prompt,
+              prompt:$task_prompt,
+              action:$action,
               createdAt:(.created_at // ""),
               updatedAt:(.updated_at // .created_at // ""),
               state:"OPEN",

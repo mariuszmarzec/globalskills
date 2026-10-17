@@ -141,6 +141,8 @@ For an agent execution:
 
 A `TASK_DONE` without a verified result comment is not accepted as successful completion.
 
+Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR is required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
+
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
 
 ## 9. Comment routing

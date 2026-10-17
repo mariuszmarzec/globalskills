@@ -80,9 +80,12 @@ if [[ "$1" == "api" ]]; then
             body_value="${arg#body=}"
         fi
     done
-    for arg in "$@"; do
-        if [[ "$arg" == "--jq" ]]; then
+    jq_filter=""
+    for ((i=1; i<=$#; i++)); do
+        if [[ "${!i}" == "--jq" ]]; then
             has_jq=true
+            i=$((i+1))
+            jq_filter="${!i}"
             break
         fi
     done
@@ -120,8 +123,8 @@ if [[ "$1" == "api" ]]; then
                 issue_num="${issue_num%%/*}"
                 case "$issue_num" in
                     42)
-                        # Test A: valid result for COMMENT_1
-                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
+                        # Test A and Q: verified task reports for explicit report-only paths
+                        json_output='[{"id":1001,"body":"<!-- manul-task:COMMENT_1:attempt:1 -->\\ntest result — manul 🐈","in_reply_to_id":null}]'
                         ;;
                     43)
                         # Test B: no result comment (missing result)
@@ -159,6 +162,18 @@ if [[ "$1" == "api" ]]; then
                         # Test K: informational task makes no repository changes; PR/branch is not required
                         json_output='[{"id":1011,"body":"<!-- manul-task:COMMENT_K:attempt:1 -->\\ntest result","in_reply_to_id":null}]'
                         ;;
+                    56)
+                        json_output='[{"id":1015,"body":"<!-- manul-task:COMMENT_Q:attempt:1 -->\nDiagnostic report with concrete findings — manul 🐈","in_reply_to_id":null}]'
+                        ;;
+                    57)
+                        json_output='[]'
+                        ;;
+                    58)
+                        json_output='[{"id":1017,"body":"✅ Manul completed the task successfully.","in_reply_to_id":null}]'
+                        ;;
+                    59)
+                        json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\n\n— manul 🐈","in_reply_to_id":null}]'
+                        ;;
                     55)
                         # Test O: existing PR is verified but the task branch was never pushed.
                         json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
@@ -168,7 +183,7 @@ if [[ "$1" == "api" ]]; then
                         ;;
                 esac
                 if [[ "$has_jq" == "true" ]]; then
-                    echo "$json_output" | jq -r '.[] | select(.in_reply_to_id == null) | .body // ""'
+                    echo "$json_output" | jq -r "$jq_filter"
                 else
                     echo "$json_output"
                 fi
@@ -215,10 +230,12 @@ DB="$TEST_TMPDIR/manul_test.db"
 HEARTBEAT_INTERVAL=60
 LOG="$LOG_FILE"
 LIFECYCLE_LOG="$LIFECYCLE_LOG"
-export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG="$SCRIPT_DIR/config.json" MANUL_DIR
+export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG="$SCRIPT_DIR/config.json" MANUL_DIR GH_API_TIMEOUT
 
 # DEFAULT_BRANCH is a global set by the production dispatch path; tests must set it.
 DEFAULT_BRANCH="master"
+# Completion evaluation also branches on the claimed task action; default fixtures emulate IMPLEMENT.
+TASK_ACTION="IMPLEMENT"
 
 # Real git workdir so verify_required_pr can resolve the task branch and (when
 # autoCreatePr is enabled) auto-create a PR. The daemon's autoCreatePr path
@@ -271,12 +288,12 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
 # workerPid must match the test process PID ($$) so the completion path's
 # ownership check (WHERE ... AND workerPid=$$) succeeds. The production
 # claim path sets workerPid to the worker PID; the test inserts rows directly.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_1','test/repo',42,'https://github.com/test/repo/issues/42#issuecomment-1001','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_2','test/repo',43,'https://github.com/test/repo/issues/43#issuecomment-1002','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_3','test/repo',44,'https://github.com/test/repo/issues/44#issuecomment-1003','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_4','test/repo',45,'https://github.com/test/repo/issues/45#issuecomment-1004','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_5','test/repo',46,'https://github.com/test/repo/issues/46#issuecomment-1005','user','test','task','queued',1,$$);"
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_6','test/repo',47,'https://github.com/test/repo/issues/47#issuecomment-1006','user','test','task','queued',1,$$);;"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_1','test/repo',42,'https://github.com/test/repo/issues/42#issuecomment-1001','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_2','test/repo',43,'https://github.com/test/repo/issues/43#issuecomment-1002','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_3','test/repo',44,'https://github.com/test/repo/issues/44#issuecomment-1003','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_4','test/repo',45,'https://github.com/test/repo/issues/45#issuecomment-1004','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_5','test/repo',46,'https://github.com/test/repo/issues/46#issuecomment-1005','user','test','task','running',1,$$);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid) VALUES ('COMMENT_6','test/repo',47,'https://github.com/test/repo/issues/47#issuecomment-1006','user','test','task','running',1,$$);;"
 echo "0" > "$PID_FILE"
 
 # ─── Test A: rc=0 + TASK_DONE + valid result comment -> COMPLETION_SUCCESS=true ─
@@ -286,9 +303,12 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master"
+evaluate_task_completion "test/repo" "42" "COMMENT_1" "COMMENT_1" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR" "" "$INITIAL_HEAD_A" "manul-task-COMMENT_1" "master" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
-    echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'"
+    echo "FAIL: Test A - expected COMPLETION_SUCCESS=true, got '$COMPLETION_SUCCESS'" >&2
+    echo "  failure_code=${FAILURE_CODE:-<unset>} reason=${FAIL_REASON:-<empty>}" >&2
+    echo "  daemon log:" >&2
+    tail -n 60 "$LOG_FILE" >&2 || true
     exit 1
 fi
 if [ -z "$FINAL_COMMENT" ]; then
@@ -304,7 +324,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "43" "COMMENT_2" "COMMENT_2" "1" "0" "$STDOUT_FILE" "$DB" ""
+evaluate_task_completion "test/repo" "43" "COMMENT_2" "COMMENT_2" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test B - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -323,7 +343,7 @@ echo "some unrelated output" >> "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "44" "COMMENT_3" "COMMENT_3" "1" "0" "$STDOUT_FILE" "$DB" ""
+evaluate_task_completion "test/repo" "44" "COMMENT_3" "COMMENT_3" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test C - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -337,7 +357,7 @@ echo "some output without marker" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "45" "COMMENT_4" "COMMENT_4" "1" "0" "$STDOUT_FILE" "$DB" ""
+evaluate_task_completion "test/repo" "45" "COMMENT_4" "COMMENT_4" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test D - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -351,7 +371,7 @@ echo "TASK_FAILED: orchestration error" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "46" "COMMENT_5" "COMMENT_5" "1" "42" "$STDOUT_FILE" "$DB" ""
+evaluate_task_completion "test/repo" "46" "COMMENT_5" "COMMENT_5" "1" "42" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test E - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -366,7 +386,7 @@ echo "timeout occurred" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "47" "COMMENT_6" "COMMENT_6" "1" "124" "$STDOUT_FILE" "$DB" ""
+evaluate_task_completion "test/repo" "47" "COMMENT_6" "COMMENT_6" "1" "124" "$STDOUT_FILE" "$DB" "" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test F - expected COMPLETION_SUCCESS=false, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -405,7 +425,7 @@ echo "=== Test G: agent pushed branch + /compare URL, daemon auto-creates PR -> 
 # The fake gh returns NO pr list results (no PR exists) but a successful
 # pr create (synthesized PR URL). The workdir is checked out on the task branch.
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_G';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_G','test/repo',48,'https://github.com/test/repo/issues/48#issuecomment-1007','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_G','test/repo',48,'https://github.com/test/repo/issues/48#issuecomment-1007','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 
 WORKDIR_G="$TEST_TMPDIR/workdir-g"
 mkdir -p "$WORKDIR_G"
@@ -426,7 +446,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G" "" "$INITIAL_HEAD_G" "manul-task-COMMENT_G" "master"
+evaluate_task_completion "test/repo" "48" "COMMENT_G" "COMMENT_G" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_G" "" "$INITIAL_HEAD_G" "manul-task-COMMENT_G" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test G - expected COMPLETION_SUCCESS=true (daemon should auto-create PR), got '$COMPLETION_SUCCESS'"
     exit 1
@@ -451,7 +471,7 @@ jq '.autoCreatePr = false' "$SCRIPT_DIR/config.json" > "$CONFIG_DISABLED"
 export CONFIG="$CONFIG_DISABLED"
 
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_H';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_H','test/repo',49,'https://github.com/test/repo/issues/49#issuecomment-1008','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_H','test/repo',49,'https://github.com/test/repo/issues/49#issuecomment-1008','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 
 WORKDIR_H="$TEST_TMPDIR/workdir-h"
 mkdir -p "$WORKDIR_H"
@@ -472,7 +492,7 @@ echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H" "" "$INITIAL_HEAD_H" "manul-task-COMMENT_H" "master"
+evaluate_task_completion "test/repo" "49" "COMMENT_H" "COMMENT_H" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_H" "" "$INITIAL_HEAD_H" "manul-task-COMMENT_H" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test H - expected COMPLETION_SUCCESS=false when autoCreatePr disabled, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -511,19 +531,19 @@ echo "forbidden direct base change" >> "$WORKDIR_I/README.md"
 git -C "$WORKDIR_I" add README.md
 git -C "$WORKDIR_I" commit -qm "forbidden direct base change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_I';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_I','test/repo',50,'https://github.com/test/repo/issues/50#issuecomment-1009','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutI.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I" "" "$INITIAL_HEAD_I" "master" "master"
+evaluate_task_completion "test/repo" "50" "COMMENT_I" "COMMENT_I" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_I" "" "$INITIAL_HEAD_I" "master" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test I - expected COMPLETION_SUCCESS=false when checked-out branch is the default branch, got '$COMPLETION_SUCCESS'"
     exit 1
 fi
-if ! printf '%s' "$FAIL_REASON" | grep -q "did not produce a real PR"; then
-    echo "FAIL: Test I - expected FAIL_REASON about missing PR, got '$FAIL_REASON'"
+if ! printf '%s' "$FAIL_REASON" | grep -q "base/default branch"; then
+    echo "FAIL: Test I - expected rejection for a direct base/default-branch change, got '$FAIL_REASON'"
     exit 1
 fi
 if ! grep -q "invalid_task_branch\|MISSING_PR\|no PR found" "$LOG_FILE" 2>/dev/null; then
@@ -552,13 +572,13 @@ echo "review change" >>"$WORKDIR_PR/README.md"
 git -C "$WORKDIR_PR" add README.md
 git -C "$WORKDIR_PR" commit -qm "review change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_REVIEW';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_REVIEW','test/repo',60,'https://github.com/test/repo/pull/60#discussion_r1234','user','test','task','queued',1,$$,'REVIEW_FIX');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_REVIEW','test/repo',60,'https://github.com/test/repo/pull/60#discussion_r1234','user','test','task','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutPR.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "60" "review:PR_REVIEW" "review:PR_REVIEW" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_PR" "" "$INITIAL_HEAD_PR" "feature/44-manul-e2e-fixture" "master"
+evaluate_task_completion "test/repo" "60" "review:PR_REVIEW" "review:PR_REVIEW" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_PR" "" "$INITIAL_HEAD_PR" "feature/44-manul-e2e-fixture" "master" "" "" "feature/44-manul-e2e-fixture"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: PR-tied task on expected head branch was rejected: $FAIL_REASON"
     exit 1
@@ -588,13 +608,13 @@ echo "implementation change" >> "$WORKDIR_J/README.md"
 git -C "$WORKDIR_J" add README.md
 git -C "$WORKDIR_J" commit -qm "implementation change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_J';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_J','test/repo',51,'https://github.com/test/repo/issues/51#issuecomment-1010','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutJ.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J" "" "$INITIAL_HEAD_J" "manul-task-COMMENT_J" "master"
+evaluate_task_completion "test/repo" "51" "COMMENT_J" "COMMENT_J" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_J" "" "$INITIAL_HEAD_J" "manul-task-COMMENT_J" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
     echo "FAIL: Test J - expected COMPLETION_SUCCESS=true on a real task branch, got '$COMPLETION_SUCCESS'"
     exit 1
@@ -615,15 +635,19 @@ git -C "$WORKDIR_K" add README.md
 git -C "$WORKDIR_K" commit -qm initial
 INITIAL_HEAD_K="$(git -C "$WORKDIR_K" rev-parse HEAD)"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','queued',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutK.txt"
 echo "TASK_DONE" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
+TASK_ACTION="REVIEW_FIX"
 evaluate_task_completion "test/repo" "52" "COMMENT_K" "COMMENT_K" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_K" "" "$INITIAL_HEAD_K" "master" "master"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then
-    echo "FAIL: Test K - expected informational task with no repo changes to succeed, got $COMPLETION_SUCCESS ($FAIL_REASON)"
+    echo "FAIL: Test K - expected informational task with no repo changes to succeed, got $COMPLETION_SUCCESS ($FAIL_REASON)" >&2
+    echo "  failure_code=${FAILURE_CODE:-<unset>} action=${TASK_ACTION:-<unset>} db_row=$(sqlite3 "$DB" "SELECT status || ':' || COALESCE(workerPid,'') || ':' || COALESCE(action,'') FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null)" >&2
+    echo "  daemon log:" >&2
+    tail -n 40 "$LOG_FILE" >&2 || true
     exit 1
 fi
 if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
@@ -631,6 +655,7 @@ if printf "%s" "$FAIL_REASON" | grep -q "real PR"; then
     exit 1
 fi
 echo "[OK] Test K: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
+TASK_ACTION="IMPLEMENT"
 
 # ─── Test N: TASK_DONE with uncommitted repository changes is rejected as delivery failure
 echo ""
@@ -649,14 +674,14 @@ INITIAL_HEAD_N="$(git -C "$WORKDIR_N" rev-parse HEAD)"
 git -C "$WORKDIR_N" checkout -qb manul-task-COMMENT_N
 echo "uncommitted implementation" >>"$WORKDIR_N/README.md"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_N';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_N','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1013','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_N','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1013','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutN.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "55" "COMMENT_N" "COMMENT_N" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_N" "" "$INITIAL_HEAD_N" "manul-task-COMMENT_N" "master"
+evaluate_task_completion "test/repo" "55" "COMMENT_N" "COMMENT_N" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_N" "" "$INITIAL_HEAD_N" "manul-task-COMMENT_N" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test N - dirty workspace must not be accepted"
     exit 1
@@ -690,14 +715,14 @@ git -C "$WORKDIR_O" remote add origin "$ORIGIN_O"
 printf '%s %s
 ' "manul-task-COMMENT_O" "master" >>"$FAKE_GH_STATE"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_O';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_O','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1014','user','test','task','queued',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_O','test/repo',55,'https://github.com/test/repo/issues/55#issuecomment-1014','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutO.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "55" "COMMENT_O" "COMMENT_O" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_O" "" "$INITIAL_HEAD_O" "manul-task-COMMENT_O" "master"
+evaluate_task_completion "test/repo" "55" "COMMENT_O" "COMMENT_O" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_O" "" "$INITIAL_HEAD_O" "manul-task-COMMENT_O" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test O - unpushed branch must not be accepted"
     exit 1
@@ -726,14 +751,14 @@ echo "wrong branch change" >>"$WORKDIR_P/README.md"
 git -C "$WORKDIR_P" add README.md
 git -C "$WORKDIR_P" commit -qm "wrong branch change"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='PR_WRONG';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_WRONG','test/repo',61,'https://github.com/test/repo/pull/61#discussion_r5678','user','test','task','queued',1,$,'REVIEW_FIX');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:PR_WRONG','test/repo',61,'https://github.com/test/repo/pull/61#discussion_r5678','user','test','task','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutP.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
-evaluate_task_completion "test/repo" "61" "review:PR_WRONG" "review:PR_WRONG" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_P" "" "$INITIAL_HEAD_P" "unexpected-branch" "master" "" "" "feature/expected-pr"
+evaluate_task_completion "test/repo" "61" "review:PR_WRONG" "review:PR_WRONG" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_P" "" "$INITIAL_HEAD_P" "unexpected-branch" "master" "" "" "feature/expected-pr" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test P - unexpected PR branch must not be accepted"
     exit 1
@@ -751,7 +776,7 @@ echo "[OK] Test P: PASSED (FAILURE_CODE=$FAILURE_CODE)"
 echo ""
 echo "=== Test L: verified PR metadata replaces issue number ==="
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_L';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,prNumber,prUrl) VALUES ('COMMENT_L','test/repo',53,'https://github.com/test/repo/issues/53#issuecomment-1012','user','test','task','completed',1,$,53,NULL);" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,prNumber,prUrl) VALUES ('COMMENT_L','test/repo',53,'https://github.com/test/repo/issues/53#issuecomment-1012','user','test','task','completed',1,$$,53,NULL);" 2>/dev/null
 if ! persist_verified_pr_metadata "COMMENT_L" "37" "https://github.com/test/repo/pull/37"; then
     echo "FAIL: Test L - persist_verified_pr_metadata returned failure"
     exit 1
@@ -772,7 +797,7 @@ echo "[OK] Test L: PASSED (issue number replaced with verified PR #37)"
 echo ""
 echo "=== Test M: issuebody task with repository changes requires real PR ==="
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_M';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber) VALUES ('issuebody:COMMENT_M','test/repo',54,'https://github.com/test/repo/issues/54','user','test','task','queued',1,$,'IMPLEMENT',54);" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action,prNumber) VALUES ('issuebody:COMMENT_M','test/repo',54,'https://github.com/test/repo/issues/54','user','test','task','running',1,$$,'IMPLEMENT',54);" 2>/dev/null
 
 WORKDIR_M="$TEST_TMPDIR/workdir-m"
 mkdir -p "$WORKDIR_M"
@@ -793,7 +818,8 @@ echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""
-evaluate_task_completion "test/repo" "54" "issuebody:COMMENT_M" "issuebody:COMMENT_M" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_M" "" "$INITIAL_HEAD_M" "manul-task-COMMENT_M" "master"
+export CONFIG="$CONFIG_DISABLED"
+evaluate_task_completion "test/repo" "54" "issuebody:COMMENT_M" "issuebody:COMMENT_M" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_M" "" "$INITIAL_HEAD_M" "manul-task-COMMENT_M" "master" "" "" "" "" ""
 if [ "$COMPLETION_SUCCESS" = "true" ]; then
     echo "FAIL: Test M - issuebody task with repository changes must not succeed without a real PR"
     exit 1
@@ -803,6 +829,74 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
     exit 1
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
+export CONFIG="$SCRIPT_DIR/config.json"
+
+
+# Test Q/R/S: report-only delivery and implementation guards.
+echo ""
+echo "=== Test Q: comment-only diagnostic delivery succeeds without PR ==="
+WORKDIR_Q="$TEST_TMPDIR/workdir-q"; mkdir -p "$WORKDIR_Q"
+git -C "$WORKDIR_Q" init -q; git -C "$WORKDIR_Q" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_Q" config user.email test@example.com; git -C "$WORKDIR_Q" config user.name test
+printf "baseline\\n" >"$WORKDIR_Q/README.md"; git -C "$WORKDIR_Q" add README.md; git -C "$WORKDIR_Q" commit -qm initial
+INITIAL_HEAD_Q="$(git -C "$WORKDIR_Q" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Q';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Q','test/repo',56,'https://github.com/test/repo/issues/56#issuecomment-1015','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutQ.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
+evaluate_task_completion "test/repo" "56" "COMMENT_Q" "COMMENT_Q" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Q" "" "$INITIAL_HEAD_Q" "master" "master" "" "" "" "" "comment_only"
+if [ "$COMPLETION_SUCCESS" != "true" ]; then echo "FAIL: report-only should succeed ($FAIL_REASON)"; exit 1; fi
+echo "[OK] Test Q: PASSED"
+
+echo "=== Test R: report-only task without a verified result fails ==="
+WORKDIR_R="$TEST_TMPDIR/workdir-r"; mkdir -p "$WORKDIR_R"
+git -C "$WORKDIR_R" init -q; git -C "$WORKDIR_R" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_R" config user.email test@example.com; git -C "$WORKDIR_R" config user.name test
+printf "baseline\\n" >"$WORKDIR_R/README.md"; git -C "$WORKDIR_R" add README.md; git -C "$WORKDIR_R" commit -qm initial
+INITIAL_HEAD_R="$(git -C "$WORKDIR_R" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_R';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_R','test/repo',57,'https://github.com/test/repo/issues/57#issuecomment-1016','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutR.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
+evaluate_task_completion "test/repo" "57" "COMMENT_R" "COMMENT_R" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_R" "" "$INITIAL_HEAD_R" "master" "master" "" "" "" "" "comment_only"
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then echo "FAIL: absent report must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+echo "[OK] Test R: PASSED"
+
+echo "=== Test T: empty report result is rejected ==="
+WORKDIR_T="$TEST_TMPDIR/workdir-t"; mkdir -p "$WORKDIR_T"
+git -C "$WORKDIR_T" init -q; git -C "$WORKDIR_T" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_T" config user.email test@example.com; git -C "$WORKDIR_T" config user.name test
+printf "baseline\\n" >"$WORKDIR_T/README.md"; git -C "$WORKDIR_T" add README.md; git -C "$WORKDIR_T" commit -qm initial
+INITIAL_HEAD_T="$(git -C "$WORKDIR_T" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_T';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_T','test/repo',59,'https://github.com/test/repo/issues/59#issuecomment-1018','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutT.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
+evaluate_task_completion "test/repo" "59" "COMMENT_T" "COMMENT_T" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_T" "" "$INITIAL_HEAD_T" "master" "master" "" "" "" "" "comment_only"
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_EMPTY" ]; then
+  echo "FAIL: empty report must fail ($FAILURE_CODE $FAIL_REASON)" >&2
+  echo "DEBUG: result endpoint fixture:" >&2
+  gh api repos/test/repo/issues/59/comments --paginate --jq '.[] | .body // ""' >&2 || true
+  echo "DEBUG: task row: $(sqlite3 "$DB" "SELECT commentUrl || ':' || action || ':' || status FROM processed_comments WHERE commentId='COMMENT_T';" 2>/dev/null)" >&2
+  echo "DEBUG: daemon log:" >&2
+  tail -n 50 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+echo "[OK] Test T: PASSED"
+
+echo "=== Test S: implementation without PR is still rejected ==="
+WORKDIR_S="$TEST_TMPDIR/workdir-s"; mkdir -p "$WORKDIR_S"
+git -C "$WORKDIR_S" init -q; git -C "$WORKDIR_S" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_S" config user.email test@example.com; git -C "$WORKDIR_S" config user.name test
+printf "baseline\\n" >"$WORKDIR_S/README.md"; git -C "$WORKDIR_S" add README.md; git -C "$WORKDIR_S" commit -qm initial
+INITIAL_HEAD_S="$(git -C "$WORKDIR_S" rev-parse HEAD)"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_S';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_S','test/repo',58,'https://github.com/test/repo/issues/58#issuecomment-1017','user','test','implement the requested change','running',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
+evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" ""
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+echo "[OK] Test S: PASSED"
 
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""

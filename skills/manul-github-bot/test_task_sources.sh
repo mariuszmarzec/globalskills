@@ -70,6 +70,7 @@ cat >"$BIN/gh" <<'GH'
 cat <<'JSON'
 [
   {"number":11,"html_url":"https://github.com/owner/issues/issues/11","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Run root task","body":"/manul implement this"},
+  {"number":13,"html_url":"https://github.com/owner/issues/issues/13","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Diagnostics only","body":"/manul verify\nDiagnose only and report findings without changing code"},
   {"number":12,"html_url":"https://github.com/owner/issues/pull/12","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"PR is not root","body":"/manul should never be a source","pull_request":{"url":"https://api.github.com/repos/owner/issues/pulls/12"}}
 ]
 JSON
@@ -84,6 +85,38 @@ assert_contains "GitHub /manul issue is normalized" "$github_tasks" '"taskSource
 assert_contains "GitHub source id is stable" "$github_tasks" '"taskSourceId":"owner/issues#11"'
 assert_contains "GitHub trigger is removed from normalized prompt" "$github_tasks" '"prompt":"implement this"'
 assert_not_contains "GitHub PR is never a root source" "$github_tasks" '"taskSourceId":"owner/issues#12"'
+assert_contains "explicit verify command is normalized as report-only" "$github_tasks" '"action":"VERIFY"'
+assert_contains "verify command is removed from the agent prompt" "$github_tasks" '"prompt":"Diagnose only and report findings without changing code"'
+
+# Queue a normalized VERIFY source through the production queueing function and assert
+# the explicit delivery action survives persistence in processed_comments.
+sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+sql_num() { [[ "$1" =~ ^[0-9]+$ ]] && printf '%s' "$1" || printf ''; }
+log() { :; }
+eval "$(sed -n '/^queue_normalized_source_task() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+DB="$WORK/queue.db"
+LOG="$WORK/poll.log"
+LEASE_TIMEOUT=900
+NEW=0
+sqlite3 "$DB" "CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER, commentUrl TEXT,
+  author TEXT, agent TEXT, prompt TEXT, status TEXT, createdAt TEXT, heartbeatAt TEXT,
+  leaseExpiresAt TEXT, conversationId TEXT, baseId TEXT, taskSourceType TEXT,
+  taskSourceId TEXT, taskSourceUrl TEXT, taskSourceTitle TEXT, taskSourceUpdatedAt TEXT,
+  context TEXT, action TEXT DEFAULT 'IMPLEMENT'
+);"
+verify_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#13")')"
+queue_normalized_source_task "$verify_task"
+if [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")" -eq 0 ]; then
+  echo "DEBUG: source task was not inserted; queue log follows:" >&2
+  cat "$LOG" >&2 2>/dev/null || true
+  echo "DEBUG: normalized source payload:" >&2
+  printf '%s\n' "$verify_task" >&2
+fi
+actual_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+actual_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+assert_eq "VERIFY action persists through source queueing" "VERIFY" "$actual_action"
+assert_eq "verify prompt persists without command prefix" "Diagnose only and report findings without changing code" "$actual_prompt"
 
 echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
