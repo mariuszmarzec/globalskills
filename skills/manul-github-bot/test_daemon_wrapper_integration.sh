@@ -773,7 +773,7 @@ echo "[OK] Test P: PASSED (FAILURE_CODE=$FAILURE_CODE)"
 echo ""
 echo "=== Test L: verified PR metadata replaces issue number ==="
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_L';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,prNumber,prUrl) VALUES ('COMMENT_L','test/repo',53,'https://github.com/test/repo/issues/53#issuecomment-1012','user','test','task','completed',1,$,53,NULL);" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,prNumber,prUrl) VALUES ('COMMENT_L','test/repo',53,'https://github.com/test/repo/issues/53#issuecomment-1012','user','test','task','completed',1,$$,53,NULL);" 2>/dev/null
 if ! persist_verified_pr_metadata "COMMENT_L" "37" "https://github.com/test/repo/pull/37"; then
     echo "FAIL: Test L - persist_verified_pr_metadata returned failure"
     exit 1
