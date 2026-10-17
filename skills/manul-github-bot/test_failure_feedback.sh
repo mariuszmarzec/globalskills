@@ -146,8 +146,12 @@ assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE c
 health_comment_count="$(count_for_task health-stuck)"
 if [ "$health_comment_count" != "1" ]; then
   echo "FAIL: health-check terminal failure comment published (expected=1 actual=$health_comment_count)" >&2
-  echo "--- health-check log ---" >&2
+  echo "--- health-check stdout/stderr ---" >&2
   cat "$TEST_DIR/health-ok.log" >&2
+  echo "--- health-check runtime log ---" >&2
+  cat "$MANUL_DIR/logs/task-health.log" >&2 || true
+  echo "--- failure publisher runtime files ---" >&2
+  find "$MANUL_DIR" -maxdepth 4 -type f -print >&2
   echo "--- GitHub mock calls ---" >&2
   cat "$GH_CALL_LOG" >&2
   echo "--- recorded GitHub comments ---" >&2
