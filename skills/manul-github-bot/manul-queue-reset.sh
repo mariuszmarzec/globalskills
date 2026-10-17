@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # manul-queue-reset.sh — Replay recoverable Manul queue items from configured sources.
 #
-# By default this is a read-only preview. Execution removes only unfinished
-# tasks that polling can recreate, clears their corresponding trigger-message
-# dedupe records, takes a SQLite-consistent backup, and runs poll.sh once.
-# Active workers, completed work, user-blocked tasks, and manually submitted
-# tasks are deliberately preserved.
+# Default mode is a read-only preview. Execution removes only unfinished tasks
+# that polling can recreate, clears the matching trigger-message dedupe records,
+# makes a consistent SQLite backup, and runs poll.sh once.
+# Running/completed/user-blocked tasks and manually submitted CLI tasks survive.
 
 set -euo pipefail
 
@@ -20,12 +19,12 @@ usage() {
   cat <<'USAGE'
 Usage: manul-queue-reset.sh [--dry-run|--execute]
 
-  --dry-run   Show replayable queued/failed/stale tasks (default; no changes)
-  --execute   Require interactive confirmation, back up the DB, remove
-              replayable unfinished GitHub/source tasks, then run poll.sh
+  --dry-run   Preview replayable queued/failed/stale tasks (default)
+  --execute   Require confirmation, back up the DB, remove replayable tasks,
+              clear their trigger-message dedupe entries, then run poll.sh
 
-This does NOT erase task history or reset the install baseline. It preserves
-running/completed/user-blocked tasks and manually submitted CLI tasks.
+The install baseline and task history are not reset. Running/completed/
+blocked-user tasks and manually submitted CLI tasks are preserved.
 USAGE
 }
 
@@ -54,7 +53,8 @@ sqlite3 "$DB" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='processe
 
 has_column() {
   local table="$1" column="$2"
-  sqlite3 "$DB" "PRAGMA table_info($table);" 2>/dev/null | awk -F'|' -v wanted="$column" '$2 == wanted { found=1 } END { exit !found }'
+  sqlite3 "$DB" "PRAGMA table_info($table);" 2>/dev/null |
+    awk -F'|' -v wanted="$column" '$2 == wanted { found=1 } END { exit !found }'
 }
 
 has_table() {
@@ -66,13 +66,12 @@ if has_column processed_comments taskSourceType && has_column processed_comments
   SOURCE_PREDICATE="(taskSourceType IN ('github_issues','jira_tasks') AND COALESCE(taskSourceId,'') <> '')"
 fi
 
-# Trigger comments can be re-discovered by poll.sh only when both the stable
-# GitHub URL and expected comment identity are present. Do not delete CLI IDs
-# or arbitrary tasks that have no external source to recreate them.
+# Only include GitHub comment IDs that poll.sh can rediscover. Never delete
+# arbitrary comment-like IDs or user-submitted tasks that have no source trigger.
 GITHUB_COMMENT_PREDICATE="(
   COALESCE(taskSourceType,'') = '' AND (
     (
-      commentId NOT GLOB '*[^0-9]*' AND
+      commentId <> '' AND commentId NOT GLOB '*[^0-9]*' AND
       (commentUrl LIKE 'https://github.com/%#issuecomment-%' OR commentUrl LIKE 'https://github.com/%#discussion_r%')
     ) OR (
       commentId LIKE 'review:%' AND substr(commentId,8) <> '' AND
@@ -84,7 +83,7 @@ GITHUB_COMMENT_PREDICATE="(
 if ! has_column processed_comments taskSourceType; then
   GITHUB_COMMENT_PREDICATE="(
     (
-      commentId NOT GLOB '*[^0-9]*' AND
+      commentId <> '' AND commentId NOT GLOB '*[^0-9]*' AND
       (commentUrl LIKE 'https://github.com/%#issuecomment-%' OR commentUrl LIKE 'https://github.com/%#discussion_r%')
     ) OR (
       commentId LIKE 'review:%' AND substr(commentId,8) <> '' AND
@@ -97,23 +96,24 @@ fi
 CANDIDATE_PREDICATE="status IN ('queued','failed','stale') AND (($SOURCE_PREDICATE) OR $GITHUB_COMMENT_PREDICATE)"
 
 show_counts() {
-  local label="$1"
-  echo "$label"
-  sqlite3 -separator ' ' "$DB" "
+  echo "$1"
+  sqlite3 "$DB" "
     SELECT '  replayable_' || status || '=' || COUNT(*)
     FROM processed_comments
     WHERE $CANDIDATE_PREDICATE
     GROUP BY status
     ORDER BY status;
     SELECT '  replayable_total=' || COUNT(*)
-    FROM processed_comments
-    WHERE $CANDIDATE_PREDICATE;
+    FROM processed_comments WHERE $CANDIDATE_PREDICATE;
     SELECT '  running_preserved=' || COUNT(*)
     FROM processed_comments WHERE status='running';
     SELECT '  completed_preserved=' || COUNT(*)
     FROM processed_comments WHERE status IN ('done','completed');
     SELECT '  blocked_user_preserved=' || COUNT(*)
     FROM processed_comments WHERE status='blocked_user';
+    SELECT '  manual_or_unreplayable_preserved=' || COUNT(*)
+    FROM processed_comments WHERE status IN ('queued','failed','stale')
+      AND NOT ($SOURCE_PREDICATE OR $GITHUB_COMMENT_PREDICATE);
   " 2>/dev/null
 }
 
@@ -123,7 +123,7 @@ if [ "$MODE" = "dry-run" ]; then
   exit 0
 fi
 
-read -r -p "This will replay unfinished externally-sourced tasks. Type RESET QUEUE to continue: " CONFIRMATION
+read -r -p "This replays unfinished externally-sourced tasks. Type RESET QUEUE to continue: " CONFIRMATION
 [ "$CONFIRMATION" = "RESET QUEUE" ] || fail "confirmation did not match; no changes made"
 
 mkdir -p "$MANUL_LOCKS_DIR" "$MANUL_STATE_DIR/backups"
@@ -147,8 +147,6 @@ with sqlite3.connect(source_path, timeout=30) as source:
             raise SystemExit(f"backup integrity check failed: {result}")
 PY
   else
-    # SQLite's shell backup API includes committed WAL content and provides a
-    # consistent snapshot without relying on a raw copy of the live DB file.
     local quoted
     quoted="$(printf '%s' "$BACKUP_FILE" | sed "s/'/''/g")"
     sqlite3 "$DB" ".backup '$quoted'"
@@ -165,51 +163,25 @@ has_column processed_comments taskSourceType && TYPE_EXPR="COALESCE(taskSourceTy
 HAS_MESSAGES=0
 has_table conversation_messages && HAS_MESSAGES=1
 
-# Lock the DB transaction before selecting candidates. If a worker claimed a
-# queued task just before the transaction began, its now-running row is not in
-# the candidate set and is left untouched.
-SQL_OUTPUT="$(
-  sqlite3 -bail "$DB" <<SQL
-BEGIN IMMEDIATE;
-CREATE TEMP TABLE queue_reset_candidates AS
-  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
-  FROM processed_comments
-  WHERE $CANDIDATE_PREDICATE;
-SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
-SQL
-)" || fail "could not prepare reset transaction"
-CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
-CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
-[[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
-
-# Backup is complete and the write transaction has a stable candidate snapshot.
-# Use a second transaction for deletion; there is no destructive SQL between the
-# snapshot and the transaction below except for this in-memory temp table.
-SQL_OUTPUT="$(
-  sqlite3 -bail "$DB" <<SQL
-BEGIN IMMEDIATE;
-CREATE TEMP TABLE queue_reset_candidates AS
-  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
-  FROM processed_comments
-  WHERE $CANDIDATE_PREDICATE;
-SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
-SQL
-)" || fail "could not acquire reset transaction"
-
-CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
-CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
-
+MESSAGE_DELETE_SQL=""
 if [ "$HAS_MESSAGES" -eq 1 ]; then
-  sqlite3 -bail "$DB" <<SQL >/dev/null || fail "could not clear trigger dedupe records"
-DELETE FROM conversation_messages
+  MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
    OR commentId IN (SELECT baseId FROM queue_reset_candidates WHERE baseId IS NOT NULL)
-   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');
-SQL
+   OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
 fi
 
+# Selection and deletion share one write transaction. If a worker claimed a
+# queued item before BEGIN IMMEDIATE, the task is now running and is not selected.
 SQL_OUTPUT="$(
   sqlite3 -bail "$DB" <<SQL
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE queue_reset_candidates AS
+  SELECT commentId, $BASE_EXPR AS baseId, $TYPE_EXPR AS taskSourceType
+  FROM processed_comments
+  WHERE $CANDIDATE_PREDICATE;
+SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
+$MESSAGE_DELETE_SQL
 DELETE FROM processed_comments
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
   AND status IN ('queued','failed','stale');
@@ -217,13 +189,19 @@ SELECT 'deleted_tasks=' || changes();
 DROP TABLE queue_reset_candidates;
 COMMIT;
 SQL
-)" || fail "could not delete replayable tasks"
+)" || fail "could not reset replayable tasks"
 
+CANDIDATE_COUNT="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^candidate_count=//p' | tail -n1)"
 DELETED_TASKS="$(printf '%s\n' "$SQL_OUTPUT" | sed -n 's/^deleted_tasks=//p' | tail -n1)"
+CANDIDATE_COUNT="${CANDIDATE_COUNT:-0}"
 DELETED_TASKS="${DELETED_TASKS:-0}"
+[[ "$CANDIDATE_COUNT" =~ ^[0-9]+$ ]] || fail "could not read candidate count"
+[[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
+
 flock -u 200 || true
 exec 200>&-
 
+echo "Replayable tasks found: $CANDIDATE_COUNT"
 echo "Removed replayable tasks: $DELETED_TASKS"
 echo "Preserved running workers, completed tasks, blocked-user tasks, manual submissions, conversations, workspace state, and baseline."
 echo "Running the configured poller now..."
@@ -234,13 +212,13 @@ POLL_OUTPUT="$(MANUL_DIR="$MANUL_DIR" MANUL_DB="$DB" DB="$DB" bash "$POLL_SCRIPT
 printf '%s\n' "$POLL_OUTPUT"
 
 if [ "$POLL_EXIT" -ne 0 ]; then
-  echo "ERROR: poll.sh exited with status $POLL_EXIT. The backup is available at $BACKUP_FILE." >&2
+  echo "ERROR: poll.sh exited with status $POLL_EXIT. Backup: $BACKUP_FILE" >&2
   exit "$POLL_EXIT"
 fi
 
 RESULT_JSON="$(printf '%s\n' "$POLL_OUTPUT" | sed -n 's/^MANUL_RESULT //p' | tail -n1)"
 if [ -n "$RESULT_JSON" ] && printf '%s' "$RESULT_JSON" | jq -e '.error != null' >/dev/null 2>&1; then
-  echo "ERROR: poller reported an error. The backup is available at $BACKUP_FILE." >&2
+  echo "ERROR: poller reported an error. Backup: $BACKUP_FILE" >&2
   exit 1
 fi
 
