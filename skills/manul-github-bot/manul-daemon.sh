@@ -1689,11 +1689,10 @@ verify_result_comment() {
   return 1
 }
 
-# Verify a task-correlated result comment has meaningful user-facing content.
-# The existing marker verifier has already established exact task/attempt correlation;
-# reuse its parsed body instead of making a second, differently-shaped API request.
+# Verify a task-correlated result comment contains meaningful user-facing content.
+# The exact task/attempt marker is checked independently by verify_result_comment().
 verify_nonempty_result_comment() {
-  local repo="$1" comment_id="$2" safe_comment_id="$3" attempt="$4"
+  local repo="$1" issue="$2" comment_id="$3" safe_comment_id="$4" attempt="$5"
   local comment_url url_issue_num endpoint marker tmpdir bodies_file body clean result_filter
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$(sql_escape "$safe_comment_id")';" 2>/dev/null)"
   [ -n "$comment_url" ] || return 1
@@ -2524,7 +2523,7 @@ evaluate_task_completion() {
       FAIL_REASON="Report-only task did not publish a verified result comment"
       log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
-    elif ! verify_nonempty_result_comment "$REPO" "$COMMENT_ID" "$current_attempt"; then
+    elif ! verify_nonempty_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
       SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
       FAIL_REASON="Report-only task result comment is empty or contains only the task marker/signature"
       log "dispatch: task $COMMENT_ID report-only validation failed: result comment is empty"
