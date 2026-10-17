@@ -2509,32 +2509,6 @@ evaluate_task_completion() {
   # comment is malformed, the verified PR metadata is still persisted before the
   # task is rejected for violating the exactly-one-result-comment contract.
 
-  # VERIFY is report-only; only its explicit delivery mode selects this path.
-  if [ "$DELIVERY_MODE" = "comment_only" ] && [ "$rc" -eq 0 ] && [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
-    local report_repo_changed="false"
-    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then report_repo_changed="true"; fi
-    if [ "$report_repo_changed" = "true" ]; then
-      SUCCESS="false"; FAILURE_CODE="VERIFICATION_FAILED"
-      FAIL_REASON="Comment-only task modified the repository; report-only delivery must leave code unchanged"
-      log "dispatch: task $COMMENT_ID report-only validation failed: repository changed"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_repository_changed"
-    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_MISSING"
-      FAIL_REASON="Report-only task did not publish a verified result comment"
-      log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
-    elif ! verify_nonempty_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
-      FAIL_REASON="Report-only task result comment is empty or contains only the task marker/signature"
-      log "dispatch: task $COMMENT_ID report-only validation failed: result comment is empty"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
-    else
-      log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
-      lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
-    fi
-  fi
-  
-
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
@@ -2566,6 +2540,33 @@ evaluate_task_completion() {
       log "dispatch: task $COMMENT_ID repository state is dirty (${repo_state_issues% })"
     fi
   fi
+
+  # VERIFY is report-only; only its explicit delivery mode selects this path.
+  if [ "$DELIVERY_MODE" = "comment_only" ] && [ "$rc" -eq 0 ] && [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
+    local report_repo_changed="false"
+    if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then report_repo_changed="true"; fi
+    if [ "$report_repo_changed" = "true" ]; then
+      SUCCESS="false"; FAILURE_CODE="VERIFICATION_FAILED"
+      FAIL_REASON="Comment-only task modified the repository; report-only delivery must leave code unchanged"
+      log "dispatch: task $COMMENT_ID report-only validation failed: repository changed"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_repository_changed"
+    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+      FAIL_REASON="Report-only task did not publish a verified result comment"
+      log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
+    elif ! verify_nonempty_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      SUCCESS="false"; FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      FAIL_REASON="Report-only task result comment is empty or contains only the task marker/signature"
+      log "dispatch: task $COMMENT_ID report-only validation failed: result comment is empty"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
+    else
+      log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
+      lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
+    fi
+  fi
+  
+
 
   # Result-comment marker validation is a correlation/presentation safeguard,
   # not a reason to discard already-verified repository delivery. By this point
