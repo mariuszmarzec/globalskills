@@ -390,12 +390,12 @@ SQL
   [[ "$DELETED_TASKS" =~ ^[0-9]+$ ]] || fail "could not read deleted task count"
 fi
 
-flock -u 200 || true
-exec 200>&-
 if [ "$SCOPE" = "all-tasks" ]; then
   flock -u 201 || true
   exec 201>&-
 fi
+flock -u 200 || true
+exec 200>&-
 
 if [ "$SCOPE" = "all-tasks" ]; then
   echo "Removed task rows: $DELETED_TASKS"
