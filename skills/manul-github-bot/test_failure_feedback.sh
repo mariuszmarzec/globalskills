@@ -86,6 +86,28 @@ GH
 chmod +x "$TEST_DIR/bin/gh"
 export PATH="$TEST_DIR/bin:$PATH"
 
+# Export a gh function so child Bash processes use the mock even when the
+# production health checker intentionally prepends standard system paths.
+gh() {
+  printf 'CALL:%s\\n' "$*" >> "$GH_CALL_LOG"
+  if [[ "${1:-}" == "api" ]]; then
+    if [ -s "$GH_COMMENTS_JSONL" ]; then jq -s '.' "$GH_COMMENTS_JSONL"; else printf '[]\\n'; fi
+    return 0
+  fi
+  if [[ "${1:-}" == "issue" && "${2:-}" == "comment" ]]; then
+    if [ "${GH_FAIL_POST:-0}" = "1" ]; then echo "simulated GitHub comment failure" >&2; return 1; fi
+    local body="" arg
+    while (($#)); do
+      if [[ "$1" == "--body" ]]; then body="$2"; shift 2; else shift; fi
+    done
+    jq -nc --arg body "$body" '{body:$body}' >> "$GH_COMMENTS_JSONL"
+    return 0
+  fi
+  echo "unexpected gh invocation: $*" >&2
+  return 2
+}
+export -f gh
+
 assert_eq() {
   local expected="$1" actual="$2" message="$3"
   if [ "$expected" != "$actual" ]; then
