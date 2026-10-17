@@ -2647,11 +2647,6 @@ evaluate_task_completion() {
   fi
 }
 
-
-  fi
-
-
-
 run_once() {
   configure_task_retention
   cleanup_expired_tasks
