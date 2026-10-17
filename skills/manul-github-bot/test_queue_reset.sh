@@ -124,6 +124,16 @@ rm -f "$MANUL_DIR/.enabled"
 STOP
 chmod +x "$MANUL_DIR/start-manul-automation.sh"
 
+cat > "$MANUL_DIR/manul-daemon.sh" <<'DAEMON'
+#!/usr/bin/env bash
+case "${1:-}" in
+  stop) echo "manul daemon stopped" ;;
+  status) echo "not running" ;;
+  *) exit 2 ;;
+esac
+DAEMON
+chmod +x "$MANUL_DIR/manul-daemon.sh"
+
 DRY_OUTPUT="$(MANUL_DIR="$MANUL_DIR" DB="$DB" MANUL_POLL_SCRIPT="$POLL_SCRIPT" bash "$SCRIPT_DIR/manul-queue-reset.sh" --dry-run)"
 assert_contains "dry-run reports replayable tasks" "$DRY_OUTPUT" "replayable_total=5"
 assert_eq "dry-run leaves all replayable candidate rows in place" "5" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId IN ('1001','review:2002','source:github_issues:owner/repo#9','issue:3003','issuebody:4004');")"
