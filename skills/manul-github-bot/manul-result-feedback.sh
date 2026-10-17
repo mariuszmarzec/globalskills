@@ -167,7 +167,7 @@ post_failure_comment_once() {
   local repo="$1" issue="$2" body="$3" task_id="$4" pr_number="$5" reply_to="$6" attempt="$7"
   local safe_task_id safe_attempt lock_dir lock_file posted_file safe_db_id existing
 
-  safe_task_id="$(printf '%s' "$task_id" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  safe_task_id="$(printf '%s' "$task_id" | sha256sum | cut -c1-24)"
   safe_db_id="$(sql_escape "$task_id")"
   safe_attempt="$attempt"
   [[ "$safe_attempt" =~ ^[0-9]+$ ]] || safe_attempt=1
