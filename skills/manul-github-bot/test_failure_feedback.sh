@@ -143,7 +143,18 @@ assert_eq 1 "$(count_for_task overlap-failure)" "overlapping failure publishers 
 insert_task "health-stuck" 73 running 1 "datetime('now','-30 seconds')"
 MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/task-health-check.sh" >"$TEST_DIR/health-ok.log" 2>&1
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='health-stuck';")" "health check persists terminal failure"
-assert_eq 1 "$(count_for_task health-stuck)" "health-check terminal failure comment published"
+health_comment_count="$(count_for_task health-stuck)"
+if [ "$health_comment_count" != "1" ]; then
+  echo "FAIL: health-check terminal failure comment published (expected=1 actual=$health_comment_count)" >&2
+  echo "--- health-check log ---" >&2
+  cat "$TEST_DIR/health-ok.log" >&2
+  echo "--- GitHub mock calls ---" >&2
+  cat "$GH_CALL_LOG" >&2
+  echo "--- recorded GitHub comments ---" >&2
+  cat "$GH_COMMENTS_JSONL" >&2
+  exit 1
+fi
+echo "PASS: health-check terminal failure comment published"
 health_body="$(jq -s -r '[.[] | select((.body // "") | contains("\"taskId\":\"health-stuck\""))][0].body' "$GH_COMMENTS_JSONL")"
 grep -q '\*\*Stage:\*\* task_health_check' <<< "$health_body" || { echo "FAIL: health-check comment missing stage" >&2; exit 1; }
 
