@@ -19,6 +19,7 @@ cat >"$CONFIG" <<'JSON'
   "autoCreatePr": false,
   "automation": {
     "maxAttemptsBeforeFail": 3,
+    "maxPreExecutionFailures": 2,
     "lockTtl": 1800,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900
@@ -78,7 +79,9 @@ CREATE TABLE processed_comments (
   workerPid INTEGER,
   claimToken TEXT,
   nextAttemptAt TEXT,
-  resultSummary TEXT
+  resultSummary TEXT,
+  preExecutionFailures INTEGER NOT NULL DEFAULT 0,
+  agentStartedAt TEXT
 );
 "
 
