@@ -317,19 +317,19 @@ MOCK
   chmod +x "$tmp/bin/opencode"
   # 200 KB exceeds Linux's per-argument limit (MAX_ARG_STRLEN) but is a valid
   # stdin payload. This reproduces the former /usr/bin/timeout E2BIG failure.
-  head -c 200000 /dev/zero | tr '\\0' 'x' > "$tmp/prompt"
+  head -c 200000 /dev/zero | tr '\0' 'x' > "$tmp/prompt"
 
   local out
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \\
-    MOCK_ARGS_FILE="$tmp/args" MOCK_STDIN_FILE="$tmp/stdin" \\
-    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \\
-    bash "$SCRIPT_DIR/opencode-adapter.sh" \\
-      --task-id oc-large-prompt --prompt "$tmp/prompt" --workspace "$tmp" \\
-      --attempt 1 --timeout 30 --session-id "" \\
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_STDIN_FILE="$tmp/stdin" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-large-prompt --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenCode accepts prompts larger than the OS per-argument limit"
-  cmp -s "$tmp/prompt" "$tmp/stdin" \\
-    && ok "large prompt reaches OpenCode byte-for-byte over stdin" \\
+  cmp -s "$tmp/prompt" "$tmp/stdin" \
+    && ok "large prompt reaches OpenCode byte-for-byte over stdin" \
     || fail "large prompt was truncated or changed before OpenCode received it"
   if grep -Fq "$(head -c 256 "$tmp/prompt")" "$tmp/args"; then
     fail "large prompt content remains in OpenCode argv"
