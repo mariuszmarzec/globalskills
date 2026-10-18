@@ -422,6 +422,7 @@ archive_task_artifacts() {
 # Enhanced SQLite UPDATE with verification and error handling
 update_task_completion() {
   ensure_claim_token_column || return 1
+  ensure_recovery_tracking_columns || return 1
   local comment_id="$1"
   local safe_comment_id="$(sql_escape "$comment_id")"
   local status="$2"
