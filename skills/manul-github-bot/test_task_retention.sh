@@ -112,11 +112,13 @@ assert_eq "history-window terminal row is retained" "1"   "$(sqlite3 "$DB" "SELE
 LOG_DIR="$MANUL_DIR/logs"
 mkdir -p "$LOG_DIR/tasks/old-comment" "$LOG_DIR/tasks/recent-comment"
 printf 'old log\n' >"$LOG_DIR/old-general.log"
+printf 'old wrapper log\n' >"$MANUL_DIR/daemon.log"
 printf 'old task diagnostic\n' >"$LOG_DIR/tasks/old-comment/attempt-1.stdout"
 printf 'recent task diagnostic\n' >"$LOG_DIR/tasks/recent-comment/attempt-1.stdout"
 printf 'old state, not a log\n' >"$MANUL_DIR/state/old-state.log"
 touch -d '8 days ago' \
   "$LOG_DIR/old-general.log" \
+  "$MANUL_DIR/daemon.log" \
   "$LOG_DIR/tasks/old-comment/attempt-1.stdout" \
   "$MANUL_DIR/state/old-state.log"
 
@@ -124,6 +126,7 @@ MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" bash -c \
   'source "$1"; cleanup_expired_logs' _ "$SCRIPT_DIR/manul-daemon.sh"
 
 assert_eq "expired root log is deleted" "0" "$(if [ -e "$LOG_DIR/old-general.log" ]; then echo 1; else echo 0; fi)"
+assert_eq "expired startup wrapper log is deleted" "0" "$(if [ -e "$MANUL_DIR/daemon.log" ]; then echo 1; else echo 0; fi)"
 assert_eq "expired nested task diagnostic is deleted" "0" "$(if [ -e "$LOG_DIR/tasks/old-comment/attempt-1.stdout" ]; then echo 1; else echo 0; fi)"
 assert_eq "recent nested task diagnostic is retained" "1" "$(if [ -e "$LOG_DIR/tasks/recent-comment/attempt-1.stdout" ]; then echo 1; else echo 0; fi)"
 assert_eq "files outside the log directory are retained" "1" "$(if [ -e "$MANUL_DIR/state/old-state.log" ]; then echo 1; else echo 0; fi)"
