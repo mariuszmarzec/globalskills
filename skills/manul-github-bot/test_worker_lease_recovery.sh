@@ -299,7 +299,7 @@ assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE 
 
 # 3d) Recovery does not report success when its conditional SQLite transition fails.
 sqlite3 "$DB" "
-INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,datetime('now','-1 hour'))
+INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,datetime('now','-1 hour'));
 CREATE TRIGGER reject_recovery_requeue
 BEFORE UPDATE OF status ON processed_comments
 WHEN OLD.commentId='recovery-race' AND NEW.status='queued'
