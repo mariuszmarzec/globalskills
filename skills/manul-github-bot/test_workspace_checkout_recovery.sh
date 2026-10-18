@@ -68,6 +68,8 @@ ISSUE_ROOT="$MANUL_WORKSPACE/ws-recovery-issue"
 mkdir -p "$ISSUE_ROOT"
 ISSUE_CHECKOUT="$(workspace_prepare_primary_checkout "$ISSUE_ROOT" "test-owner/primary" "$CACHE")"
 git -C "$ISSUE_CHECKOUT" remote set-url origin "$REMOTE"
+git -C "$ISSUE_CHECKOUT" config user.name "Manul recovery tests"
+git -C "$ISSUE_CHECKOUT" config user.email "manul-recovery@example.invalid"
 git -C "$ISSUE_CHECKOUT" checkout -q -b stale/local
 printf 'local commit\n' > "$ISSUE_CHECKOUT/local-commit.txt"
 git -C "$ISSUE_CHECKOUT" add local-commit.txt
