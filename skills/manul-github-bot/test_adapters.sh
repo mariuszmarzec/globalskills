@@ -618,7 +618,7 @@ test_opencode_permission_blocked() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s
-' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm","part":{"type":"tool-use","tool":"external_directory","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
+' '{"type":"tool_use","timestamp":1000,"part":{"type":"tool-use","tool":"external_directory","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -644,7 +644,7 @@ MOCK
   # stderr often contains the actionable target that must be preserved.
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' '{"type":"tool_use","timestamp":2000,"sessionID":"ses_perm_stderr","part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
+printf '%s\n' '{"type":"tool_use","timestamp":2000,"part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
 printf '%s\n' '! permission requested: bash (cd /home/marzec/.manul/workspace/ws-old/src && git log); auto-rejecting' >&2
 exit 1
 MOCK
@@ -672,6 +672,93 @@ MOCK
     ok "User-facing diagnostic redacts bash tool arguments"
   fi
   [ "$rc2" -eq 1 ] && ok "Enriched permission denial remains a failure" || fail "Enriched permission rc=$rc2"
+}
+
+# ---------------------------------------------------------------------------
+# 9b. Permission denial gets one same-session recovery turn, never a bypass
+# ---------------------------------------------------------------------------
+test_opencode_permission_recovery() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$tmp/home/.manul/workspace/ws-active"
+  local active_workspace="$tmp/home/.manul/workspace/ws-active"
+  cat >"$tmp/home/.config/opencode/opencode.json" <<JSON
+{"model":"test/provider","permission":{"external_directory":{"$tmp/home/.manul/workspace/**":"deny","$tmp/home/.gradle/caches/modules-2/files-2.1/**":"allow"}}}
+JSON
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$MOCK_ARGS_FILE"
+count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf '%s\n' "$count" >"$MOCK_COUNT_FILE"
+if [ "$count" -eq 1 ]; then
+  cat >"$MOCK_INITIAL_PROMPT_FILE"
+  printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_perm_recovery","part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
+  printf '%s\n' '! permission requested: external_directory (/home/test/.gradle/daemon/8.11.1/*); auto-rejecting' >&2
+  exit 1
+fi
+cat >"$MOCK_RECOVERY_PROMPT_FILE"
+has_session=false
+for arg in "$@"; do [ "$arg" = "--session" ] && has_session=true; done
+if ! $has_session; then echo "recovery did not resume a session" >&2; exit 2; fi
+if [ "$MOCK_ALWAYS_DENY" = "true" ]; then
+  printf '%s\n' '{"type":"tool_use","timestamp":2000,"sessionID":"ses_perm_recovery","part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"permission denied again"}}}'
+  printf '%s\n' '! permission requested: external_directory (/home/test/.gradle/daemon/8.11.1/*); auto-rejecting' >&2
+  exit 1
+fi
+printf '%s\n' '{"type":"text","timestamp":2100,"sessionID":"ses_perm_recovery","part":{"type":"text","text":"TASK_DONE recovered via an in-workspace alternative"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":2200,"sessionID":"ses_perm_recovery","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Build the project and investigate failures" >"$tmp/prompt"
+  : >"$tmp/stdout"; : >"$tmp/stderr"
+
+  local out rc
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_COUNT_FILE="$tmp/count" MOCK_ARGS_FILE="$tmp/args" \
+    MOCK_INITIAL_PROMPT_FILE="$tmp/initial-prompt" \
+    MOCK_RECOVERY_PROMPT_FILE="$tmp/recovery-prompt" MOCK_ALWAYS_DENY=false \
+    MANUL_DIR="$tmp/home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-permission-recovery --prompt "$tmp/prompt" --workspace "$active_workspace" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode recovers from a permission denial with a permitted alternative"
+  [ "$rc" -eq 0 ] && ok "Permission recovery completes within the same attempt" || fail "Permission recovery rc=$rc"
+  [ "$(cat "$tmp/count")" = "2" ] && ok "Permission recovery is bounded to one same-session resume" || fail "Permission recovery invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
+  grep -Fq -- '--session ses_perm_recovery' "$tmp/args" && ok "Permission recovery resumes the exact rejected session" || fail "Permission recovery did not resume the exact session"
+  grep -Fq 'Do not repeat the denied operation' "$tmp/recovery-prompt" && ok "Recovery prompt forbids repeating or bypassing the denied operation" || fail "Recovery prompt lacks strict denial guidance"
+  ! grep -Fq 'Do not repeat the denied operation' "$tmp/args" && ok "Recovery instruction is sent over stdin, not argv" || fail "Recovery instruction leaked into argv"
+  grep -Fq "$active_workspace" "$tmp/initial-prompt" && ok "Initial prompt includes the actual assigned workspace" || fail "Initial prompt lacks capability workspace"
+  grep -Fq "$active_workspace" "$tmp/recovery-prompt" && ok "Recovery prompt retains the capability workspace" || fail "Recovery prompt lacks capability workspace"
+  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt" && ok "Capability snapshot lists effective external-directory allow rules" || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq 'not a guarantee that every bash command' "$tmp/initial-prompt" && ok "Capability snapshot explains tool-level restrictions" || fail "Capability snapshot omits tool-level caveat"
+  ! grep -Fq 'daemon-8.11.1' "$tmp/initial-prompt" && ok "Capability snapshot does not imply access to denied daemon logs" || fail "Capability snapshot implied daemon log access"
+  grep -Fq 'TASK_DONE recovered via an in-workspace alternative' "$tmp/stdout" && ok "Recovered completion marker is normalized" || fail "Recovered completion marker missing"
+  [ "$(printf '%s' "$out" | jq -r '.diagnostics.permission_recovery_used')" = "1" ] && ok "Result records the single recovery turn" || fail "Result did not record recovery"
+
+  # A second denial must fail closed without a third invocation.
+  rm -f "$tmp/count" "$tmp/initial-prompt" "$tmp/recovery-prompt" "$tmp/args"
+  local denied
+  denied="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_COUNT_FILE="$tmp/count" MOCK_ARGS_FILE="$tmp/args" \
+    MOCK_INITIAL_PROMPT_FILE="$tmp/initial-prompt" \
+    MOCK_RECOVERY_PROMPT_FILE="$tmp/recovery-prompt" MOCK_ALWAYS_DENY=true \
+    MANUL_DIR="$tmp/home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-permission-recovery-denied --prompt "$tmp/prompt" --workspace "$active_workspace" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout-denied" --stderr-file "$tmp/stderr-denied" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$denied" "FAILED" "A second permission denial fails closed"
+  [ "$rc" -eq 1 ] && ok "Second denial returns a failure" || fail "Second denial rc=$rc"
+  [ "$(cat "$tmp/count")" = "2" ] && ok "Repeated denial never causes a third runtime invocation" || fail "Repeated denial invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
+  [ "$(printf '%s' "$denied" | jq -r '.failure_code')" = "RUNTIME_PERMISSION_BLOCKED" ] && ok "Second denial retains permission-blocked code" || fail "Second denial lost permission classification"
+  [ "$(printf '%s' "$denied" | jq -r '.diagnostics.permission_recovery_used')" = "1" ] && ok "Second denial reports one recovery attempt" || fail "Incorrect recovery count"
 }
 
 # ---------------------------------------------------------------------------
@@ -974,6 +1061,7 @@ test_opencode_step_limit_resumes_inside_attempt
 test_opencode_stop_without_marker
 test_opencode_failure
 test_opencode_permission_blocked
+test_opencode_permission_recovery
 test_opencode_missing
 test_opencode_continuation
 test_agent_executor_dispatch

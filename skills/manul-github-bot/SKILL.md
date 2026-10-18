@@ -60,6 +60,22 @@ ordinary task-heartbeat updates do not. On expiry, only the isolated OpenCode
 process group is terminated, the result is marked
 `AGENT_NO_PROGRESS_TIMEOUT`, and the raw JSONL/stderr artifacts are retained.
 
+For each OpenCode invocation, the adapter appends a runtime-capability snapshot
+to the initial prompt and every resumed turn. It identifies the assigned
+workspace and lists the effective `permission.external_directory` path rules
+from the invocation config without exposing the rest of the config. The snapshot
+is advisory context, not a permission grant: tool-level and path-level checks
+remain authoritative.
+
+When OpenCode reports a permission denial and exposes a resumable session, the
+adapter permits exactly one same-session recovery turn inside the original
+timeout budget. The recovery prompt requires the agent to stop using the denied
+operation, not to route around the same restriction, and to pursue an independent
+in-scope alternative (for example, rerunning a build and saving diagnostics in
+the task workspace). Permissions are never widened automatically. If the
+recovery turn is denied again, or there is no resumable session, the task fails
+with a sanitized `RUNTIME_PERMISSION_BLOCKED` diagnostic.
+
 The installer deploys the runtime scripts as symlinks.
 
 Canonical source:

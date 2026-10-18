@@ -268,6 +268,16 @@ Every generated implementation/review-fix prompt must enforce a least-privilege 
 
 These restrictions are part of the default task contract, not requirements that the user must repeat in every GitHub comment. The generated prompt must not contain conflicting instructions that tell the agent to load `~/.agents/**` or inspect private runtime state.
 
+### Runtime capability awareness and permission recovery
+
+- The OpenCode adapter appends a capability snapshot to the initial prompt and every same-session continuation. The snapshot is generated from the exact leased workspace and the invocation's effective `permission.external_directory` rules; it must not dump the full OpenCode config or environment.
+- The snapshot describes rules; it does not grant access or promise that every tool or shell command can use an allowed path. Actual OpenCode tool and path decisions remain authoritative.
+- On an explicit permission denial, never repeat the same request, reshape it, split it, or route around the boundary through another tool, path, symlink, wrapper, subagent, or command. Do not modify permissions or invoke a permission bypass.
+- If a resumable session ID is available and no task-control marker was emitted, the adapter may issue exactly one recovery continuation within the same execution timeout and attempt. The recovery instruction must make the denial and boundary explicit, preserve task progress, and request an independent permitted strategy.
+- Prefer diagnostics created by commands running inside the task workspace. For a blocked external build log, rerun the documented project command with appropriate diagnostic flags and write a minimal, secret-redacted log under the task workspace.
+- A second denial, absent session ID, or lack of a safe alternative remains a concrete failure. Preserve sanitized logs and report what evidence is missing; never claim completion without verification and never widen permissions automatically.
+- Test both the recovery-success path and repeated-denial fail-closed path. Recovery must use the exact same runtime session, run at most once, preserve the original timeout budget, and never create an unbounded retry loop.
+
 ## 14. Watchdog contract
 
 The watchdog is a liveness/recovery mechanism, not a general task scheduler.
