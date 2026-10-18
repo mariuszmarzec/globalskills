@@ -60,7 +60,7 @@ workspace_pool_init() {
   current_size="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces;" 2>/dev/null || echo 0)"
   local i
   for ((i = current_size; i < pool_size; i++)); do
-    local ws_id="ws-$i-$(date +%s)"
+    local ws_id="ws-$i-$(date +%s%N)-$$"
     local ws_path="$WORKSPACES_DIR/$ws_id"
     mkdir -p "$ws_path"
     sqlite3 "$DB" "INSERT OR IGNORE INTO workspaces(workspaceId, workspacePath, status, lastUsedAt) VALUES('$ws_id', '$ws_path', 'IDLE', datetime('now'));"
@@ -176,6 +176,7 @@ workspace_restore_recovery_snapshot() {
 }
 
 # Atomically reclaim a previously-used workspace for a task whose processed_comments row points to it.
+workspace_reclaim() {
   local task_id="$1"
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
@@ -193,7 +194,16 @@ workspace_restore_recovery_snapshot() {
     [ "$restored_ws" = "$ws_id" ] || return 1
     printf '%s\n' "$restored_ws"
     return 0
-    return 1
+  fi
+
+  # A cleanup DB transaction may fail after the directory was moved to recovery.
+  # Never return a leased workspace path that does not exist on disk.
+  if [ ! -d "$WORKSPACES_DIR/$ws_id" ] || [ -L "$WORKSPACES_DIR/$ws_id" ]; then
+    local restored_ws
+    restored_ws="$(workspace_restore_recovery_snapshot "$ws_id" "$task_id")" || return 1
+    [ "$restored_ws" = "$ws_id" ] || return 1
+    printf '%s\n' "$restored_ws"
+    return 0
   fi
   sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
 }
