@@ -185,7 +185,7 @@ ProcessRunner.run() {
                 if command -v setsid >/dev/null 2>&1; then
                     setsid timeout -k 60 "${timeout:-2147483647}" "${exec_cmd[@]}" >>"$out_file" 2>>"$err_file" &
                 else
-                    printf '%s\\n' "ProcessRunner: --idle-timeout requires setsid; runtime was not launched" >>"$err_file"
+                    printf '%s\n' "ProcessRunner: --idle-timeout requires setsid; runtime was not launched" >>"$err_file"
                     ProcessRunner_Rc=127
                 fi
                 if [ -z "${ProcessRunner_Rc:-}" ]; then
@@ -208,7 +208,7 @@ ProcessRunner.run() {
                         fi
                         idle_now="$(date +%s)"
                         if [ "$((idle_now - idle_last_progress))" -ge "$idle_timeout" ]; then
-                            printf 'ProcessRunner: no stdout/stderr progress for %ss; terminating isolated runtime process group\\n' "$idle_timeout" >>"$err_file"
+                            printf 'ProcessRunner: no stdout/stderr progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
                             idle_pgid="$(ps -o pgid= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
                             if [ "$idle_pgid" = "$idle_runner_pid" ]; then
                                 kill -TERM -- "-$idle_runner_pid" 2>/dev/null || true
