@@ -129,6 +129,12 @@ assert_eq "recent nested task diagnostic is retained" "1" "$(if [ -e "$LOG_DIR/t
 assert_eq "files outside the log directory are retained" "1" "$(if [ -e "$MANUL_DIR/state/old-state.log" ]; then echo 1; else echo 0; fi)"
 assert_eq "empty expired task archive directory is pruned" "0" "$(if [ -d "$LOG_DIR/tasks/old-comment" ]; then echo 1; else echo 0; fi)"
 
+EXTERNAL_TASK_LOG_DIR="$MANUL_DIR/state/task-archives"
+mkdir -p "$EXTERNAL_TASK_LOG_DIR/empty"
+MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" MANUL_TASK_LOG_DIR="$EXTERNAL_TASK_LOG_DIR" bash -c \
+  'source "$1"; cleanup_expired_logs' _ "$SCRIPT_DIR/manul-daemon.sh"
+assert_eq "custom task archives outside the log tree are not pruned" "1" "$(if [ -d "$EXTERNAL_TASK_LOG_DIR/empty" ]; then echo 1; else echo 0; fi)"
+
 # ---------------------------------------------------------------------------
 # 4. Invalid retention config falls back to 7/14 without failing
 # ---------------------------------------------------------------------------
