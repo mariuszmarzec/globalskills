@@ -2555,24 +2555,21 @@ mark_task_stale() {
   return 1
 }
 
-# Requeue a running task for later retry.
+# Route transient pre-agent source failures through the same bounded recovery
+# path as checkout/workspace errors. Infrastructure retries get their own budget
+# and do not silently churn queued/running forever.
 requeue_task() {
   ensure_recovery_tracking_columns || return 1
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
-  local safe_claim_token
-  safe_claim_token="$(sql_escape "$claim_token")"
-  local result changes
-  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
-  changes="$(printf '%s\n' "$result" | tail -1)"
-  if [ "$changes" = "1" ]; then
-    log "requeue_task: task $comment_id requeued"
-    lc_log "TASK_REQUEUED" "task=$comment_id reason=revalidation_transient"
-    return 0
+  local repo="${4:-}" issue_num="${5:-}" reply_to="${6:-}" attempt_fallback="${7:-1}"
+  if [ -z "$repo" ]; then repo="$(sqlite3 "$DB" "SELECT COALESCE(repository,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || true)"; fi
+  if [ -z "$issue_num" ]; then issue_num="$(sqlite3 "$DB" "SELECT COALESCE(issueNumber,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || true)"; fi
+  if [ -z "$attempt_fallback" ] || ! [[ "$attempt_fallback" =~ ^[0-9]+$ ]]; then
+    attempt_fallback="$(sqlite3 "$DB" "SELECT COALESCE(attempts,1) FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo 1)"
   fi
-  log "ERROR: requeue_task did not update task $comment_id (changes=$changes)"
-  lc_log "TASK_ERROR" "task=$comment_id reason=requeue_failed"
-  return 1
+  handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "" "$reply_to" "Source revalidation encountered a transient infrastructure error before agent startup." "" "$attempt_fallback" "source_transient_revalidation"
 }
+
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
 # Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir] [workdir] [claim_token] [initial_head] [initial_branch] [initial_base_branch]
@@ -3207,13 +3204,9 @@ run_once() {
       set_activity "none" "idle"
       return 0
     elif [ "$reval_rc" -eq 2 ]; then
-      log "dispatch: source transient error for task $COMMENT_ID, requeuing"
+      log "dispatch: source transient error for task $COMMENT_ID, requeuing with bounded pre-agent infrastructure budget"
       lc_log "SOURCE_TRANSIENT_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
-      requeue_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
-      stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      requeue_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$REPLY_TO" "$current_attempt"
       return 0
     fi
 
@@ -3534,12 +3527,9 @@ PROMPT_EOF
     fi
 
     if [ -z "$WORKSPACE_ID" ]; then
-      log "dispatch: no workspace available for task $COMMENT_ID, retrying"
+      log "dispatch: no workspace available for task $COMMENT_ID; consuming bounded pre-agent infrastructure retry"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "No task-owned workspace could be acquired before agent startup." "${PR_NUM_FROM_URL:-}" "$current_attempt" "workspace_acquisition"
       return 0
     fi
 
