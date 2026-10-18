@@ -81,6 +81,7 @@ eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^complete_task_with_verification() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^ensure_claim_token_column() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^ensure_recovery_tracking_columns() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^start_heartbeat() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^stop_heartbeat() {/,/^}/p' "$DAEMON")"
 # Heartbeat tracking array must be declared in test scope
@@ -88,6 +89,8 @@ eval "$(sed -n '/^declare -A HEARTBEAT_PIDS/p' "$DAEMON")"
 
 # Override paths so sourced functions use our temp dirs
 LOG="$LOG_FILE"
+CONFIG="$WORK/config.json"
+printf '%s\n' '{"automation":{"maxPreExecutionFailures":8}}' > "$CONFIG"
 LIFECYCLE_LOG="$LIFECYCLE_LOG"
 PID_FILE="$PID_FILE"
 DB="$TEMP_DB"
