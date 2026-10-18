@@ -119,7 +119,6 @@ if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then
     exit 2
 fi
 
-PROMPT_CONTENT="$(cat "$OPT_PROMPT")"
 CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 AGENT_ARGS=()
 if [ -n "$OPT_AGENT" ]; then
@@ -133,6 +132,7 @@ fi
 RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
 CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
 CURRENT_RUN_STDERR_FILE="${RAW_STDOUT_FILE%.jsonl}.current.stderr"
+CURRENT_RUN_PROMPT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.prompt"
 # Aggregate all runtime events from the initial call and same-session resumes.
 mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" "$(dirname "$RAW_STDOUT_FILE")" 2>/dev/null || true
 
@@ -169,9 +169,13 @@ while true; do
         break
     fi
 
-    RUN_PROMPT="$PROMPT_CONTENT"
+    # Keep large task prompts out of argv. Linux limits the size of each
+    # individual argument, so pass the prompt through OpenCode's documented
+    # stdin interface instead of appending it to the command line.
     if [ "$run_index" -gt 0 ] || [ -n "$session_id" ]; then
-        RUN_PROMPT="$CONTINUATION_PROMPT"
+        printf '%s' "$CONTINUATION_PROMPT" > "$CURRENT_RUN_PROMPT_FILE"
+    else
+        cat "$OPT_PROMPT" > "$CURRENT_RUN_PROMPT_FILE"
     fi
     SESSION_ARGS=()
     if [ -n "$session_id" ]; then
@@ -193,7 +197,7 @@ while true; do
             "${AGENT_ARGS[@]}" \
             --format json \
             --dir "$OPT_WORKSPACE" \
-            "$RUN_PROMPT")"
+            < "$CURRENT_RUN_PROMPT_FILE")"
     pr_rc=$?
     : "$local_runner_result"
 
@@ -255,7 +259,7 @@ while true; do
     break
 done
 
-rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" 2>/dev/null || true
+rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" "$CURRENT_RUN_PROMPT_FILE" 2>/dev/null || true
 : >"$OPT_STDOUT_FILE"
 if [ -f "$RAW_STDOUT_FILE" ]; then
     jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' \
