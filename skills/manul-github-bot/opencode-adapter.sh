@@ -257,7 +257,7 @@ while true; do
             --dir "$OPT_WORKSPACE" \
             < "$CURRENT_RUN_PROMPT_FILE")"
     pr_rc=$?
-    runner_timeout_reason="$(printf '%s\\n' "$local_runner_result" | head -n 1 | cut -d'|' -f5)"
+    runner_timeout_reason="$(printf '%s\n' "$local_runner_result" | head -n 1 | cut -d'|' -f5)"
     if [ "$runner_timeout_reason" = "idle_timeout" ]; then
         idle_timeout_detected="true"
         error_type="AGENT_NO_PROGRESS_TIMEOUT"
