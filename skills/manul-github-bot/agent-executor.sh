@@ -46,7 +46,7 @@ AgentExecutor.execute() {
     task_id="$(jq -r '.taskId // ""' "$ctx_file" 2>/dev/null)"
     prompt="$(jq -r '.prompt // ""' "$ctx_file" 2>/dev/null)"
     workspace="$(jq -r '.workspace // ""' "$ctx_file" 2>/dev/null)"
-    workspace_root="$(jq -r '.workspaceRoot // .workspace // ""' "$ctx_file" 2>/dev/null)"
+    workspace_root="$(jq -r '.workspaceRoot // ""' "$ctx_file" 2>/dev/null)"
     workdir="$(jq -r '.workdir // ""' "$ctx_file" 2>/dev/null)"
     agent="$(jq -r '.agent // ""' "$ctx_file" 2>/dev/null)"
     attempt="$(jq -r '.attempt // 1' "$ctx_file" 2>/dev/null)"
