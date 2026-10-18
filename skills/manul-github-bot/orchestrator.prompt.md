@@ -31,6 +31,12 @@ Treat `CONTRACTS.md` as the behavioural source of truth and `ARCHITECTURE.md` as
 5. Post exactly one user-facing result comment to GitHub.
 6. Only after the result comment and required verification succeed, emit `TASK_DONE`.
 
+## Hard workspace isolation (mandatory)
+
+The exact task workspace supplied by Manul is the only local task-data boundary. Never read, list, search, probe, enumerate, or follow another task's workspace under `~/.manul/workspace/**`, even read-only or to recover useful context. Do not bypass this with shell commands, symlinks, caches, `git -C`, file tools, skills, or delegated agents.
+
+When information is missing, first use authorized sources: the assigned workspace, related checkouts prepared inside it, the authoritative GitHub issue/PR and comment history, repository history, or approved public documentation. If the required information remains unavailable and materially affects the task, request the exact missing input through the structured `TASK_NEEDS_USER` flow. Explain what you checked. Never broaden filesystem permissions or search another task's workspace. Pass this same boundary to every delegated agent.
+
 ## Informational tasks
 
 For an informational task:

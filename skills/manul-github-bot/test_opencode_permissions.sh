@@ -17,7 +17,10 @@ cat >"$CONFIG" <<'JSON'
   "theme": "preserve-me",
   "permission": {
     "external_directory": {
-      "/operator/custom/**": "allow"
+      "/operator/custom/**": "allow",
+      "~/.manul/**": "allow",
+      "~/.manul/workspace/ws-explicit/**": "allow",
+      "$HOME/.manul/workspace/ws-absolute/**": "allow"
     },
     "read": "allow",
     "edit": "ask",
@@ -53,8 +56,12 @@ assert_jq() {
 bash "$SCRIPT_DIR/opencode-permissions.sh"
 
 assert_jq "non-Manul provider fields are preserved" '.model == "provider/model" and .theme == "preserve-me"'
-assert_jq "existing custom external-directory rule is preserved" '.permission.external_directory["/operator/custom/**"] == "allow"'
-assert_jq "temporary workspace access remains allowlisted" '.permission.external_directory["/tmp/**"] == "allow"'
+assert_jq "existing unrelated external-directory rule is preserved" '.permission.external_directory["/operator/custom/**"] == "allow"'
+assert_jq "broad Manul path rule is preserved while the narrower workspace deny overrides it" '.permission.external_directory["~/.manul/**"] == "allow" and .permission.external_directory["~/.manul/workspace/**"] == "deny"'
+assert_jq "specific tilde-based workspace allows are changed to deny" '.permission.external_directory["~/.manul/workspace/ws-explicit/**"] == "deny"'
+assert_jq "specific HOME-based workspace allows are changed to deny" '.permission.external_directory["$HOME/.manul/workspace/ws-absolute/**"] == "deny"'
+assert_jq "the final workspace deny follows the broader allow rule" '.permission.external_directory as $rules | ($rules | keys_unsorted | index("~/.manul/**")) < ($rules | keys_unsorted | index("~/.manul/workspace/**"))'
+assert_jq "temporary workspace scratch access remains allowlisted" '.permission.external_directory["/tmp/**"] == "allow"'
 assert_jq "diagnostic scratch access remains allowlisted" '.permission.external_directory["/tmp/manul-diagnostics/**"] == "allow"'
 assert_jq "Manul logs are externally reachable only under the narrow logs path" '.permission.external_directory["~/.manul/logs/**"] == "allow"'
 assert_jq "log read/list/search are allowed" '.permission.read["~/.manul/logs/**"] == "allow" and .permission.list["~/.manul/logs/**"] == "allow" and .permission.glob["~/.manul/logs/**"] == "allow" and .permission.grep["~/.manul/logs/**"] == "allow"'

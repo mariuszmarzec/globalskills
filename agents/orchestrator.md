@@ -81,6 +81,14 @@ Follow the minimum sufficient workflow process:
   → return to implementation/review stage. Delivery failure → resolve
   delivery problem only.
 
+### Hard task-workspace boundary (mandatory)
+
+- The exact workspace assigned for the current task is the only local task-data boundary.
+- NEVER read, list, search, probe, enumerate, or follow another task's workspace under `~/.manul/workspace/**`, even read-only. Do not use shell, file tools, symlinks, shared caches, `git -C`, or a subagent to bypass this restriction.
+- When delegating, include the same boundary in every subagent prompt and verify that delegated work did not inspect sibling workspaces.
+- If context is missing, first use the assigned workspace, in-workspace related checkouts, the authoritative GitHub issue/PR and comment history, repository history, or approved public documentation. If essential information remains unavailable, ask the user via the structured `TASK_NEEDS_USER` flow, naming the exact missing input and summarizing what was checked.
+- Do not widen permissions or search other workspaces to avoid asking the user.
+
 ### PR description freshness (mandatory)
 
 Before closing delivery, follow `pr-description-management`: create a meaningful PR immediately after the first standalone-branch push, then refresh and read back the full, cumulative description after EVERY later push to that PR branch, including checkpoints and fixes. A successful push alone is not successful delivery.

@@ -250,14 +250,14 @@ __RELATED_UNAVAILABLE__
 
 All repository file access must stay inside the exact task workspace root above. Run primary-repository build, test, git, commit, push, and PR commands from the primary checkout at `__WORKDIR__`. Related checkouts, if listed, are read-only context. Do not edit, commit, branch, or push a related checkout by default. If the task genuinely requires changing another repository, stop and request an explicit delivery policy for that repository/branch/PR before changing it. If a required related repository is unavailable, report the exact repository and blocker; do not search for its shared cache or another task's checkout.
 
-Treat local Manul/OpenCode/operator state as outside the task boundary. Under ~/.manul/**, the ONLY permitted path is the exact task workspace root shown above and its descendants. Do NOT inspect sibling workspace directories or shared repository-cache directories, databases, prompts, logs, runtime artifacts, adapters, or symlinks. Also do NOT read, list, search, probe, or follow paths in:
+Treat local Manul/OpenCode/operator state as outside the task boundary. Under ~/.manul/**, the ONLY permitted local repository-access path is the exact task workspace root shown above and its descendants. Access to ANY other workspace under ~/.manul/workspace/** is explicitly forbidden, including read-only inspection, even if you believe it contains useful code, prior attempts, context, logs, caches, or diagnostics. Do NOT read, list, search, probe, enumerate, or follow sibling workspace directories; shared repository-cache directories; databases; prompts; logs; runtime artifacts; adapters; or symlinks. This prohibition applies to shell commands, file tools, skill tools, subagents, and indirect access alike. Also do NOT read, list, search, probe, or follow paths in:
 - ~/.config/opencode/** (provider configuration and permissions)
 - ~/.agents/** or other global agent/skill directories
 - daemon logs, process environments, agent runtime internals, or other tasks' workspaces
 
 Do not use shell commands, file tools, skill tools, symlinks, or indirect access to bypass this boundary. Do not attempt to diagnose or prove runtime routing from inside the implementation session. Manul/operator diagnostics must gather that evidence separately, outside this agent run.
 
-Use repository-local documentation and skills when present. If a task genuinely requires an external dependency or a policy/document that exists only outside the workspace, stop and explain the exact missing input; do not inspect private paths or broaden permissions. Do not change runtime configuration or access permissions to get around this boundary.
+If information is missing, first seek it through authorized sources: the assigned workspace, related repositories explicitly checked out INSIDE that workspace, the authoritative GitHub issue/PR and its comments/history, repository history, or approved public documentation. If the required information still cannot be obtained, ask the user for the specific missing input using the structured TASK_NEEDS_USER flow; summarize what you checked and why the answer matters. Do NOT search another task's workspace or request broader filesystem permissions as a workaround. Do not change runtime configuration or access permissions to get around this boundary.
 
 ## Scope-First Investigation and Host-System Boundary
 Start with the task request and the smallest relevant evidence set inside WORKDIR: repository docs, source, tests, build/dependency declarations, and documented project commands. Search narrowly and expand only when a concrete finding proves it is needed. Do not perform broad host/environment reconnaissance just to understand an ordinary repository task.
@@ -351,6 +351,9 @@ if assert_file_contains "stdin request body present" "$WORK/prompt.md" "--input 
 if assert_file_contains "inline body flags forbidden" "$WORK/prompt.md" 'Do NOT use `-f body="..."` or `-F body="..."`'; then :; else :; fi
 if assert_file_contains "material ambiguity guidance present" "$WORK/prompt.md" "The user-facing decision request must summarize what you checked"; then :; else :; fi
 if assert_file_contains "structured user decision marker guidance present" "$WORK/prompt.md" "TASK_NEEDS_USER_BEGIN"; then :; else :; fi
+if assert_file_contains "sibling workspace access is explicitly forbidden" "$WORK/prompt.md" "Access to ANY other workspace under ~/.manul/workspace/** is explicitly forbidden"; then :; else :; fi
+if assert_file_contains "missing context fallback uses authorized sources" "$WORK/prompt.md" "the assigned workspace, related repositories explicitly checked out INSIDE that workspace"; then :; else :; fi
+if assert_file_contains "missing context must be requested from user" "$WORK/prompt.md" "ask the user for the specific missing input using the structured TASK_NEEDS_USER flow"; then :; else :; fi
 if assert_file_contains "completion forbidden with user decision" "$WORK/prompt.md" 'Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run'; then :; else :; fi
 
 # ─── Tests ────────────────────────────────────────────────────────────────────

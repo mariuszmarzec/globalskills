@@ -235,11 +235,11 @@ Every generated implementation/review-fix prompt must enforce a least-privilege 
 
 - The exact assigned task workspace root is the only local repository-access boundary. The primary checkout (`WORKDIR`) is authoritative for all default repository edits, commits, pushes and PR delivery.
 - Related checkouts explicitly listed in the generated prompt may be inspected/searched but are read-only by default. No changes may be delivered from a secondary checkout unless the user has explicitly approved that repository's branch/PR/delivery policy.
-- Within `~/.manul/**`, only the exact leased task workspace root and its descendants are permitted. Sibling workspaces, shared repository caches, databases, prompts, logs, adapters, daemon state and runtime artifacts remain prohibited. Also do not read/list/search/probe `~/.agents/**` or `~/.config/opencode/**`.
-- Do not follow symlinks or use shell/file/skill tools to reach paths outside the task workspace indirectly.
+- Within `~/.manul/**`, only the exact leased task workspace root and its descendants are permitted. Access to any other path under `~/.manul/workspace/**` is explicitly forbidden, including read-only inspection of sibling task workspaces, prior attempts, logs, artifacts, or caches. Shared repository caches, databases, prompts, logs, adapters, daemon state and runtime artifacts also remain prohibited. Do not read/list/search/probe `~/.agents/**` or `~/.config/opencode/**`.
+- Do not follow symlinks or use shell/file/skill tools, globbing, shell redirection, `git -C`, subagents, or indirect path tricks to reach another workspace or escape the task root.
 - Do not inspect Manul task state or runtime artifacts to prove routing/role selection. Those are operator-owned diagnostics collected outside the implementation session.
 - Prefer repository-local instructions and skills. Global skills may only be used when their contents are explicitly supplied to the agent as task context; never tell the agent to open a global skill path.
-- If a required policy/dependency is genuinely unavailable inside the workspace and was not supplied in context, state the missing input and stop instead of probing protected paths or asking for broader permissions.
+- If needed context is missing, first seek it from the assigned workspace, related checkouts explicitly prepared inside it, the authoritative GitHub issue/PR and comment history, repository history, or approved public documentation. If the information remains unavailable and materially affects the work, ask the user through the structured `TASK_NEEDS_USER` flow, naming the specific input required and what was already checked. Never inspect another task's workspace to fill the gap.
 - Do not change runtime configuration or permissions to work around this boundary.
 
 ### Scope-first investigation and host-system boundary

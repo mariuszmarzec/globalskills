@@ -19,9 +19,10 @@
 
 set -euo pipefail
 
-# Required permission rules. Each entry is a jq path expression for the
-# permission.external_directory key. The installer only ensures these exist;
-# it never removes or rewrites any other rule.
+# Required permission rules. Most entries add narrow capabilities. The workspace
+# deny is intentionally stronger: any existing external_directory allow rules
+# under ~/.manul/workspace are changed to deny, and the final catch-all workspace
+# deny is placed last so a broad ~/.manul/** allow cannot override it.
 REQUIRED_PERMISSION_RULES=(
   '.permission.external_directory["/tmp/**"] = "allow"'
   '.permission.external_directory["/tmp/manul-diagnostics/**"] = "allow"'
@@ -34,6 +35,7 @@ REQUIRED_PERMISSION_RULES=(
   '.permission.list |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.list["~/.manul/logs/**"] = "allow"'
   '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
+  '.permission.external_directory |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.external_directory |= (with_entries(if (((.key | if startswith("~/") then (env.HOME + .[1:]) elif startswith("$HOME/") then (env.HOME + .[5:]) else . end) as $path | ($path == (env.HOME + "/.manul/workspace") or ($path | startswith(env.HOME + "/.manul/workspace/")))) then .value = "deny" else . end) | del(."~/.manul/workspace/**") + {"~/.manul/workspace/**":"deny"})'
 )
 
 # Paths verified against the effective OpenCode configuration, kept in lockstep
@@ -43,6 +45,9 @@ REQUIRED_PERMISSION_PATHS=(
   '/tmp/manul-diagnostics/**'
   '~/.manul/logs/**'
   '~/.gradle/caches/modules-2/files-2.1/**'
+)
+REQUIRED_PERMISSION_DENY_PATHS=(
+  '~/.manul/workspace/**'
 )
 
 resolve_opencode_bin() {
@@ -113,6 +118,14 @@ for i in "${!REQUIRED_PERMISSION_PATHS[@]}"; do
   if ! "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null |
     jq -e --arg p "$path" '.permission.external_directory[$p] == "allow"' >/dev/null 2>&1; then
     echo "ERROR: OpenCode effective configuration does not allow $path" >&2
+    exit 1
+  fi
+done
+
+for path in "${REQUIRED_PERMISSION_DENY_PATHS[@]}"; do
+  if ! "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null |
+    jq -e --arg p "$path" '.permission.external_directory[$p] == "deny"' >/dev/null 2>&1; then
+    echo "ERROR: OpenCode effective configuration does not deny access to other Manul workspaces ($path)" >&2
     exit 1
   fi
 done
