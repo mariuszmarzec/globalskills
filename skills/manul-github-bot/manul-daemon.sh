@@ -1438,7 +1438,7 @@ status() {
 # Return the number of queued tasks that are eligible to run now.
 # SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
 eligible_queued_count() {
-  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND ((attempts=0 AND COALESCE(preExecutionFailures,0)=0) OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -2961,6 +2961,10 @@ else
 
 run_once() {
   configure_task_retention
+  ensure_recovery_tracking_columns || {
+    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
+    return 1
+  }
   cleanup_expired_tasks
 
   # Use timeout to prevent daemon deadlock if poll.sh hangs
@@ -3039,7 +3043,7 @@ run_once() {
     # Select the oldest task that is actually eligible now. A retry with a
     # future nextAttemptAt must never monopolize the singleton dispatcher and
     # starve a fresh task that is ready to run.
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND ((attempts=0 AND COALESCE(preExecutionFailures,0)=0) OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
@@ -3239,14 +3243,9 @@ run_once() {
 **Source:** $SOURCE_LINK"
 
     if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
-      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
+      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
-      stop_heartbeat "$COMMENT_ID"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
       return 0
     fi
 
