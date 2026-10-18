@@ -111,14 +111,14 @@ test_process_runner_idle_timeout() {
     source "$1/manul-paths.sh"
     source "$1/process-runner.sh"
     ProcessRunner_TmpStdout="$2/out.jsonl"
-    ProcessRunner_TmpStderr="$2/err.log"
-    ProcessRunner.run --timeout 20 --idle-timeout 2 --cwd "$2/work" -- bash -c '"'"'printf "%s\\n" "{\\"type\\":\\"step_start\\"}"; echo "$" > "$3/runtime-pid"; sleep 30'"'"'
+    printf '%s\\n' '{"type":"step_start"}' > "$2/out.jsonl"
+    ProcessRunner.run --timeout 20 --idle-timeout 2 --cwd "$2/work" -- sleep 30
   ' _ "$SCRIPT_DIR" "$tmp" "$tmp")"
   rc=$?
   elapsed=$(( $(date +%s) - start ))
-  header="$(printf '%s\\n' "$result" | head -n 1)"
+  header="$(printf '%s\n' "$result" | head -n 1)"
   [ "${header%%|*}" = "124" ] && ok "ProcessRunner idle watchdog returns timeout code" || fail "ProcessRunner idle timeout rc=${header%%|*} (full=$header rc=$rc)"
-  [ "$(printf '%s\\n' "$header" | cut -d'|' -f5)" = "idle_timeout" ] && ok "ProcessRunner marks idle timeout distinctly" || fail "ProcessRunner idle marker missing: $header"
+  [ "$(printf '%s\n' "$header" | cut -d'|' -f5)" = "idle_timeout" ] && ok "ProcessRunner marks idle timeout distinctly" || fail "ProcessRunner idle marker missing: $header"
   grep -Fq "no stdout/stderr progress for 2s" "$tmp/err.log" && ok "ProcessRunner records idle timeout diagnostics" || fail "ProcessRunner did not write idle timeout diagnostics"
   [ "$elapsed" -lt 10 ] && ok "ProcessRunner kills stalled process before total timeout" || fail "ProcessRunner idle timeout took ${elapsed}s"
 }
@@ -567,16 +567,16 @@ test_opencode_no_progress_timeout() {
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/bin" "$tmp/runtime"
-  printf '%s\\n' '{"automation":{"agentNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
+  printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_stalled","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_stalled","part":{"type":"step-start"}}'
 sleep 30
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' "Do the task" > "$tmp/prompt"
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \\
-    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-stalled --prompt "$tmp/prompt" --workspace "$tmp" \\
+  printf '%s\n' "Do the task" > "$tmp/prompt"
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-stalled --prompt "$tmp/prompt" --workspace "$tmp" \
       --attempt 1 --timeout 20 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   rc=$?
   assert_json_status "$out" "TIMEOUT" "OpenCode no-progress watchdog reports timeout status"
