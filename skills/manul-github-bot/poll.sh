@@ -991,7 +991,32 @@ is_ci_fix_failed_for_commit() {
 has_unresolved_manul_tasks() {
     local repo="$1"
     local issue="$2"
-    sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE repository='$repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','failed') AND (status!='failed' OR attempts <= 2) LIMIT 1;" 2>>"$LOG"
+    local safe_repo found
+
+    # These values originate from configured repositories and GitHub PR
+    # numbers, but still validate/escape them before building the SQL query.
+    if ! [[ "$issue" =~ ^[0-9]+$ ]]; then
+        log "WARN: invalid issue number '$issue' in unresolved-task check; skipping CI auto-fix conservatively"
+        return 0
+    fi
+    safe_repo="$(printf '%s' "$repo" | sed "s/'/''/g")"
+
+    # EXISTS returns exactly 0/1 internally. Capture it so this helper emits
+    # no stray "1" on stdout; callers depend on its exit status, not SQL output.
+    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(SELECT 1 FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','failed') AND (status!='failed' OR attempts <= 2));" 2>>"$LOG")"; then
+        # Fail closed: on DB/query errors, do not launch a duplicate CI fix task.
+        log "WARN: unresolved-task check failed for $repo#$issue; skipping CI auto-fix conservatively"
+        return 0
+    fi
+
+    case "$found" in
+        1) return 0 ;;
+        0) return 1 ;;
+        *)
+            log "WARN: unexpected unresolved-task query result '$found' for $repo#$issue; skipping CI auto-fix conservatively"
+            return 0
+            ;;
+    esac
 }
 
 # scan_failing_ci <repo> -> queues synthetic tasks for failing manul PRs

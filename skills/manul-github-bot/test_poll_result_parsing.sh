@@ -40,6 +40,7 @@ EOF
 log() { :; }
 eval "$(sed -n '/^parse_poll_result() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 eval "$(sed -n '/^eligible_queued_count() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
+eval "$(sed -n '/^has_unresolved_manul_tasks() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -77,17 +78,52 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
   commentId TEXT PRIMARY KEY,
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL,
-  nextAttemptAt TEXT
+  nextAttemptAt TEXT,
+  repository TEXT DEFAULT 'test/repo',
+  issueNumber INTEGER DEFAULT 1
 );"
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('a','queued',0,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('a','queued',0,NULL);"
 assert_eq "eligible-attempt-zero" "1" "$(eligible_queued_count)"
 
 echo "=== Queue eligibility: due retry is runnable ==="
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('b','queued',1,datetime('now','-1 minute'));"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('b','queued',1,datetime('now','-1 minute'));"
 assert_eq "eligible-due-retry" "2" "$(eligible_queued_count)"
 
 echo "=== Queue eligibility: future retry is not runnable ==="
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('c','queued',1,'2099-01-01 00:00:00');"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('c','queued',1,'2099-01-01 00:00:00');"
 assert_eq "future-retry-filtered" "2" "$(eligible_queued_count)"
+
+echo "=== Queue eligibility: retry with NULL deadline is not stranded ==="
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('d','queued',2,NULL);"
+assert_eq "null-retry-deadline-is-eligible" "3" "$(eligible_queued_count)"
+
+echo "=== Poll CI guard: no unresolved tasks returns false and emits nothing ==="
+if has_unresolved_manul_tasks "test/repo" "99"; then
+  echo "FAIL: no-row unresolved query unexpectedly returned true" >&2
+  exit 1
+fi
+echo "=== Poll CI guard: unresolved task returns true without stdout ==="
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt,repository,issueNumber) VALUES ('pending','queued',0,NULL,'test/repo',99);"
+if ! has_unresolved_manul_tasks "test/repo" "99"; then
+  echo "FAIL: queued task must block duplicate CI auto-fix" >&2
+  exit 1
+fi
+unresolved_output="$(has_unresolved_manul_tasks "test/repo" "99")"
+assert_eq "unresolved-query-no-stdout" "" "$unresolved_output"
+sqlite3 "$DB" "UPDATE processed_comments SET status='completed' WHERE commentId='pending';"
+if has_unresolved_manul_tasks "test/repo" "99"; then
+  echo "FAIL: completed task must not block CI auto-fix" >&2
+  exit 1
+fi
+
+echo "=== Poll CI guard: query error fails closed ==="
+BROKEN_DB="$TEST_DIR/broken.db"
+sqlite3 "$BROKEN_DB" "CREATE TABLE other(value TEXT);"
+DB="$BROKEN_DB"
+if ! has_unresolved_manul_tasks "test/repo" "99"; then
+  echo "FAIL: DB error should conservatively block CI auto-fix" >&2
+  exit 1
+fi
+DB="$MANUL_DIR/manul.db"
 
 echo "All poll-result parsing tests passed."

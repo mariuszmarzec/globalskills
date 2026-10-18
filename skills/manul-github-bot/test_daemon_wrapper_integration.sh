@@ -898,6 +898,44 @@ evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDO
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test S: PASSED"
 
+# ─── Test U: failed agent attempts must transition running -> queued ──────────
+echo ""
+echo "=== Test U: failed agent attempt is atomically requeued ==="
+ensure_claim_token_column
+CLAIM_TOKEN_RETRY="test-claim-retry"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_RETRY';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,createdAt,heartbeatAt,leaseExpiresAt,workerPid,action,claimToken) VALUES ('COMMENT_RETRY','test/repo',60,'https://github.com/test/repo/issues/60#issuecomment-1060','user','test','retry transition test','running',1,datetime('now'),datetime('now'),datetime('now','+15 minutes'),$$,'IMPLEMENT','$CLAIM_TOKEN_RETRY');" 2>/dev/null
+RETRY_DELAY_SECONDS=2
+STDOUT_FILE="$TEST_TMPDIR/stdout-retry.txt"
+echo "runtime stopped without completion marker" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="IMPLEMENT"
+evaluate_task_completion "test/repo" "60" "COMMENT_RETRY" "COMMENT_RETRY" "1" "42" "$STDOUT_FILE" "$DB" "" "" "$CLAIM_TOKEN_RETRY" "" "master" "master" "transient runtime failure" "RUNTIME_FAILURE" "" "" ""
+RETRY_STATE="$(sqlite3 "$DB" "SELECT status || '|' || COALESCE(claimToken,'') || '|' || COALESCE(workerPid,'') || '|' || COALESCE(heartbeatAt,'') || '|' || COALESCE(leaseExpiresAt,'') || '|' || CASE WHEN nextAttemptAt IS NULL THEN 'NULL' ELSE 'SET' END FROM processed_comments WHERE commentId='COMMENT_RETRY';" 2>/dev/null)"
+if [ "$RETRY_STATE" != "queued|||||SET" ]; then
+  echo "FAIL: expected queued status with ownership/heartbeat/lease cleared and retry deadline set; got '$RETRY_STATE'" >&2
+  tail -n 60 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+RETRY_IS_FUTURE="$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt > datetime('now') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='COMMENT_RETRY';" 2>/dev/null)"
+if [ "$RETRY_IS_FUTURE" != "1" ]; then
+  echo "FAIL: retry deadline must be in the future" >&2
+  exit 1
+fi
+RETRY_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='COMMENT_RETRY';" 2>/dev/null)"
+if [ "$RETRY_ATTEMPTS" != "1" ]; then
+  echo "FAIL: retry transition must preserve attempts, got '$RETRY_ATTEMPTS'" >&2
+  exit 1
+fi
+if ! printf '%s' "$FINAL_COMMENT" | grep -q "will retry"; then
+  echo "FAIL: successful retry transition should announce a retry" >&2
+  exit 1
+fi
+echo "[OK] Test U: retry is queued with token/lease cleared and backoff preserved"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="

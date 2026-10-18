@@ -1361,7 +1361,7 @@ status() {
 # Return the number of queued tasks that are eligible to run now.
 # SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
 eligible_queued_count() {
-  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -2788,9 +2788,21 @@ else
       log "dispatch: task $COMMENT_ID failed (max attempts reached)"
       lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}${FAILURE_CODE:+ failure_code=$FAILURE_CODE}"
     else
-      FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS).${FAIL_REASON:+ Reason: $FAIL_REASON}"
-      log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
-      lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS${FAIL_REASON:+ reason=$FAIL_REASON}${FAILURE_CODE:+ failure_code=$FAILURE_CODE}"
+      # Persist running -> queued under the current claim token before saying
+      # that the task will retry. Leaving this row running strands retries and
+      # makes the watchdog recover it as a stale worker later.
+      if update_task_completion "$COMMENT_ID" "queued" "$FAIL_REASON" "$CLAIM_TOKEN"; then
+        FINAL_COMMENT="⚠️ Manul encountered an issue and will retry (attempt $NEW_ATTEMPTS/$MAX_ATTEMPTS)."
+        if [ -n "$FAIL_REASON" ]; then FINAL_COMMENT+=" Reason: $FAIL_REASON"; fi
+        log "dispatch: task $COMMENT_ID requeued for retry (attempt $NEW_ATTEMPTS)"
+        lc_log "TASK_REQUEUED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS max=$MAX_ATTEMPTS reason=$FAIL_REASON failure_code=$FAILURE_CODE"
+      else
+        # Ownership may have changed; never claim it was requeued when the
+        # conditional state transition did not succeed.
+        FINAL_COMMENT="⚠️ Manul could not safely schedule the retry for this task. The daemon will need to recover it before another attempt."
+        log "ERROR: task $COMMENT_ID retry transition failed; status was not confirmed as queued"
+        lc_log "TASK_REQUEUE_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$NEW_ATTEMPTS reason=$FAIL_REASON failure_code=$FAILURE_CODE"
+      fi
     fi
   fi
 }
@@ -2875,7 +2887,7 @@ run_once() {
     # Select the oldest task that is actually eligible now. A retry with a
     # future nextAttemptAt must never monopolize the singleton dispatcher and
     # starve a fresh task that is ready to run.
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY CASE WHEN attempts=0 OR nextAttemptAt IS NULL THEN 0 ELSE 1 END, nextAttemptAt ASC NULLS LAST, createdAt ASC LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
