@@ -111,7 +111,8 @@ test_process_runner_idle_timeout() {
     source "$1/manul-paths.sh"
     source "$1/process-runner.sh"
     ProcessRunner_TmpStdout="$2/out.jsonl"
-    printf '%s\\n' '{"type":"step_start"}' > "$2/out.jsonl"
+    ProcessRunner_TmpStderr="$2/err.log"
+    printf '%s\n' '{"type":"step_start"}' > "$2/out.jsonl"
     ProcessRunner.run --timeout 20 --idle-timeout 2 --cwd "$2/work" -- sleep 30
   ' _ "$SCRIPT_DIR" "$tmp" "$tmp")"
   rc=$?
