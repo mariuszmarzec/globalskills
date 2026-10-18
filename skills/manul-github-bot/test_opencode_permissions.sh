@@ -7,6 +7,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export HOME="$TMP/home"
+unset MANUL_DIR MANUL_WORKSPACE
 mkdir -p "$HOME/.config/opencode" "$TMP/bin"
 CONFIG="$TMP/custom opencode config.json"
 MOCK_BIN="$TMP/bin/opencode"
@@ -77,4 +78,19 @@ SECOND_HASH="$(sha256sum "$CONFIG" | awk '{print $1}')"
 echo "PASS: repeated permission setup is idempotent"
 
 assert_jq "global blanket workspace deny remains active" '.permission.external_directory["~/.manul/workspace/**"] == "deny"'
+
+# A custom workspace base must have its own absolute global deny. Pre-existing
+# allows under the configured base are rewritten to deny, even with spaces.
+CUSTOM_RUNTIME="$TMP/custom Manul runtime"
+CUSTOM_WORKSPACE="$TMP/custom task workspaces"
+mkdir -p "$CUSTOM_WORKSPACE/ws-stale"
+jq --arg stale "$CUSTOM_WORKSPACE/ws-stale/**" '.permission.external_directory[$stale] = "allow"' "$CONFIG" >"$TMP/custom-config.json"
+mv "$TMP/custom-config.json" "$CONFIG"
+export MANUL_DIR="$CUSTOM_RUNTIME" MANUL_WORKSPACE="$CUSTOM_WORKSPACE"
+bash "$SCRIPT_DIR/opencode-permissions.sh"
+CUSTOM_DENY="$CUSTOM_WORKSPACE/**"
+jq -e --arg path "$CUSTOM_DENY" '.permission.external_directory[$path] == "deny"' "$CONFIG" >/dev/null || fail "configured custom workspace root is not blanket-denied"
+echo "PASS: configured custom workspace root is blanket-denied"
+jq -e --arg path "$CUSTOM_WORKSPACE/ws-stale/**" '.permission.external_directory[$path] == "deny"' "$CONFIG" >/dev/null || fail "custom-workspace allow was not rewritten to deny"
+echo "PASS: custom-workspace allow is rewritten to deny"
 echo "All OpenCode permission helper tests passed."

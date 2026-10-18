@@ -216,12 +216,23 @@ if [ -f "$_OPENCODE_BASE_CONFIG" ]; then
     OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
     _original_opencode_config="$OPENCODE_CONFIG"
     OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
-    if ! jq --arg workspace "$_workspace_real" '
+    if ! jq --arg workspace "$_workspace_real" --arg workspaceBase "$_workspace_base_real" '
         .permission.external_directory = (
           (.permission.external_directory // {})
           | if type == "object" then . else {} end
-          | .[$workspace] = "allow"
-          | .[$workspace + "/**"] = "allow"
+          | with_entries(
+              ((.key
+                | if startswith("~/") then (env.HOME + .[1:])
+                  elif startswith("$HOME/") then (env.HOME + .[5:])
+                  else .
+                  end) as $path
+               | select((($path == $workspaceBase) or ($path | startswith($workspaceBase + "/"))) | not))
+            )
+          | . + {
+              ($workspaceBase + "/**"): "deny",
+              ($workspace): "allow",
+              ($workspace + "/**"): "allow"
+            }
         )
     ' "$_original_opencode_config" >"$OPENCODE_CONFIG"; then
         cleanup_opencode_task_config

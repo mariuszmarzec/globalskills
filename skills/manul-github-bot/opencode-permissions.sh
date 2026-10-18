@@ -19,10 +19,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/manul-paths.sh"
+MANUL_WORKSPACE_CANONICAL="$(realpath -m -- "$MANUL_WORKSPACE")"
+[ "$MANUL_WORKSPACE_CANONICAL" != "/" ] || { echo "ERROR: MANUL_WORKSPACE must not resolve to /" >&2; exit 1; }
+MANUL_WORKSPACE_RULE="${MANUL_WORKSPACE_CANONICAL%/}/**"
+export MANUL_WORKSPACE_CANONICAL MANUL_WORKSPACE_RULE
+
 # Required permission rules. Most entries add narrow capabilities. The workspace
 # deny is intentionally stronger: any existing external_directory allow rules
-# under ~/.manul/workspace are changed to deny, and the final catch-all workspace
-# deny is placed last so a broad ~/.manul/** allow cannot override it.
+# under the configured workspace base are changed to deny, and both default and
+# absolute canonical workspace denies are appended after broader allow rules.
 REQUIRED_PERMISSION_RULES=(
   '.permission.external_directory["/tmp/**"] = "allow"'
   '.permission.external_directory["/tmp/manul-diagnostics/**"] = "allow"'
@@ -35,7 +42,7 @@ REQUIRED_PERMISSION_RULES=(
   '.permission.list |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.list["~/.manul/logs/**"] = "allow"'
   '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
-  '.permission.external_directory |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.external_directory |= (with_entries((.key | if startswith("~/") then (env.HOME + .[1:]) elif startswith("$HOME/") then (env.HOME + .[5:]) else . end) as $path | if ($path == (env.HOME + "/.manul/workspace") or ($path | startswith(env.HOME + "/.manul/workspace/"))) then .value = "deny" else . end) | del(."~/.manul/workspace/**") + {"~/.manul/workspace/**":"deny"})'
+  '.permission.external_directory |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.external_directory |= (with_entries((.key | if startswith("~/") then (env.HOME + .[1:]) elif startswith("$HOME/") then (env.HOME + .[5:]) else . end) as $path | if ($path == $manulWorkspace or ($path | startswith($manulWorkspace + "/"))) then .value = "deny" else . end) | del(.[$defaultWorkspaceDeny]) + {($defaultWorkspaceDeny):"deny",($workspaceDeny):"deny"})'
 )
 
 # Paths verified against the effective OpenCode configuration, kept in lockstep
@@ -48,6 +55,7 @@ REQUIRED_PERMISSION_PATHS=(
 )
 REQUIRED_PERMISSION_DENY_PATHS=(
   '~/.manul/workspace/**'
+  "$MANUL_WORKSPACE_RULE"
 )
 
 resolve_opencode_bin() {
@@ -99,7 +107,7 @@ for rule in "${REQUIRED_PERMISSION_RULES[@]}"; do
 done
 
 # shellcheck disable=SC2086
-jq "$JQ_EXPR" "$OPENCODE_CONFIG" >"$TMP_FILE"
+jq --arg manulWorkspace "$MANUL_WORKSPACE_CANONICAL" --arg workspaceDeny "$MANUL_WORKSPACE_RULE" --arg defaultWorkspaceDeny '~/.manul/workspace/**' "$JQ_EXPR" "$OPENCODE_CONFIG" >"$TMP_FILE"
 MODE="$(stat -c '%a' "$OPENCODE_CONFIG" 2>/dev/null || true)"
 [ -n "$MODE" ] && chmod "$MODE" "$TMP_FILE" 2>/dev/null || true
 
