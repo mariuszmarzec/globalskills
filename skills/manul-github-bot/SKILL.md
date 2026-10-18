@@ -105,8 +105,17 @@ access to all of `~/.manul/**`: they may access only the exact leased workspace
 and descendants, not sibling workspaces, shared repository caches, logs, DB,
 configuration, adapters, or global skills. Related-repository paths are
 normalized to GitHub `owner/repository` identifiers; traversal and symlink
-escapes are rejected. Existing work and unpushed commits are preserved when a
-workspace is migrated or a checkout cannot be verified.
+escapes are rejected.
+
+If Git cannot switch/reset a task checkout safely, Manul must attempt a fresh
+clone of the repository remote at the task's explicit target
+branch. Standalone tasks use the branch selected by the base-branch policy;
+PR/review tasks use that PR's actual head branch, never an assumed `master`.
+Before replacing the checkout, Manul moves the previous checkout intact to
+`tmp/checkout-recovery/` inside that task workspace. If the required remote
+branch is unavailable or recovery cannot be verified, the task fails with a
+concrete diagnostic rather than falling back to another branch. The recovery
+backup is not the active checkout; `WORKDIR` remains authoritative.
 
 ## Agent execution boundary
 
