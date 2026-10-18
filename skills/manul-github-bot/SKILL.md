@@ -86,6 +86,10 @@ The runtime contains Manul configuration, SQLite state, logs, locks, task
 artifacts, workspace state, runtime script links, and the operator environment
 file `.env`. OpenClaw configuration/state remains outside that ownership
 boundary. Provider-specific environment such as `OPENCLAW_STATE_DIR` or
+The daemon removes regular files under `~/.manul/logs` when they have not been
+modified for more than seven days, and prunes empty task-archive directories.
+This log-file retention is independent from SQLite task-history retention; files
+outside the log directory are not affected.
 `OPENCLAW_CONFIG_PATH` is persisted in `~/.manul/.env` when present during
 installation/repair. Existing `.env` entries are preserved; arbitrary
 environment variables are never copied. Unattended daemon/watchdog processes
