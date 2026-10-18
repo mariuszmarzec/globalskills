@@ -91,10 +91,10 @@ installation/repair. Existing `.env` entries are preserved; arbitrary
 environment variables are never copied. Unattended daemon/watchdog processes
 load this file because cron/systemd does not load `~/.zshrc`.
 
-The daemon removes regular files under `~/.manul/logs` when they have not been
-modified for more than seven days, and prunes empty task-archive directories.
-This log-file retention is independent from SQLite task-history retention; files
-outside the log directory are not affected.
+The daemon removes regular files under `~/.manul/logs` and the legacy startup
+wrapper log `~/.manul/daemon.log` when they have not been modified for more than
+seven days, and prunes empty task-archive directories. This log-file retention is
+independent from SQLite task-history retention; other files are not affected.
 
 A leased workspace is a task-owned **root**, not a Git repository itself. The
 workspace layout is:
