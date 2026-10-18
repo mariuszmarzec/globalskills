@@ -457,6 +457,32 @@ if [ -d "$TASK_LOCK_DIR" ]; then
 fi
 echo "PASS: stale legacy .daemon-lock cannot self-deadlock the dispatcher"
 
+# 7b) The supervisor lifetime lock rejects a second owner and is acquired
+# before daemon.pid is published; worker processes must not inherit the lock.
+echo ""
+echo "=== Test 7b: daemon supervisor is a singleton ==="
+OWNER_LOCK_FILE="$MANUL_DIR/state/locks/daemon-owner.flock"
+mkdir -p "$(dirname "$OWNER_LOCK_FILE")"
+if ! grep -Fq 'exec 220>"$DAEMON_OWNER_LOCK_FILE"' "$SCRIPT_DIR/manul-daemon.sh" \
+  || ! grep -Fq 'if ! flock -n 220;' "$SCRIPT_DIR/manul-daemon.sh" \
+  || ! grep -Fq '220>&-' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon startup is missing lifetime ownership or worker lock isolation" >&2
+  exit 1
+fi
+exec 230>"$OWNER_LOCK_FILE"
+flock -n 230 || { echo "FAIL: test could not acquire daemon owner lock" >&2; exit 1; }
+if ( exec 231>"$OWNER_LOCK_FILE"; flock -n 231 ) 2>/dev/null; then
+  echo "FAIL: a second supervisor could acquire the lifetime lock" >&2
+  exit 1
+fi
+flock -u 230
+exec 230>&-
+if ! ( exec 231>"$OWNER_LOCK_FILE"; flock -n 231 ); then
+  echo "FAIL: owner lock stayed unavailable after the owner released it" >&2
+  exit 1
+fi
+echo "PASS: daemon lifetime lock prevents overlapping supervisors"
+
 # 8) A worker started by an older daemon must exit rather than join a new pool.
 loop --worker=orphan-regression --parent-pid=2147483647
 grep -q 'worker startup aborted: owning daemon is not alive' "$LOG" \
