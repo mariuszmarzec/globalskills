@@ -386,7 +386,9 @@ while true; do
     break
 done
 
-rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" "$CURRENT_RUN_PROMPT_FILE" 2>/dev/null || true
+# Keep only the current run's raw artifacts until final classification is done.
+# The aggregate attempt log remains the durable diagnostic artifact.
+rm -f "$CURRENT_RUN_PROMPT_FILE" 2>/dev/null || true
 : >"$OPT_STDOUT_FILE"
 if [ -f "$RAW_STDOUT_FILE" ]; then
     jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' \
@@ -454,17 +456,25 @@ fi
 # a different approach instead of silently treating it as "session can continue".
 permission_blocked=0
 permission_operation=""
+# After a permission-recovery continuation, historical denial events in the
+# aggregate attempt log must not override the latest run's actual result.
+PERMISSION_STDOUT_FILE="$RAW_STDOUT_FILE"
+PERMISSION_STDERR_FILE="$OPT_STDERR_FILE"
+if [ "$permission_recovery_used" -gt 0 ]; then
+    PERMISSION_STDOUT_FILE="$CURRENT_RUN_STDOUT_FILE"
+    PERMISSION_STDERR_FILE="$CURRENT_RUN_STDERR_FILE"
+fi
 permission_detail=""
 permission_tool=""
 # Extract a compact description of the denied operation, not the raw event.
 # OpenCode event shapes differ across versions; avoid publishing arguments,
 # prompt contents, or arbitrary event JSON to GitHub.
-if [ -s "$RAW_STDOUT_FILE" ]; then
+if [ -s "$PERMISSION_STDOUT_FILE" ]; then
     permission_event="$(jq -c '
       select(.type == "tool_use")
       | select(.part.state.status == "error")
       | select((.part.state.error // "") | tostring | test("permission|rejected|auto-reject"; "i"))
-    ' "$RAW_STDOUT_FILE" 2>/dev/null | tail -n 1 || true)"
+    ' "$PERMISSION_STDOUT_FILE" 2>/dev/null | tail -n 1 || true)"
     if [ -n "$permission_event" ]; then
         permission_blocked=1
         permission_tool="$(printf '%s' "$permission_event" | jq -r '.part.tool // .part.name // .part.state.tool // .tool // empty' 2>/dev/null)"
@@ -479,8 +489,8 @@ fi
 # override a specific, structured non-permission error (for example, ProviderError).
 stderr_permission_line=""
 stderr_permission_operation=""
-if [ -s "$OPT_STDERR_FILE" ]; then
-    stderr_permission_line="$(grep -Ei 'permission requested: [^;]+; auto-rejecting' "$OPT_STDERR_FILE" 2>/dev/null | tail -n 1 | tr '\n\r' '  ' | cut -c1-400 || true)"
+if [ -s "$PERMISSION_STDERR_FILE" ]; then
+    stderr_permission_line="$(grep -Ei 'permission requested: [^;]+; auto-rejecting' "$PERMISSION_STDERR_FILE" 2>/dev/null | tail -n 1 | tr '\n\r' '  ' | cut -c1-400 || true)"
     if [ -n "$stderr_permission_line" ]; then
         stderr_permission_operation="$(printf '%s' "$stderr_permission_line" | sed -nE 's/.*permission requested: ([^;]+); auto-rejecting.*/\1/ip' | head -n 1)"
         if [ "$permission_blocked" -eq 0 ] && [ -z "$error_message" ]; then
@@ -643,6 +653,8 @@ jq -cn \
     --arg permission_recovery_used "$permission_recovery_used" \
     --arg selected_agent "$OPT_AGENT" \
     '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,permission_recovery_used:($permission_recovery_used|tonumber),selected_agent:$selected_agent,raw_log:$raw_log}}'
+
+rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" "$CURRENT_RUN_PROMPT_FILE" 2>/dev/null || true
 
 if [ "$_status" = "BLOCKED" ]; then
     exit 0
