@@ -271,9 +271,9 @@ ProcessRunner.run() {
     unset ProcessRunner_ManagedStdout ProcessRunner_ManagedStderr
 
     if [ "${ProcessRunner_IdleTimedOut:-false}" = "true" ]; then
-        printf '%s|%s|false|true|idle_timeout\\n' "$ProcessRunner_Rc" "$dur"
+        printf '%s|%s|false|true|idle_timeout\n' "$ProcessRunner_Rc" "$dur"
     else
-        printf '%s|%s|false|%s\\n' "$ProcessRunner_Rc" "$dur" "${ProcessRunner_TimedOut:-false}"
+        printf '%s|%s|false|%s\n' "$ProcessRunner_Rc" "$dur" "${ProcessRunner_TimedOut:-false}"
     fi
     return "$ProcessRunner_Rc"
 }
