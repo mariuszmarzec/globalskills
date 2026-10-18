@@ -296,8 +296,6 @@ MOCK
     || fail "OpenCode inherited PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
 }
 
-
-
 # ---------------------------------------------------------------------------
 # 7b. Large OpenCode prompts must not exceed the per-argument OS limit
 # ---------------------------------------------------------------------------
@@ -850,6 +848,7 @@ MOCK
 echo "=== Adapter Unit Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 
+test_opencode_adapter_syntax
 test_process_runner_mock
 test_process_runner_cwd_env
 test_openclaw_success
