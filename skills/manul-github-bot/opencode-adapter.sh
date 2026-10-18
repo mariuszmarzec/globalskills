@@ -152,7 +152,11 @@ cleanup_opencode_task_config() {
 }
 trap cleanup_opencode_task_config EXIT HUP INT TERM
 
-if [ -n "${OPENCODE_CONFIG:-}" ] && [ -f "$OPENCODE_CONFIG" ]; then
+# Respect a configured provider path, but also cover OpenCode's canonical
+# default when OPENCODE_CONFIG is not exported by the unattended launcher.
+_OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
+if [ -f "$_OPENCODE_BASE_CONFIG" ]; then
+    OPENCODE_CONFIG="$_OPENCODE_BASE_CONFIG"
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
     _workspace_root="$(realpath -e -- "$HOME/.manul/workspace" 2>/dev/null || true)"
     if [ -z "$_workspace_real" ] || [ -z "$_workspace_root" ]; then
