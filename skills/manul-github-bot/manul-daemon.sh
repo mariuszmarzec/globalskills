@@ -1465,16 +1465,27 @@ cleanup_expired_tasks() {
     log "WARN: task retention cleanup returned unexpected result: $deleted"
   fi
 
-  # Runtime adapters may retain per-attempt diagnostic artifacts (for example
-  # OpenCode JSONL event streams) so execution failures remain debuggable after
-  # the process exits. Keep them for the same retention window as terminal task
-  # history instead of leaking unbounded task logs.
+
+}
+
+
+# Remove stale files from the entire Manul log tree, independently from task-row
+# retention. File age is based on last modification so currently active log files
+# remain in place while old task archives and inactive log files are deleted.
+cleanup_expired_logs() {
+  [ -n "${MANUL_LOG_DIR:-}" ] && [ -d "$MANUL_LOG_DIR" ] || return 0
+
+  local retention_minutes=$((7 * 24 * 60))
+  local deleted_logs
+  deleted_logs="$(find "$MANUL_LOG_DIR" -type f -mmin "+${retention_minutes}" -print -delete 2>/dev/null | wc -l | tr -d '[:space:]')"
+
+  if [[ "$deleted_logs" =~ ^[0-9]+$ ]] && [ "$deleted_logs" -gt 0 ]; then
+    log "log retention cleanup: removed $deleted_logs file(s) older than 7 days"
+  fi
+
+  # Avoid leaving one empty directory per expired task archive behind.
   if [ -d "$MANUL_TASK_LOG_DIR" ]; then
-    local deleted_task_logs
-    deleted_task_logs="$(find "$MANUL_TASK_LOG_DIR" -type f -name 'task-*' -mtime "+${TASK_HISTORY_RETENTION_DAYS}" -print -delete 2>/dev/null | wc -l | tr -d ' ')"
-    if [[ "$deleted_task_logs" =~ ^[0-9]+$ ]] && [ "$deleted_task_logs" -gt 0 ]; then
-      log "task retention cleanup: removed $deleted_task_logs task diagnostic artifact(s) older than ${TASK_HISTORY_RETENTION_DAYS} days"
-    fi
+    find "$MANUL_TASK_LOG_DIR" -depth -mindepth 1 -type d -empty -delete 2>/dev/null || true
   fi
 }
 
@@ -2965,6 +2976,7 @@ run_once() {
     return 1
   }
   cleanup_expired_tasks
+  cleanup_expired_logs
 
   # Use timeout to prevent daemon deadlock if poll.sh hangs
   # This can happen if gh API is unresponsive or network is blocked.
