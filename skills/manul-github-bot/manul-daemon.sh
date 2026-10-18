@@ -696,22 +696,36 @@ recover_stale_tasks() {
       ownership_clause="AND claimToken IS NULL"
     fi
 
+    local changed
     if [ "${attempts:-0}" -ge "$max_attempts" ]; then
       log "recover_stale_tasks: marking stale task as failed: $comment_id"
-      local changed
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)"
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || true
       if [ "${changed:-0}" -eq 1 ]; then
+        recovered=$((recovered + 1))
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
         post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
       else
-        log "WARN: stale task $comment_id was no longer owned by this recovery pass; failure comment skipped"
+        log "WARN: stale task $comment_id was not marked failed (changes=${changed:-unknown}); task state or claim ownership changed"
+        lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=failed_transition_not_applied"
       fi
     else
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;" 2>/dev/null
-      log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
-      lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
+      changed="$(sqlite3 "$DB" "
+        UPDATE processed_comments
+        SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
+            leaseExpiresAt=NULL, claimToken=NULL,
+            nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
+        WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
+        SELECT changes();
+      " 2>>"$LOG" | tail -n 1)" || true
+      if [ "${changed:-0}" -eq 1 ]; then
+        log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
+        lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
+        recovered=$((recovered + 1))
+      else
+        log "WARN: recover_stale_tasks: task $comment_id was not requeued (changes=${changed:-unknown}); task state or claim ownership changed"
+        lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=requeue_transition_not_applied"
+      fi
     fi
-    recovered=$((recovered + 1))
   done <<<"$stale_tasks"
 
   log "recover_stale_tasks: recovered $recovered stale task(s)"
@@ -1230,9 +1244,22 @@ start() {
   # the safety net for any path that invokes manul-daemon.sh start directly.
   touch "$MANUL_DIR/.enabled"
 
-  # Atomically write PID file under flock to prevent concurrent start races
+  # Serialize starts, then re-check the singleton under the lock. The earlier
+  # PID-file check is only a fast path: two concurrent starts can both pass it
+  # before either child writes daemon.pid.
   exec 200>"$FLOCK_FILE"
   flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
+  if [ -f "$PID_FILE" ]; then
+    local locked_pid
+    locked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ "$locked_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$locked_pid" 2>/dev/null; then
+      flock -u 200
+      exec 200>&-
+      echo "already running (pid $locked_pid)"
+      return 0
+    fi
+    rm -f "$PID_FILE"
+  fi
 
   # Fork the daemon to run in background.
   (
@@ -1247,7 +1274,7 @@ start() {
 for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
        # Use an absolute path so the worker survives even if the daemon's cwd
        # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
-       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
+       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
@@ -1294,7 +1321,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       for i in "${!WORKER_PIDS[@]}"; do
 if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
            log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" >>"$LOG" 2>&1 &
+           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
           worker_pid=$!
           echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
           new_pids+=("$worker_pid")
@@ -3881,13 +3908,20 @@ PROMPT_APPEND
 }
 
 loop() {
-  # Parse arguments for worker mode
-  local worker_id=""
+  # Parse worker mode and the daemon master that owns this worker. An orphaned
+  # worker must exit after its master dies instead of competing with a
+  # replacement daemon and repeatedly contending for the task-dispatch lock.
+  local worker_id="" parent_pid=""
   for arg in "$@"; do
     case "$arg" in
       --worker=*) worker_id="${arg#--worker=}" ;;
+      --parent-pid=*) parent_pid="${arg#--parent-pid=}" ;;
     esac
   done
+  if [ -n "$parent_pid" ] && { ! [[ "$parent_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$parent_pid" 2>/dev/null; }; then
+    log "worker startup aborted: owning daemon is not alive (parent=$parent_pid worker=$worker_id)"
+    return 0
+  fi
 
   # Ensure nextAttemptAt column exists before any scheduler query
   if ! ensure_nextattemptat_column; then
@@ -3913,9 +3947,14 @@ loop() {
 
   # In worker mode, skip flock (each worker has its own lock)
   if [ -n "$worker_id" ]; then
-    log "daemon loop started as worker $worker_id (interval ${INTERVAL}s)"
-    lc_log "LOOP_START" "worker=$worker_id interval=${INTERVAL}s"
+    log "daemon loop started as worker $worker_id (interval ${INTERVAL}s parent=${parent_pid:-legacy})"
+    lc_log "LOOP_START" "worker=$worker_id interval=${INTERVAL}s parent=${parent_pid:-legacy}"
     while true; do
+      if [ -n "$parent_pid" ] && ! kill -0 "$parent_pid" 2>/dev/null; then
+        log "worker $worker_id stopping because owning daemon $parent_pid exited"
+        lc_log "WORKER_STOP" "worker=$worker_id reason=parent_exited parent=$parent_pid"
+        break
+      fi
       run_once
       sleep "$INTERVAL"
     done
