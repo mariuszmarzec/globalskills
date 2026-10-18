@@ -1480,6 +1480,38 @@ ensure_nextattemptat_column() {
   return 0
 }
 
+# Add recovery bookkeeping to existing installations without replacing the user's DB.
+# agentStartedAt distinguishes an execution that actually reached the runtime from
+# a claim that failed during checkout/workspace preparation. Existing running rows
+# are conservatively classified as started during the one-time migration.
+ensure_recovery_tracking_columns() {
+  local columns
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\n' "$columns" | grep -q '|preExecutionFailures|'; then
+    local alter_failures
+    alter_failures="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN preExecutionFailures INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|preExecutionFailures|'; then
+        log "ERROR: failed to add preExecutionFailures column: $alter_failures"
+        return 1
+      fi
+    }
+    log "migration: preExecutionFailures column added or already present"
+  fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\n' "$columns" | grep -q '|agentStartedAt|'; then
+    local alter_started
+    alter_started="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN agentStartedAt TEXT; UPDATE processed_comments SET agentStartedAt=COALESCE(processedAt,datetime('now')) WHERE status='running' AND agentStartedAt IS NULL; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|agentStartedAt|'; then
+        log "ERROR: failed to add agentStartedAt column: $alter_started"
+        return 1
+      fi
+    }
+    log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
+  fi
+  return 0
+}
+
 # Ensure each task claim has a unique ownership token. workerPid identifies a long-lived worker loop, not one specific task execution.
 ensure_claim_token_column() {
   if sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|claimToken|'; then
@@ -1577,18 +1609,50 @@ post_task_failure_feedback() {
 handle_pre_execution_failure() {
   local comment_id="$1" claim_token="$2" repo="$3" issue_num="$4"
   local workspace_id="${5:-}" reply_to="${6:-}" reason="$7" pr_number="${8:-}" attempt_fallback="${9:-1}" failure_stage="${10:-pre_execution}"
-  local attempts max_attempts target_status
+  local attempts infra_failures max_infra_failures target_status safe_id safe_token
   reason="$(manul_redact_failure_details "$reason")"
+  ensure_recovery_tracking_columns || {
+    log "ERROR: cannot migrate recovery counters while handling pre-agent failure for $comment_id"
+    release_task_lock
+    return 1
+  }
 
-  attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  safe_id="$(sql_escape "$comment_id")"
+  safe_token="$(sql_escape "$claim_token")"
+  local row
+  row="$(sqlite3 "$DB" "SELECT COALESCE(attempts,0) || '|' || COALESCE(preExecutionFailures,0) FROM processed_comments WHERE commentId='$safe_id' AND status='running' AND claimToken='$safe_token' LIMIT 1;" 2>/dev/null || true)"
+  if [ -z "$row" ]; then
+    log "ERROR: pre-agent recovery refused for $comment_id because this claim no longer owns the running row"
+    lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=pre_execution_claim_mismatch"
+    release_task_lock
+    return 1
+  fi
+  IFS='|' read -r attempts infra_failures <<< "$row"
   [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="$attempt_fallback"
-  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then max_attempts=3; fi
-  if [ "$attempts" -ge "$max_attempts" ]; then target_status="failed"; else target_status="queued"; fi
+  [[ "$infra_failures" =~ ^[0-9]+$ ]] || infra_failures=0
 
-  # Prove current-claim ownership before touching heartbeat/workspace/locks.
-  if ! update_task_completion "$comment_id" "$target_status" "$reason" "$claim_token"; then
-    log "ERROR: could not finalize pre-execution failure for $comment_id (target=$target_status)"
+  max_infra_failures="$(jq -r '.automation.maxPreExecutionFailures // 8' "$CONFIG" 2>/dev/null || echo 8)"
+  if ! [[ "$max_infra_failures" =~ ^[0-9]+$ ]] || [ "$max_infra_failures" -lt 1 ]; then max_infra_failures=8; fi
+  infra_failures=$((infra_failures + 1))
+  if [ "$infra_failures" -ge "$max_infra_failures" ]; then target_status="failed"; else target_status="queued"; fi
+
+  # Preparation failures are not agent executions. Atomically release the claim,
+  # decrement the claim-time attempt bump, and charge the separate bounded infra
+  # counter so repeated checkout/runtime setup failures cannot consume agent budget.
+  local changed
+  changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
+    UPDATE processed_comments
+    SET status='$target_status',
+        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+        preExecutionFailures=$infra_failures,
+        agentStartedAt=NULL,
+        processedAt=CASE WHEN '$target_status'='failed' THEN datetime('now') ELSE NULL END,
+        heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL,
+        nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${RETRY_DELAY_SECONDS} seconds') ELSE NULL END
+    WHERE commentId='$safe_id' AND status='running' AND claimToken='$safe_token';
+    SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+  if [ "$changed" != "1" ]; then
+    log "ERROR: could not finalize pre-execution infrastructure failure for $comment_id (changes=${changed:-unknown})"
     lc_log "TASK_ERROR" "task=$comment_id reason=pre_execution_finalization_failed"
     release_task_lock
     return 1
@@ -1602,14 +1666,15 @@ handle_pre_execution_failure() {
   release_task_lock
   set_activity "none" "idle"
 
+  local execution_attempts="$(( attempts > 0 ? attempts - 1 : 0 ))"
   if [ "$target_status" = "failed" ]; then
-    log "dispatch: task $comment_id failed before agent startup after $attempts/$max_attempts attempts: $reason"
-    lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
-    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" "$failure_stage" || true
+    log "dispatch: task $comment_id failed before agent startup after $infra_failures/$max_infra_failures infrastructure failures (agent attempts remain $execution_attempts): $reason"
+    lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num infra_failures=$infra_failures max_infra_failures=$max_infra_failures agent_attempts=$execution_attempts reason=$reason"
+    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $infra_failures/$max_infra_failures pre-execution infrastructure failures before the agent started. Agent execution attempts are tracked separately. Reason: $reason" "$pr_number" "$failure_stage" || true
   else
-    local retry_comment="⚠️ Manul could not start the task and will retry (attempt $attempts/$max_attempts). Reason: $reason"
-    log "dispatch: task $comment_id requeued after pre-execution failure ($attempts/$max_attempts): $reason"
-    lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
+    local retry_comment="⚠️ Manul could not start the agent; infrastructure preparation failure $infra_failures/$max_infra_failures. Agent execution attempt budget is unchanged. Reason: $reason"
+    log "dispatch: task $comment_id requeued after pre-execution infrastructure failure ($infra_failures/$max_infra_failures); agent attempt count unchanged at $execution_attempts: $reason"
+    lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num infra_failures=$infra_failures max_infra_failures=$max_infra_failures agent_attempts=$execution_attempts reason=$reason"
     post_lifecycle_comment "$repo" "$issue_num" "$retry_comment" "$reply_to" || log "WARN: failed to post retry comment for $comment_id"
   fi
   return 0
