@@ -93,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=30
+  local expected_tests=31
   local actual_tests
   actual_tests=$(grep -Ec "^test_[a-zA-Z0-9_]+\(\)[[:space:]]*(\{|\()" "$0" 2>/dev/null || echo 0)
 
