@@ -242,6 +242,15 @@ __WORKSPACE_ROOT__
 The primary repository checkout is the only repository that may be edited, committed, pushed, or delivered by default:
 __WORKDIR__
 
+## Canonical Path Handling — Mandatory
+The absolute paths supplied by Manul above are authoritative. Treat the leased workspace root as the task boundary and the primary checkout as the working repository. Never reconstruct paths from usernames, task IDs, previous attempts, logs, or assumptions about the machine.
+
+- The execution runner provides `MANUL_TASK_WORKSPACE_ROOT` and `MANUL_TASK_WORKDIR` to local command processes when supported. Prefer `cd "$MANUL_TASK_WORKDIR"` for shell commands and verify the repository root with `git rev-parse --show-toplevel`.
+- If a tool does not inherit those variables, use the exact literal primary-checkout path printed above. Do not invent or “correct” an absolute path.
+- Prefer `"$HOME/…"` for home-relative shell paths. Do not assume `~` expands inside quoted strings, tool arguments, configuration values, or file APIs.
+- If the supplied paths and the actual filesystem disagree, stop path-dependent operations and report the observed `HOME`, `PWD`, supplied path values, and the exact failed check. Never try alternate username/home prefixes.
+- A path or permission failure is not permission to search another workspace, guess a replacement, use a symlink, or broaden access.
+
 Additional repositories prepared inside this workspace for READ-ONLY inspection:
 __RELATED_REPOSITORIES__
 
@@ -250,7 +259,7 @@ __RELATED_UNAVAILABLE__
 
 All repository file access must stay inside the exact task workspace root above. Run primary-repository build, test, git, commit, push, and PR commands from the primary checkout at `__WORKDIR__`. Related checkouts, if listed, are read-only context. Do not edit, commit, branch, or push a related checkout by default. If the task genuinely requires changing another repository, stop and request an explicit delivery policy for that repository/branch/PR before changing it. If a required related repository is unavailable, report the exact repository and blocker; do not search for its shared cache or another task's checkout.
 
-Treat local Manul/OpenCode/operator state as outside the task boundary. Under ~/.manul/**, the ONLY permitted local repository-access path is the exact task workspace root shown above and its descendants. Access to ANY other workspace under ~/.manul/workspace/** is explicitly forbidden, including read-only inspection, even if you believe it contains useful code, prior attempts, context, logs, caches, or diagnostics. Do NOT read, list, search, probe, enumerate, or follow sibling workspace directories; shared repository-cache directories; databases; prompts; logs; runtime artifacts; adapters; or symlinks. This prohibition applies to shell commands, file tools, skill tools, subagents, and indirect access alike. Also do NOT read, list, search, probe, or follow paths in:
+Treat local Manul/OpenCode/operator state as outside the task boundary. The configured Manul workspace tree is private runtime state: only the exact task workspace root shown above and its descendants are permitted. Every sibling workspace is forbidden, even read-only, as are shared repository caches, databases, prompts, logs, runtime artifacts, adapters, and symlink targets outside this task root. Do NOT read, list, search, probe, enumerate, or follow them through shell commands, file tools, skill tools, subagents, or indirect access. Also do NOT read, list, search, probe, or follow paths in:
 - ~/.config/opencode/** (provider configuration and permissions)
 - ~/.agents/** or other global agent/skill directories
 - daemon logs, process environments, agent runtime internals, or other tasks' workspaces
@@ -733,6 +742,11 @@ if assert_file_contains "task workspace path injected" "$WORK/prompt.md" "/tmp/m
 else
     :
 fi
+if assert_file_contains "canonical path policy included" "$WORK/prompt.md" "Canonical Path Handling — Mandatory"; then :; else :; fi
+if assert_file_contains "runner-provided primary path variable explained" "$WORK/prompt.md" 'cd "$MANUL_TASK_WORKDIR"'; then :; else :; fi
+if assert_file_contains "home-relative path expansion guidance included" "$WORK/prompt.md" 'Prefer `"$HOME/…"` for home-relative shell paths'; then :; else :; fi
+if assert_file_contains "path guessing explicitly forbidden" "$WORK/prompt.md" "Never reconstruct paths from usernames"; then :; else :; fi
+if assert_file_not_contains "prompt does not hardcode a Linux account home path" "$WORK/prompt.md" "/home/marzec"; then :; else :; fi
 if assert_file_contains "primary checkout path injected" "$WORK/prompt.md" "/tmp/manul-task-workspace/repos/test-owner/test-repo"; then :; else :; fi
 if assert_file_contains "related checkout read-only path injected" "$WORK/prompt.md" "test-owner/related: repos/test-owner/related (read-only)"; then :; else :; fi
 if assert_file_contains "unavailable related repo blocker injected" "$WORK/prompt.md" "test-owner/missing: cache unavailable"; then :; else :; fi
@@ -763,6 +777,9 @@ if assert_file_contains "generated prompt requires safe body-file edit" "$WORK/p
 if assert_file_contains "generated prompt requires PR head/body read-back" "$WORK/prompt.md" "gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid"; then :; else :; fi
 if assert_file_contains "generated prompt blocks TASK_DONE when description verification fails" "$WORK/prompt.md" 'do NOT emit `TASK_DONE`'; then :; else :; fi
 if assert_file_contains "production daemon contains mandatory PR description policy" "$SCRIPT_DIR/manul-daemon.sh" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
+if assert_file_contains "production prompt enforces canonical path handling" "$SCRIPT_DIR/manul-daemon.sh" "Canonical Path Handling — Mandatory"; then :; else :; fi
+if assert_file_contains "execution context carries a primary checkout path" "$SCRIPT_DIR/manul-daemon.sh" '--arg workdir "$WORKDIR"'; then :; else :; fi
+if assert_file_contains "execution context carries the task workspace root" "$SCRIPT_DIR/manul-daemon.sh" '--arg workspaceRoot "$workspace_path"'; then :; else :; fi
 if assert_file_contains "production daemon refreshes after every later push" "$SCRIPT_DIR/manul-daemon.sh" "After EVERY later push to a branch with an open PR"; then :; else :; fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────

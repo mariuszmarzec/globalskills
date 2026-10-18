@@ -42,10 +42,12 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    local task_id prompt workspace agent attempt timeout session_id stdout_file stderr_file
+    local task_id prompt workspace workspace_root workdir agent attempt timeout session_id stdout_file stderr_file
     task_id="$(jq -r '.taskId // ""' "$ctx_file" 2>/dev/null)"
     prompt="$(jq -r '.prompt // ""' "$ctx_file" 2>/dev/null)"
     workspace="$(jq -r '.workspace // ""' "$ctx_file" 2>/dev/null)"
+    workspace_root="$(jq -r '.workspaceRoot // .workspace // ""' "$ctx_file" 2>/dev/null)"
+    workdir="$(jq -r '.workdir // ""' "$ctx_file" 2>/dev/null)"
     agent="$(jq -r '.agent // ""' "$ctx_file" 2>/dev/null)"
     attempt="$(jq -r '.attempt // 1' "$ctx_file" 2>/dev/null)"
     timeout="$(jq -r '.timeout // 0' "$ctx_file" 2>/dev/null)"
@@ -157,7 +159,12 @@ AgentExecutor.execute() {
     fi
     # Execute the adapter; it writes its ExecutionResult JSON to stdout.
     local adapter_output
-    adapter_output="$(bash "$adapter_script" \
+    adapter_output="$( \
+        MANUL_DIR="$MANUL_DIR" \
+        MANUL_WORKSPACE="$MANUL_WORKSPACE" \
+        MANUL_TASK_WORKSPACE_ROOT="$workspace_root" \
+        MANUL_TASK_WORKDIR="$workdir" \
+        bash "$adapter_script" \
         --task-id "$task_id" \
         --prompt "$prompt" \
         --workspace "$workspace" \

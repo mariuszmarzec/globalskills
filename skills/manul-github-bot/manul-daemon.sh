@@ -3689,6 +3689,15 @@ __WORKSPACE_ROOT__
 The primary repository checkout is the only repository that may be edited, committed, pushed, or delivered by default:
 __WORKDIR__
 
+## Canonical Path Handling — Mandatory
+The absolute paths supplied by Manul above are authoritative. Treat the leased workspace root as the task boundary and the primary checkout as the working repository. Never reconstruct paths from usernames, task IDs, previous attempts, logs, or assumptions about the machine.
+
+- The execution runner provides `MANUL_TASK_WORKSPACE_ROOT` and `MANUL_TASK_WORKDIR` to local command processes when supported. Prefer `cd "$MANUL_TASK_WORKDIR"` for shell commands and verify the repository root with `git rev-parse --show-toplevel`.
+- If a tool does not inherit those variables, use the exact literal primary-checkout path printed above. Do not invent or “correct” an absolute path.
+- Prefer `"$HOME/…"` for home-relative shell paths. Do not assume `~` expands inside quoted strings, tool arguments, configuration values, or file APIs.
+- If the supplied paths and the actual filesystem disagree, stop path-dependent operations and report the observed `HOME`, `PWD`, supplied path values, and the exact failed check. Never try alternate username/home prefixes.
+- A path or permission failure is not permission to search another workspace, guess a replacement, use a symlink, or broaden access.
+
 Additional repositories prepared inside this workspace for READ-ONLY inspection:
 __RELATED_REPOSITORIES__
 
@@ -3697,7 +3706,7 @@ __RELATED_UNAVAILABLE__
 
 All repository file access must stay inside the exact task workspace root above. Run primary-repository build, test, git, commit, push, and PR commands from the primary checkout at `__WORKDIR__`. Related checkouts, if listed, are read-only context. Do not edit, commit, branch, or push a related checkout by default. If the task genuinely requires changing another repository, stop and request an explicit delivery policy for that repository/branch/PR before changing it. If a required related repository is unavailable, report the exact repository and blocker; do not search for its shared cache or another task's checkout.
 
-Treat local Manul/OpenCode/operator state as outside the task boundary. Under ~/.manul/**, the ONLY permitted local repository-access path is the exact task workspace root shown above and its descendants. Access to ANY other workspace under ~/.manul/workspace/** is explicitly forbidden, including read-only inspection, even if you believe it contains useful code, prior attempts, context, logs, caches, or diagnostics. Do NOT read, list, search, probe, enumerate, or follow sibling workspace directories; shared repository-cache directories; databases; prompts; logs; runtime artifacts; adapters; or symlinks. This prohibition applies to shell commands, file tools, skill tools, subagents, and indirect access alike. Also do NOT read, list, search, probe, or follow paths in:
+Treat local Manul/OpenCode/operator state as outside the task boundary. The configured Manul workspace tree is private runtime state: only the exact task workspace root shown above and its descendants are permitted. Every sibling workspace is forbidden, even read-only, as are shared repository caches, databases, prompts, logs, runtime artifacts, adapters, and symlink targets outside this task root. Do NOT read, list, search, probe, enumerate, or follow them through shell commands, file tools, skill tools, subagents, or indirect access. Also do NOT read, list, search, probe, or follow paths in:
 - ~/.config/opencode/** (provider configuration and permissions)
 - ~/.agents/** or other global agent/skill directories
 - daemon logs, process environments, agent runtime internals, or other tasks' workspaces
@@ -3829,6 +3838,8 @@ PROMPT_APPEND
        --arg taskId "$COMMENT_ID" \
        --arg prompt "$TASK_PROMPT_FILE" \
        --arg workspace "$workspace_path" \
+       --arg workspaceRoot "$workspace_path" \
+       --arg workdir "$WORKDIR" \
        --arg agent "${AGENT:-}" \
        --arg agentSelection "$AGENT_SELECTION" \
        --argjson autoAccept "$TASK_AUTO_ACCEPT" \
@@ -3837,7 +3848,7 @@ PROMPT_APPEND
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      local executor_output

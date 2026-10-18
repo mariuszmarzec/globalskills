@@ -330,15 +330,18 @@ MOCK
 # 7c. Task-scoped OpenCode config keeps sibling workspaces denied
 # ---------------------------------------------------------------------------
 test_opencode_task_scoped_config() {
-  local tmp global_config active_workspace sibling_workspace before_hash output
+  local tmp global_config active_workspace sibling_workspace custom_workspace_base custom_manul_dir primary_checkout before_hash output
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$tmp/home/.manul/workspace/ws-active" "$tmp/home/.manul/workspace/ws-sibling"
+  custom_workspace_base="$tmp/custom task workspaces"
+  custom_manul_dir="$tmp/custom Manul runtime"
+  active_workspace="$custom_workspace_base/ws-active"
+  sibling_workspace="$custom_workspace_base/ws-sibling"
+  primary_checkout="$active_workspace/repos/test-owner/test-repo"
+  mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$primary_checkout" "$sibling_workspace"
   global_config="$tmp/home/.config/opencode/opencode.json"
-  active_workspace="$tmp/home/.manul/workspace/ws-active"
-  sibling_workspace="$tmp/home/.manul/workspace/ws-sibling"
   cat >"$global_config" <<JSON
-{"model":"test/provider","permission":{"external_directory":{"$tmp/home/.manul/workspace/**":"deny"}}}
+{"model":"test/provider","permission":{"external_directory":{"$custom_workspace_base/**":"deny"}}}
 JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
@@ -348,7 +351,7 @@ if [ "${1:-}" = "run" ]; then
   # Inspect the actual config used by this run, not a debug command that the
   # production adapter never invokes. OpenCode evaluates patterns in order;
   # the task-specific allow must follow the broader sibling-workspace deny.
-  jq -e --arg active "$ACTIVE_WORKSPACE" --arg activeGlob "$ACTIVE_WORKSPACE/**" --arg globalPattern "$HOME/.manul/workspace/**" --arg sibling "$SIBLING_WORKSPACE" '
+  jq -e --arg active "$ACTIVE_WORKSPACE" --arg activeGlob "$ACTIVE_WORKSPACE/**" --arg globalPattern "$MANUL_WORKSPACE/**" --arg sibling "$SIBLING_WORKSPACE" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$ACTIVE_WORKSPACE" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$EXPECTED_PRIMARY_CHECKOUT" '
     .permission.external_directory as $rules
     | ($rules[$globalPattern] == "deny")
       and ($rules[$active] == "allow")
@@ -357,6 +360,8 @@ if [ "${1:-}" = "run" ]; then
       and (($rules | keys_unsorted | index($active)) < ($rules | keys_unsorted | index($activeGlob)))
       and (($rules[$sibling] // "deny") == "deny")
       and (($rules[$sibling + "/**"] // "deny") == "deny")
+      and ($taskRoot == $expectedRoot)
+      and ($workdir == $expectedWorkdir)
   ' "$OPENCODE_CONFIG" >/dev/null
   printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 else
@@ -366,7 +371,7 @@ fi
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do task" >"$tmp/prompt"; : >"$tmp/stdout"; : >"$tmp/stderr"
-  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" ACTIVE_WORKSPACE="$active_workspace" SIBLING_WORKSPACE="$sibling_workspace" MANUL_DIR="$tmp/home/.manul" env -u OPENCODE_CONFIG \
+  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" ACTIVE_WORKSPACE="$active_workspace" SIBLING_WORKSPACE="$sibling_workspace" EXPECTED_PRIMARY_CHECKOUT="$primary_checkout" MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" MANUL_TASK_WORKSPACE_ROOT="$active_workspace" MANUL_TASK_WORKDIR="$primary_checkout" env -u OPENCODE_CONFIG \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" --workspace "$active_workspace" --attempt 1 --timeout 10 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$output" "COMPLETED" "OpenCode runs with the task-specific overlay using default config path"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] && ok "global provider config remains unchanged" || fail "global provider config changed"
@@ -828,25 +833,34 @@ MOCK
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
 test_agent_executor_dispatch() {
-  local tmp
+  local tmp custom_manul_dir custom_workspace_base workspace_root workdir
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin"
+  custom_manul_dir="$tmp/custom Manul runtime"
+  custom_workspace_base="$tmp/custom workspace tree"
+  workspace_root="$custom_workspace_base/ws-route"
+  workdir="$workspace_root/repos/test-owner/test-repo"
+  mkdir -p "$tmp/bin" "$workspace_root" "$workdir" "$tmp/home"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do the task" >"$tmp/prompt"
-  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
-    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+  jq -n --arg p "$tmp/prompt" --arg w "$workspace_root" --arg wr "$workspace_root" --arg wd "$workdir" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,workspaceRoot:$wr,workdir:$wd,attempt:1,timeout:30}' >"$tmp/context.json"
 
   local out
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
-    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_TASK_ENV="$tmp/task-env" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+  printf '%s\n' "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
+  cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
+    && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
+    || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------------------
@@ -951,25 +965,34 @@ test_opencode_adapter_syntax() {
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
 test_agent_executor_dispatch() {
-  local tmp
+  local tmp custom_manul_dir custom_workspace_base workspace_root workdir
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin"
+  custom_manul_dir="$tmp/custom Manul runtime"
+  custom_workspace_base="$tmp/custom workspace tree"
+  workspace_root="$custom_workspace_base/ws-route"
+  workdir="$workspace_root/repos/test-owner/test-repo"
+  mkdir -p "$tmp/bin" "$workspace_root" "$workdir" "$tmp/home"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do the task" >"$tmp/prompt"
-  jq -n --arg p "$tmp/prompt" --arg w "$tmp" \
-    '{taskId:"route-1",prompt:$p,workspace:$w,attempt:1,timeout:30}' >"$tmp/context.json"
+  jq -n --arg p "$tmp/prompt" --arg w "$workspace_root" --arg wr "$workspace_root" --arg wd "$workdir" \
+    '{taskId:"route-1",prompt:$p,workspace:$w,workspaceRoot:$wr,workdir:$wd,attempt:1,timeout:30}' >"$tmp/context.json"
 
   local out
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
-    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_TASK_ENV="$tmp/task-env" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
+  printf '%s\n' "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
+  cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
+    && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
+    || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------------------
