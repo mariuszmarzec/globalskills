@@ -795,6 +795,7 @@ test_stale_busy_workspace_is_archived_before_reclaim() {
   mkdir -p "$path/repos/owner/repo"
   printf '%s\n' "uncommitted implementation" > "$path/repos/owner/repo/wip.txt"
   printf '%s\n' "untracked test" > "$path/repos/owner/repo/new-test.txt"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId,repository,issueNumber,status,workspaceId) VALUES ('task-rebooted','owner/repo',29,'running','$ws');"
   sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
 
   workspace_cleanup_stale 1
@@ -807,6 +808,14 @@ test_stale_busy_workspace_is_archived_before_reclaim() {
   [ ! -e "$path" ] || return 1
   [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$ws';")" = "0" ] || return 1
   [ "$(stat -c '%a' "$archive_root" 2>/dev/null)" = "700" ] || return 1
+
+  # When the same task is recovered, it can reclaim its archived WIP rather than
+  # failing because its previous workspace row disappeared.
+  [ "$(workspace_reclaim "task-rebooted")" = "$ws" ] || return 1
+  [ -f "$path/repos/owner/repo/wip.txt" ] || return 1
+  grep -Fxq "uncommitted implementation" "$path/repos/owner/repo/wip.txt" || return 1
+  grep -Fxq "untracked test" "$path/repos/owner/repo/new-test.txt" || return 1
+  [ "$(sqlite3 "$DB" "SELECT status || '|' || currentTaskId FROM workspaces WHERE workspaceId='$ws';")" = "BUSY|task-rebooted" ] || return 1
 }
 run_and_test "Test 29: Stale workspace is archived before reclaim" test_stale_busy_workspace_is_archived_before_reclaim
 
