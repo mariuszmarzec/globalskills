@@ -325,6 +325,8 @@ The example configuration currently defines:
 - agent timeout;
 - `automation.opencodeMaxStepLimitContinuations` — maximum internal OpenCode
   same-session resumes after step-limit events (default 3, valid range 0..20);
+- `automation.agentNoProgressTimeoutSeconds` — maximum silent period for OpenCode
+  stdout/stderr before its isolated process group is terminated (default 900s);
 - heartbeat timeout;
 - lease timeout;
 - maximum attempts;
@@ -369,6 +371,14 @@ completion/user-input markers, and timeouts must not trigger this retry loop.
 When the configured internal budget is exhausted and OpenCode still reports a
 step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
 the daemon's existing retry/session handling remains authoritative.
+
+The OpenCode adapter also applies `automation.agentNoProgressTimeoutSeconds`
+(default `900`) to the current run's actual stdout/stderr stream. A fresh JSONL
+event or stderr write resets the idle timer; a heartbeat alone does not. On
+expiry, `ProcessRunner` terminates only the isolated runtime process group and
+returns the distinct `AGENT_NO_PROGRESS_TIMEOUT` failure code. The aggregate
+JSONL log and stderr diagnostics are retained for task recovery. This timeout is
+independent of the overall agent timeout and of the daemon lease/heartbeat.
 
 Every adapter failure result should preserve actionable diagnostics in its
 `ExecutionResult` when the runtime provides them, including the runtime,
