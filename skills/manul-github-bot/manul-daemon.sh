@@ -70,6 +70,8 @@ LAST_POLL_FILE="$MANUL_STATE_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_STATE_DIR/current_activity"
 LOCK="$MANUL_LOCKS_DIR/daemon.lock"
 FLOCK_FILE="$MANUL_LOCKS_DIR/daemon.flock"
+# Held by the long-lived daemon supervisor, independently of the short startup lock.
+DAEMON_OWNER_LOCK_FILE="$MANUL_LOCKS_DIR/daemon-owner.flock"
 # OS-level lock for the singleton task dispatcher. Unlike the legacy .daemon-lock
 # directory, flock is automatically released when the owning worker process dies.
 TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
@@ -1229,6 +1231,28 @@ refresh_heartbeat() {
 start() {
   configure_task_retention
 
+  # Serialize the whole preparation/start path, including stale-workspace cleanup.
+  # Otherwise two concurrent startup wrappers could both mutate pool state before
+  # reaching the old late lock acquisition.
+  mkdir -p "$(dirname "$FLOCK_FILE")"
+  exec 200>"$FLOCK_FILE"
+  flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; exec 200>&-; return 1; }
+  if [ -f "$PID_FILE" ]; then
+    local initial_pid initial_cmdline
+    initial_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ "$initial_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$initial_pid" 2>/dev/null; then
+      initial_cmdline="$(tr '\0' ' ' < "/proc/$initial_pid/cmdline" 2>/dev/null || true)"
+      if [[ "$initial_cmdline" == *"manul-daemon.sh"* ]]; then
+        flock -u 200
+        exec 200>&-
+        echo "already running (pid $initial_pid)"
+        return 0
+      fi
+      log "WARN: daemon PID file points to a live unrelated/reused PID ($initial_pid); removing stale PID file"
+    fi
+    rm -f "$PID_FILE"
+  fi
+
   # Reclaim workspaces left BUSY by dead/stale workers before creating the pool.
   # This must happen before workspace_pool_init: a stale BUSY row otherwise
   # makes available_ws=0 and prevents the daemon from starting at all.
@@ -1246,18 +1270,6 @@ start() {
     return 1
   fi
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
-
-  # Singleton check: verify no other daemon is running
-  if [ -f "$PID_FILE" ]; then
-    local existing_pid
-    existing_pid="$(cat "$PID_FILE" 2>/dev/null)"
-    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      echo "already running (pid $existing_pid)"
-      return 0
-    fi
-    # Stale PID file — remove it
-    rm -f "$PID_FILE"
-  fi
 
   # Clean up the legacy directory lock left by pre-flock Manul versions.
   if [ -d "$MANUL_DIR/.daemon-lock" ]; then
@@ -1287,27 +1299,20 @@ start() {
   # the safety net for any path that invokes manul-daemon.sh start directly.
   touch "$MANUL_DIR/.enabled"
 
-  # Serialize starts, then re-check the singleton under the lock. The earlier
-  # PID-file check is only a fast path: two concurrent starts can both pass it
-  # before either child writes daemon.pid.
-  exec 200>"$FLOCK_FILE"
-  flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
-  if [ -f "$PID_FILE" ]; then
-    local locked_pid
-    locked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ "$locked_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$locked_pid" 2>/dev/null; then
-      flock -u 200
-      exec 200>&-
-      echo "already running (pid $locked_pid)"
-      return 0
-    fi
-    rm -f "$PID_FILE"
-  fi
+  # The start lock acquired at function entry remains held until after the supervisor is forked.
 
   # Fork the daemon to run in background.
   (
-    # Child process: we are the daemon.
-    # Write PID file under the lock (we already hold the lock via fd 200)
+    # Child process: claim an OS-level owner lock for the supervisor's full lifetime.
+    # Workers and isolated executors close this descriptor so they cannot pin the
+    # singleton lock after the supervisor exits or a replacement starts.
+    mkdir -p "$(dirname "$DAEMON_OWNER_LOCK_FILE")"
+    exec 220>"$DAEMON_OWNER_LOCK_FILE"
+    if ! flock -n 220; then
+      log "ERROR: another daemon supervisor owns the lifetime lock; refusing duplicate start"
+      exit 1
+    fi
+    # Write PID only after owning the singleton lock.
     echo "$BASHPID" >"$PID_FILE"
 
     # Spawn worker pool
@@ -1317,7 +1322,7 @@ start() {
 for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
        # Use an absolute path so the worker survives even if the daemon's cwd
        # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
-       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
+       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
@@ -1342,7 +1347,9 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       done
       wait 2>/dev/null || true
       rm -f "$PID_FILE"
-      lc_log "DAEMON_STOP" "pid=$$"
+      flock -u 220 2>/dev/null || true
+      exec 220>&- 2>/dev/null || true
+      lc_log "DAEMON_STOP" "pid=$"
       exit 0
     }
     trap handle_stop TERM INT
@@ -1364,7 +1371,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       for i in "${!WORKER_PIDS[@]}"; do
 if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
            log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
+           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
           worker_pid=$!
           echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
           new_pids+=("$worker_pid")
