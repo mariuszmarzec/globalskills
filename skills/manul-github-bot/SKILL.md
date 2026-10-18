@@ -117,6 +117,19 @@ branch is unavailable or recovery cannot be verified, the task fails with a
 concrete diagnostic rather than falling back to another branch. The recovery
 backup is not the active checkout; `WORKDIR` remains authoritative.
 
+Before stale/broken workspace cleanup deletes its DB mapping, the full task-owned
+workspace root is moved into a private archive under
+`~/.manul/state/recovery/workspaces`. This retains staged, unstaged and
+untracked implementation work. A retry may restore only the snapshot matching
+its original workspace ID and task ID; snapshot preservation/restore failures
+must leave data on disk and emit an actionable error. The archive is outside the
+agent's allowlisted workspace and must never be exposed through broader
+OpenCode path permissions.
+
+Startup serializes the entire workspace-preparation path and holds a separate
+OS-level owner lock for the supervisor's lifetime. Worker processes must close
+that lock descriptor so a worker cannot keep a dead supervisor's lock alive.
+
 ## Agent execution boundary
 
 The daemon never invokes an agent runtime directly. It calls
@@ -282,9 +295,18 @@ queued -> running -> completed
                   -> stale -> queued
 ```
 
-`attempts` increments only when a queued task is claimed for execution.
+`attempts` is the agent-execution budget. A task claim starts with
+`agentStartedAt = NULL`; the field is set atomically immediately before the
+isolated runtime starts. If preparation fails before that marker, Manul rolls
+back the claim-time attempt increment and increments the separate
+`preExecutionFailures` counter instead. The bounded
+`automation.maxPreExecutionFailures` option defaults to 8. These retries still
+use `nextAttemptAt` backoff; neither infrastructure retry loops nor a reboot
+before runtime startup should exhaust `maxAttemptsBeforeFail`.
 
-Recovery from running to queued preserves the attempt count.
+A stale task with `agentStartedAt` set has reached the runtime and uses the
+normal agent retry budget. Recovery from a real agent execution requeue does not
+increment attempts by itself.
 
 `blocked_user` is not failure and resumes through `/manul continue <answer>`.
 
@@ -368,6 +390,7 @@ heartbeatTimeout
 leaseTimeout
 maxConcurrentTasks
 maxAttemptsBeforeFail
+maxPreExecutionFailures (default 8)
 lockTtl
 ```
 
