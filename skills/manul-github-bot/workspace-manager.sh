@@ -121,7 +121,9 @@ workspace_restore_recovery_snapshot() {
   archive_root="$MANUL_STATE_DIR/recovery/workspaces"
   [ -d "$archive_root" ] && [ ! -L "$archive_root" ] || return 1
   archive_root="$(realpath -e "$archive_root" 2>/dev/null)" || return 1
-  case "$archive_root" in "$MANUL_STATE_DIR"/recovery/workspaces) ;; *) return 1 ;; esac
+  local expected_archive_root
+  expected_archive_root="$(realpath -m "$MANUL_STATE_DIR/recovery/workspaces" 2>/dev/null)" || return 1
+  [ "$archive_root" = "$expected_archive_root" ] || return 1
 
   candidate_name="$(find "$archive_root" -mindepth 1 -maxdepth 1 -type d -name "${ws_id}-${safe_task_id}-*" -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
   [ -n "$candidate_name" ] || return 1
@@ -186,9 +188,11 @@ workspace_restore_recovery_snapshot() {
   result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
   result="$(printf '%s\n' "$result" | tail -n1)"
   if [ "${result:-0}" -ne 1 ] || [ -z "$result" ]; then
-    if workspace_restore_recovery_snapshot "$ws_id" "$task_id" >/dev/null; then
-      return 0
-    fi
+    local restored_ws
+    restored_ws="$(workspace_restore_recovery_snapshot "$ws_id" "$task_id")" || return 1
+    [ "$restored_ws" = "$ws_id" ] || return 1
+    printf '%s\n' "$restored_ws"
+    return 0
     return 1
   fi
   sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
