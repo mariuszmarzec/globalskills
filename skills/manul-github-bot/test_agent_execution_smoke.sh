@@ -54,7 +54,7 @@ if grep -Fq 'Your skills are available at: ~/.agents/skills' "$SCRIPT_DIR/manul-
   echo "FAIL: generated task prompt still advertises the global skills directory" >&2
   exit 1
 fi
-for protected_path in '~/.manul/**' '~/.agents/**' '~/.config/opencode/**'; do
+for protected_path in 'configured Manul workspace tree' '~/.agents/**' '~/.config/opencode/**'; do
   if ! grep -Fq "$protected_path" "$SCRIPT_DIR/manul-daemon.sh"; then
     echo "FAIL: generated task prompt does not protect $protected_path" >&2
     exit 1

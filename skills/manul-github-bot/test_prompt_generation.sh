@@ -360,7 +360,7 @@ if assert_file_contains "stdin request body present" "$WORK/prompt.md" "--input 
 if assert_file_contains "inline body flags forbidden" "$WORK/prompt.md" 'Do NOT use `-f body="..."` or `-F body="..."`'; then :; else :; fi
 if assert_file_contains "material ambiguity guidance present" "$WORK/prompt.md" "The user-facing decision request must summarize what you checked"; then :; else :; fi
 if assert_file_contains "structured user decision marker guidance present" "$WORK/prompt.md" "TASK_NEEDS_USER_BEGIN"; then :; else :; fi
-if assert_file_contains "sibling workspace access is explicitly forbidden" "$WORK/prompt.md" "Access to ANY other workspace under ~/.manul/workspace/** is explicitly forbidden"; then :; else :; fi
+if assert_file_contains "sibling workspace access is explicitly forbidden" "$WORK/prompt.md" "Every sibling workspace is forbidden, even read-only"; then :; else :; fi
 if assert_file_contains "missing context fallback uses authorized sources" "$WORK/prompt.md" "the assigned workspace, related repositories explicitly checked out INSIDE that workspace"; then :; else :; fi
 if assert_file_contains "missing context must be requested from user" "$WORK/prompt.md" "ask the user for the specific missing input using the structured TASK_NEEDS_USER flow"; then :; else :; fi
 if assert_file_contains "completion forbidden with user decision" "$WORK/prompt.md" 'Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run'; then :; else :; fi
