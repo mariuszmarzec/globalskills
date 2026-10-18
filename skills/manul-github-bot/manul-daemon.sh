@@ -1484,7 +1484,7 @@ cleanup_expired_logs() {
   fi
 
   # Avoid leaving one empty directory per expired task archive behind.
-  if [ -d "$MANUL_TASK_LOG_DIR" ]; then
+  if [ "$MANUL_TASK_LOG_DIR" = "$MANUL_LOG_DIR/tasks" ] && [ -d "$MANUL_TASK_LOG_DIR" ]; then
     find "$MANUL_TASK_LOG_DIR" -depth -mindepth 1 -type d -empty -delete 2>/dev/null || true
   fi
 }
