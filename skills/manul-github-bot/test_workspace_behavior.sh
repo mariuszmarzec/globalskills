@@ -93,7 +93,7 @@ reset_pool() {
 
 # Self-check: verify test discovery
 self_check() {
-  local expected_tests=30
+  local expected_tests=31
   local actual_tests
   actual_tests=$(grep -Ec "^test_[a-zA-Z0-9_]+\(\)[[:space:]]*(\{|\()" "$0" 2>/dev/null || echo 0)
 
@@ -779,6 +779,46 @@ test_new_context_gets_fresh_workspace() {
   workspace_release "$ws_new" "task-new"
 }
 run_and_test "Test 28: New context gets fresh workspace after context pool is full" test_new_context_gets_fresh_workspace
+
+# Test 29: a stale workspace is archived before its DB row/context is discarded.
+# Simulate an interrupted implementation with uncommitted files, then let startup
+# recovery reclaim the stale lease. The preserved snapshot must remain task-owned
+# and outside the agent's active workspace.
+echo ""
+echo "=== Test 29: Stale workspace is archived before reclaim ==="
+test_stale_busy_workspace_is_archived_before_reclaim() {
+  workspace_pool_init 1 reset
+
+  local ws path archive_root archive
+  ws="$(workspace_lease "task-rebooted")" || return 1
+  path="$WORKSPACES_DIR/$ws"
+  mkdir -p "$path/repos/owner/repo"
+  printf '%s\n' "uncommitted implementation" > "$path/repos/owner/repo/wip.txt"
+  printf '%s\n' "untracked test" > "$path/repos/owner/repo/new-test.txt"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId,repository,issueNumber,status,workspaceId) VALUES ('task-rebooted','owner/repo',29,'running','$ws');"
+  sqlite3 "$DB" "UPDATE workspaces SET lastUsedAt=datetime('now','-7200 seconds') WHERE workspaceId='$ws';"
+
+  workspace_cleanup_stale 1
+
+  archive_root="$MANUL_STATE_DIR/recovery/workspaces"
+  archive="$(find "$archive_root" -mindepth 1 -maxdepth 1 -type d -name "${ws}-task-rebooted-*" -print -quit 2>/dev/null)"
+  [ -n "$archive" ] || return 1
+  grep -Fxq "uncommitted implementation" "$archive/repos/owner/repo/wip.txt" || return 1
+  grep -Fxq "untracked test" "$archive/repos/owner/repo/new-test.txt" || return 1
+  [ ! -e "$path" ] || return 1
+  [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE workspaceId='$ws';")" = "0" ] || return 1
+  [ "$(stat -c '%a' "$archive_root" 2>/dev/null)" = "700" ] || return 1
+
+  # When the same task is recovered, it can reclaim its archived WIP rather than
+  # failing because its previous workspace row disappeared.
+  [ "$(workspace_reclaim "task-rebooted")" = "$ws" ] || return 1
+  [ -f "$path/repos/owner/repo/wip.txt" ] || return 1
+  grep -Fxq "uncommitted implementation" "$path/repos/owner/repo/wip.txt" || return 1
+  grep -Fxq "untracked test" "$path/repos/owner/repo/new-test.txt" || return 1
+  [ "$(sqlite3 "$DB" "SELECT status || '|' || currentTaskId FROM workspaces WHERE workspaceId='$ws';")" = "BUSY|task-rebooted" ] || return 1
+}
+run_and_test "Test 29: Stale workspace is archived before reclaim" test_stale_busy_workspace_is_archived_before_reclaim
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TESTS_RUN tests)"
 echo "═══════════════════════════════════════════════════════════════"

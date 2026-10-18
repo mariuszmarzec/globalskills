@@ -86,16 +86,18 @@ ProcessRunner.override() {
 }
 
 ProcessRunner.run() {
-    local timeout="" cwd="" env_args=() cmd_args=()
+    local timeout="" idle_timeout="" cwd="" env_args=() cmd_args=()
     ProcessRunner_Rc=""
     ProcessRunner_Interrupted="false"
     ProcessRunner_TimedOut="false"
+    ProcessRunner_IdleTimedOut="false"
     ProcessRunner_ManagedStdout=""
     ProcessRunner_ManagedStderr=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --timeout) timeout="$2"; shift 2 ;;
+            --idle-timeout) idle_timeout="$2"; shift 2 ;;
             --cwd)     cwd="$2";     shift 2 ;;
             --env)     env_args+=("$2"); shift 2 ;;
             --)        shift; cmd_args+=("$@"); break ;;
@@ -177,7 +179,68 @@ ProcessRunner.run() {
         fi
 
         if [ -z "${ProcessRunner_Rc:-}" ]; then
-            if [ -n "$timeout" ] && [ "$timeout" -gt 0 ] 2>/dev/null; then
+            if [ -n "$idle_timeout" ] && [[ "$idle_timeout" =~ ^[0-9]+$ ]] && [ "$idle_timeout" -gt 0 ] 2>/dev/null; then
+                # Isolate the runtime in its own process group so an idle timeout
+                # cannot signal the Manul supervisor or sibling tasks.
+                if command -v setsid >/dev/null 2>&1; then
+                    setsid timeout -k 60 "${timeout:-2147483647}" "${exec_cmd[@]}" <&0 >>"$out_file" 2>>"$err_file" &
+                else
+                    printf '%s\n' "ProcessRunner: --idle-timeout requires setsid; runtime was not launched" >>"$err_file"
+                    ProcessRunner_Rc=127
+                fi
+                if [ -z "${ProcessRunner_Rc:-}" ]; then
+                    local idle_runner_pid idle_last_progress idle_now idle_out_size idle_err_size idle_prev_out idle_prev_err idle_state idle_pgid
+                    idle_runner_pid=$!
+                    idle_last_progress="$(date +%s)"
+                    idle_prev_out="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
+                    idle_prev_err="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
+                    while :; do
+                        sleep 1
+                        idle_state="$(ps -o stat= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
+                        case "$idle_state" in ""|*Z*) break ;; esac
+                        idle_out_size="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
+                        idle_err_size="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
+                        if [ "$idle_out_size" != "$idle_prev_out" ] || [ "$idle_err_size" != "$idle_prev_err" ]; then
+                            idle_last_progress="$(date +%s)"
+                            idle_prev_out="$idle_out_size"
+                            idle_prev_err="$idle_err_size"
+                            continue
+                        fi
+                        idle_now="$(date +%s)"
+                        if [ "$((idle_now - idle_last_progress))" -ge "$idle_timeout" ]; then
+                            printf 'ProcessRunner: no stdout/stderr progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
+                            idle_pgid="$(ps -o pgid= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
+                            if [ "$idle_pgid" = "$idle_runner_pid" ]; then
+                                kill -TERM -- "-$idle_runner_pid" 2>/dev/null || true
+                            else
+                                kill -TERM "$idle_runner_pid" 2>/dev/null || true
+                            fi
+                            sleep 2
+                            idle_state="$(ps -o stat= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
+                            case "$idle_state" in
+                                ""|*Z*) ;;
+                                *)
+                                    if [ "$idle_pgid" = "$idle_runner_pid" ]; then
+                                        kill -KILL -- "-$idle_runner_pid" 2>/dev/null || true
+                                    else
+                                        kill -KILL "$idle_runner_pid" 2>/dev/null || true
+                                    fi
+                                    ;;
+                            esac
+                            wait "$idle_runner_pid" 2>/dev/null || true
+                            ProcessRunner_Rc=124
+                            ProcessRunner_TimedOut="true"
+                            ProcessRunner_IdleTimedOut="true"
+                            break
+                        fi
+                    done
+                    if [ "${ProcessRunner_IdleTimedOut:-false}" != "true" ]; then
+                        wait "$idle_runner_pid"
+                        ProcessRunner_Rc=$?
+                        if [ "$ProcessRunner_Rc" -eq 124 ]; then ProcessRunner_TimedOut="true"; fi
+                    fi
+                fi
+            elif [ -n "$timeout" ] && [ "$timeout" -gt 0 ] 2>/dev/null; then
                 timeout -k 60 "$timeout" "${exec_cmd[@]}" >>"$out_file" 2>>"$err_file"
                 ProcessRunner_Rc=$?
                 if [ "$ProcessRunner_Rc" -eq 124 ]; then
@@ -207,6 +270,10 @@ ProcessRunner.run() {
     [ -n "$ProcessRunner_ManagedStderr" ] && rm -f "$ProcessRunner_ManagedStderr" 2>/dev/null || true
     unset ProcessRunner_ManagedStdout ProcessRunner_ManagedStderr
 
-    printf '%s|%s|false|%s\n' "$ProcessRunner_Rc" "$dur" "${ProcessRunner_TimedOut:-false}"
+    if [ "${ProcessRunner_IdleTimedOut:-false}" = "true" ]; then
+        printf '%s|%s|false|true|idle_timeout\n' "$ProcessRunner_Rc" "$dur"
+    else
+        printf '%s|%s|false|%s\n' "$ProcessRunner_Rc" "$dur" "${ProcessRunner_TimedOut:-false}"
+    fi
     return "$ProcessRunner_Rc"
 }

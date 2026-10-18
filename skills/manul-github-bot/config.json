@@ -18,6 +18,8 @@
   "automation": {
     "enabled": true,
     "maxAttemptsBeforeFail": 3,
+    "maxPreExecutionFailures": 8,
+    "agentNoProgressTimeoutSeconds": 900,
     "lockTtl": 1800,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,

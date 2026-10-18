@@ -60,7 +60,7 @@ workspace_pool_init() {
   current_size="$(sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces;" 2>/dev/null || echo 0)"
   local i
   for ((i = current_size; i < pool_size; i++)); do
-    local ws_id="ws-$i-$(date +%s)"
+    local ws_id="ws-$i-$(date +%s%N)-$$"
     local ws_path="$WORKSPACES_DIR/$ws_id"
     mkdir -p "$ws_path"
     sqlite3 "$DB" "INSERT OR IGNORE INTO workspaces(workspaceId, workspacePath, status, lastUsedAt) VALUES('$ws_id', '$ws_path', 'IDLE', datetime('now'));"
@@ -104,6 +104,77 @@ workspace_release() {
   sqlite3 "$DB" "UPDATE workspaces SET status='IDLE', currentTaskId=NULL, lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id';"
 }
 
+# Restore the latest preserved snapshot for this exact workspace/task pair.
+# It only runs for a task with an existing workspace mapping; it never scans
+# or opens another task's recovery material.
+workspace_restore_recovery_snapshot() {
+  local ws_id="$1" task_id="$2"
+  [[ "$ws_id" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [ -n "$task_id" ] || return 1
+  local safe_task_id
+  safe_task_id="$(printf '%s' "$task_id" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-100)"
+
+  local workspace_root archive_root root_real candidate_name candidate target row_owner row_status
+  workspace_root="$WORKSPACES_DIR"
+  [ ! -L "$workspace_root" ] || return 1
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  archive_root="$MANUL_STATE_DIR/recovery/workspaces"
+  [ -d "$archive_root" ] && [ ! -L "$archive_root" ] || return 1
+  archive_root="$(realpath -e "$archive_root" 2>/dev/null)" || return 1
+  local expected_archive_root
+  expected_archive_root="$(realpath -m "$MANUL_STATE_DIR/recovery/workspaces" 2>/dev/null)" || return 1
+  [ "$archive_root" = "$expected_archive_root" ] || return 1
+
+  candidate_name="$(find "$archive_root" -mindepth 1 -maxdepth 1 -type d -name "${ws_id}-${safe_task_id}-*" -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
+  [ -n "$candidate_name" ] || return 1
+  candidate="$archive_root/$candidate_name"
+  [ ! -L "$candidate" ] && [ -d "$candidate" ] || return 1
+  target="$root_real/$ws_id"
+  [ ! -e "$target" ] && [ ! -L "$target" ] || return 1
+
+  local row
+  row="$(sqlite3 "$DB" "SELECT COALESCE(status,'') || '|' || COALESCE(currentTaskId,'') FROM workspaces WHERE workspaceId='$(sql_escape "$ws_id")' LIMIT 1;" 2>/dev/null || true)"
+  if [ -n "$row" ]; then
+    IFS='|' read -r row_status row_owner <<< "$row"
+    case "$row_status:$row_owner" in
+      BROKEN:*|IDLE:*|BUSY:"$task_id") ;;
+      *) echo "workspace recovery: refusing to restore $ws_id; database row has another owner" >&2; return 1 ;;
+    esac
+  fi
+
+  if ! mv -T -- "$candidate" "$target"; then
+    echo "workspace recovery: failed to restore snapshot for $ws_id/$task_id" >&2
+    return 1
+  fi
+
+  local safe_ws_id safe_task_id_sql safe_path upsert
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id_sql="$(sql_escape "$task_id")"
+  safe_path="$(sql_escape "$target")"
+  upsert="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
+    BEGIN IMMEDIATE;
+    INSERT INTO workspaces(workspaceId,workspacePath,status,currentTaskId,lastUsedAt)
+      VALUES('$safe_ws_id','$safe_path','BUSY','$safe_task_id_sql',datetime('now'))
+      ON CONFLICT(workspaceId) DO UPDATE SET workspacePath=excluded.workspacePath,status='BUSY',currentTaskId=excluded.currentTaskId,lastUsedAt=datetime('now')
+      WHERE workspaces.status='BROKEN' OR workspaces.status='IDLE' OR (workspaces.status='BUSY' AND workspaces.currentTaskId=excluded.currentTaskId);
+    SELECT changes();
+    COMMIT;" 2>/dev/null | tail -n 1)" || upsert="0"
+  if [ "$upsert" != "1" ]; then
+    echo "workspace recovery: restored files but could not reclaim DB ownership; data remains at $target" >&2
+    return 1
+  fi
+
+  local context_id repository issue_number
+  context_id="$(sqlite3 "$DB" "SELECT COALESCE(conversationId,'') FROM processed_comments WHERE commentId='$safe_task_id_sql' LIMIT 1;" 2>/dev/null || true)"
+  repository="$(sqlite3 "$DB" "SELECT COALESCE(repository,'') FROM processed_comments WHERE commentId='$safe_task_id_sql' LIMIT 1;" 2>/dev/null || true)"
+  issue_number="$(sqlite3 "$DB" "SELECT COALESCE(issueNumber,'') FROM processed_comments WHERE commentId='$safe_task_id_sql' LIMIT 1;" 2>/dev/null || true)"
+  if [ -n "$context_id" ]; then
+    sqlite3 "$DB" "INSERT OR IGNORE INTO workspace_contexts(contextId,workspaceId,repository,prNumber,createdAt,lastUsedAt) VALUES('$(sql_escape "$context_id")','$safe_ws_id','$(sql_escape "$repository")',NULLIF('$(sql_escape "$issue_number")',''),datetime('now'),datetime('now'));" 2>/dev/null || true
+  fi
+  echo "workspace recovery: restored snapshot workspace=$ws_id task=$task_id path=$target" >&2
+  printf '%s\n' "$ws_id"
+}
+
 # Atomically reclaim a previously-used workspace for a task whose processed_comments row points to it.
 workspace_reclaim() {
   local task_id="$1"
@@ -118,7 +189,21 @@ workspace_reclaim() {
   result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
   result="$(printf '%s\n' "$result" | tail -n1)"
   if [ "${result:-0}" -ne 1 ] || [ -z "$result" ]; then
-    return 1
+    local restored_ws
+    restored_ws="$(workspace_restore_recovery_snapshot "$ws_id" "$task_id")" || return 1
+    [ "$restored_ws" = "$ws_id" ] || return 1
+    printf '%s\n' "$restored_ws"
+    return 0
+  fi
+
+  # A cleanup DB transaction may fail after the directory was moved to recovery.
+  # Never return a leased workspace path that does not exist on disk.
+  if [ ! -d "$WORKSPACES_DIR/$ws_id" ] || [ -L "$WORKSPACES_DIR/$ws_id" ]; then
+    local restored_ws
+    restored_ws="$(workspace_restore_recovery_snapshot "$ws_id" "$task_id")" || return 1
+    [ "$restored_ws" = "$ws_id" ] || return 1
+    printf '%s\n' "$restored_ws"
+    return 0
   fi
   sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null
 }
@@ -330,13 +415,76 @@ workspace_prepare_pr_branch() {
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
 }
 
+# Move a workspace that is about to be discarded into a private recovery
+# area. This is a rename (not a copy), so large working trees and uncommitted
+# files survive host/worker recovery without leaving two writable checkouts.
+# The recovery area is under runtime state, never under another task workspace
+# and never included in the OpenCode workspace allowlist.
+workspace_preserve_recovery_snapshot() {
+  local ws_id="$1" requested_task_id="${2:-}"
+  [[ "$ws_id" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "workspace recovery: invalid workspace id; refusing to discard it" >&2
+    return 1
+  }
+
+  local workspace_path="$WORKSPACES_DIR/$ws_id"
+  if [ ! -e "$workspace_path" ] && [ ! -L "$workspace_path" ]; then
+    return 0
+  fi
+  if [ -L "$workspace_path" ] || [ ! -d "$workspace_path" ]; then
+    echo "workspace recovery: refusing unsafe workspace path: $workspace_path" >&2
+    return 1
+  fi
+
+  local workspaces_real workspace_real manul_real state_real recovery_root task_id safe_task_id destination
+  workspaces_real="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  workspace_real="$(realpath -e "$workspace_path" 2>/dev/null)" || return 1
+  case "$workspace_real" in
+    "$workspaces_real"/*) ;;
+    *) echo "workspace recovery: workspace path escaped its root; preserving in place" >&2; return 1 ;;
+  esac
+
+  task_id="$requested_task_id"
+  if [ -z "$task_id" ]; then
+    task_id="$(sqlite3 "$DB" "SELECT COALESCE(currentTaskId,'') FROM workspaces WHERE workspaceId='$(sql_escape "$ws_id")' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  safe_task_id="$(printf '%s' "${task_id:-unmapped}" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-100)"
+  manul_real="$(realpath -e "$MANUL_DIR" 2>/dev/null)" || return 1
+  mkdir -p "$MANUL_STATE_DIR/recovery/workspaces" || return 1
+  state_real="$(realpath -e "$MANUL_STATE_DIR" 2>/dev/null)" || return 1
+  case "$state_real" in
+    "$manul_real"/state) ;;
+    *) echo "workspace recovery: runtime state path escaped MANUL_DIR; preserving in place" >&2; return 1 ;;
+  esac
+  recovery_root="$(realpath -e "$state_real/recovery/workspaces" 2>/dev/null)" || return 1
+  case "$recovery_root" in
+    "$state_real"/recovery/workspaces) ;;
+    *) echo "workspace recovery: recovery path is not canonical; preserving in place" >&2; return 1 ;;
+  esac
+  chmod 700 "$state_real/recovery" "$recovery_root" 2>/dev/null || return 1
+
+  destination="$recovery_root/${ws_id}-${safe_task_id}-$(date -u +%Y%m%dT%H%M%S%N)-$"
+  [ ! -e "$destination" ] && [ ! -L "$destination" ] || {
+    echo "workspace recovery: destination already exists; preserving in place" >&2
+    return 1
+  }
+  if ! mv -T -- "$workspace_real" "$destination"; then
+    echo "workspace recovery: failed to preserve $workspace_path; refusing deletion" >&2
+    return 1
+  fi
+  chmod 700 "$destination" 2>/dev/null || true
+  echo "workspace recovery: preserved workspace=$ws_id task=${task_id:-unmapped} path=$destination" >&2
+}
+
 workspace_mark_broken() {
   local ws_id="$1"
   local safe_ws_id
   safe_ws_id="$(sql_escape "$ws_id")"
-  sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws_id';" 2>/dev/null || true
-  sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$safe_ws_id';"
-  rm -rf "$WORKSPACES_DIR/$ws_id"
+  if ! workspace_preserve_recovery_snapshot "$ws_id"; then
+    echo "workspace_mark_broken: recovery snapshot failed; workspace remains registered and on disk" >&2
+    return 1
+  fi
+  sqlite3 "$DB" "BEGIN IMMEDIATE; DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws_id'; UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$safe_ws_id'; COMMIT;" 2>/dev/null
 }
 
 workspace_repo_matches() {
@@ -940,12 +1088,29 @@ workspace_cleanup_stale() {
       fi
 
       if [ "$stale" = true ]; then
-        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+        if workspace_preserve_recovery_snapshot "$ws_id" "$task_id"; then
+          sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+        else
+          # A failed snapshot must keep the old workspace registered: cleanup
+          # must never convert a recovery error into silent data loss.
+          echo "workspace_cleanup_stale: could not preserve workspace=$ws_id task=$task_id; leaving it BUSY for operator recovery" >&2
+        fi
       fi
     done <<< "$rows"
   else
     # Backward-compatible fallback for databases predating liveness columns.
-    sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true
+    # Iterate one workspace at a time so the filesystem can be preserved before
+    # a stale BUSY row becomes disposable.
+    local legacy_rows
+    legacy_rows="$(sqlite3 -separator '|' "$DB" "SELECT workspaceId, COALESCE(currentTaskId,'') FROM workspaces WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true)"
+    while IFS='|' read -r ws_id task_id; do
+      [ -n "$ws_id" ] || continue
+      if workspace_preserve_recovery_snapshot "$ws_id" "$task_id"; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      else
+        echo "workspace_cleanup_stale: could not preserve workspace=$ws_id task=$task_id; leaving it BUSY for operator recovery" >&2
+      fi
+    done <<< "$legacy_rows"
   fi
 
   # Broken workspaces are disposable. Idle context-bound workspaces are
@@ -976,4 +1141,4 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
+export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null

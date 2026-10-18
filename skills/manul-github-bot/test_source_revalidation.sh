@@ -261,6 +261,7 @@ assert_eq "stale clears worker pid" "" "$(sqlite3 "$DB" "SELECT coalesce(workerP
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid) VALUES('requeue-test','$REPO',2,'url','IMPLEMENT','running',1,'token2',456);"
 requeue_task "requeue-test" "requeue-test" "token2"; rc=$?; assert_rc "requeue succeeds" 0 "$rc"
 assert_eq "transient returns queued" "queued" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='requeue-test';")"
+assert_eq "pre-agent revalidation preserves agent attempt budget" "0" "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='requeue-test';")"
 assert_eq "requeue clears claim token" "" "$(sqlite3 "$DB" "SELECT coalesce(claimToken,'') FROM processed_comments WHERE commentId='requeue-test';")"
 assert_eq "requeue sets nextAttemptAt" "1" "$(sqlite3 "$DB" "SELECT nextAttemptAt IS NOT NULL FROM processed_comments WHERE commentId='requeue-test';")"
 

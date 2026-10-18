@@ -97,6 +97,8 @@
     "heartbeatTimeout": 900,
     "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,
+    "maxPreExecutionFailures": 8,
+    "agentNoProgressTimeoutSeconds": 900,
     "lockTtl": 1800,
     "alerts": {
       "failureWebhook": null,

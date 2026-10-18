@@ -58,23 +58,23 @@ A stale running task is either:
 
 ## 3. Attempt counting
 
-`attempts` counts actual execution claims.
+`attempts` is the bounded budget for actual agent-runtime executions, not workspace/checkout preparation.
 
-It increments only on:
+A task claim first transitions:
 
 ```
 queued -> running
 ```
 
-Recovery:
+and creates a fresh `claimToken` with `agentStartedAt = NULL`. Immediately before invoking the isolated agent runner, the dispatcher must atomically set `agentStartedAt` for that same running claim. A crash after this marker counts as an agent execution attempt.
 
-```
-running -> queued
-```
+If workspace acquisition, checkout preparation, lifecycle-comment publication, or another pre-agent step fails before the marker is written, recovery must atomically:
+- decrement the claim-time `attempts` increment (never below zero);
+- increment the separate `preExecutionFailures` counter;
+- clear worker/lease/claim ownership and `agentStartedAt`;
+- requeue with `nextAttemptAt`, or fail only when the configured bounded `maxPreExecutionFailures` budget is exhausted.
 
-does not increment attempts.
-
-This prevents watchdog recovery from consuming retry budget by itself.
+Pre-agent failures therefore cannot exhaust `maxAttemptsBeforeFail`. Infrastructure retries remain finite and respect backoff. A stale claim with a non-empty `agentStartedAt` follows the normal agent execution retry budget. A normal running-to-queued recovery never increments `attempts` by itself.
 
 ## 4. Worker ownership and leases
 
@@ -113,7 +113,13 @@ The default configuration uses:
 
 Repository locks prevent two tasks from concurrently modifying the same repository workspace.
 
-A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks. The dispatcher lock descriptor must not be inherited by any long-lived background helper (including heartbeats) or an isolated agent executor or its descendants. Stopping/recovering a task must terminate the complete executor and heartbeat process trees—including descendants that create their own process groups—before the workspace can be reused. PID-file cleanup must not hide a still-running process.
+A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks. Startup must serialize preparation and hold a separate OS-level daemon-owner lock for the full supervisor lifetime; a stale/reused PID must not allow a second supervisor to start. The dispatcher and daemon-owner lock descriptors must not be inherited by long-lived background helpers, workers, or isolated agent executors. Stopping/recovering a task must terminate the complete executor and heartbeat process trees—including descendants that create their own process groups—before the workspace can be reused. PID-file cleanup must not hide a still-running process.
+
+
+
+## 6a. Workspace recovery data
+
+Before marking a stale/broken workspace reclaimable or deleting its database mapping, the manager must atomically move the complete task-owned workspace root into a private recovery area under `$MANUL_DIR/state/recovery/workspaces`. Do not remove staged, unstaged, untracked, or uncommitted work. Snapshot names must bind the original workspace ID and task ID so a retry can restore only its own snapshot. If preservation fails, leave the workspace and its ownership metadata intact and report a diagnostic. Never widen runtime permissions to let an agent browse the recovery area or another task's workspace.
 
 ## 7. GitHub comment contract
 
@@ -319,6 +325,8 @@ The example configuration currently defines:
 - agent timeout;
 - `automation.opencodeMaxStepLimitContinuations` — maximum internal OpenCode
   same-session resumes after step-limit events (default 3, valid range 0..20);
+- `automation.agentNoProgressTimeoutSeconds` — maximum silent period for OpenCode
+  stdout/stderr before its isolated process group is terminated (default 900s);
 - heartbeat timeout;
 - lease timeout;
 - maximum attempts;
@@ -363,6 +371,14 @@ completion/user-input markers, and timeouts must not trigger this retry loop.
 When the configured internal budget is exhausted and OpenCode still reports a
 step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
 the daemon's existing retry/session handling remains authoritative.
+
+The OpenCode adapter also applies `automation.agentNoProgressTimeoutSeconds`
+(default `900`) to the current run's actual stdout/stderr stream. A fresh JSONL
+event or stderr write resets the idle timer; a heartbeat alone does not. On
+expiry, `ProcessRunner` terminates only the isolated runtime process group and
+returns the distinct `AGENT_NO_PROGRESS_TIMEOUT` failure code. The aggregate
+JSONL log and stderr diagnostics are retained for task recovery. This timeout is
+independent of the overall agent timeout and of the daemon lease/heartbeat.
 
 Every adapter failure result should preserve actionable diagnostics in its
 `ExecutionResult` when the runtime provides them, including the runtime,

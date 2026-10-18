@@ -70,6 +70,8 @@ LAST_POLL_FILE="$MANUL_STATE_DIR/last-poll"
 CURRENT_ACTIVITY_FILE="$MANUL_STATE_DIR/current_activity"
 LOCK="$MANUL_LOCKS_DIR/daemon.lock"
 FLOCK_FILE="$MANUL_LOCKS_DIR/daemon.flock"
+# Held by the long-lived daemon supervisor, independently of the short startup lock.
+DAEMON_OWNER_LOCK_FILE="$MANUL_LOCKS_DIR/daemon-owner.flock"
 # OS-level lock for the singleton task dispatcher. Unlike the legacy .daemon-lock
 # directory, flock is automatically released when the owning worker process dies.
 TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
@@ -422,6 +424,7 @@ archive_task_artifacts() {
 # Enhanced SQLite UPDATE with verification and error handling
 update_task_completion() {
   ensure_claim_token_column || return 1
+  ensure_recovery_tracking_columns || return 1
   local comment_id="$1"
   local safe_comment_id="$(sql_escape "$comment_id")"
   local status="$2"
@@ -482,13 +485,13 @@ update_task_completion() {
   local update_sql="UPDATE processed_comments SET status='$status'"
   case "$status" in
     completed|failed)
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
+      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL"
       ;;
     queued)
       # A retry must become schedulable again. Without nextAttemptAt, the
       # scheduler's "attempts > 0 AND nextAttemptAt <= now" predicate ignores
       # NULL forever, silently stranding early-failure retries.
-      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
       ;;
   esac
 
@@ -644,12 +647,14 @@ release_task_lock() {
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
   ensure_claim_token_column || return 1
+  ensure_recovery_tracking_columns || return 1
   log "recover_stale_tasks: checking for stuck tasks"
   lc_log "RECOVERY_START" ""
 
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken,
+           COALESCE(agentStartedAt,''), COALESCE(preExecutionFailures,0),
            CASE
              WHEN heartbeatAt IS NULL
                OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
@@ -666,7 +671,7 @@ recover_stale_tasks() {
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token lease_stale; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token agent_started_at pre_execution_failures lease_stale; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
@@ -680,30 +685,70 @@ recover_stale_tasks() {
       continue
     fi
 
-    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale attempts=$attempts)"
+    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale agent_started=${agent_started_at:-no} attempts=$attempts pre_execution_failures=$pre_execution_failures)"
     terminate_task_executor "$comment_id"
 
-    local max_attempts
-    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-    local safe_comment_id
+    local safe_comment_id safe_claim_token ownership_clause changed
     safe_comment_id="$(sql_escape "$comment_id")"
-    local ownership_clause
     if [ -n "$claim_token" ]; then
-      local safe_claim_token
       safe_claim_token="$(sql_escape "$claim_token")"
       ownership_clause="AND claimToken='$safe_claim_token'"
     else
       ownership_clause="AND claimToken IS NULL"
     fi
 
-    local changed
+    # The claim attempt is incremented before workspace preparation. If the
+    # runtime was never started, classify this as infrastructure failure, roll
+    # back that attempt bump, and use a separate finite budget.
+    if [ -z "$agent_started_at" ]; then
+      local max_pre_execution_failures next_pre_execution_failures target_status
+      max_pre_execution_failures="$(jq -r '.automation.maxPreExecutionFailures // 8' "$CONFIG" 2>/dev/null || echo 8)"
+      if ! [[ "$max_pre_execution_failures" =~ ^[0-9]+$ ]] || [ "$max_pre_execution_failures" -lt 1 ]; then max_pre_execution_failures=8; fi
+      [[ "${pre_execution_failures:-0}" =~ ^[0-9]+$ ]] || pre_execution_failures=0
+      next_pre_execution_failures=$((pre_execution_failures + 1))
+      if [ "$next_pre_execution_failures" -ge "$max_pre_execution_failures" ]; then target_status="failed"; else target_status="queued"; fi
+
+      changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
+        UPDATE processed_comments
+        SET status='$target_status',
+            attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+            preExecutionFailures=$next_pre_execution_failures,
+            agentStartedAt=NULL,
+            processedAt=CASE WHEN '$target_status'='failed' THEN datetime('now') ELSE NULL END,
+            heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL,
+            nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${RETRY_DELAY_SECONDS} seconds') ELSE NULL END
+        WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
+        SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+
+      if [ "$changed" = "1" ]; then
+        recovered=$((recovered + 1))
+        if [ "$target_status" = "failed" ]; then
+          log "recover_stale_tasks: task $comment_id exhausted pre-execution failures $next_pre_execution_failures/$max_pre_execution_failures; no agent attempt was started"
+          lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_pre_execution_max_failures infra_failures=$next_pre_execution_failures max_infra_failures=$max_pre_execution_failures"
+          post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $next_pre_execution_failures/$max_pre_execution_failures pre-execution infrastructure failures before the agent started. Agent execution attempts are tracked separately." "" "stale_task_recovery_pre_execution" || true
+        else
+          log "recover_stale_tasks: requeued task $comment_id after pre-execution worker loss (infra_failures=$next_pre_execution_failures/$max_pre_execution_failures; agent attempts preserved)"
+          lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_pre_execution infra_failures=$next_pre_execution_failures max_infra_failures=$max_pre_execution_failures"
+          post_lifecycle_comment "$repo" "$issue_num" "⚠️ Manul recovered a worker lost before agent startup (infrastructure failure $next_pre_execution_failures/$max_pre_execution_failures). The agent execution attempt budget was not consumed." || log "WARN: failed to post pre-execution recovery comment for $comment_id"
+        fi
+      else
+        log "WARN: recover_stale_tasks: pre-execution task $comment_id was not transitioned (changes=${changed:-unknown}); claim ownership may have changed"
+        lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=stale_pre_execution_transition_not_applied"
+      fi
+      continue
+    fi
+
+    # Once agentStartedAt is recorded, the retry budget represents a real
+    # runtime execution. Keep the existing bounded agent-attempt recovery path.
+    local max_attempts
+    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     if [ "${attempts:-0}" -ge "$max_attempts" ]; then
-      log "recover_stale_tasks: marking stale task as failed: $comment_id"
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || true
+      log "recover_stale_tasks: marking stale agent execution as failed: $comment_id"
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
         recovered=$((recovered + 1))
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
-        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
+        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts agent execution attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
       else
         log "WARN: stale task $comment_id was not marked failed (changes=${changed:-unknown}); task state or claim ownership changed"
         lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=failed_transition_not_applied"
@@ -712,17 +757,17 @@ recover_stale_tasks() {
       changed="$(sqlite3 "$DB" "
         UPDATE processed_comments
         SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
-            leaseExpiresAt=NULL, claimToken=NULL,
+            leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL,
             nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
         SELECT changes();
-      " 2>>"$LOG" | tail -n 1)" || true
+      " 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
-        log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
+        log "recover_stale_tasks: requeued task $comment_id after lost agent execution (agent attempts preserved=$attempts)"
         lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
         recovered=$((recovered + 1))
       else
-        log "WARN: recover_stale_tasks: task $comment_id was not requeued (changes=${changed:-unknown}); task state or claim ownership changed"
+        log "WARN: recover_stale_tasks: agent task $comment_id was not requeued (changes=${changed:-unknown}); task state or claim ownership changed"
         lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=requeue_transition_not_applied"
       fi
     fi
@@ -1186,6 +1231,28 @@ refresh_heartbeat() {
 start() {
   configure_task_retention
 
+  # Serialize the whole preparation/start path, including stale-workspace cleanup.
+  # Otherwise two concurrent startup wrappers could both mutate pool state before
+  # reaching the old late lock acquisition.
+  mkdir -p "$(dirname "$FLOCK_FILE")"
+  exec 200>"$FLOCK_FILE"
+  flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; exec 200>&-; return 1; }
+  if [ -f "$PID_FILE" ]; then
+    local initial_pid initial_cmdline
+    initial_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ "$initial_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$initial_pid" 2>/dev/null; then
+      initial_cmdline="$(tr '\0' ' ' < "/proc/$initial_pid/cmdline" 2>/dev/null || true)"
+      if [[ "$initial_cmdline" == *"manul-daemon.sh"* ]]; then
+        flock -u 200
+        exec 200>&-
+        echo "already running (pid $initial_pid)"
+        return 0
+      fi
+      log "WARN: daemon PID file points to a live unrelated/reused PID ($initial_pid); removing stale PID file"
+    fi
+    rm -f "$PID_FILE"
+  fi
+
   # Reclaim workspaces left BUSY by dead/stale workers before creating the pool.
   # This must happen before workspace_pool_init: a stale BUSY row otherwise
   # makes available_ws=0 and prevents the daemon from starting at all.
@@ -1203,18 +1270,6 @@ start() {
     return 1
   fi
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
-
-  # Singleton check: verify no other daemon is running
-  if [ -f "$PID_FILE" ]; then
-    local existing_pid
-    existing_pid="$(cat "$PID_FILE" 2>/dev/null)"
-    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      echo "already running (pid $existing_pid)"
-      return 0
-    fi
-    # Stale PID file — remove it
-    rm -f "$PID_FILE"
-  fi
 
   # Clean up the legacy directory lock left by pre-flock Manul versions.
   if [ -d "$MANUL_DIR/.daemon-lock" ]; then
@@ -1244,27 +1299,20 @@ start() {
   # the safety net for any path that invokes manul-daemon.sh start directly.
   touch "$MANUL_DIR/.enabled"
 
-  # Serialize starts, then re-check the singleton under the lock. The earlier
-  # PID-file check is only a fast path: two concurrent starts can both pass it
-  # before either child writes daemon.pid.
-  exec 200>"$FLOCK_FILE"
-  flock -n 200 || { echo "cannot acquire lock (another start in progress)" >&2; return 1; }
-  if [ -f "$PID_FILE" ]; then
-    local locked_pid
-    locked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [[ "$locked_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$locked_pid" 2>/dev/null; then
-      flock -u 200
-      exec 200>&-
-      echo "already running (pid $locked_pid)"
-      return 0
-    fi
-    rm -f "$PID_FILE"
-  fi
+  # The start lock acquired at function entry remains held until after the supervisor is forked.
 
   # Fork the daemon to run in background.
   (
-    # Child process: we are the daemon.
-    # Write PID file under the lock (we already hold the lock via fd 200)
+    # Child process: claim an OS-level owner lock for the supervisor's full lifetime.
+    # Workers and isolated executors close this descriptor so they cannot pin the
+    # singleton lock after the supervisor exits or a replacement starts.
+    mkdir -p "$(dirname "$DAEMON_OWNER_LOCK_FILE")"
+    exec 220>"$DAEMON_OWNER_LOCK_FILE"
+    if ! flock -n 220; then
+      log "ERROR: another daemon supervisor owns the lifetime lock; refusing duplicate start"
+      exit 1
+    fi
+    # Write PID only after owning the singleton lock.
     echo "$BASHPID" >"$PID_FILE"
 
     # Spawn worker pool
@@ -1274,7 +1322,7 @@ start() {
 for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
        # Use an absolute path so the worker survives even if the daemon's cwd
        # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
-       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
+       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
@@ -1282,6 +1330,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
     done
 
     flock -u 200
+    exec 200>&-
     log "$TASK_RETENTION_CONFIG_MESSAGE"
     lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
     echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
@@ -1299,7 +1348,9 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       done
       wait 2>/dev/null || true
       rm -f "$PID_FILE"
-      lc_log "DAEMON_STOP" "pid=$$"
+      flock -u 220 2>/dev/null || true
+      exec 220>&- 2>/dev/null || true
+      lc_log "DAEMON_STOP" "pid=$BASHPID"
       exit 0
     }
     trap handle_stop TERM INT
@@ -1321,7 +1372,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       for i in "${!WORKER_PIDS[@]}"; do
 if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
            log "worker $i died (pid=${WORKER_PIDS[$i]}), restarting"
-           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" >>"$LOG" 2>&1 &
+           setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
           worker_pid=$!
           echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
           new_pids+=("$worker_pid")
@@ -1388,7 +1439,7 @@ status() {
 # Return the number of queued tasks that are eligible to run now.
 # SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
 eligible_queued_count() {
-  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -1476,6 +1527,38 @@ ensure_nextattemptat_column() {
       return 1
     }
     log "migration: nextAttemptAt column added and initialized"
+  fi
+  return 0
+}
+
+# Add recovery bookkeeping to existing installations without replacing the user's DB.
+# agentStartedAt distinguishes an execution that actually reached the runtime from
+# a claim that failed during checkout/workspace preparation. Existing running rows
+# are conservatively classified as started during the one-time migration.
+ensure_recovery_tracking_columns() {
+  local columns
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\n' "$columns" | grep -q '|preExecutionFailures|'; then
+    local alter_failures
+    alter_failures="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN preExecutionFailures INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|preExecutionFailures|'; then
+        log "ERROR: failed to add preExecutionFailures column: $alter_failures"
+        return 1
+      fi
+    }
+    log "migration: preExecutionFailures column added or already present"
+  fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\n' "$columns" | grep -q '|agentStartedAt|'; then
+    local alter_started
+    alter_started="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN agentStartedAt TEXT; UPDATE processed_comments SET agentStartedAt=COALESCE(processedAt,datetime('now')) WHERE status='running' AND agentStartedAt IS NULL; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|agentStartedAt|'; then
+        log "ERROR: failed to add agentStartedAt column: $alter_started"
+        return 1
+      fi
+    }
+    log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
   fi
   return 0
 }
@@ -1577,18 +1660,50 @@ post_task_failure_feedback() {
 handle_pre_execution_failure() {
   local comment_id="$1" claim_token="$2" repo="$3" issue_num="$4"
   local workspace_id="${5:-}" reply_to="${6:-}" reason="$7" pr_number="${8:-}" attempt_fallback="${9:-1}" failure_stage="${10:-pre_execution}"
-  local attempts max_attempts target_status
+  local attempts infra_failures max_infra_failures target_status safe_id safe_token
   reason="$(manul_redact_failure_details "$reason")"
+  ensure_recovery_tracking_columns || {
+    log "ERROR: cannot migrate recovery counters while handling pre-agent failure for $comment_id"
+    release_task_lock
+    return 1
+  }
 
-  attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  safe_id="$(sql_escape "$comment_id")"
+  safe_token="$(sql_escape "$claim_token")"
+  local row
+  row="$(sqlite3 "$DB" "SELECT COALESCE(attempts,0) || '|' || COALESCE(preExecutionFailures,0) FROM processed_comments WHERE commentId='$safe_id' AND status='running' AND claimToken='$safe_token' LIMIT 1;" 2>/dev/null || true)"
+  if [ -z "$row" ]; then
+    log "ERROR: pre-agent recovery refused for $comment_id because this claim no longer owns the running row"
+    lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=pre_execution_claim_mismatch"
+    release_task_lock
+    return 1
+  fi
+  IFS='|' read -r attempts infra_failures <<< "$row"
   [[ "$attempts" =~ ^[0-9]+$ ]] || attempts="$attempt_fallback"
-  max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-  if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || [ "$max_attempts" -lt 1 ]; then max_attempts=3; fi
-  if [ "$attempts" -ge "$max_attempts" ]; then target_status="failed"; else target_status="queued"; fi
+  [[ "$infra_failures" =~ ^[0-9]+$ ]] || infra_failures=0
 
-  # Prove current-claim ownership before touching heartbeat/workspace/locks.
-  if ! update_task_completion "$comment_id" "$target_status" "$reason" "$claim_token"; then
-    log "ERROR: could not finalize pre-execution failure for $comment_id (target=$target_status)"
+  max_infra_failures="$(jq -r '.automation.maxPreExecutionFailures // 8' "$CONFIG" 2>/dev/null || echo 8)"
+  if ! [[ "$max_infra_failures" =~ ^[0-9]+$ ]] || [ "$max_infra_failures" -lt 1 ]; then max_infra_failures=8; fi
+  infra_failures=$((infra_failures + 1))
+  if [ "$infra_failures" -ge "$max_infra_failures" ]; then target_status="failed"; else target_status="queued"; fi
+
+  # Preparation failures are not agent executions. Atomically release the claim,
+  # decrement the claim-time attempt bump, and charge the separate bounded infra
+  # counter so repeated checkout/runtime setup failures cannot consume agent budget.
+  local changed
+  changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
+    UPDATE processed_comments
+    SET status='$target_status',
+        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+        preExecutionFailures=$infra_failures,
+        agentStartedAt=NULL,
+        processedAt=CASE WHEN '$target_status'='failed' THEN datetime('now') ELSE NULL END,
+        heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL,
+        nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${RETRY_DELAY_SECONDS} seconds') ELSE NULL END
+    WHERE commentId='$safe_id' AND status='running' AND claimToken='$safe_token';
+    SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+  if [ "$changed" != "1" ]; then
+    log "ERROR: could not finalize pre-execution infrastructure failure for $comment_id (changes=${changed:-unknown})"
     lc_log "TASK_ERROR" "task=$comment_id reason=pre_execution_finalization_failed"
     release_task_lock
     return 1
@@ -1602,14 +1717,15 @@ handle_pre_execution_failure() {
   release_task_lock
   set_activity "none" "idle"
 
+  local execution_attempts="$(( attempts > 0 ? attempts - 1 : 0 ))"
   if [ "$target_status" = "failed" ]; then
-    log "dispatch: task $comment_id failed before agent startup after $attempts/$max_attempts attempts: $reason"
-    lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
-    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" "$failure_stage" || true
+    log "dispatch: task $comment_id failed before agent startup after $infra_failures/$max_infra_failures infrastructure failures (agent attempts remain $execution_attempts): $reason"
+    lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num infra_failures=$infra_failures max_infra_failures=$max_infra_failures agent_attempts=$execution_attempts reason=$reason"
+    post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $infra_failures/$max_infra_failures pre-execution infrastructure failures before the agent started. Agent execution attempts are tracked separately. Reason: $reason" "$pr_number" "$failure_stage" || true
   else
-    local retry_comment="⚠️ Manul could not start the task and will retry (attempt $attempts/$max_attempts). Reason: $reason"
-    log "dispatch: task $comment_id requeued after pre-execution failure ($attempts/$max_attempts): $reason"
-    lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts max=$max_attempts reason=$reason"
+    local retry_comment="⚠️ Manul could not start the agent; infrastructure preparation failure $infra_failures/$max_infra_failures. Agent execution attempt budget is unchanged. Reason: $reason"
+    log "dispatch: task $comment_id requeued after pre-execution infrastructure failure ($infra_failures/$max_infra_failures); agent attempt count unchanged at $execution_attempts: $reason"
+    lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num infra_failures=$infra_failures max_infra_failures=$max_infra_failures agent_attempts=$execution_attempts reason=$reason"
     post_lifecycle_comment "$repo" "$issue_num" "$retry_comment" "$reply_to" || log "WARN: failed to post retry comment for $comment_id"
   fi
   return 0
@@ -2439,23 +2555,21 @@ mark_task_stale() {
   return 1
 }
 
-# Requeue a running task for later retry.
+# Route transient pre-agent source failures through the same bounded recovery
+# path as checkout/workspace errors. Infrastructure retries get their own budget
+# and do not silently churn queued/running forever.
 requeue_task() {
+  ensure_recovery_tracking_columns || return 1
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
-  local safe_claim_token
-  safe_claim_token="$(sql_escape "$claim_token")"
-  local result changes
-  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
-  changes="$(printf '%s\n' "$result" | tail -1)"
-  if [ "$changes" = "1" ]; then
-    log "requeue_task: task $comment_id requeued"
-    lc_log "TASK_REQUEUED" "task=$comment_id reason=revalidation_transient"
-    return 0
+  local repo="${4:-}" issue_num="${5:-}" reply_to="${6:-}" attempt_fallback="${7:-1}"
+  if [ -z "$repo" ]; then repo="$(sqlite3 "$DB" "SELECT COALESCE(repository,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || true)"; fi
+  if [ -z "$issue_num" ]; then issue_num="$(sqlite3 "$DB" "SELECT COALESCE(issueNumber,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || true)"; fi
+  if [ -z "$attempt_fallback" ] || ! [[ "$attempt_fallback" =~ ^[0-9]+$ ]]; then
+    attempt_fallback="$(sqlite3 "$DB" "SELECT COALESCE(attempts,1) FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo 1)"
   fi
-  log "ERROR: requeue_task did not update task $comment_id (changes=$changes)"
-  lc_log "TASK_ERROR" "task=$comment_id reason=requeue_failed"
-  return 1
+  handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "" "$reply_to" "Source revalidation encountered a transient infrastructure error before agent startup." "" "$attempt_fallback" "source_transient_revalidation"
 }
+
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
 # Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir] [workdir] [claim_token] [initial_head] [initial_branch] [initial_base_branch]
@@ -2846,6 +2960,10 @@ else
 
 run_once() {
   configure_task_retention
+  ensure_recovery_tracking_columns || {
+    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
+    return 1
+  }
   cleanup_expired_tasks
 
   # Use timeout to prevent daemon deadlock if poll.sh hangs
@@ -2924,7 +3042,7 @@ run_once() {
     # Select the oldest task that is actually eligible now. A retry with a
     # future nextAttemptAt must never monopolize the singleton dispatcher and
     # starve a fresh task that is ready to run.
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
@@ -3015,6 +3133,13 @@ run_once() {
       return 0
     fi
 
+    if ! ensure_recovery_tracking_columns; then
+      log "dispatch: recovery tracking schema unavailable; leaving queued tasks untouched"
+      lc_log "TASK_SCHEMA_ERROR" "phase=pre_claim"
+      release_task_lock
+      return 0
+    fi
+
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
     local CURRENT_WORKER_PID
@@ -3024,7 +3149,7 @@ run_once() {
     local safe_claim_token
     safe_claim_token="$(sql_escape "$CLAIM_TOKEN")"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token' WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token', agentStartedAt=NULL WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
@@ -3079,13 +3204,9 @@ run_once() {
       set_activity "none" "idle"
       return 0
     elif [ "$reval_rc" -eq 2 ]; then
-      log "dispatch: source transient error for task $COMMENT_ID, requeuing"
+      log "dispatch: source transient error for task $COMMENT_ID, requeuing with bounded pre-agent infrastructure budget"
       lc_log "SOURCE_TRANSIENT_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
-      requeue_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
-      stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      requeue_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$REPLY_TO" "$current_attempt"
       return 0
     fi
 
@@ -3117,14 +3238,9 @@ run_once() {
 **Source:** $SOURCE_LINK"
 
     if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
-      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
+      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
-      stop_heartbeat "$COMMENT_ID"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
       return 0
     fi
 
@@ -3346,7 +3462,7 @@ PROMPT_EOF
     if [ "$ensure_repo_rc" -eq 2 ]; then
       log "dispatch: repository $REPO is busy, requeueing task $COMMENT_ID"
       lc_log "REPO_BUSY" "task=$COMMENT_ID repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -3402,7 +3518,7 @@ PROMPT_EOF
       if [ "$workspace_acquire_rc" -eq 2 ]; then
         log "dispatch: logical workspace context is busy for task $COMMENT_ID; requeueing"
         lc_log "WORKSPACE_CONTEXT_BUSY" "task=$COMMENT_ID context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
         release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
@@ -3411,12 +3527,9 @@ PROMPT_EOF
     fi
 
     if [ -z "$WORKSPACE_ID" ]; then
-      log "dispatch: no workspace available for task $COMMENT_ID, retrying"
+      log "dispatch: no workspace available for task $COMMENT_ID; consuming bounded pre-agent infrastructure retry"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
-      release_task_repo_lock "$REPO"
-      release_task_lock
-      set_activity "none" "idle"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "No task-owned workspace could be acquired before agent startup." "${PR_NUM_FROM_URL:-}" "$current_attempt" "workspace_acquisition"
       return 0
     fi
 
@@ -3716,6 +3829,16 @@ PROMPT_APPEND
      # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
      # executor or any descendants inherit it: their lifetime may outlive the
      # worker and would keep the dispatcher lock held across a restart.
+      # Mark the transition to actual agent execution. Pre-agent failures use a
+      # separate infrastructure retry budget; a host/runtime loss after this point
+      # consumes a genuine agent attempt.
+      local agent_start_changed
+      agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
+      if [ "$agent_start_changed" != "1" ]; then
+        log "ERROR: could not record agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before invoking the runtime." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
+        return 0
+      fi
      setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0

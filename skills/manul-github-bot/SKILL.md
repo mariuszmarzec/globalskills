@@ -52,6 +52,14 @@ same-session resumes is configured by
 (default: 3, valid range: 0..20). These internal resumes share the original
 execution timeout and do not consume additional Manul attempts.
 
+The OpenCode adapter has an independent no-progress watchdog controlled by
+`automation.agentNoProgressTimeoutSeconds` in `~/.manul/config.json`
+(default: 900 seconds; `MANUL_OPENCODE_NO_PROGRESS_TIMEOUT` can override it for
+a specific invocation). Actual JSONL stdout or stderr activity resets the timer;
+ordinary task-heartbeat updates do not. On expiry, only the isolated OpenCode
+process group is terminated, the result is marked
+`AGENT_NO_PROGRESS_TIMEOUT`, and the raw JSONL/stderr artifacts are retained.
+
 The installer deploys the runtime scripts as symlinks.
 
 Canonical source:
@@ -116,6 +124,19 @@ Before replacing the checkout, Manul moves the previous checkout intact to
 branch is unavailable or recovery cannot be verified, the task fails with a
 concrete diagnostic rather than falling back to another branch. The recovery
 backup is not the active checkout; `WORKDIR` remains authoritative.
+
+Before stale/broken workspace cleanup deletes its DB mapping, the full task-owned
+workspace root is moved into a private archive under
+`~/.manul/state/recovery/workspaces`. This retains staged, unstaged and
+untracked implementation work. A retry may restore only the snapshot matching
+its original workspace ID and task ID; snapshot preservation/restore failures
+must leave data on disk and emit an actionable error. The archive is outside the
+agent's allowlisted workspace and must never be exposed through broader
+OpenCode path permissions.
+
+Startup serializes the entire workspace-preparation path and holds a separate
+OS-level owner lock for the supervisor's lifetime. Worker processes must close
+that lock descriptor so a worker cannot keep a dead supervisor's lock alive.
 
 ## Agent execution boundary
 
@@ -282,9 +303,18 @@ queued -> running -> completed
                   -> stale -> queued
 ```
 
-`attempts` increments only when a queued task is claimed for execution.
+`attempts` is the agent-execution budget. A task claim starts with
+`agentStartedAt = NULL`; the field is set atomically immediately before the
+isolated runtime starts. If preparation fails before that marker, Manul rolls
+back the claim-time attempt increment and increments the separate
+`preExecutionFailures` counter instead. The bounded
+`automation.maxPreExecutionFailures` option defaults to 8. These retries still
+use `nextAttemptAt` backoff; neither infrastructure retry loops nor a reboot
+before runtime startup should exhaust `maxAttemptsBeforeFail`.
 
-Recovery from running to queued preserves the attempt count.
+A stale task with `agentStartedAt` set has reached the runtime and uses the
+normal agent retry budget. Recovery from a real agent execution requeue does not
+increment attempts by itself.
 
 `blocked_user` is not failure and resumes through `/manul continue <answer>`.
 
@@ -368,6 +398,7 @@ heartbeatTimeout
 leaseTimeout
 maxConcurrentTasks
 maxAttemptsBeforeFail
+maxPreExecutionFailures (default 8)
 lockTtl
 ```
 

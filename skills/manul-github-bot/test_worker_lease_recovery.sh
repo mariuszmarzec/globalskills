@@ -19,6 +19,7 @@ cat >"$CONFIG" <<'JSON'
   "autoCreatePr": false,
   "automation": {
     "maxAttemptsBeforeFail": 3,
+    "maxPreExecutionFailures": 2,
     "lockTtl": 1800,
     "heartbeatTimeout": 900,
     "leaseTimeout": 900
@@ -78,7 +79,9 @@ CREATE TABLE processed_comments (
   workerPid INTEGER,
   claimToken TEXT,
   nextAttemptAt TEXT,
-  resultSummary TEXT
+  resultSummary TEXT,
+  preExecutionFailures INTEGER NOT NULL DEFAULT 0,
+  agentStartedAt TEXT
 );
 "
 
@@ -258,9 +261,9 @@ echo "PASS: startup cleanup reaps orphan heartbeat trees without releasing anoth
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES
-('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'owner-token',NULL,NULL);
+('owner','$REPO',1,'https://github.com/$REPO/issues/1','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'owner-token',NULL,NULL,0,NULL);
 INSERT INTO processed_comments VALUES
-('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,'other-token',NULL,NULL);
+('other','$REPO',2,'https://github.com/$REPO/issues/2','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999999,'other-token',NULL,NULL,0,NULL);
 "
 update_task_completion owner completed "" owner-token
 assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='owner';")" "owner can complete"
@@ -271,7 +274,7 @@ fi
 echo "PASS: non-owner completion rejected"
 
 # 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('123','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),123,'123-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('123','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),123,'123-token',NULL,NULL,0,datetime('now'))"
 HEARTBEAT_PIDS[123]=1
 CURRENT_WORKER_PID=123
 LEASE_TIMEOUT=900
@@ -280,23 +283,23 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN heartbeatAt > datetime('now','-5 
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN leaseExpiresAt > datetime('now') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='123';")" "lease expiry extended"
 
 # 3) Dead worker + expired lease is requeued.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,'dead-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,'dead-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
 
 # 3b) Dead worker + fresh lease is still recovered immediately.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'https://github.com/$REPO/issues/41','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999997,'dead-fresh-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'https://github.com/$REPO/issues/41','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999997,'dead-fresh-token',NULL,NULL,0,datetime('now'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead-fresh';")" "dead worker with fresh lease requeued"
 
 # 3c) Live worker + fresh lease is left alone.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL,0,datetime('now'))"
 recover_stale_tasks
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
 
 # 3d) Recovery does not report success when its conditional SQLite transition fails.
 sqlite3 "$DB" "
-INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL);
+INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,datetime('now','-1 hour'));
 CREATE TRIGGER reject_recovery_requeue
 BEFORE UPDATE OF status ON processed_comments
 WHEN OLD.commentId='recovery-race' AND NEW.status='queued'
@@ -315,11 +318,11 @@ sqlite3 "$DB" "DROP TRIGGER reject_recovery_requeue;"
 echo "PASS: failed stale-recovery transition does not emit a false success event"
 
 # 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task recovered by expired lease"
 # Simulate the same long-lived worker claiming the retry with a new token. The old execution must not finalize it.
-sqlite3 "$DB" "UPDATE processed_comments SET status='running', heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=1, claimToken='new-token' WHERE commentId='live';"
+sqlite3 "$DB" "UPDATE processed_comments SET status='running', heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=1, claimToken='new-token', agentStartedAt=datetime('now') WHERE commentId='live';"
 if update_task_completion live completed "" live-token; then
   echo "FAIL: stale claim unexpectedly finalized a newer execution" >&2
   exit 1
@@ -330,7 +333,7 @@ assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHER
 
 # 5) Max attempts on dead worker becomes failed.
 : > "$GH_LOG"
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
 if grep -q 'Task Failed' "$GH_LOG" && grep -q 'stale heartbeat/lease recovery' "$GH_LOG" && grep -q '\*\*Stage:\*\* stale_task_recovery' "$GH_LOG"; then
@@ -346,15 +349,18 @@ fi
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-retry','$REPO',80,'https://github.com/$REPO/issues/80','running',1,$CURRENT_TEST_PID,'early-retry-token');"
 handle_pre_execution_failure "early-retry" "early-retry-token" "$REPO" 80 "" "" "Workspace unavailable on first attempt." "" 1
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-retry';")" "pre-agent recoverable failure transitions to queued"
+assert_eq 0 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-retry';")" "pre-agent failure does not consume an agent execution attempt"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='early-retry';")" "pre-agent failure increments separate infrastructure counter"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry has nextAttemptAt"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','-2 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry is scheduled"
 
 # 5b) Early workspace failures use the same attempt limit and publish a final
 # failure comment instead of leaving the task running for the watchdog to guess.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,$CURRENT_TEST_PID,'early-fail-token');"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,1,$CURRENT_TEST_PID,'early-fail-token');"
 handle_pre_execution_failure "early-fail" "early-fail-token" "$REPO" 81 "" "" "Workspace path is missing or failed ownership/path validation." "" 3 "workspace_path_validation"
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-fail';")" "pre-agent failure transitions to failed"
-assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery does not double-count attempts"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery removes the claim-time agent-attempt bump"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='early-fail';")" "repeated infrastructure failure reaches separate infra budget"
 if grep -q 'Workspace path is missing or failed ownership/path validation.' "$GH_LOG" && grep -q '\*\*Stage:\*\* workspace_path_validation' "$GH_LOG"; then
   echo "PASS: pre-agent terminal failure comment contains the concrete cause"
 else
@@ -364,9 +370,10 @@ else
 fi
 
 # 5c) Primary-checkout preparation failures publish their own explicit stage.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('checkout-fail','$REPO',82,'https://github.com/$REPO/issues/82','running',3,$CURRENT_TEST_PID,'checkout-fail-token');"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('checkout-fail','$REPO',82,'https://github.com/$REPO/issues/82','running',3,1,$CURRENT_TEST_PID,'checkout-fail-token');"
 handle_pre_execution_failure "checkout-fail" "checkout-fail-token" "$REPO" 82 "" "" "Could not prepare the primary checkout for $REPO (rc=1). Existing workspace data was preserved." "" 3 "primary_checkout_preparation"
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='checkout-fail';")" "primary-checkout failure transitions to failed"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='checkout-fail';")" "checkout failure leaves the agent-attempt budget intact"
 if grep -q 'Could not prepare the primary checkout for' "$GH_LOG" && grep -q '\*\*Stage:\*\* primary_checkout_preparation' "$GH_LOG"; then
   echo "PASS: primary-checkout failure comment includes stage and cause"
 else
@@ -386,7 +393,7 @@ git -C "$WORKTREE" add README.md
 git -C "$WORKTREE" commit -qm initial
 git -C "$WORKTREE" checkout -qb manul-task-test
 
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'pr-token',NULL,NULL);"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('pr','$REPO',7,'https://github.com/$REPO/issues/7','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),12345,'pr-token',NULL,NULL,0,NULL);"
 
 FAKE_BIN="$TEST_DIR/bin"
 mkdir -p "$FAKE_BIN"
@@ -449,6 +456,32 @@ if [ -d "$TASK_LOCK_DIR" ]; then
   exit 1
 fi
 echo "PASS: stale legacy .daemon-lock cannot self-deadlock the dispatcher"
+
+# 7b) The supervisor lifetime lock rejects a second owner and is acquired
+# before daemon.pid is published; worker processes must not inherit the lock.
+echo ""
+echo "=== Test 7b: daemon supervisor is a singleton ==="
+OWNER_LOCK_FILE="$MANUL_DIR/state/locks/daemon-owner.flock"
+mkdir -p "$(dirname "$OWNER_LOCK_FILE")"
+if ! grep -Fq 'exec 220>"$DAEMON_OWNER_LOCK_FILE"' "$SCRIPT_DIR/manul-daemon.sh" \
+  || ! grep -Fq 'if ! flock -n 220;' "$SCRIPT_DIR/manul-daemon.sh" \
+  || ! grep -Fq '220>&-' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon startup is missing lifetime ownership or worker lock isolation" >&2
+  exit 1
+fi
+exec 230>"$OWNER_LOCK_FILE"
+flock -n 230 || { echo "FAIL: test could not acquire daemon owner lock" >&2; exit 1; }
+if ( exec 231>"$OWNER_LOCK_FILE"; flock -n 231 ) 2>/dev/null; then
+  echo "FAIL: a second supervisor could acquire the lifetime lock" >&2
+  exit 1
+fi
+flock -u 230
+exec 230>&-
+if ! ( exec 231>"$OWNER_LOCK_FILE"; flock -n 231 ); then
+  echo "FAIL: owner lock stayed unavailable after the owner released it" >&2
+  exit 1
+fi
+echo "PASS: daemon lifetime lock prevents overlapping supervisors"
 
 # 8) A worker started by an older daemon must exit rather than join a new pool.
 loop --worker=orphan-regression --parent-pid=2147483647
