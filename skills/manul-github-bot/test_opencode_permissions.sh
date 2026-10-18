@@ -76,4 +76,5 @@ SECOND_HASH="$(sha256sum "$CONFIG" | awk '{print $1}')"
 [ "$FIRST_HASH" = "$SECOND_HASH" ] || fail "permissions helper is not idempotent"
 echo "PASS: repeated permission setup is idempotent"
 
+assert_jq "global blanket workspace deny remains active" '.permission.external_directory["~/.manul/workspace/**"] == "deny"'
 echo "All OpenCode permission helper tests passed."

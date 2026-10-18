@@ -297,6 +297,54 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 7c. Task-scoped OpenCode config keeps sibling workspaces denied
+# ---------------------------------------------------------------------------
+test_opencode_task_scoped_config() {
+  local tmp global_config active_workspace sibling_workspace before_hash output
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$tmp/home/.manul/workspace/ws-active" "$tmp/home/.manul/workspace/ws-sibling"
+  global_config="$tmp/home/.config/opencode/opencode.json"
+  active_workspace="$tmp/home/.manul/workspace/ws-active"
+  sibling_workspace="$tmp/home/.manul/workspace/ws-sibling"
+  cat >"$global_config" <<JSON
+{"model":"test/provider","permission":{"external_directory":{"$tmp/home/.manul/workspace/**":"deny"}}}
+JSON
+  before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "run" ]; then
+  # Inspect the actual config used by this run, not a debug command that the
+  # production adapter never invokes. OpenCode evaluates patterns in order;
+  # the task-specific allow must follow the broader sibling-workspace deny.
+  jq -e --arg active "$ACTIVE_WORKSPACE" --arg activeGlob "$ACTIVE_WORKSPACE/**" --arg globalPattern "$HOME/.manul/workspace/**" --arg sibling "$SIBLING_WORKSPACE" '
+    .permission.external_directory as $rules
+    | ($rules[$globalPattern] == "deny")
+      and ($rules[$active] == "allow")
+      and ($rules[$activeGlob] == "allow")
+      and (($rules | keys_unsorted | index($globalPattern)) < ($rules | keys_unsorted | index($active)))
+      and (($rules | keys_unsorted | index($active)) < ($rules | keys_unsorted | index($activeGlob)))
+      and (($rules[$sibling] // "deny") == "deny")
+      and (($rules[$sibling + "/**"] // "deny") == "deny")
+  ' "$OPENCODE_CONFIG" >/dev/null
+  printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
+else
+  echo "unexpected mock OpenCode command: $*" >&2
+  exit 2
+fi
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do task" >"$tmp/prompt"; : >"$tmp/stdout"; : >"$tmp/stderr"
+  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" ACTIVE_WORKSPACE="$active_workspace" SIBLING_WORKSPACE="$sibling_workspace" MANUL_DIR="$tmp/home/.manul" env -u OPENCODE_CONFIG \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" --workspace "$active_workspace" --attempt 1 --timeout 10 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$output" "COMPLETED" "OpenCode runs with the task-specific overlay using default config path"
+  [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] && ok "global provider config remains unchanged" || fail "global provider config changed"
+  ! grep -Fq "$active_workspace" "$global_config" && ok "active workspace allow is not persisted in global config" || fail "active workspace allow leaked globally"
+  if find "$tmp" -maxdepth 1 -type d -name 'manul-opencode-config.*' | grep -q .; then fail "temporary config leaked"; else ok "temporary task config cleaned after invocation"; fi
+}
+
+# ---------------------------------------------------------------------------
 # 7b. Large OpenCode prompts must not exceed the per-argument OS limit
 # ---------------------------------------------------------------------------
 test_opencode_large_prompt_uses_stdin() {
@@ -863,6 +911,7 @@ test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
+test_opencode_task_scoped_config
 test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
 test_opencode_step_limit_resumes_inside_attempt
