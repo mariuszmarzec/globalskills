@@ -1330,6 +1330,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
     done
 
     flock -u 200
+    exec 200>&-
     log "$TASK_RETENTION_CONFIG_MESSAGE"
     lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
     echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
@@ -1349,7 +1350,7 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       rm -f "$PID_FILE"
       flock -u 220 2>/dev/null || true
       exec 220>&- 2>/dev/null || true
-      lc_log "DAEMON_STOP" "pid=$"
+      lc_log "DAEMON_STOP" "pid=$BASHPID"
       exit 0
     }
     trap handle_stop TERM INT
