@@ -3470,16 +3470,24 @@ PROMPT_EOF
        local base_branch
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
        log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
+       local base_recovered=0
        if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
-         log "ERROR: failed to fetch origin before task setup on $REPO"
-         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not fetch origin before task setup for $REPO; see daemon diagnostics for the Git error." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-         return 0
+         log "ERROR: fetch origin failed before task setup on $REPO; trying a fresh clone at selected branch '$base_branch'"
+         if workspace_recover_primary_checkout "$workspace_path" "$REPO" "$WORKDIR" "$base_branch" 2>>"$LOG"; then
+           base_recovered=1
+           log "dispatch: recovered checkout directly from remote at selected base branch '$base_branch'"
+         else
+           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not fetch origin or rebuild a fresh checkout at selected base branch '$base_branch'. See daemon diagnostics for the exact Git/recovery blocker; the prior checkout was preserved whenever possible." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+           return 0
+         fi
        fi
-       base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
-       if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
-         log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
-         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh checkout at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever recovery could safely archive it." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-         return 0
+       if [ "$base_recovered" -eq 0 ]; then
+         base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+         if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
+           log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
+           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh clone at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever recovery could safely archive it." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+           return 0
+         fi
        fi
      fi
 log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
