@@ -201,12 +201,19 @@ if [ -f "$DB" ]; then
                     log "WARN: task $comment_id was no longer owned by this recovery pass; failure comment skipped"
                 fi
             else
-                log "  → resetting to QUEUED for retry (preserving attempts=$attempts, no increment)"
-                sqlite3 "$DB" "
+                changed="$(sqlite3 "$DB" "
                     UPDATE processed_comments
-                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
+                    SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
+                        leaseExpiresAt=NULL, claimToken=NULL,
+                        nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
                     WHERE commentId='$comment_id' AND status='running' $ownership_clause;
-                " 2>/dev/null
+                    SELECT changes();
+                " 2>>"$LOG" | tail -n 1)" || true
+                if [ "${changed:-0}" -eq 1 ]; then
+                    log "  → reset to QUEUED for retry (preserving attempts=$attempts, no increment)"
+                else
+                    log "WARN: recovery did not requeue $comment_id (changes=${changed:-unknown}); task state or claim ownership changed"
+                fi
             fi
         done <<< "$STUCK_TASKS"
     fi
