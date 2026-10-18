@@ -523,7 +523,7 @@ workspace_recover_primary_checkout() {
   expected_head="$(git -C "$repo_cache_real" rev-parse "$source_ref^{commit}" 2>/dev/null)" || return 1
   [ -n "$expected_head" ] || return 1
 
-  local temp_checkout="$checkout_parent/.$repo_name.recovery.$"
+  local temp_checkout="$checkout_parent/.$repo_name.recovery-$(date +%s%N)"
   if [ -e "$temp_checkout" ] || [ -L "$temp_checkout" ]; then
     echo "workspace_recover_primary_checkout: temporary checkout path already exists; refusing to overwrite it" >&2
     return 1
@@ -581,7 +581,7 @@ workspace_recover_primary_checkout() {
 
   local backup="" branch_slug recovery_stamp suffix=0 existing_root
   branch_slug="$(printf '%s' "$branch" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  recovery_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$"
+  recovery_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$(date +%s%N)"
   backup="$recovery_root/$repo_name-$branch_slug-$recovery_stamp"
   while [ -e "$backup" ] || [ -L "$backup" ]; do
     suffix=$((suffix + 1))

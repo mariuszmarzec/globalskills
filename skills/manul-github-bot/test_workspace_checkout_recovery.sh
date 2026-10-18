@@ -10,7 +10,7 @@ cat > "$MANUL_DIR/config.json" <<'CONFIG'
 {"automation":{"maxConcurrentTasks":1}}
 CONFIG
 
-SCRIPT_DIR="$(cd "$(dirname "$(dirname "$BASH_SOURCE")")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$BASH_SOURCE")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
 source "$SCRIPT_DIR/workspace-manager.sh"
 

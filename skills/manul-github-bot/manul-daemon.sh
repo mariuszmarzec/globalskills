@@ -3455,8 +3455,10 @@ PROMPT_EOF
       local verify_branch
       verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
       if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
-        log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
-        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "PR workspace branch mismatch: expected '$PR_HEAD_BRANCH', got '"${verify_branch:-detached}'." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+        local verify_branch_display="$verify_branch"
+        [ -n "$verify_branch_display" ] || verify_branch_display="detached"
+        log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch_display), releasing and failing"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "PR workspace branch mismatch: expected $PR_HEAD_BRANCH, got $verify_branch_display." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
       log "dispatch: verified PR head branch $verify_branch in workspace"
