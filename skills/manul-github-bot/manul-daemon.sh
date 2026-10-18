@@ -482,13 +482,13 @@ update_task_completion() {
   local update_sql="UPDATE processed_comments SET status='$status'"
   case "$status" in
     completed|failed)
-      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL"
+      update_sql+=" , processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL"
       ;;
     queued)
       # A retry must become schedulable again. Without nextAttemptAt, the
       # scheduler's "attempts > 0 AND nextAttemptAt <= now" predicate ignores
       # NULL forever, silently stranding early-failure retries.
-      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
       ;;
   esac
 
@@ -644,12 +644,14 @@ release_task_lock() {
 # 3. Deadlocked pipe in verify_result_comment or similar
 recover_stale_tasks() {
   ensure_claim_token_column || return 1
+  ensure_recovery_tracking_columns || return 1
   log "recover_stale_tasks: checking for stuck tasks"
   lc_log "RECOVERY_START" ""
 
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken,
+           COALESCE(agentStartedAt,''), COALESCE(preExecutionFailures,0),
            CASE
              WHEN heartbeatAt IS NULL
                OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
@@ -666,7 +668,7 @@ recover_stale_tasks() {
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token lease_stale; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token agent_started_at pre_execution_failures lease_stale; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
@@ -680,30 +682,70 @@ recover_stale_tasks() {
       continue
     fi
 
-    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale attempts=$attempts)"
+    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale agent_started=${agent_started_at:-no} attempts=$attempts pre_execution_failures=$pre_execution_failures)"
     terminate_task_executor "$comment_id"
 
-    local max_attempts
-    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-    local safe_comment_id
+    local safe_comment_id safe_claim_token ownership_clause changed
     safe_comment_id="$(sql_escape "$comment_id")"
-    local ownership_clause
     if [ -n "$claim_token" ]; then
-      local safe_claim_token
       safe_claim_token="$(sql_escape "$claim_token")"
       ownership_clause="AND claimToken='$safe_claim_token'"
     else
       ownership_clause="AND claimToken IS NULL"
     fi
 
-    local changed
+    # The claim attempt is incremented before workspace preparation. If the
+    # runtime was never started, classify this as infrastructure failure, roll
+    # back that attempt bump, and use a separate finite budget.
+    if [ -z "$agent_started_at" ]; then
+      local max_pre_execution_failures next_pre_execution_failures target_status
+      max_pre_execution_failures="$(jq -r '.automation.maxPreExecutionFailures // 8' "$CONFIG" 2>/dev/null || echo 8)"
+      if ! [[ "$max_pre_execution_failures" =~ ^[0-9]+$ ]] || [ "$max_pre_execution_failures" -lt 1 ]; then max_pre_execution_failures=8; fi
+      [[ "${pre_execution_failures:-0}" =~ ^[0-9]+$ ]] || pre_execution_failures=0
+      next_pre_execution_failures=$((pre_execution_failures + 1))
+      if [ "$next_pre_execution_failures" -ge "$max_pre_execution_failures" ]; then target_status="failed"; else target_status="queued"; fi
+
+      changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
+        UPDATE processed_comments
+        SET status='$target_status',
+            attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+            preExecutionFailures=$next_pre_execution_failures,
+            agentStartedAt=NULL,
+            processedAt=CASE WHEN '$target_status'='failed' THEN datetime('now') ELSE NULL END,
+            heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL,
+            nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${RETRY_DELAY_SECONDS} seconds') ELSE NULL END
+        WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
+        SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+
+      if [ "$changed" = "1" ]; then
+        recovered=$((recovered + 1))
+        if [ "$target_status" = "failed" ]; then
+          log "recover_stale_tasks: task $comment_id exhausted pre-execution failures $next_pre_execution_failures/$max_pre_execution_failures; no agent attempt was started"
+          lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_pre_execution_max_failures infra_failures=$next_pre_execution_failures max_infra_failures=$max_pre_execution_failures"
+          post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $next_pre_execution_failures/$max_pre_execution_failures pre-execution infrastructure failures before the agent started. Agent execution attempts are tracked separately." "" "stale_task_recovery_pre_execution" || true
+        else
+          log "recover_stale_tasks: requeued task $comment_id after pre-execution worker loss (infra_failures=$next_pre_execution_failures/$max_pre_execution_failures; agent attempts preserved)"
+          lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_pre_execution infra_failures=$next_pre_execution_failures max_infra_failures=$max_pre_execution_failures"
+          post_lifecycle_comment "$repo" "$issue_num" "⚠️ Manul recovered a worker lost before agent startup (infrastructure failure $next_pre_execution_failures/$max_pre_execution_failures). The agent execution attempt budget was not consumed." || log "WARN: failed to post pre-execution recovery comment for $comment_id"
+        fi
+      else
+        log "WARN: recover_stale_tasks: pre-execution task $comment_id was not transitioned (changes=${changed:-unknown}); claim ownership may have changed"
+        lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=stale_pre_execution_transition_not_applied"
+      fi
+      continue
+    fi
+
+    # Once agentStartedAt is recorded, the retry budget represents a real
+    # runtime execution. Keep the existing bounded agent-attempt recovery path.
+    local max_attempts
+    max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     if [ "${attempts:-0}" -ge "$max_attempts" ]; then
-      log "recover_stale_tasks: marking stale task as failed: $comment_id"
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || true
+      log "recover_stale_tasks: marking stale agent execution as failed: $comment_id"
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
         recovered=$((recovered + 1))
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
-        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
+        post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts agent execution attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
       else
         log "WARN: stale task $comment_id was not marked failed (changes=${changed:-unknown}); task state or claim ownership changed"
         lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=failed_transition_not_applied"
@@ -712,17 +754,17 @@ recover_stale_tasks() {
       changed="$(sqlite3 "$DB" "
         UPDATE processed_comments
         SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
-            leaseExpiresAt=NULL, claimToken=NULL,
+            leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL,
             nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
         WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
         SELECT changes();
-      " 2>>"$LOG" | tail -n 1)" || true
+      " 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
-        log "recover_stale_tasks: requeued task $comment_id for retry (attempts preserved=$attempts)"
+        log "recover_stale_tasks: requeued task $comment_id after lost agent execution (agent attempts preserved=$attempts)"
         lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
         recovered=$((recovered + 1))
       else
-        log "WARN: recover_stale_tasks: task $comment_id was not requeued (changes=${changed:-unknown}); task state or claim ownership changed"
+        log "WARN: recover_stale_tasks: agent task $comment_id was not requeued (changes=${changed:-unknown}); task state or claim ownership changed"
         lc_log "RECOVERY_SKIPPED" "task=$comment_id reason=requeue_transition_not_applied"
       fi
     fi
