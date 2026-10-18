@@ -1430,7 +1430,7 @@ status() {
 # Return the number of queued tasks that are eligible to run now.
 # SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
 eligible_queued_count() {
-  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND ((attempts=0 AND COALESCE(preExecutionFailures,0)=0) OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -2552,7 +2552,7 @@ requeue_task() {
   local safe_claim_token
   safe_claim_token="$(sql_escape "$claim_token")"
   local result changes
-  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now','+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
   changes="$(printf '%s\n' "$result" | tail -1)"
   if [ "$changes" = "1" ]; then
     log "requeue_task: task $comment_id requeued"
@@ -3031,7 +3031,7 @@ run_once() {
     # Select the oldest task that is actually eligible now. A retry with a
     # future nextAttemptAt must never monopolize the singleton dispatcher and
     # starve a fresh task that is ready to run.
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (attempts=0 OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND ((attempts=0 AND COALESCE(preExecutionFailures,0)=0) OR nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: fire:true but no eligible queued task found"
@@ -3122,6 +3122,13 @@ run_once() {
       return 0
     fi
 
+    if ! ensure_recovery_tracking_columns; then
+      log "dispatch: recovery tracking schema unavailable; leaving queued tasks untouched"
+      lc_log "TASK_SCHEMA_ERROR" "phase=pre_claim"
+      release_task_lock
+      return 0
+    fi
+
     # 2. Atomically claim the task (queued -> running, attempts+1)
     # Prevent claiming if another worker already owns this task
     local CURRENT_WORKER_PID
@@ -3131,7 +3138,7 @@ run_once() {
     local safe_claim_token
     safe_claim_token="$(sql_escape "$CLAIM_TOKEN")"
     local CLAIM_RESULT
-    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token' WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
+    CLAIM_RESULT="$(sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds'), workerPid=$CURRENT_WORKER_PID, claimToken='$safe_claim_token', agentStartedAt=NULL WHERE commentId='$safe_comment_id' AND status='queued' AND (workerPid IS NULL OR workerPid=0); SELECT changes();" 2>/dev/null)"
 
     local CHANGED
     CHANGED="$(echo "$CLAIM_RESULT" | tail -n 1)"
@@ -3227,7 +3234,7 @@ run_once() {
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID, reverting to queued"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       stop_heartbeat "$COMMENT_ID"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       stop_heartbeat "$COMMENT_ID"
       release_repo_lock "$REPO"
       release_task_lock
@@ -3453,7 +3460,7 @@ PROMPT_EOF
     if [ "$ensure_repo_rc" -eq 2 ]; then
       log "dispatch: repository $REPO is busy, requeueing task $COMMENT_ID"
       lc_log "REPO_BUSY" "task=$COMMENT_ID repo=$REPO"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -3509,7 +3516,7 @@ PROMPT_EOF
       if [ "$workspace_acquire_rc" -eq 2 ]; then
         log "dispatch: logical workspace context is busy for task $COMMENT_ID; requeueing"
         lc_log "WORKSPACE_CONTEXT_BUSY" "task=$COMMENT_ID context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
         release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "none" "idle"
@@ -3520,7 +3527,7 @@ PROMPT_EOF
     if [ -z "$WORKSPACE_ID" ]; then
       log "dispatch: no workspace available for task $COMMENT_ID, retrying"
       lc_log "NO_WORKSPACE" "task=$COMMENT_ID repo=$REPO context=$CONVERSATION_ID parent=${PARENT_WORKSPACE_CONTEXT_ID:-none}"
-      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
+      sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';" 2>/dev/null
       release_task_repo_lock "$REPO"
       release_task_lock
       set_activity "none" "idle"
@@ -3823,6 +3830,16 @@ PROMPT_APPEND
      # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
      # executor or any descendants inherit it: their lifetime may outlive the
      # worker and would keep the dispatcher lock held across a restart.
+      # Mark the transition to actual agent execution. Pre-agent failures use a
+      # separate infrastructure retry budget; a host/runtime loss after this point
+      # consumes a genuine agent attempt.
+      local agent_start_changed
+      agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
+      if [ "$agent_start_changed" != "1" ]; then
+        log "ERROR: could not record agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before invoking the runtime." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
+        return 0
+      fi
      setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0
