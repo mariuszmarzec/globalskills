@@ -297,6 +297,42 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 7c. Task-scoped OpenCode config keeps sibling workspaces denied
+# ---------------------------------------------------------------------------
+test_opencode_task_scoped_config() {
+  local tmp global_config active_workspace sibling_workspace before_hash output
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$tmp/home/.manul/workspace/ws-active" "$tmp/home/.manul/workspace/ws-sibling"
+  global_config="$tmp/home/.config/opencode/opencode.json"
+  active_workspace="$tmp/home/.manul/workspace/ws-active"
+  sibling_workspace="$tmp/home/.manul/workspace/ws-sibling"
+  cat >"$global_config" <<JSON
+{"model":"test/provider","permission":{"external_directory":{"$tmp/home/.manul/workspace/**":"deny"}}}
+JSON
+  before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
+  jq -e --arg active "$ACTIVE_WORKSPACE" '.permission.external_directory[$active] == "allow" and .permission.external_directory[$active + "/**"] == "allow"' "$OPENCODE_CONFIG" >/dev/null
+  jq -e --arg sibling "$SIBLING_WORKSPACE" '(.permission.external_directory | has($sibling)) | not' "$OPENCODE_CONFIG" >/dev/null
+  cat "$OPENCODE_CONFIG"
+else
+  printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
+fi
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do task" >"$tmp/prompt"; : >"$tmp/stdout"; : >"$tmp/stderr"
+  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" ACTIVE_WORKSPACE="$active_workspace" SIBLING_WORKSPACE="$sibling_workspace" MANUL_DIR="$tmp/home/.manul" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" --workspace "$active_workspace" --attempt 1 --timeout 10 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$output" "COMPLETED" "OpenCode runs with task-scoped config"
+  [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] && ok "global provider config remains unchanged" || fail "global provider config changed"
+  ! grep -Fq "$active_workspace" "$global_config" && ok "active workspace allow is not persisted globally" || fail "active workspace allow leaked globally"
+  if find "$tmp" -maxdepth 1 -type d -name 'manul-opencode-config.*' | grep -q .; then fail "temporary config leaked"; else ok "temporary config cleaned after invocation"; fi
+}
+
+# ---------------------------------------------------------------------------
 # 7b. Large OpenCode prompts must not exceed the per-argument OS limit
 # ---------------------------------------------------------------------------
 test_opencode_large_prompt_uses_stdin() {

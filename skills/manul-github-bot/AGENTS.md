@@ -99,6 +99,8 @@ Do not modify `manul.db` as part of repository changes.
 
 Never put secrets, local credentials, or machine-specific state into the repository.
 
+A task-scoped OpenCode permission exception must use a temporary invocation-local config for the exact canonical active workspace only; do not weaken the global sibling-workspace deny or persist per-task permissions globally. Add regression coverage for global config immutability and sibling isolation.
+
 When changing a behavioural contract, update `CONTRACTS.md` in the same change and add/adjust tests that prove the new contract.
 
 ## Documentation truthfulness

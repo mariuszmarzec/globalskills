@@ -140,6 +140,52 @@ log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
 
+# Keep the provider/global config immutable. OpenCode needs an explicit
+# external-directory allow for the active lease only, while shared config
+# denies the whole ~/.manul/workspace tree (including siblings).
+OPENCODE_TASK_CONFIG_DIR=""
+cleanup_opencode_task_config() {
+    if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
+        rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
+        OPENCODE_TASK_CONFIG_DIR=""
+    fi
+}
+trap cleanup_opencode_task_config EXIT HUP INT TERM
+
+if [ -n "${OPENCODE_CONFIG:-}" ] && [ -f "$OPENCODE_CONFIG" ]; then
+    _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
+    _workspace_root="$(realpath -e -- "$HOME/.manul/workspace" 2>/dev/null || true)"
+    if [ -z "$_workspace_real" ] || [ -z "$_workspace_root" ]; then
+        printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve canonical task workspace","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+        exit 66
+    fi
+    case "$_workspace_real" in
+        "$_workspace_root"/ws-*) ;;
+        *)
+            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Task workspace is outside canonical workspace root","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+            exit 66
+            ;;
+    esac
+    OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
+    _original_opencode_config="$OPENCODE_CONFIG"
+    OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
+    if ! jq --arg workspace "$_workspace_real" '
+        .permission.external_directory = (
+          (.permission.external_directory // {})
+          | if type == "object" then . else {} end
+          | .[$workspace] = "allow"
+          | .[$workspace + "/**"] = "allow"
+        )
+    ' "$_original_opencode_config" >"$OPENCODE_CONFIG"; then
+        cleanup_opencode_task_config
+        printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+        exit 65
+    fi
+    chmod 600 "$OPENCODE_CONFIG"
+    export OPENCODE_CONFIG
+    log "using task-scoped OpenCode config (provider/global config unchanged)"
+fi
+
 STEP_LIMIT_CONTINUATIONS_MAX="$(jq -r '.automation.opencodeMaxStepLimitContinuations // 3' "$MANUL_CONFIG" 2>/dev/null || echo 3)"
 if ! [[ "$STEP_LIMIT_CONTINUATIONS_MAX" =~ ^[0-9]+$ ]] || [ "$STEP_LIMIT_CONTINUATIONS_MAX" -gt 20 ]; then
     log "WARN: invalid automation.opencodeMaxStepLimitContinuations=${STEP_LIMIT_CONTINUATIONS_MAX}; using default 3 (valid range 0..20)"
