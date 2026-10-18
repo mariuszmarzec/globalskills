@@ -316,7 +316,22 @@ JSON
 set -euo pipefail
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
   jq -e --arg active "$ACTIVE_WORKSPACE" '.permission.external_directory[$active] == "allow" and .permission.external_directory[$active + "/**"] == "allow"' "$OPENCODE_CONFIG" >/dev/null
-  jq -e --arg sibling "$SIBLING_WORKSPACE" '(.permission.external_directory | has($sibling)) | not' "$OPENCODE_CONFIG" >/dev/null
+  jq -e --arg sibling "$SIBLING_WORKSPACE" --arg globalPattern "$HOME/.manul/workspace/**" '
+    .permission.external_directory[$globalPattern] == "deny"
+    and .permission.external_directory[$sibling] == null
+    and .permission.external_directory[$sibling + "/**"] == null
+  ' "$OPENCODE_CONFIG" >/dev/null
+  # Simulate OpenCode's most-specific external-directory match: exact/child
+  # active workspace must allow; the sibling falls back to the global deny.
+  jq -e --arg active "$ACTIVE_WORKSPACE" --arg sibling "$SIBLING_WORKSPACE" --arg globalPattern "$HOME/.manul/workspace/**" '
+    def matches($path; $target):
+      ($path == $target) or ($target == ($path + "/**") and ($target | startswith($path + "/")));
+    .permission.external_directory as $rules
+    | any($rules | to_entries[]; .key == $active and .value == "allow")
+      and any($rules | to_entries[]; .key == ($active + "/**") and .value == "allow")
+      and any($rules | to_entries[]; .key == $globalPattern and .value == "deny")
+      and ($rules[$sibling] // "deny") == "deny"
+  ' "$OPENCODE_CONFIG" >/dev/null
   cat "$OPENCODE_CONFIG"
 else
   printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
