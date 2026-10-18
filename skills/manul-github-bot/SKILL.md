@@ -108,7 +108,7 @@ normalized to GitHub `owner/repository` identifiers; traversal and symlink
 escapes are rejected.
 
 If Git cannot switch/reset a task checkout safely, Manul must attempt a fresh
-checkout from the refreshed repository cache at the task's explicit target
+clone of the repository remote at the task's explicit target
 branch. Standalone tasks use the branch selected by the base-branch policy;
 PR/review tasks use that PR's actual head branch, never an assumed `master`.
 Before replacing the checkout, Manul moves the previous checkout intact to

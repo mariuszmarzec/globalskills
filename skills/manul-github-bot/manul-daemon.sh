@@ -3447,7 +3447,7 @@ PROMPT_EOF
      # the old checkout; never silently fall back to master/default.
      if [ -n "$PR_HEAD_BRANCH" ]; then
       log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
-      if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" "$REPO_DIR" 2>>"$LOG"; then
+      if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" 2>>"$LOG"; then
         log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH; see Git recovery diagnostics"
         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare PR head branch '$PR_HEAD_BRANCH' from remote state. Manul attempted branch-specific checkout recovery where possible; see daemon diagnostics for the exact blocker." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
@@ -3476,7 +3476,7 @@ PROMPT_EOF
          return 0
        fi
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
-       if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" "$REPO_DIR" 2>>"$LOG"; then
+       if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
          log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
          handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh checkout at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever recovery could safely archive it." "${PR_NUM_FROM_URL:-}" "$current_attempt"
          return 0

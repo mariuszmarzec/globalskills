@@ -225,10 +225,10 @@ The agent may read/search configured related repository checkouts inside the lea
 ### Checkout recovery
 
 - The branch Manul prepares is explicit and task-specific. For a standalone issue task, use the resolved base branch selected by the branch policy. For a PR/review task, use that PR's actual head branch. Never assume \`master\` or the repository default for a PR task.
-- Before preparing a standalone task, fetch the repository and resolve the intended base branch. If checkout, reset, cleanup, or verification of that branch fails, Manul must attempt a fresh checkout from the refreshed repository cache at the **same intended branch**.
+- Before preparing a standalone task, fetch the repository and resolve the intended base branch. If checkout, reset, cleanup, or verification of that branch fails, Manul must attempt a fresh clone of the repository remote at the **same intended branch**.
 - If switching to a PR head branch fails because of dirty/stale checkout state, Manul must attempt a fresh checkout at that exact PR head branch. Do not silently switch to another branch if the requested PR branch cannot be fetched.
-- Before replacing a broken checkout, move the existing checkout intact to the task-owned \`tmp/checkout-recovery/\` area. Keep it as a recovery backup; do not delete it as part of fallback. Build and verify the replacement first, and restore the backup if installing the replacement fails.
-- If the intended remote branch is unavailable, the cache cannot be refreshed, path validation fails, or a fresh checkout cannot be verified, fail with a concrete diagnostic and preserve the prior checkout where possible. Never turn a recovery failure into a checkout of \`master\`/default.
+- Before replacing a broken checkout, clone and verify the replacement first, then move the existing checkout intact to the task-owned \`tmp/checkout-recovery/\` area. Keep it as a recovery backup; do not delete it as part of fallback. Build and verify the replacement first, and restore the backup if installing the replacement fails.
+- If the intended remote branch is unavailable, the remote cannot provide the intended branch, path validation fails, or a fresh checkout cannot be verified, fail with a concrete diagnostic and preserve the prior checkout where possible. Never turn a recovery failure into a checkout of \`master\`/default.
 - A recovery backup is operator/recovery material, not a second active checkout. The normal agent prompt and all delivery checks must continue to use only the validated primary checkout at \`WORKDIR\`.
 
 ## 14. Agent task access boundary

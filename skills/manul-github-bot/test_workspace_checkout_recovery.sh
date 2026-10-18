@@ -31,9 +31,10 @@ assert_branch() { [ "$(git -C "$1" symbolic-ref --short HEAD 2>/dev/null)" = "$2
 assert_head() { [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$2" ]; }
 assert_clean() { [ -z "$(git -C "$1" status --porcelain 2>/dev/null)" ]; }
 
-REMOTE="$TEST_DIR/primary.git"
+REMOTE="$TEST_DIR/test-owner/primary.git"
 SEED="$TEST_DIR/seed"
 CACHE="$TEST_DIR/cache"
+mkdir -p "$(dirname "$REMOTE")"
 git init -q --bare "$REMOTE"
 git init -q -b main "$SEED"
 git -C "$SEED" config user.name "Manul recovery tests"
@@ -76,7 +77,7 @@ ISSUE_OLD_HEAD="$(git -C "$ISSUE_CHECKOUT" rev-parse HEAD)"
 ISSUE_EXPECTED_HEAD="$(git --git-dir="$REMOTE" rev-parse refs/heads/release/task-base)"
 git -C "$ISSUE_CHECKOUT" fetch --quiet origin --prune
 check "standalone checkout fixture has selected base ref" git -C "$ISSUE_CHECKOUT" show-ref --verify --quiet refs/remotes/origin/release/task-base
-check "standalone preparation recovers at the selected base branch" workspace_prepare_task_base_branch "$ISSUE_CHECKOUT" release/task-base "$ISSUE_ROOT" test-owner/primary "$CACHE"
+check "standalone preparation recovers at the selected base branch" workspace_prepare_task_base_branch "$ISSUE_CHECKOUT" release/task-base "$ISSUE_ROOT" test-owner/primary
 check "standalone checkout lands on selected non-default branch" assert_branch "$ISSUE_CHECKOUT" release/task-base
 check "standalone checkout uses exact remote head" assert_head "$ISSUE_CHECKOUT" "$ISSUE_EXPECTED_HEAD"
 check "standalone replacement is clean" assert_clean "$ISSUE_CHECKOUT"
@@ -94,7 +95,7 @@ PR_CHECKOUT="$(workspace_prepare_primary_checkout "$PR_ROOT" "test-owner/primary
 git -C "$PR_CHECKOUT" remote set-url origin "$REMOTE"
 printf 'untracked collision\n' > "$PR_CHECKOUT/feature-only.txt"
 PR_EXPECTED_HEAD="$(git --git-dir="$REMOTE" rev-parse refs/heads/feature/pr-target)"
-check "PR preparation recovers a blocked switch to the explicit PR head" workspace_prepare_pr_branch "$PR_CHECKOUT" feature/pr-target "$PR_ROOT" test-owner/primary "$CACHE"
+check "PR preparation recovers a blocked switch to the explicit PR head" workspace_prepare_pr_branch "$PR_CHECKOUT" feature/pr-target "$PR_ROOT" test-owner/primary
 check "PR replacement is on requested feature branch" assert_branch "$PR_CHECKOUT" feature/pr-target
 check "PR replacement uses exact remote feature head" assert_head "$PR_CHECKOUT" "$PR_EXPECTED_HEAD"
 check "PR replacement includes the PR-only file" assert_file "$PR_CHECKOUT/feature-only.txt"
