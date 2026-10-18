@@ -936,6 +936,33 @@ if ! printf '%s' "$FINAL_COMMENT" | grep -q "will retry"; then
 fi
 echo "[OK] Test U: retry is queued with token/lease cleared and backoff preserved"
 
+# ─── Test V: deterministic permission blocks stop without wasting retries ────
+echo ""
+echo "=== Test V: permission-policy rejection is terminal ==="
+ensure_claim_token_column
+CLAIM_TOKEN_PERMISSION="test-claim-permission"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_PERMISSION';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,createdAt,heartbeatAt,leaseExpiresAt,workerPid,action,claimToken) VALUES ('COMMENT_PERMISSION','test/repo',61,'https://github.com/test/repo/issues/61#issuecomment-1061','user','test','permission block test','running',1,datetime('now'),datetime('now','+1 minute'),datetime('now','+15 minutes'),$$,'IMPLEMENT','$CLAIM_TOKEN_PERMISSION');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdout-permission.txt"
+echo "permission requested: bash outside configured workspace; auto-rejecting" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="IMPLEMENT"
+evaluate_task_completion "test/repo" "61" "COMMENT_PERMISSION" "COMMENT_PERMISSION" "1" "1" "$STDOUT_FILE" "$DB" "" "" "$CLAIM_TOKEN_PERMISSION" "" "master" "master" "OpenCode denied an external directory access" "RUNTIME_PERMISSION_BLOCKED" "" "" ""
+PERMISSION_STATE="$(sqlite3 "$DB" "SELECT status || '|' || COALESCE(claimToken,'') || '|' || COALESCE(workerPid,'') || '|' || COALESCE(heartbeatAt,'') || '|' || COALESCE(leaseExpiresAt,'') || '|' || CASE WHEN nextAttemptAt IS NULL THEN 'NULL' ELSE 'SET' END FROM processed_comments WHERE commentId='COMMENT_PERMISSION';" 2>/dev/null)"
+if [ "$PERMISSION_STATE" != "failed|||||NULL" ]; then
+  echo "FAIL: permission block should fail terminally with claim/lease cleared and no retry deadline; got '$PERMISSION_STATE'" >&2
+  tail -n 60 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if ! printf '%s' "$FINAL_COMMENT" | grep -qi "permission policy"; then
+  echo "FAIL: permission failure comment must explain the required policy change" >&2
+  exit 1
+fi
+echo "[OK] Test V: permission failure stops after first block and reports remediation"
+
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""
 echo "=== INTEGRATION TEST SUMMARY ==="

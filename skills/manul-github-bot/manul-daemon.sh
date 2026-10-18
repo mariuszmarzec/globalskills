@@ -2775,7 +2775,17 @@ else
     local MAX_ATTEMPTS
     MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     
-    if [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+    if [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
+      # Permission denials are deterministic until the operator/policy changes.
+      # Do not burn the remaining attempts re-running the same blocked tool call.
+      if update_task_completion "$COMMENT_ID" "failed" "$FAIL_REASON" "$CLAIM_TOKEN"; then
+        log "dispatch: task $COMMENT_ID stopped after an OpenCode permission-policy rejection"
+      else
+        log "ERROR: task $COMMENT_ID could not transition to failed after permission-policy rejection"
+      fi
+      FINAL_COMMENT="⛔ Manul stopped this task because OpenCode's permission policy rejected a tool call. Automatic retries will not change that policy; fix the specific permission/path and trigger the task again.${FAIL_REASON:+ Reason: $FAIL_REASON}"
+      lc_log "TASK_FAILED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempts=$NEW_ATTEMPTS reason=permission_policy_blocked${FAIL_REASON:+ detail=$FAIL_REASON}"
+    elif [ "${NEW_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       # Persist the terminal state before posting the final lifecycle comment.
       # A max-attempt failure is terminal; leaving the row as running causes
       # watchdog/recovery churn and can make a failed workspace look active.
