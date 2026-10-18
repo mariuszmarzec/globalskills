@@ -52,6 +52,14 @@ same-session resumes is configured by
 (default: 3, valid range: 0..20). These internal resumes share the original
 execution timeout and do not consume additional Manul attempts.
 
+The OpenCode adapter has an independent no-progress watchdog controlled by
+`automation.agentNoProgressTimeoutSeconds` in `~/.manul/config.json`
+(default: 900 seconds; `MANUL_OPENCODE_NO_PROGRESS_TIMEOUT` can override it for
+a specific invocation). Actual JSONL stdout or stderr activity resets the timer;
+ordinary task-heartbeat updates do not. On expiry, only the isolated OpenCode
+process group is terminated, the result is marked
+`AGENT_NO_PROGRESS_TIMEOUT`, and the raw JSONL/stderr artifacts are retained.
+
 The installer deploys the runtime scripts as symlinks.
 
 Canonical source:
