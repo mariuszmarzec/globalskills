@@ -183,7 +183,7 @@ ProcessRunner.run() {
                 # Isolate the runtime in its own process group so an idle timeout
                 # cannot signal the Manul supervisor or sibling tasks.
                 if command -v setsid >/dev/null 2>&1; then
-                    setsid timeout -k 60 "${timeout:-2147483647}" "${exec_cmd[@]}" >>"$out_file" 2>>"$err_file" &
+                    setsid timeout -k 60 "${timeout:-2147483647}" "${exec_cmd[@]}" <&0 >>"$out_file" 2>>"$err_file" &
                 else
                     printf '%s\n' "ProcessRunner: --idle-timeout requires setsid; runtime was not launched" >>"$err_file"
                     ProcessRunner_Rc=127
