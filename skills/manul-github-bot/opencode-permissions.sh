@@ -31,6 +31,7 @@ REQUIRED_PERMISSION_RULES=(
   '.permission.read |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.read["~/.manul/logs/**"] = "allow"'
   '.permission.glob |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.glob["~/.manul/logs/**"] = "allow"'
   '.permission.grep |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.grep["~/.manul/logs/**"] = "allow"'
+  '.permission.list |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.list["~/.manul/logs/**"] = "allow"'
   '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
 )
@@ -123,6 +124,7 @@ if ! "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null | jq -e '
   .permission.read["~/.manul/logs/**"] == "allow" and
   .permission.glob["~/.manul/logs/**"] == "allow" and
   .permission.grep["~/.manul/logs/**"] == "allow" and
+  .permission.list["~/.manul/logs/**"] == "allow" and
   .permission.edit["~/.manul/logs/**"] == "deny" and
   .permission.read["/tmp/manul-diagnostics/**"] == "allow" and
   .permission.edit["/tmp/manul-diagnostics/**"] == "allow"
