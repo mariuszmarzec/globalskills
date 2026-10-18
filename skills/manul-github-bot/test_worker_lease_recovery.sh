@@ -274,7 +274,7 @@ fi
 echo "PASS: non-owner completion rejected"
 
 # 2) Heartbeat refresh updates both heartbeatAt and leaseExpiresAt.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('123','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),123,'123-token',NULL,NULL,0,NULL),datetime('now'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('123','$REPO',3,'https://github.com/$REPO/issues/3','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),123,'123-token',NULL,NULL,0,datetime('now'))"
 HEARTBEAT_PIDS[123]=1
 CURRENT_WORKER_PID=123
 LEASE_TIMEOUT=900
@@ -283,23 +283,23 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN heartbeatAt > datetime('now','-5 
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN leaseExpiresAt > datetime('now') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='123';")" "lease expiry extended"
 
 # 3) Dead worker + expired lease is requeued.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,'dead-token',NULL,NULL,0,NULL),datetime('now','-1 hour'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead','$REPO',4,'https://github.com/$REPO/issues/4','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999999,'dead-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead';")" "dead worker task requeued"
 
 # 3b) Dead worker + fresh lease is still recovered immediately.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'https://github.com/$REPO/issues/41','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999997,'dead-fresh-token',NULL,NULL,0,NULL),datetime('now'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'https://github.com/$REPO/issues/41','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),999997,'dead-fresh-token',NULL,NULL,0,datetime('now'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead-fresh';")" "dead worker with fresh lease requeued"
 
 # 3c) Live worker + fresh lease is left alone.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL,0,NULL),datetime('now'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL,0,datetime('now'))"
 recover_stale_tasks
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
 
 # 3d) Recovery does not report success when its conditional SQLite transition fails.
 sqlite3 "$DB" "
-INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,NULL),datetime('now','-1 hour'))
+INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,datetime('now','-1 hour'))
 CREATE TRIGGER reject_recovery_requeue
 BEFORE UPDATE OF status ON processed_comments
 WHEN OLD.commentId='recovery-race' AND NEW.status='queued'
@@ -318,7 +318,7 @@ sqlite3 "$DB" "DROP TRIGGER reject_recovery_requeue;"
 echo "PASS: failed stale-recovery transition does not emit a false success event"
 
 # 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL,0,NULL),datetime('now','-1 hour'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live';")" "live worker task recovered by expired lease"
 # Simulate the same long-lived worker claiming the retry with a new token. The old execution must not finalize it.
@@ -333,7 +333,7 @@ assert_eq completed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHER
 
 # 5) Max attempts on dead worker becomes failed.
 : > "$GH_LOG"
-sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL,0,NULL),datetime('now','-1 hour'))"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('maxed','$REPO',6,'https://github.com/$REPO/issues/6','IMPLEMENT','running',3,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999998,'maxed-token',NULL,NULL,0,datetime('now','-1 hour'))"
 recover_stale_tasks
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='maxed';")" "max-attempt task failed"
 if grep -q 'Task Failed' "$GH_LOG" && grep -q 'stale heartbeat/lease recovery' "$GH_LOG" && grep -q '\*\*Stage:\*\* stale_task_recovery' "$GH_LOG"; then
