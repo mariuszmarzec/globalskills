@@ -34,8 +34,9 @@ cat >"$MANUL_DIR/config.json" <<'JSON'
 }
 JSON
 
-WORKSPACE="$TEST_ROOT/workspace"
-mkdir -p "$WORKSPACE"
+WORKSPACE="$MANUL_DIR/workspace/ws-smoke"
+WORKDIR="$WORKSPACE/repos/test-owner/test-repo"
+mkdir -p "$WORKDIR"
 
 PROMPT_FILE="$MANUL_DIR/state/tasks/smoke.prompt.md"
 printf '%s\n' 'Execute the executor-boundary smoke test.' >"$PROMPT_FILE"
@@ -91,12 +92,16 @@ jq -n \
   --arg taskId "smoke-execution-1" \
   --arg prompt "$PROMPT_FILE" \
   --arg workspace "$WORKSPACE" \
+  --arg workspaceRoot "$WORKSPACE" \
+  --arg workdir "$WORKDIR" \
   --arg stdoutFile "$STDOUT_FILE" \
   --arg stderrFile "$STDERR_FILE" \
   '{
     taskId: $taskId,
     prompt: $prompt,
     workspace: $workspace,
+    workspaceRoot: $workspaceRoot,
+    workdir: $workdir,
     agent: "",
     attempt: 1,
     timeout: 30,
@@ -233,6 +238,8 @@ jq -n \
   --arg taskId "smoke-opencode-role" \
   --arg prompt "$PROMPT_FILE" \
   --arg workspace "$WORKSPACE" \
+  --arg workspaceRoot "$WORKSPACE" \
+  --arg workdir "$WORKDIR" \
   --arg stdoutFile "$OPENCODE_STDOUT_FILE" \
   --arg stderrFile "$OPENCODE_STDERR_FILE" \
   --arg agent "coder-cheap" \
@@ -240,6 +247,8 @@ jq -n \
     taskId: $taskId,
     prompt: $prompt,
     workspace: $workspace,
+    workspaceRoot: $workspaceRoot,
+    workdir: $workdir,
     agent: $agent,
     agentSelection: "explicit",
     attempt: 1,
@@ -286,6 +295,8 @@ jq -n \
   --arg taskId "smoke-openclaw-role" \
   --arg prompt "$PROMPT_FILE" \
   --arg workspace "$WORKSPACE" \
+  --arg workspaceRoot "$WORKSPACE" \
+  --arg workdir "$WORKDIR" \
   --arg stdoutFile "$ROLE_STDOUT_FILE" \
   --arg stderrFile "$ROLE_STDERR_FILE" \
   --arg agent "coder-cheap" \
@@ -293,6 +304,8 @@ jq -n \
     taskId: $taskId,
     prompt: $prompt,
     workspace: $workspace,
+    workspaceRoot: $workspaceRoot,
+    workdir: $workdir,
     agent: $agent,
     agentSelection: "explicit",
     autoAccept: true,
