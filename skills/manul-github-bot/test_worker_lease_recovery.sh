@@ -349,15 +349,18 @@ fi
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-retry','$REPO',80,'https://github.com/$REPO/issues/80','running',1,$CURRENT_TEST_PID,'early-retry-token');"
 handle_pre_execution_failure "early-retry" "early-retry-token" "$REPO" 80 "" "" "Workspace unavailable on first attempt." "" 1
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-retry';")" "pre-agent recoverable failure transitions to queued"
+assert_eq 0 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-retry';")" "pre-agent failure does not consume an agent execution attempt"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='early-retry';")" "pre-agent failure increments separate infrastructure counter"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry has nextAttemptAt"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','-2 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry is scheduled"
 
 # 5b) Early workspace failures use the same attempt limit and publish a final
 # failure comment instead of leaving the task running for the watchdog to guess.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,$CURRENT_TEST_PID,'early-fail-token');"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,1,$CURRENT_TEST_PID,'early-fail-token');"
 handle_pre_execution_failure "early-fail" "early-fail-token" "$REPO" 81 "" "" "Workspace path is missing or failed ownership/path validation." "" 3 "workspace_path_validation"
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='early-fail';")" "pre-agent failure transitions to failed"
-assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery does not double-count attempts"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='early-fail';")" "pre-agent recovery removes the claim-time agent-attempt bump"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='early-fail';")" "repeated infrastructure failure reaches separate infra budget"
 if grep -q 'Workspace path is missing or failed ownership/path validation.' "$GH_LOG" && grep -q '\*\*Stage:\*\* workspace_path_validation' "$GH_LOG"; then
   echo "PASS: pre-agent terminal failure comment contains the concrete cause"
 else
@@ -367,9 +370,10 @@ else
 fi
 
 # 5c) Primary-checkout preparation failures publish their own explicit stage.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken) VALUES ('checkout-fail','$REPO',82,'https://github.com/$REPO/issues/82','running',3,$CURRENT_TEST_PID,'checkout-fail-token');"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('checkout-fail','$REPO',82,'https://github.com/$REPO/issues/82','running',3,1,$CURRENT_TEST_PID,'checkout-fail-token');"
 handle_pre_execution_failure "checkout-fail" "checkout-fail-token" "$REPO" 82 "" "" "Could not prepare the primary checkout for $REPO (rc=1). Existing workspace data was preserved." "" 3 "primary_checkout_preparation"
 assert_eq failed "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='checkout-fail';")" "primary-checkout failure transitions to failed"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='checkout-fail';")" "checkout failure leaves the agent-attempt budget intact"
 if grep -q 'Could not prepare the primary checkout for' "$GH_LOG" && grep -q '\*\*Stage:\*\* primary_checkout_preparation' "$GH_LOG"; then
   echo "PASS: primary-checkout failure comment includes stage and cause"
 else
