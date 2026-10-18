@@ -119,6 +119,12 @@ if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then
     exit 2
 fi
 
+AGENT_IDLE_TIMEOUT="${MANUL_OPENCODE_NO_PROGRESS_TIMEOUT:-$(jq -r '.automation.agentNoProgressTimeoutSeconds // 900' "${MANUL_CONFIG:-/dev/null}" 2>/dev/null || echo 900)}"
+if ! [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_IDLE_TIMEOUT" -lt 1 ]; then
+    log "WARN: invalid no-progress timeout; using default 900s"
+    AGENT_IDLE_TIMEOUT=900
+fi
+
 CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 AGENT_ARGS=()
 if [ -n "$OPT_AGENT" ]; then
@@ -200,11 +206,12 @@ fi
 session_id="$OPT_SESSION_ID"
 pr_rc=1
 final_step_limit_detected="false"
+idle_timeout_detected="false"
 internal_continuations_used=0
 run_index=0
 execution_start_epoch="$(date +%s)"
 
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s no_progress_timeout=${AGENT_IDLE_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
 
 # One timeout budget spans the first call and all internal continuations.
 # These resumes happen before the adapter returns, so they do not finish or
@@ -240,6 +247,7 @@ while true; do
     # Keep ProcessRunner's protocol line out of AgentExecutor's JSON result.
     local_runner_result="$(ProcessRunner.run \
         --timeout "$remaining_timeout" \
+        --idle-timeout "$AGENT_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
         -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
             "${AUTO_ARGS[@]}" \
@@ -249,7 +257,12 @@ while true; do
             --dir "$OPT_WORKSPACE" \
             < "$CURRENT_RUN_PROMPT_FILE")"
     pr_rc=$?
-    : "$local_runner_result"
+    runner_timeout_reason="$(printf '%s\\n' "$local_runner_result" | head -n 1 | cut -d'|' -f5)"
+    if [ "$runner_timeout_reason" = "idle_timeout" ]; then
+        idle_timeout_detected="true"
+        error_type="AGENT_NO_PROGRESS_TIMEOUT"
+        log "no-progress watchdog fired task=$OPT_TASK_ID attempt=$OPT_ATTEMPT threshold=${AGENT_IDLE_TIMEOUT}s; JSONL/stderr artifacts retained"
+    fi
 
     if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
         cat "$CURRENT_RUN_STDOUT_FILE" >>"$RAW_STDOUT_FILE"
@@ -453,7 +466,12 @@ if [ -z "$error_message" ] && [ -s "$OPT_STDERR_FILE" ]; then
     fi
 fi
 
-if [ "$pr_rc" -eq 124 ]; then
+if [ "$idle_timeout_detected" = "true" ]; then
+    _status="TIMEOUT"
+    _summary="OpenCode made no stdout/stderr progress for ${AGENT_IDLE_TIMEOUT}s; no-progress watchdog terminated the runtime"
+    error_type="AGENT_NO_PROGRESS_TIMEOUT"
+    error_message="No stdout/stderr progress for ${AGENT_IDLE_TIMEOUT}s; isolated runtime process group was terminated"
+elif [ "$pr_rc" -eq 124 ]; then
     _status="TIMEOUT"
     _summary="OpenCode execution timed out after ${AGENT_TIMEOUT}s"
 elif grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
@@ -523,7 +541,7 @@ case "$_status" in
             *)                         failure_code="RUNTIME_FAILURE" ;;
         esac
         ;;
-    TIMEOUT)            failure_code="RUNTIME_TIMEOUT" ;;
+    TIMEOUT)            if [ "$idle_timeout_detected" = "true" ]; then failure_code="AGENT_NO_PROGRESS_TIMEOUT"; else failure_code="RUNTIME_TIMEOUT"; fi ;;
     BLOCKED)            failure_code="TASK_NEEDS_USER" ;;
     NEEDS_CONTINUATION) failure_code="NEEDS_CONTINUATION" ;;
     COMPLETED)          failure_code="" ;;
