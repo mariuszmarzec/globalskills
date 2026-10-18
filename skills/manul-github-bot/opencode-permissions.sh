@@ -42,7 +42,7 @@ REQUIRED_PERMISSION_RULES=(
   '.permission.list |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.list["~/.manul/logs/**"] = "allow"'
   '.permission.edit |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.edit["~/.manul/logs/**"] = "deny"'
   '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] = "allow"'
-  '.permission.external_directory |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.external_directory |= (with_entries((.key | if startswith("~/") then (env.HOME + .[1:]) elif startswith("$HOME/") then (env.HOME + .[5:]) else . end) as $path | if ($path == $manulWorkspace or ($path | startswith($manulWorkspace + "/"))) then .value = "deny" else . end) | del(.[$defaultWorkspaceDeny]) + {($defaultWorkspaceDeny):"deny",($workspaceDeny):"deny"})'
+  '.permission.external_directory |= (if type == "object" then . elif type == "string" then {"*": .} else {} end) | .permission.external_directory |= (with_entries((.key | if startswith("~/") then (env.HOME + .[1:]) elif startswith("$HOME/") then (env.HOME + .[5:]) else . end) as $path | if ($path == $manulWorkspace or ($path | startswith($manulWorkspace + "/"))) then .value = "deny" else . end) | del(.[$defaultWorkspaceDeny]) | del(.[$workspaceDeny]) | . + {($defaultWorkspaceDeny):"deny",($workspaceDeny):"deny"})'
 )
 
 # Paths verified against the effective OpenCode configuration, kept in lockstep
