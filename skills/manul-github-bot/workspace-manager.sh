@@ -235,15 +235,31 @@ workspace_context_acquire() {
   printf '%s\n' "$ws_id"
 }
 
-# Prepare a PR workspace without destroying local/unpushed work.
+# Prepare the explicitly requested PR head branch. If a branch switch is
+# blocked by stale/dirty checkout state, build a fresh checkout at that PR branch
+# and keep the old checkout in task-local recovery storage. Never assume master.
 workspace_prepare_pr_branch() {
   local workdir="$1"
   local branch="$2"
+  local workspace_root="" repository="" repo_cache=""
+  if [ "$#" -ge 5 ]; then
+    workspace_root="$3"
+    repository="$4"
+    repo_cache="$5"
+  fi
 
   [ -d "$workdir/.git" ] || return 1
   [ -n "$branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
 
-  git -C "$workdir" fetch origin "$branch" >/dev/null 2>&1 || return 1
+  if ! git -C "$workdir" fetch origin "$branch" >/dev/null 2>&1; then
+    echo "workspace_prepare_pr_branch: fetch of PR head '$branch' failed" >&2
+    if [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] &&
+       workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+      return 0
+    fi
+    return 1
+  fi
 
   local current_branch
   current_branch="$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null || true)"
@@ -252,14 +268,32 @@ workspace_prepare_pr_branch() {
 
   if [ "$current_branch" != "$branch" ]; then
     if [ -n "$dirty" ]; then
-      echo "workspace_prepare_pr_branch: refusing branch switch in dirty workspace (current=$current_branch expected=$branch)" >&2
+      echo "workspace_prepare_pr_branch: checkout of PR head '$branch' is blocked by a dirty checkout" >&2
+      if [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] &&
+         workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+        return 0
+      fi
       return 2
     fi
 
     if git -C "$workdir" show-ref --verify --quiet "refs/heads/$branch"; then
-      git -C "$workdir" checkout "$branch" >/dev/null 2>&1 || return 1
+      if ! git -C "$workdir" checkout "$branch" >/dev/null 2>&1; then
+        echo "workspace_prepare_pr_branch: checkout of local PR head '$branch' failed" >&2
+        if [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] &&
+           workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+          return 0
+        fi
+        return 1
+      fi
     else
-      git -C "$workdir" checkout -B "$branch" "origin/$branch" >/dev/null 2>&1 || return 1
+      if ! git -C "$workdir" checkout -B "$branch" "origin/$branch" >/dev/null 2>&1; then
+        echo "workspace_prepare_pr_branch: checkout of remote PR head '$branch' failed" >&2
+        if [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] &&
+           workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+          return 0
+        fi
+        return 1
+      fi
     fi
   fi
 
@@ -270,13 +304,20 @@ workspace_prepare_pr_branch() {
     remote_head="$(git -C "$workdir" rev-parse "origin/$branch" 2>/dev/null || true)"
     if [ -n "$local_head" ] && [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
       if git -C "$workdir" merge-base --is-ancestor "$local_head" "$remote_head" 2>/dev/null; then
-        git -C "$workdir" merge --ff-only "$remote_head" >/dev/null 2>&1 || return 1
+        if ! git -C "$workdir" merge --ff-only "$remote_head" >/dev/null 2>&1; then
+          echo "workspace_prepare_pr_branch: fast-forward to PR head '$branch' failed" >&2
+          if [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] &&
+             workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+            return 0
+          fi
+          return 1
+        fi
       else
         echo "workspace_prepare_pr_branch: preserving local commits (local=$local_head remote=$remote_head)" >&2
       fi
     fi
   else
-    echo "workspace_prepare_pr_branch: preserving dirty workspace $workdir" >&2
+    echo "workspace_prepare_pr_branch: preserving dirty checkout already on PR head '$branch' at $workdir" >&2
   fi
 
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
@@ -433,6 +474,193 @@ workspace_prepare_primary_checkout() {
   fi
   mkdir -p "$(realpath -e "$workspace_root")/tmp" || return 1
   printf '%s\n' "$checkout"
+}
+
+
+# Rebuild a broken checkout at the task's explicit target branch. The previous
+# checkout is moved intact into this task workspace's recovery area; it is never
+# deleted as part of recovery. repo_cache must have been prepared for this repo.
+workspace_recover_primary_checkout() {
+  local workspace_root="$1" repository="$2" repo_cache="$3" branch="$4"
+  [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$repo_cache" ] && [ -n "$branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || {
+    echo "workspace_recover_primary_checkout: invalid target branch '$branch'" >&2
+    return 1
+  }
+
+  local root_real checkout checkout_parent repo_cache_real repo_name source_ref expected_head
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  checkout="$(workspace_primary_repo_path "$root_real" "$repository" 2>/dev/null)" || return 1
+  checkout_parent="$(dirname "$checkout")"
+  repo_name="$(basename "$checkout")"
+  repo_cache_real="$(realpath -e "$repo_cache" 2>/dev/null)" || return 1
+  [ -d "$repo_cache_real/.git" ] || {
+    echo "workspace_recover_primary_checkout: repository cache is unavailable" >&2
+    return 1
+  }
+  case "$checkout" in "$repo_cache_real"/*)
+    echo "workspace_recover_primary_checkout: checkout cannot be inside the shared cache" >&2
+    return 1
+    ;;
+  esac
+  case "$repo_cache_real" in "$checkout"/*)
+    echo "workspace_recover_primary_checkout: shared cache cannot be inside the task checkout" >&2
+    return 1
+    ;;
+  esac
+
+  # Refresh the cache before cloning so the fallback is based on current remote
+  # state, not a stale local HEAD or an assumed default branch.
+  if ! git -C "$repo_cache_real" fetch origin --quiet; then
+    echo "workspace_recover_primary_checkout: could not refresh the repository cache from origin" >&2
+    return 1
+  fi
+  source_ref="refs/remotes/origin/$branch"
+  if ! git -C "$repo_cache_real" show-ref --verify --quiet "$source_ref"; then
+    echo "workspace_recover_primary_checkout: origin does not expose target branch '$branch'; refusing to fall back to another branch" >&2
+    return 1
+  fi
+  expected_head="$(git -C "$repo_cache_real" rev-parse "$source_ref^{commit}" 2>/dev/null)" || return 1
+  [ -n "$expected_head" ] || return 1
+
+  local temp_checkout="$checkout_parent/.$repo_name.recovery.$"
+  if [ -e "$temp_checkout" ] || [ -L "$temp_checkout" ]; then
+    echo "workspace_recover_primary_checkout: temporary checkout path already exists; refusing to overwrite it" >&2
+    return 1
+  fi
+
+  local tmp_root="$root_real/tmp"
+  [ ! -L "$tmp_root" ] || {
+    echo "workspace_recover_primary_checkout: task tmp path is a symlink" >&2
+    return 1
+  }
+  mkdir -p "$tmp_root" || return 1
+  [ "$(realpath -e "$tmp_root" 2>/dev/null)" = "$tmp_root" ] || return 1
+  local recovery_root="$tmp_root/checkout-recovery"
+  [ ! -L "$recovery_root" ] || {
+    echo "workspace_recover_primary_checkout: recovery path is a symlink" >&2
+    return 1
+  }
+  mkdir -p "$recovery_root" || return 1
+  recovery_root="$(realpath -e "$recovery_root" 2>/dev/null)" || return 1
+  case "$recovery_root" in "$root_real"/*) ;; *)
+    echo "workspace_recover_primary_checkout: recovery path escaped the task workspace" >&2
+    return 1
+    ;;
+  esac
+
+  if ! git clone --local --no-hardlinks "$repo_cache_real" "$temp_checkout" >/dev/null 2>&1; then
+    [ ! -e "$temp_checkout" ] || rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: could not create a fresh checkout from the prepared cache" >&2
+    return 1
+  fi
+  if ! git -C "$temp_checkout" fetch --quiet "$repo_cache_real" "+$source_ref:refs/remotes/origin/$branch"; then
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: could not fetch target branch '$branch' from the prepared cache" >&2
+    return 1
+  fi
+  if ! git -C "$temp_checkout" checkout -B "$branch" "refs/remotes/origin/$branch" >/dev/null 2>&1 ||
+     ! git -C "$temp_checkout" reset --hard "$expected_head" --quiet >/dev/null 2>&1; then
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: fresh checkout could not select target branch '$branch'" >&2
+    return 1
+  fi
+  if ! git -C "$temp_checkout" remote set-url origin "https://github.com/$repository" ||
+     ! git -C "$temp_checkout" branch --set-upstream-to="origin/$branch" "$branch" >/dev/null 2>&1; then
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: could not configure origin for '$repository'" >&2
+    return 1
+  fi
+  if [ "$(git -C "$temp_checkout" symbolic-ref --short HEAD 2>/dev/null)" != "$branch" ] ||
+     [ "$(git -C "$temp_checkout" rev-parse HEAD 2>/dev/null)" != "$expected_head" ] ||
+     [ -n "$(git -C "$temp_checkout" status --porcelain 2>/dev/null)" ]; then
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: fresh checkout verification failed for '$branch'" >&2
+    return 1
+  fi
+
+  local backup="" branch_slug recovery_stamp suffix=0 existing_root
+  branch_slug="$(printf '%s' "$branch" | sed 's#[^A-Za-z0-9._-]#_#g')"
+  recovery_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$"
+  backup="$recovery_root/$repo_name-$branch_slug-$recovery_stamp"
+  while [ -e "$backup" ] || [ -L "$backup" ]; do
+    suffix=$((suffix + 1))
+    backup="$recovery_root/$repo_name-$branch_slug-$recovery_stamp-$suffix"
+  done
+
+  if [ -e "$checkout" ] || [ -L "$checkout" ]; then
+    if [ ! -d "$checkout" ] || [ -L "$checkout" ] || [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: existing checkout is not a safe Git directory; it was left untouched" >&2
+      return 1
+    fi
+    existing_root="$(git -C "$checkout" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -z "$existing_root" ] || [ "$(realpath -e "$existing_root" 2>/dev/null)" != "$checkout" ]; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: existing checkout root is invalid; it was left untouched" >&2
+      return 1
+    fi
+    if ! mv -- "$checkout" "$backup"; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: could not archive existing checkout; it was left untouched" >&2
+      return 1
+    fi
+  fi
+
+  if ! mv -- "$temp_checkout" "$checkout"; then
+    if [ -d "$backup/.git" ] && [ ! -e "$checkout" ] && [ ! -L "$checkout" ]; then
+      mv -- "$backup" "$checkout" 2>/dev/null || true
+    fi
+    echo "workspace_recover_primary_checkout: could not install fresh checkout; previous data remains in recovery storage at '$backup'" >&2
+    return 1
+  fi
+
+  if [ -n "$backup" ] && [ -d "$backup/.git" ]; then
+    echo "workspace_recover_primary_checkout: rebuilt '$repository' at '$branch' ($expected_head); previous checkout preserved at '$backup'" >&2
+  else
+    echo "workspace_recover_primary_checkout: created '$repository' at '$branch' ($expected_head)" >&2
+  fi
+  return 0
+}
+
+# Prepare a standalone/issue-task checkout at the selected base branch. The
+# caller fetches origin and resolves the branch first. If checkout, reset,
+# cleanup, or verification fails, recover at that same intended branch.
+workspace_prepare_task_base_branch() {
+  local workdir="$1" branch="$2" workspace_root="$3" repository="$4" repo_cache="$5"
+  [ -d "$workdir/.git" ] && [ -n "$branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
+  if ! git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    echo "workspace_prepare_task_base_branch: origin target branch '$branch' is unavailable" >&2
+    return 1
+  fi
+
+  local failed_step=""
+  if ! git -C "$workdir" checkout -B "$branch" "origin/$branch" >/dev/null 2>&1; then
+    failed_step="checkout"
+  elif ! git -C "$workdir" reset --hard "origin/$branch" --quiet 2>/dev/null; then
+    failed_step="reset"
+  elif ! git -C "$workdir" clean -fd --quiet 2>/dev/null; then
+    failed_step="clean"
+  elif [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" != "$branch" ] ||
+       [ "$(git -C "$workdir" rev-parse HEAD 2>/dev/null)" != "$(git -C "$workdir" rev-parse "origin/$branch" 2>/dev/null)" ]; then
+    failed_step="verification"
+  fi
+
+  if [ -z "$failed_step" ]; then
+    return 0
+  fi
+
+  echo "workspace_prepare_task_base_branch: ordinary '$failed_step' failed for target '$branch'; trying a fresh checkout at the same target" >&2
+  if workspace_recover_primary_checkout "$workspace_root" "$repository" "$repo_cache" "$branch"; then
+    if [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ] &&
+       [ "$(git -C "$workdir" rev-parse HEAD 2>/dev/null)" = "$(git -C "$workdir" rev-parse "origin/$branch" 2>/dev/null)" ]; then
+      echo "workspace_prepare_task_base_branch: recovered checkout at '$branch'" >&2
+      return 0
+    fi
+  fi
+  echo "workspace_prepare_task_base_branch: recovery failed for target '$branch'; original checkout remains preserved when possible" >&2
+  return 1
 }
 
 # Clone configured related repositories into this task's workspace. The shared

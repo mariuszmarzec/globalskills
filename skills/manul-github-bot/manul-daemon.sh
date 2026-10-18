@@ -3442,29 +3442,27 @@ PROMPT_EOF
     # below intentionally continue to target WORKDIR (the primary checkout).
     release_task_repo_lock "$REPO"
 
-     # PR workspaces are persistent contexts. Never reset a dirty checkout or
-     # discard local commits that have not reached the remote PR branch.
+     # PR tasks use the PR's explicit head branch. If checkout fails because of
+     # stale/dirty state, rebuild from the remote at that same branch and archive
+     # the old checkout; never silently fall back to master/default.
      if [ -n "$PR_HEAD_BRANCH" ]; then
-      log "dispatch: preparing persistent PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
-      if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" 2>>"$LOG"; then
-        log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH without destroying local work, releasing"
-        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not safely check out PR head branch '$PR_HEAD_BRANCH'; local workspace changes were preserved." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+      log "dispatch: preparing PR head branch $PR_HEAD_BRANCH in workspace $WORKDIR"
+      if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" "$REPO_DIR" 2>>"$LOG"; then
+        log "dispatch: failed to prepare PR head branch $PR_HEAD_BRANCH; see Git recovery diagnostics"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare PR head branch '$PR_HEAD_BRANCH' from remote state. Manul attempted branch-specific checkout recovery where possible; see daemon diagnostics for the exact blocker." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
       local verify_branch
       verify_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null)"
       if [ "$verify_branch" != "$PR_HEAD_BRANCH" ]; then
         log "dispatch: PR branch verification failed (expected=$PR_HEAD_BRANCH, got=$verify_branch), releasing and failing"
-        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "PR workspace branch mismatch: expected '$PR_HEAD_BRANCH', got '${verify_branch:-detached}'." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "PR workspace branch mismatch: expected '$PR_HEAD_BRANCH', got '"${verify_branch:-detached}'." "${PR_NUM_FROM_URL:-}" "$current_attempt"
         return 0
       fi
-      log "dispatch: verified persistent PR head branch $verify_branch in workspace"
+      log "dispatch: verified PR head branch $verify_branch in workspace"
      else
-       # Issue / standalone task: the workspace may have been left on a stale
-       # task branch from a previous run. Reset to the default branch so the
-       # agent starts from a clean, known state and cannot pick up leftover
-       # changes from an unrelated task. (Do NOT use clean -fdx: the workspace
-       # holds untracked helper dirs like .agents that must be preserved.)
+       # Issue / standalone task: target the resolved repository/base branch, not
+       # whichever branch happens to be checked out in the task workspace.
        local default_branch
        default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "")"
        local base_branch
@@ -3476,19 +3474,9 @@ PROMPT_EOF
          return 0
        fi
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
-       if ! git -C "$WORKDIR" checkout -B "$base_branch" "origin/$base_branch" 2>>"$LOG"; then
-         log "ERROR: failed to checkout base branch '$base_branch' for task $COMMENT_ID"
-         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not check out base branch '$base_branch'; Git refused to switch the existing workspace. Existing changes were not forcibly discarded." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-         return 0
-       fi
-       if ! git -C "$WORKDIR" reset --hard "origin/$base_branch" --quiet 2>>"$LOG"; then
-         log "ERROR: failed to reset workspace to origin/$base_branch for task $COMMENT_ID"
-         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not reset workspace to origin/$base_branch." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-         return 0
-       fi
-       if ! git -C "$WORKDIR" clean -fd --quiet 2>>"$LOG"; then
-         log "ERROR: failed to clean workspace before task $COMMENT_ID"
-         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not clean untracked workspace files safely." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+       if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" "$REPO_DIR" 2>>"$LOG"; then
+         log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh checkout at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever recovery could safely archive it." "${PR_NUM_FROM_URL:-}" "$current_attempt"
          return 0
        fi
      fi
