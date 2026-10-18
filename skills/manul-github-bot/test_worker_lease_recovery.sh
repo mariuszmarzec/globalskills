@@ -294,6 +294,26 @@ sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'h
 recover_stale_tasks
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
 
+# 3d) Recovery does not report success when its conditional SQLite transition fails.
+sqlite3 "$DB" "
+INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL);
+CREATE TRIGGER reject_recovery_requeue
+BEFORE UPDATE OF status ON processed_comments
+WHEN OLD.commentId='recovery-race' AND NEW.status='queued'
+BEGIN SELECT RAISE(ABORT, 'simulated conditional update failure'); END;
+"
+recover_stale_tasks
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='recovery-race';")" "failed recovery update leaves task state unchanged"
+if grep -q 'TASK_REQUEUED task=recovery-race ' "$LIFECYCLE_LOG" 2>/dev/null; then
+  echo "FAIL: stale recovery logged TASK_REQUEUED despite a failed SQLite update" >&2
+  exit 1
+fi
+grep -q 'task recovery-race was not requeued' "$LOG" \
+  && echo "PASS: failed stale-recovery transition is explicitly logged" \
+  || { echo "FAIL: failed stale-recovery transition was not logged" >&2; exit 1; }
+sqlite3 "$DB" "DROP TRIGGER reject_recovery_requeue;"
+echo "PASS: failed stale-recovery transition does not emit a false success event"
+
 # 4) Live worker + expired lease is recovered; worker PID alone is not task ownership.
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live','$REPO',5,'https://github.com/$REPO/issues/5','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),1,'live-token',NULL,NULL);"
 recover_stale_tasks
@@ -429,6 +449,12 @@ if [ -d "$TASK_LOCK_DIR" ]; then
   exit 1
 fi
 echo "PASS: stale legacy .daemon-lock cannot self-deadlock the dispatcher"
+
+# 8) A worker started by an older daemon must exit rather than join a new pool.
+loop --worker=orphan-regression --parent-pid=2147483647
+grep -q 'worker startup aborted: owning daemon is not alive' "$LOG" \
+  && echo "PASS: orphan worker refuses to start without its owning daemon" \
+  || { echo "FAIL: orphan worker startup was not rejected" >&2; exit 1; }
 
 echo "All focused worker lifecycle tests passed."
 exit 0

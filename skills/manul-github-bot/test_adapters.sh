@@ -245,6 +245,7 @@ test_opencode_success() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
+if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
 printf 'PYTHONPATH=%s\n' "${PYTHONPATH-<unset>}" > "$MOCK_ENV_FILE"
 printf 'PYTHONHOME=%s\n' "${PYTHONHOME-<unset>}" >> "$MOCK_ENV_FILE"
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_success","part":{"type":"step-start"}}'
@@ -259,12 +260,18 @@ MOCK
 
   local out
   out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
-    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
       --agent build --attempt 1 --timeout 30 --session-id "" --auto \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenCodeAdapter completes JSON-mode TASK_DONE"
+  cmp -s "$tmp/prompt" "$tmp/stdin" \
+    && ok "OpenCodeAdapter sends the prompt through stdin" \
+    || fail "OpenCodeAdapter did not send the complete prompt through stdin"
+  ! grep -Fq "Do the task" "$tmp/args" \
+    && ok "OpenCodeAdapter keeps prompt contents out of argv" \
+    || fail "OpenCodeAdapter still passes prompt contents as an argument"
   grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
   grep -q -- '--dir '"$tmp" "$tmp/args" && ok "OpenCodeAdapter passes workspace with --dir" || fail "OpenCodeAdapter did not pass --dir workspace"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
@@ -287,6 +294,46 @@ MOCK
   grep -qx 'PYTHONHOME=<unset>' "$tmp/env" \
     && ok "OpenCode process does not inherit stale PYTHONHOME" \
     || fail "OpenCode inherited PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
+}
+
+# ---------------------------------------------------------------------------
+# 7b. Large OpenCode prompts must not exceed the per-argument OS limit
+# ---------------------------------------------------------------------------
+test_opencode_large_prompt_uses_stdin() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin"
+
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
+cat > "$MOCK_STDIN_FILE"
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_large","part":{"type":"text","text":"TASK_DONE large prompt accepted"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  # 200 KB exceeds Linux's per-argument limit (MAX_ARG_STRLEN) but is a valid
+  # stdin payload. This reproduces the former /usr/bin/timeout E2BIG failure.
+  head -c 200000 /dev/zero | tr '\0' 'x' > "$tmp/prompt"
+
+  local out
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_STDIN_FILE="$tmp/stdin" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-large-prompt --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenCode accepts prompts larger than the OS per-argument limit"
+  cmp -s "$tmp/prompt" "$tmp/stdin" \
+    && ok "large prompt reaches OpenCode byte-for-byte over stdin" \
+    || fail "large prompt was truncated or changed before OpenCode received it"
+  if grep -Fq "$(head -c 256 "$tmp/prompt")" "$tmp/args"; then
+    fail "large prompt content remains in OpenCode argv"
+  else
+    ok "large prompt content is absent from OpenCode argv"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -541,6 +588,7 @@ test_opencode_continuation() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
+cat > "$MOCK_STDIN_FILE"
 has_session=false
 for arg in "$@"; do
   [ "$arg" = "--session" ] && has_session=true
@@ -557,7 +605,7 @@ MOCK
   echo "Do the task" >"$tmp/prompt"
 
   local first rc1 sid
-  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
+  first="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" MOCK_STDIN_FILE="$tmp/stdin" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 1 --timeout 30 --session-id ""       --stdout-file "$tmp/stdout1" --stderr-file "$tmp/stderr1" 2>/dev/null)"
   rc1=$?
   sid="$(printf '%s' "$first" | jq -r '.session_id')"
   assert_json_status "$first" "NEEDS_CONTINUATION" "OpenCodeAdapter detects step-limit continuation"
@@ -565,13 +613,18 @@ MOCK
   [ "$sid" = "ses_cont" ] && ok "OpenCodeAdapter exposes continuation session ID" || fail "Continuation session ID=$sid"
 
   local second
-  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 2 --timeout 30 --session-id "$sid"       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
+  second="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode"     MOCK_ARGS_FILE="$tmp/args" MOCK_STDIN_FILE="$tmp/stdin" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime"     bash "$SCRIPT_DIR/opencode-adapter.sh"       --task-id cont-1 --prompt "$tmp/prompt" --workspace "$tmp"       --agent coder --attempt 2 --timeout 30 --session-id "$sid"       --stdout-file "$tmp/stdout2" --stderr-file "$tmp/stderr2" 2>/dev/null)"
   assert_json_status "$second" "COMPLETED" "OpenCodeAdapter resumes the same session"
   grep -q -- "--session $sid" "$tmp/args"     && ok "OpenCode continuation sends the persisted session ID"     || fail "OpenCode continuation did not reuse session ID"
   [ "$(grep -c -- '--agent coder' "$tmp/args")" -eq 2 ] \
     && ok "OpenCode continuation preserves the selected role across both attempts" \
     || fail "OpenCode continuation lost the selected role on one attempt"
-  grep -q 'Continue exactly where you left off' "$tmp/args"     && ok "OpenCode continuation uses a compact continuation prompt"     || fail "OpenCode continuation replayed the full task prompt"
+  grep -q 'Continue exactly where you left off' "$tmp/stdin" \
+    && ok "OpenCode continuation sends a compact prompt through stdin" \
+    || fail "OpenCode continuation did not send its prompt through stdin"
+  ! grep -q 'Continue exactly where you left off' "$tmp/args" \
+    && ok "OpenCode continuation prompt is absent from argv" \
+    || fail "OpenCode continuation prompt still appears in argv"
   grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2"     && ok "OpenCode continuation produces the completion marker"     || fail "OpenCode continuation lost TASK_DONE"
 }
 # ---------------------------------------------------------------------------
@@ -697,36 +750,6 @@ test_opencode_adapter_syntax() {
   fi
 }
 
-echo "=== Adapter Unit Tests ==="
-echo "Canonical source: $SCRIPT_DIR"
-
-test_opencode_adapter_syntax
-
-test_process_runner_mock
-test_process_runner_cwd_env
-test_openclaw_success
-test_openclaw_no_marker
-test_openclaw_failure
-test_openclaw_missing
-test_openclaw_timeout
-test_opencode_success
-test_opencode_no_marker_continuation
-test_opencode_step_limit_resumes_inside_attempt
-test_opencode_stop_without_marker
-test_opencode_failure
-test_opencode_permission_blocked
-test_opencode_missing
-test_opencode_continuation
-test_agent_executor_dispatch
-test_runtime_selection
-test_unknown_runtime
-test_controller_stdout_path
-
-echo
-echo "=== Results: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] || exit 1
-exit 0
-
 # ---------------------------------------------------------------------------
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
@@ -831,6 +854,7 @@ MOCK
 echo "=== Adapter Unit Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 
+test_opencode_adapter_syntax
 test_process_runner_mock
 test_process_runner_cwd_env
 test_openclaw_success
@@ -839,6 +863,7 @@ test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
+test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
 test_opencode_step_limit_resumes_inside_attempt
 test_opencode_stop_without_marker
