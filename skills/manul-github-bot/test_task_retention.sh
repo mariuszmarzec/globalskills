@@ -107,7 +107,39 @@ assert_eq "expired terminal rows deleted" "0"   "$(sqlite3 "$DB" "SELECT COUNT(*
 assert_eq "history-window terminal row is retained" "1"   "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='completed-history';")"
 
 # ---------------------------------------------------------------------------
-# 3. Invalid retention config falls back to 7/14 without failing
+# 3. Log cleanup removes every stale log file after seven days only
+# ---------------------------------------------------------------------------
+LOG_DIR="$MANUL_DIR/logs"
+mkdir -p "$LOG_DIR/tasks/old-comment" "$LOG_DIR/tasks/recent-comment"
+printf 'old log\n' >"$LOG_DIR/old-general.log"
+printf 'old wrapper log\n' >"$MANUL_DIR/daemon.log"
+printf 'old task diagnostic\n' >"$LOG_DIR/tasks/old-comment/attempt-1.stdout"
+printf 'recent task diagnostic\n' >"$LOG_DIR/tasks/recent-comment/attempt-1.stdout"
+printf 'old state, not a log\n' >"$MANUL_DIR/state/old-state.log"
+touch -d '8 days ago' \
+  "$LOG_DIR/old-general.log" \
+  "$MANUL_DIR/daemon.log" \
+  "$LOG_DIR/tasks/old-comment/attempt-1.stdout" \
+  "$MANUL_DIR/state/old-state.log"
+
+MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" bash -c \
+  'source "$1"; cleanup_expired_logs' _ "$SCRIPT_DIR/manul-daemon.sh"
+
+assert_eq "expired root log is deleted" "0" "$(if [ -e "$LOG_DIR/old-general.log" ]; then echo 1; else echo 0; fi)"
+assert_eq "expired startup wrapper log is deleted" "0" "$(if [ -e "$MANUL_DIR/daemon.log" ]; then echo 1; else echo 0; fi)"
+assert_eq "expired nested task diagnostic is deleted" "0" "$(if [ -e "$LOG_DIR/tasks/old-comment/attempt-1.stdout" ]; then echo 1; else echo 0; fi)"
+assert_eq "recent nested task diagnostic is retained" "1" "$(if [ -e "$LOG_DIR/tasks/recent-comment/attempt-1.stdout" ]; then echo 1; else echo 0; fi)"
+assert_eq "files outside the log directory are retained" "1" "$(if [ -e "$MANUL_DIR/state/old-state.log" ]; then echo 1; else echo 0; fi)"
+assert_eq "empty expired task archive directory is pruned" "0" "$(if [ -d "$LOG_DIR/tasks/old-comment" ]; then echo 1; else echo 0; fi)"
+
+EXTERNAL_TASK_LOG_DIR="$MANUL_DIR/state/task-archives"
+mkdir -p "$EXTERNAL_TASK_LOG_DIR/empty"
+MANUL_TESTING=true MANUL_DIR="$MANUL_DIR" MANUL_TASK_LOG_DIR="$EXTERNAL_TASK_LOG_DIR" bash -c \
+  'source "$1"; cleanup_expired_logs' _ "$SCRIPT_DIR/manul-daemon.sh"
+assert_eq "custom task archives outside the log tree are not pruned" "1" "$(if [ -d "$EXTERNAL_TASK_LOG_DIR/empty" ]; then echo 1; else echo 0; fi)"
+
+# ---------------------------------------------------------------------------
+# 4. Invalid retention config falls back to 7/14 without failing
 # ---------------------------------------------------------------------------
 write_config 10 19
 RETENTION_OUT="$(
