@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
 DB="$MANUL_DB"
 LOG="$MANUL_LOG_DIR/task-recovery.log"
-CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$CONFIG" 2>/dev/null || echo "60")"
+CFG_RETRY_DELAY="$(jq -r '.retryConfig.delaySeconds // 60' "$MANUL_CONFIG" 2>/dev/null || echo "60")"
 RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*"; }
