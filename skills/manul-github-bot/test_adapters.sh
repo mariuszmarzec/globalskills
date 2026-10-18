@@ -99,6 +99,31 @@ test_process_runner_cwd_env() {
 }
 
 # ---------------------------------------------------------------------------
+# 2b. ProcessRunner terminates an isolated runtime after output stalls
+# ---------------------------------------------------------------------------
+test_process_runner_idle_timeout() {
+  local tmp result rc header elapsed start
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/work"
+  start="$(date +%s)"
+  result="$(MANUL_DIR="$tmp/runtime" bash -c '
+    source "$1/manul-paths.sh"
+    source "$1/process-runner.sh"
+    ProcessRunner_TmpStdout="$2/out.jsonl"
+    ProcessRunner_TmpStderr="$2/err.log"
+    ProcessRunner.run --timeout 20 --idle-timeout 2 --cwd "$2/work" -- bash -c '"'"'printf "%s\\n" "{\\"type\\":\\"step_start\\"}"; echo "$" > "$3/runtime-pid"; sleep 30'"'"'
+  ' _ "$SCRIPT_DIR" "$tmp" "$tmp")"
+  rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  header="$(printf '%s\\n' "$result" | head -n 1)"
+  [ "${header%%|*}" = "124" ] && ok "ProcessRunner idle watchdog returns timeout code" || fail "ProcessRunner idle timeout rc=${header%%|*} (full=$header rc=$rc)"
+  [ "$(printf '%s\\n' "$header" | cut -d'|' -f5)" = "idle_timeout" ] && ok "ProcessRunner marks idle timeout distinctly" || fail "ProcessRunner idle marker missing: $header"
+  grep -Fq "no stdout/stderr progress for 2s" "$tmp/err.log" && ok "ProcessRunner records idle timeout diagnostics" || fail "ProcessRunner did not write idle timeout diagnostics"
+  [ "$elapsed" -lt 10 ] && ok "ProcessRunner kills stalled process before total timeout" || fail "ProcessRunner idle timeout took ${elapsed}s"
+}
+
+# ---------------------------------------------------------------------------
 # 3. OpenClaw success + JSON escaping
 # ---------------------------------------------------------------------------
 test_openclaw_success() {
@@ -535,6 +560,34 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 8c. OpenCode no-progress watchdog is distinct from the overall timeout
+# ---------------------------------------------------------------------------
+test_opencode_no_progress_timeout() {
+  local tmp out rc
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/runtime"
+  printf '%s\\n' '{"automation":{"agentNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_stalled","part":{"type":"step-start"}}'
+sleep 30
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' "Do the task" > "$tmp/prompt"
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \\
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-stalled --prompt "$tmp/prompt" --workspace "$tmp" \\
+      --attempt 1 --timeout 20 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "TIMEOUT" "OpenCode no-progress watchdog reports timeout status"
+  [ "$rc" -eq 124 ] && ok "OpenCode no-progress watchdog returns timeout rc" || fail "OpenCode no-progress watchdog rc=$rc"
+  [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_NO_PROGRESS_TIMEOUT" ] && ok "OpenCode no-progress watchdog has distinct failure code" || fail "Wrong no-progress failure code: $(printf '%s' "$out" | jq -r '.failure_code // empty')"
+  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'no stdout/stderr progress for 2s' && ok "OpenCode summary explains stalled progress" || fail "No-progress summary missing"
+  [ -f "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" ] && grep -Fq 'step_start' "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" && ok "OpenCode keeps partial JSONL output for diagnosis" || fail "Partial JSONL runtime output was not retained"
+  grep -Fq 'no stdout/stderr progress for 2s' "$tmp/stderr" && ok "OpenCode preserves the watchdog diagnostic in task stderr" || fail "Task stderr omitted no-progress diagnosis"
+}
+
+# ---------------------------------------------------------------------------
 # 9. OpenCode missing binary
 # ---------------------------------------------------------------------------
 test_opencode_missing() {
@@ -905,12 +958,14 @@ echo "Canonical source: $SCRIPT_DIR"
 test_opencode_adapter_syntax
 test_process_runner_mock
 test_process_runner_cwd_env
+test_process_runner_idle_timeout
 test_openclaw_success
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
+test_opencode_no_progress_timeout
 test_opencode_task_scoped_config
 test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
