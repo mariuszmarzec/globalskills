@@ -2557,6 +2557,7 @@ mark_task_stale() {
 
 # Requeue a running task for later retry.
 requeue_task() {
+  ensure_recovery_tracking_columns || return 1
   local comment_id="$1" safe_comment_id="$2" claim_token="$3"
   local safe_claim_token
   safe_claim_token="$(sql_escape "$claim_token")"
