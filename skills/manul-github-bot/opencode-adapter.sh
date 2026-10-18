@@ -121,7 +121,7 @@ fi
 
 AGENT_IDLE_TIMEOUT="${MANUL_OPENCODE_NO_PROGRESS_TIMEOUT:-$(jq -r '.automation.agentNoProgressTimeoutSeconds // 900' "${MANUL_CONFIG:-/dev/null}" 2>/dev/null || echo 900)}"
 if ! [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_IDLE_TIMEOUT" -lt 1 ]; then
-    printf '[%s] opencode-adapter: WARN: invalid no-progress timeout; using default 900s\\n' "$(date -Is)" >>"$OPT_STDERR_FILE"
+    printf '[%s] opencode-adapter: WARN: invalid no-progress timeout; using default 900s\n' "$(date -Is)" >>"$OPT_STDERR_FILE"
     AGENT_IDLE_TIMEOUT=900
 fi
 
