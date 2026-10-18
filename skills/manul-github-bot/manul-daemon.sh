@@ -1477,7 +1477,16 @@ cleanup_expired_logs() {
 
   local retention_minutes=$((7 * 24 * 60))
   local deleted_logs
-  deleted_logs="$(find "$MANUL_LOG_DIR" -type f -mmin "+${retention_minutes}" -print -delete 2>/dev/null | wc -l | tr -d '[:space:]')"
+  deleted_logs="$(
+    {
+      find "$MANUL_LOG_DIR" -type f -mmin "+${retention_minutes}" -print -delete 2>/dev/null
+      # The startup wrapper's redirected output log is beside the canonical
+      # logs/ directory rather than inside it, so include that one legacy path.
+      if [ -f "$MANUL_DIR/daemon.log" ]; then
+        find "$MANUL_DIR/daemon.log" -type f -mmin "+${retention_minutes}" -print -delete 2>/dev/null
+      fi
+    } | wc -l | tr -d '[:space:]'
+  )"
 
   if [[ "$deleted_logs" =~ ^[0-9]+$ ]] && [ "$deleted_logs" -gt 0 ]; then
     log "log retention cleanup: removed $deleted_logs file(s) older than 7 days"
