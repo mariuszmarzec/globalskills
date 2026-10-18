@@ -450,5 +450,11 @@ if [ -d "$TASK_LOCK_DIR" ]; then
 fi
 echo "PASS: stale legacy .daemon-lock cannot self-deadlock the dispatcher"
 
+# 8) A worker started by an older daemon must exit rather than join a new pool.
+loop --worker=orphan-regression --parent-pid=2147483647
+grep -q 'worker startup aborted: owning daemon is not alive' "$LOG" \
+  && echo "PASS: orphan worker refuses to start without its owning daemon" \
+  || { echo "FAIL: orphan worker startup was not rejected" >&2; exit 1; }
+
 echo "All focused worker lifecycle tests passed."
 exit 0
