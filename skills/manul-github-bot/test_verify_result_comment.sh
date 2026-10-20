@@ -75,6 +75,7 @@ eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^lc_log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^sql_escape() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^get_daemon_pid() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^repair_result_comment_marker() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_result_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
@@ -120,6 +121,7 @@ setup_db() {
             leaseExpiresAt TEXT,
             workerPid INTEGER,
             claimToken TEXT,
+            agentStartedAt TEXT,
             nextAttemptAt TEXT
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -142,7 +144,24 @@ insert_task() {
 # Handles: gh api "repos/owner/repo/issues/1/comments" --paginate --jq '...'
 cat > "$FAKE_BIN/gh" << 'GHEOF'
 #!/bin/bash
-# Fake gh — responds from pre-staged JSON files or fails on demand
+# Fake gh — responds from pre-staged JSON files or fails on demand.
+
+# The marker-repair regression uses the same API shape as a GitHub PATCH. Record
+# the exact request and return its body so production verification can validate
+# the server's read-back without contacting GitHub.
+if [[ " $* " == *" --method PATCH "* ]]; then
+    request="$(cat)"
+    printf '%s\t%s\n' "$*" "$request" >> "${PATCH_LOG_FILE:?}"
+    endpoint_id=""
+    for arg in "$@"; do
+        case "$arg" in
+            repos/*/comments/*) endpoint_id="${arg##*/}" ;;
+        esac
+    done
+    [[ "$endpoint_id" =~ ^[0-9]+$ ]] || exit 2
+    printf '%s' "$request" | jq --argjson id "$endpoint_id" '. + {id:$id}'
+    exit $?
+fi
 
 RESPONSE_FILE=""
 JQ_FILTER=""
@@ -198,6 +217,9 @@ chmod +x "$FAKE_BIN/gh"
 # Prepend fake bin to PATH and set responses directory
 export PATH="$FAKE_BIN:$PATH"
 export RESPONSES_DIR="$WORK/responses"
+PATCH_LOG_FILE="$WORK/patches.log"
+export PATCH_LOG_FILE
+: > "$PATCH_LOG_FILE"
 
 # ─── Test runner ───────────────────────────────────────────────────────────────
 run_test() {
@@ -322,6 +344,36 @@ EOF
 run_test "Wrong attempt number rejected" \
     "$REPO" 1 "result-6" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 6b: A unique current-attempt result with a stale marker is repaired in place ──
+echo "Test: unique result comment from this attempt has a stale attempt marker"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '1 minute ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-repair"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-repair"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:\${COMMENT_ID}:attempt:1 -->
+The implementation finished on the third execution.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:113,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Unique current-run result marker is repaired in place for attempt 3" 0 "$rc"
+if grep -Fq "<!-- manul-task:\${COMMENT_ID}:attempt:3 -->" "$PATCH_LOG_FILE" &&
+   grep -Fq "repos/owner/repo/issues/comments/113" "$PATCH_LOG_FILE"; then
+    ok "Marker repair PATCH targets the existing result comment and uses current attempt"
+else
+    fail "Marker repair PATCH request is missing or targets the wrong comment"
+fi
+if ! grep -Fq "<!-- manul-task:\${COMMENT_ID}:attempt:1 -->" "$PATCH_LOG_FILE"; then
+    ok "Marker repair replaces stale attempt marker rather than duplicating the comment"
+else
+    fail "Marker repair request retained the stale marker"
+fi
 
 # ── Test 7: gh API failure → fail-closed ──────────────────────────────────────
 # Create a fake gh that fails
