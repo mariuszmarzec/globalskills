@@ -147,6 +147,17 @@ For an agent execution:
 
 A `TASK_DONE` without a verified result comment is not accepted as successful completion.
 
+Recovery for a stale attempt marker is deliberately narrow: when the current
+running claim has `agentStartedAt`, the daemon may repair the marker in the
+existing comment only if exactly one non-lifecycle comment for the same task
+contains a lower numeric attempt marker, carries the required `— manul 🐈`
+signature, and its `created_at` timestamp is strictly after the current attempt's start. The daemon changes only the invisible
+marker, patches the existing comment in place, and verifies the returned body
+before accepting delivery. Missing timestamps, multiple candidates, a comment
+older than the current attempt, or an API/update/read-back error remain
+fail-closed. This handles an agent accidentally copying an old attempt number
+without accepting a previous attempt's result or creating duplicate comments.
+
 Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR is required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
@@ -382,12 +393,25 @@ When the configured internal budget is exhausted and OpenCode still reports a
 step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
 the daemon's existing retry/session handling remains authoritative.
 
-The OpenCode adapter also applies `automation.agentNoProgressTimeoutSeconds`
-(default `900`) to the current run's actual stdout/stderr stream. A fresh JSONL
-event or stderr write resets the idle timer; a heartbeat alone does not. On
-expiry, `ProcessRunner` terminates only the isolated runtime process group and
-returns the distinct `AGENT_NO_PROGRESS_TIMEOUT` failure code. The aggregate
-JSONL log and stderr diagnostics are retained for task recovery. This timeout is
+The OpenCode adapter applies `automation.agentNoProgressTimeoutSeconds`
+(default `900`) to the current run's stdout/stderr stream. A fresh JSONL
+event or stderr write resets the generic idle timer; a heartbeat alone does
+not. OpenCode CLI JSON streams may not emit a `tool_use` event until the tool
+has completed, so an unfinished `step_start` without a corresponding
+`step_finish` is also treated as bounded active model/tool work. During that
+unfinished step, the generic idle timer pauses but
+`automation.agentStepNoProgressTimeoutSeconds` (default `3600`, overridable
+with `MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT`) remains a hard limit. If the
+JSONL stream explicitly reports a running/pending tool, the adapter separately
+applies `automation.agentToolNoProgressTimeoutSeconds` (default `3600`,
+overridable with `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`). Thus model/tool
+work is not killed by the shorter generic idle budget, but neither an active
+step nor an active tool can suppress timeouts indefinitely. On expiry,
+`ProcessRunner` terminates only the isolated runtime process group and
+returns `AGENT_NO_PROGRESS_TIMEOUT` for generic idle,
+`AGENT_STEP_NO_PROGRESS_TIMEOUT` for an unfinished JSONL step, or
+`AGENT_TOOL_NO_PROGRESS_TIMEOUT` for an active tool that never completes.
+The aggregate JSONL log and stderr diagnostics are retained for task recovery. This timeout is
 independent of the overall agent timeout and of the daemon lease/heartbeat.
 
 Every adapter failure result should preserve actionable diagnostics in its
@@ -534,7 +558,10 @@ Failure codes must be stable and actionable:
 - `RUNTIME_PERMISSION_BLOCKED` — runtime rejected a tool call because of a permission boundary.
 - `PROVIDER_ERROR` — provider returned a structured runtime/provider error.
 - `RUNTIME_FAILURE` — generic runtime execution failure.
-- `RUNTIME_TIMEOUT` — runtime execution timed out.
+- `RUNTIME_TIMEOUT` — the overall runtime execution budget expired.
+- `AGENT_NO_PROGRESS_TIMEOUT` — neither runtime output nor recognized JSONL activity progressed within the idle budget.
+- `AGENT_STEP_NO_PROGRESS_TIMEOUT` — an OpenCode `step_start` remained unfinished past the bounded active-step budget.
+- `AGENT_TOOL_NO_PROGRESS_TIMEOUT` — an explicitly active OpenCode tool call failed to complete within its bounded budget.
 - `TASK_NEEDS_USER` — structured user decision is required.
 - `NEEDS_CONTINUATION` — runtime can continue an existing session.
 - `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion; the dirty workspace is preserved for diagnosis and must not be treated as delivered.
