@@ -174,6 +174,10 @@ if [[ "$1" == "api" ]]; then
                     59)
                         json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\n\n— manul 🐈","in_reply_to_id":null}]'
                         ;;
+                    60)
+                        # Test PR: valid task/attempt result marker in the review thread.
+                        json_output='[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]'
+                        ;;
                     55)
                         # Test O: existing PR is verified but the task branch was never pushed.
                         json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
