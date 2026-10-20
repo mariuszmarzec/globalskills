@@ -711,7 +711,7 @@ git -C "$WORKDIR_W" remote add origin "$ORIGIN_W"
 git -C "$WORKDIR_W" push -q -u origin manul-task-COMMENT_W
 echo "uncommitted requested edit" >>"$WORKDIR_W/README.md"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_W';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_W','test/repo',62,'https://github.com/test/repo/issues/62#issuecomment-1062','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_W','test/repo',62,'https://github.com/test/repo/issues/62#issuecomment-1062','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutW.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
 evaluate_task_completion "test/repo" "62" "COMMENT_W" "COMMENT_W" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_W" "" "$INITIAL_HEAD_W" "manul-task-COMMENT_W" "master" "" "" "" "" ""
@@ -747,7 +747,7 @@ git -C "$WORKDIR_X" remote add origin "$ORIGIN_X"
 git -C "$WORKDIR_X" push -q -u origin manul-task-COMMENT_X
 # The fixture for issue #63 has no valid result comment marker.
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_X';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutX.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
 evaluate_task_completion "test/repo" "63" "COMMENT_X" "COMMENT_X" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_X" "" "$INITIAL_HEAD_X" "manul-task-COMMENT_X" "master" "" "" "" "" ""
