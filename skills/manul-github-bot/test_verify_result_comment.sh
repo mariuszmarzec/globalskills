@@ -375,6 +375,24 @@ else
     fail "Marker repair request retained the stale marker"
 fi
 
+# ── Test 6c: An older result comment must not be repaired as the current attempt ──
+echo "Test: stale result comment from before this attempt remains rejected"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-old-comment"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-old-comment"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:$COMMENT_ID:attempt:1 -->
+This result was posted by an earlier attempt.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:114,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Comment created before current attempt is rejected" 1 "$rc"
+[ ! -s "$PATCH_LOG_FILE" ] && ok "Older result comment is never modified" || fail "Stale result comment was incorrectly patched"
 # ── Test 7: gh API failure → fail-closed ──────────────────────────────────────
 # Create a fake gh that fails
 cat > "$FAKE_BIN/gh_fail" << 'EOF'
