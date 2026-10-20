@@ -649,7 +649,7 @@ elif [ "$step_idle_timeout_detected" = "true" ]; then
     error_message="A JSONL step_start event had no corresponding step_finish or further output for ${AGENT_STEP_IDLE_TIMEOUT}s; isolated runtime process group was terminated"
 elif [ "$idle_timeout_detected" = "true" ]; then
     _status="TIMEOUT"
-    _summary="OpenCode made no stdout/stderr or active-tool JSONL progress for ${AGENT_IDLE_TIMEOUT}s; no-progress watchdog terminated the runtime"
+    _summary="OpenCode made no stdout/stderr or recognized active JSONL step/tool progress for ${AGENT_IDLE_TIMEOUT}s; no-progress watchdog terminated the runtime"
     error_type="AGENT_NO_PROGRESS_TIMEOUT"
     error_message="No stdout/stderr or active-tool JSONL progress for ${AGENT_IDLE_TIMEOUT}s; isolated runtime process group was terminated"
 elif [ "$pr_rc" -eq 124 ]; then
