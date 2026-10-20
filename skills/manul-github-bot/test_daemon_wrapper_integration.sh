@@ -91,7 +91,12 @@ if [[ "$1" == "api" ]]; then
     done
     for arg in "$@"; do
         if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
-            printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
+            if [ "$has_jq" = "true" ]; then
+                # Match jq --jq output expected by verify_result_comment().
+                printf '"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\\\nReview fix result"\\n'
+            else
+                printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
+            fi
             exit 0
         fi
         if [[ "$arg" == repos/* ]]; then
