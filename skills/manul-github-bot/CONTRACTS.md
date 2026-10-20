@@ -150,8 +150,8 @@ A `TASK_DONE` without a verified result comment is not accepted as successful co
 Recovery for a stale attempt marker is deliberately narrow: when the current
 running claim has `agentStartedAt`, the daemon may repair the marker in the
 existing comment only if exactly one non-lifecycle comment for the same task
-contains a lower numeric attempt marker and its `created_at` timestamp is at
-or after the current attempt's start. The daemon changes only the invisible
+contains a lower numeric attempt marker, carries the required `— manul 🐈`
+signature, and its `created_at` timestamp is strictly after the current attempt's start. The daemon changes only the invisible
 marker, patches the existing comment in place, and verifies the returned body
 before accepting delivery. Missing timestamps, multiple candidates, a comment
 older than the current attempt, or an API/update/read-back error remain
