@@ -1780,11 +1780,11 @@ repair_result_comment_marker() {
     reply_to_id="$(printf '%s' "$comment_url" | sed -nE 's/.*#discussion_r([0-9]+).*/\1/p')"
     [[ "$reply_to_id" =~ ^[0-9]+$ ]] || return 1
     result_endpoint="repos/$repo/pulls/$url_issue_num/comments"
-    result_filter=".[] | select(.in_reply_to_id == $reply_to_id) | {id,created_at,body:(.body // \"\")}"
+    result_filter=".[] | select(.in_reply_to_id == $reply_to_id) | {id,created_at,body:(.body // \"\")} | tojson"
     patch_collection="pulls/comments"
   else
     result_endpoint="repos/$repo/issues/$url_issue_num/comments"
-    result_filter='.[] | {id,created_at,body:(.body // "")}'
+    result_filter='.[] | {id,created_at,body:(.body // "")} | tojson'
     patch_collection="issues/comments"
   fi
 
