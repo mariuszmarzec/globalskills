@@ -727,15 +727,17 @@ git -C "$WORKDIR_W" remote add origin "$ORIGIN_W"
 git -C "$WORKDIR_W" push -q -u origin manul-task-COMMENT_W
 echo "uncommitted requested edit" >>"$WORKDIR_W/README.md"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_W';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_W','test/repo',62,'https://github.com/test/repo/issues/62#issuecomment-1062','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:COMMENT_W','test/repo',62,'https://github.com/test/repo/pull/62#discussion_r1062','user','test','task','running',1,$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutW.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
-evaluate_task_completion "test/repo" "62" "COMMENT_W" "COMMENT_W" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_W" "" "$INITIAL_HEAD_W" "manul-task-COMMENT_W" "master" "" "" "" "" ""
+TASK_ACTION="REVIEW_FIX"
+evaluate_task_completion "test/repo" "62" "review:COMMENT_W" "review:COMMENT_W" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_W" "" "$INITIAL_HEAD_W" "manul-task-COMMENT_W" "master" "" "" "manul-task-COMMENT_W" "" ""
+TASK_ACTION="IMPLEMENT"
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
-  echo "FAIL: Test W - expected dirty edit rejection, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  echo "FAIL: Test W - REVIEW_FIX must reject dirty edits even when origin SHA equals HEAD, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
   exit 1
 fi
-if ! grep -q "DELIVERY_NOT_COMMITTED.*task=COMMENT_W" "$LIFECYCLE_LOG"; then
+if ! grep -q "DELIVERY_NOT_COMMITTED.*COMMENT_W" "$LIFECYCLE_LOG"; then
   echo "FAIL: Test W - expected concrete lifecycle delivery failure log" >&2
   exit 1
 fi
