@@ -596,7 +596,7 @@ MOCK
   assert_json_status "$out" "TIMEOUT" "OpenCode no-progress watchdog reports timeout status"
   [ "$rc" -eq 124 ] && ok "OpenCode no-progress watchdog returns timeout rc" || fail "OpenCode no-progress watchdog rc=$rc"
   [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_NO_PROGRESS_TIMEOUT" ] && ok "OpenCode no-progress watchdog has distinct failure code" || fail "Wrong no-progress failure code: $(printf '%s' "$out" | jq -r '.failure_code // empty')"
-  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'no stdout/stderr or active-tool JSONL progress for 2s' && ok "OpenCode summary explains stalled progress" || fail "No-progress summary missing"
+  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'no stdout/stderr or recognized active JSONL step/tool progress for 2s' && ok "OpenCode summary explains stalled progress" || fail "No-progress summary missing"
   [ -f "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" ] && grep -Fq 'metadata' "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" && ok "OpenCode keeps partial JSONL output for diagnosis" || fail "Partial JSONL runtime output was not retained"
   grep -Fq 'no stdout/stderr or active-tool JSONL progress for 2s' "$tmp/stderr" && ok "OpenCode preserves the watchdog diagnostic in task stderr" || fail "Task stderr omitted no-progress diagnosis"
 }
