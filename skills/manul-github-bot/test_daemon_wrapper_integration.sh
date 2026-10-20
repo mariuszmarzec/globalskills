@@ -726,7 +726,7 @@ git init --bare -q "$ORIGIN_W"
 git -C "$WORKDIR_W" remote add origin "$ORIGIN_W"
 git -C "$WORKDIR_W" push -q -u origin manul-task-COMMENT_W
 echo "uncommitted requested edit" >>"$WORKDIR_W/README.md"
-sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_W';" 2>/dev/null
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:COMMENT_W';" 2>/dev/null
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:COMMENT_W','test/repo',62,'https://github.com/test/repo/pull/62#discussion_r1062','user','test','task','running',1,$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutW.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
