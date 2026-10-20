@@ -125,6 +125,15 @@ if ! [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_IDLE_TIMEOUT" -lt 1 ];
     AGENT_IDLE_TIMEOUT=900
 fi
 
+# A running JSONL tool_use event is explicit evidence that OpenCode is still
+# executing a tool. Allow it up to this bounded interval to return before
+# classifying it as a stuck tool call; the overall agent timeout still applies.
+AGENT_TOOL_IDLE_TIMEOUT="${MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT:-$(jq -r '.automation.agentToolNoProgressTimeoutSeconds // 3600' "${MANUL_CONFIG:-/dev/null}" 2>/dev/null || echo 3600)}"
+if ! [[ "$AGENT_TOOL_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TOOL_IDLE_TIMEOUT" -lt 1 ]; then
+    printf '[%s] opencode-adapter: WARN: invalid active-tool timeout; using default 3600s\n' "$(date -Is)" >>"$OPT_STDERR_FILE"
+    AGENT_TOOL_IDLE_TIMEOUT=3600
+fi
+
 CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 PERMISSION_RECOVERY_PROMPT="A tool call was rejected by the OpenCode permission policy. Do not repeat the denied operation, rephrase it, split it into smaller calls, or try to reach the same denied resource through another tool, path, symlink, wrapper, subagent, or command. Do not change or bypass permissions. Re-evaluate the original task goal and choose an independent alternative that stays inside the assigned workspace and uses currently allowed capabilities. For build diagnostics, prefer rerunning the repository's documented command with useful flags and save a concise, secret-free log under the task workspace (for example, tmp/diagnostics/). If no safe alternative can provide the required evidence, explain exactly what is missing and why, preserve all completed work, and emit TASK_FAILED with a concise reason. Never claim success without verification."
 AGENT_ARGS=()
@@ -297,6 +306,7 @@ session_id="$OPT_SESSION_ID"
 pr_rc=1
 final_step_limit_detected="false"
 idle_timeout_detected="false"
+tool_idle_timeout_detected="false"
 internal_continuations_used=0
 run_index=0
 permission_recovery_used=0
@@ -304,7 +314,7 @@ permission_recovery_pending=false
 current_stderr_error_message=""
 execution_start_epoch="$(date +%s)"
 
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s no_progress_timeout=${AGENT_IDLE_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s no_progress_timeout=${AGENT_IDLE_TIMEOUT}s active_tool_timeout=${AGENT_TOOL_IDLE_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
 
 # One timeout budget spans the first call and all internal continuations.
 # These resumes happen before the adapter returns, so they do not finish or
@@ -346,6 +356,8 @@ while true; do
     local_runner_result="$(ProcessRunner.run \
         --timeout "$remaining_timeout" \
         --idle-timeout "$AGENT_IDLE_TIMEOUT" \
+        --idle-jsonl-file "$CURRENT_RUN_STDOUT_FILE" \
+        --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
         -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
             "${AUTO_ARGS[@]}" \
@@ -356,7 +368,11 @@ while true; do
             < "$CURRENT_RUN_PROMPT_FILE")"
     pr_rc=$?
     runner_timeout_reason="$(printf '%s\n' "$local_runner_result" | head -n 1 | cut -d'|' -f5)"
-    if [ "$runner_timeout_reason" = "idle_timeout" ]; then
+    if [ "$runner_timeout_reason" = "tool_idle_timeout" ]; then
+        tool_idle_timeout_detected="true"
+        error_type="AGENT_TOOL_NO_PROGRESS_TIMEOUT"
+        log "active-tool watchdog fired task=$OPT_TASK_ID attempt=$OPT_ATTEMPT threshold=${AGENT_TOOL_IDLE_TIMEOUT}s; JSONL/stderr artifacts retained"
+    elif [ "$runner_timeout_reason" = "idle_timeout" ]; then
         idle_timeout_detected="true"
         error_type="AGENT_NO_PROGRESS_TIMEOUT"
         log "no-progress watchdog fired task=$OPT_TASK_ID attempt=$OPT_ATTEMPT threshold=${AGENT_IDLE_TIMEOUT}s; JSONL/stderr artifacts retained"
@@ -606,11 +622,16 @@ if [ -z "$error_message" ] && [ -n "$current_stderr_error_message" ]; then
     fi
 fi
 
-if [ "$idle_timeout_detected" = "true" ]; then
+if [ "$tool_idle_timeout_detected" = "true" ]; then
     _status="TIMEOUT"
-    _summary="OpenCode made no stdout/stderr progress for ${AGENT_IDLE_TIMEOUT}s; no-progress watchdog terminated the runtime"
+    _summary="OpenCode tool call remained active without completion for ${AGENT_TOOL_IDLE_TIMEOUT}s; tool watchdog terminated the runtime"
+    error_type="AGENT_TOOL_NO_PROGRESS_TIMEOUT"
+    error_message="An OpenCode JSONL tool_use event remained active for ${AGENT_TOOL_IDLE_TIMEOUT}s without completion; isolated runtime process group was terminated"
+elif [ "$idle_timeout_detected" = "true" ]; then
+    _status="TIMEOUT"
+    _summary="OpenCode made no stdout/stderr or active-tool JSONL progress for ${AGENT_IDLE_TIMEOUT}s; no-progress watchdog terminated the runtime"
     error_type="AGENT_NO_PROGRESS_TIMEOUT"
-    error_message="No stdout/stderr progress for ${AGENT_IDLE_TIMEOUT}s; isolated runtime process group was terminated"
+    error_message="No stdout/stderr or active-tool JSONL progress for ${AGENT_IDLE_TIMEOUT}s; isolated runtime process group was terminated"
 elif [ "$pr_rc" -eq 124 ]; then
     _status="TIMEOUT"
     _summary="OpenCode execution timed out after ${AGENT_TIMEOUT}s"
@@ -681,7 +702,15 @@ case "$_status" in
             *)                         failure_code="RUNTIME_FAILURE" ;;
         esac
         ;;
-    TIMEOUT)            if [ "$idle_timeout_detected" = "true" ]; then failure_code="AGENT_NO_PROGRESS_TIMEOUT"; else failure_code="RUNTIME_TIMEOUT"; fi ;;
+    TIMEOUT)
+        if [ "$tool_idle_timeout_detected" = "true" ]; then
+            failure_code="AGENT_TOOL_NO_PROGRESS_TIMEOUT"
+        elif [ "$idle_timeout_detected" = "true" ]; then
+            failure_code="AGENT_NO_PROGRESS_TIMEOUT"
+        else
+            failure_code="RUNTIME_TIMEOUT"
+        fi
+        ;;
     BLOCKED)            failure_code="TASK_NEEDS_USER" ;;
     NEEDS_CONTINUATION) failure_code="NEEDS_CONTINUATION" ;;
     COMPLETED)          failure_code="" ;;
