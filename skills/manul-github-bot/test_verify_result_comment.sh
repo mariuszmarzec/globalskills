@@ -355,7 +355,7 @@ COMMENT_ID="result-repair"
 COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-repair"
 insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
 sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
-STALE_BODY="<!-- manul-task:\${COMMENT_ID}:attempt:1 -->
+STALE_BODY="<!-- manul-task:${COMMENT_ID}:attempt:1 -->
 The implementation finished on the third execution.
 — manul 🐈"
 jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:113,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
@@ -363,13 +363,13 @@ jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:113,in_reply
 verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
 rc=$?
 assert_rc "Unique current-run result marker is repaired in place for attempt 3" 0 "$rc"
-if grep -Fq "<!-- manul-task:\${COMMENT_ID}:attempt:3 -->" "$PATCH_LOG_FILE" &&
+if grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:3 -->" "$PATCH_LOG_FILE" &&
    grep -Fq "repos/owner/repo/issues/comments/113" "$PATCH_LOG_FILE"; then
     ok "Marker repair PATCH targets the existing result comment and uses current attempt"
 else
     fail "Marker repair PATCH request is missing or targets the wrong comment"
 fi
-if ! grep -Fq "<!-- manul-task:\${COMMENT_ID}:attempt:1 -->" "$PATCH_LOG_FILE"; then
+if ! grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:1 -->" "$PATCH_LOG_FILE"; then
     ok "Marker repair replaces stale attempt marker rather than duplicating the comment"
 else
     fail "Marker repair request retained the stale marker"
