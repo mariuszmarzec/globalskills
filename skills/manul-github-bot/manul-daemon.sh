@@ -1751,6 +1751,110 @@ handle_pre_execution_failure() {
   return 0
 }
 
+# Repair the invisible attempt marker only when one unique result comment for this
+# exact task was created after the current attempt started. Agents occasionally copy
+# a stale attempt number from a previous GitHub comment; editing that marker in place
+# preserves the one-result-comment contract while keeping stale earlier-attempt
+# comments ineligible for success.
+repair_result_comment_marker() {
+  local repo="$1" issue="$2" comment_id="$3" safe_comment_id="$4" attempt="$5"
+  local safe_key comment_url agent_started_at url_issue_num started_epoch
+  local marker marker_prefix result_endpoint result_filter patch_collection reply_to_id
+  local tmpdir comments_file candidate response_file candidate_count
+  local body created_at candidate_epoch marker_tail candidate_attempt candidate_id
+  local selected_body selected_id selected_attempt old_marker repaired_body request_file
+
+  [[ "$attempt" =~ ^[0-9]+$ ]] || return 1
+  safe_key="$(sql_escape "$safe_comment_id")"
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_key';" 2>/dev/null)"
+  agent_started_at="$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'') FROM processed_comments WHERE commentId='$safe_key';" 2>/dev/null)"
+  [ -n "$comment_url" ] && [ -n "$agent_started_at" ] || return 1
+  url_issue_num="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || true)"
+  [ -n "$url_issue_num" ] || return 1
+  started_epoch="$(date -u -d "$agent_started_at" +%s 2>/dev/null || true)"
+  [[ "$started_epoch" =~ ^[0-9]+$ ]] || return 1
+
+  marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
+  marker_prefix="<!-- manul-task:${comment_id}:attempt:"
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    reply_to_id="$(printf '%s' "$comment_url" | sed -nE 's/.*#discussion_r([0-9]+).*/\1/p')"
+    [[ "$reply_to_id" =~ ^[0-9]+$ ]] || return 1
+    result_endpoint="repos/$repo/pulls/$url_issue_num/comments"
+    result_filter=".[] | select(.in_reply_to_id == $reply_to_id) | {id,created_at,body:(.body // \"\")}"
+    patch_collection="pulls/comments"
+  else
+    result_endpoint="repos/$repo/issues/$url_issue_num/comments"
+    result_filter='.[] | {id,created_at,body:(.body // "")}'
+    patch_collection="issues/comments"
+  fi
+
+  tmpdir="$(mktemp -d)" || return 1
+  comments_file="$tmpdir/comments.jsonl"
+  response_file="$tmpdir/patch-response.json"
+  request_file="$tmpdir/patch-request.json"
+  if ! timeout "${GH_API_TIMEOUT:-30}" gh api "$result_endpoint" --paginate --jq "$result_filter" 2>>"$LOG" >"$comments_file"; then
+    log "WARN: result-marker repair could not list comments for task $comment_id attempt $attempt"
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  candidate_count=0
+  selected_body=""
+  selected_id=""
+  selected_attempt=""
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    body="$(printf '%s' "$candidate" | jq -r '.body // ""' 2>/dev/null)"
+    [[ "$body" == '🔄'* || "$body" == '✅'* || "$body" == '❌'* || "$body" == '⚠️'* ]] && continue
+    [[ "$body" == *"$marker_prefix"* ]] || continue
+
+    marker_tail="${body#*"$marker_prefix"}"
+    candidate_attempt="${marker_tail%% -->*}"
+    [[ "$candidate_attempt" =~ ^[0-9]+$ ]] || continue
+    [ "$candidate_attempt" -lt "$attempt" ] || continue
+
+    created_at="$(printf '%s' "$candidate" | jq -r '.created_at // ""' 2>/dev/null)"
+    candidate_epoch="$(date -u -d "$created_at" +%s 2>/dev/null || true)"
+    [[ "$candidate_epoch" =~ ^[0-9]+$ ]] || continue
+    # The timestamp guard prevents a previous attempt's legitimate result from
+    # being mistaken for the current agent's comment.
+    [ "$candidate_epoch" -ge "$started_epoch" ] || continue
+
+    candidate_id="$(printf '%s' "$candidate" | jq -r '.id // empty' 2>/dev/null)"
+    [[ "$candidate_id" =~ ^[0-9]+$ ]] || continue
+    candidate_count=$((candidate_count + 1))
+    selected_body="$body"
+    selected_id="$candidate_id"
+    selected_attempt="$candidate_attempt"
+  done < "$comments_file"
+
+  if [ "$candidate_count" -ne 1 ]; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  old_marker="<!-- manul-task:${comment_id}:attempt:${selected_attempt} -->"
+  [[ "$selected_body" == *"$old_marker"* ]] || { rm -rf "$tmpdir"; return 1; }
+  repaired_body="${selected_body/"$old_marker"/"$marker"}"
+  printf '%s' "$repaired_body" | jq -Rs '{body:.}' >"$request_file"
+
+  if ! timeout "${GH_API_TIMEOUT:-30}" gh api "repos/$repo/$patch_collection/$selected_id" --method PATCH --input - <"$request_file" >"$response_file" 2>>"$LOG"; then
+    log "ERROR: result-marker repair failed to update comment $selected_id for task $comment_id"
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! jq -e --arg marker "$marker" '(.body // "") | contains($marker)' "$response_file" >/dev/null 2>&1; then
+    log "ERROR: result-marker repair response did not confirm marker for task $comment_id attempt $attempt"
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  log "verify_result_comment: repaired stale marker attempt=$selected_attempt to current attempt=$attempt in existing comment $selected_id for task $comment_id"
+  lc_log "RESULT_MARKER_REPAIRED" "task=$comment_id repo=$repo issue=$url_issue_num previous_attempt=$selected_attempt attempt=$attempt comment_id=$selected_id"
+  rm -rf "$tmpdir"
+  return 0
+}
+
 # Verify the agent posted a result comment to GitHub for THIS exact task/attempt.
 # Uses deterministic task/attempt marker: <!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
 # Fails closed on any error (missing commentUrl, API failure, no matching comment).
@@ -1850,6 +1954,15 @@ verify_result_comment() {
   fi
 
   rm -rf "$tmpdir"
+
+  # Last-resort recovery for the known LLM failure mode: a unique result comment
+  # for this task was posted by the current execution but copied an older attempt
+  # number. The helper repairs the invisible marker in-place only after checking
+  # task identity, unique candidate count, and the current agentStartedAt window.
+  if repair_result_comment_marker "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
+    log "verify_result_comment: recovered result comment with stale attempt marker for task $comment_id attempt $attempt"
+    return 0
+  fi
 
   log "ERROR: verify_result_comment: no result comment with marker '$marker' found for task $comment_id attempt $attempt on $repo#$url_issue_num"
   return 1
