@@ -198,7 +198,7 @@ ProcessRunner.run() {
                     ProcessRunner_Rc=127
                 fi
                 if [ -z "${ProcessRunner_Rc:-}" ]; then
-                    local idle_runner_pid idle_last_progress idle_now idle_out_size idle_err_size idle_prev_out idle_prev_err idle_state idle_pgid idle_tool_status idle_tool_started idle_step_status idle_step_started
+                    local idle_runner_pid idle_last_progress idle_now idle_out_size idle_err_size idle_prev_out idle_prev_err idle_state idle_pgid idle_tool_status idle_tool_started idle_step_status idle_step_started idle_output_changed
                     idle_runner_pid=$!
                     idle_last_progress="$(date +%s)"
                     idle_tool_started=""
@@ -217,6 +217,20 @@ ProcessRunner.run() {
                         case "$idle_state" in ""|*Z*) break ;; esac
 
                         idle_now="$(date +%s)"
+                        # Measure file growth before checking active-step/tool
+                        # timers so newly emitted JSONL/stderr progress refreshes
+                        # those bounded idle windows before any timeout decision.
+                        idle_output_changed="false"
+                        idle_out_size="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
+                        idle_err_size="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
+                        if [ "$idle_out_size" != "$idle_prev_out" ] || [ "$idle_err_size" != "$idle_prev_err" ]; then
+                            idle_last_progress="$idle_now"
+                            [ -n "$idle_tool_started" ] && idle_tool_started="$idle_now"
+                            [ -n "$idle_step_started" ] && idle_step_started="$idle_now"
+                            idle_prev_out="$idle_out_size"
+                            idle_prev_err="$idle_err_size"
+                            idle_output_changed="true"
+                        fi
                         idle_tool_status=""
                         if [ -n "$idle_jsonl_file" ] && [ -s "$idle_jsonl_file" ]; then
                             # OpenCode can spend a long time inside one tool call.
@@ -313,12 +327,7 @@ ProcessRunner.run() {
                             idle_step_started=""
                         fi
 
-                        idle_out_size="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
-                        idle_err_size="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
-                        if [ "$idle_out_size" != "$idle_prev_out" ] || [ "$idle_err_size" != "$idle_prev_err" ]; then
-                            idle_last_progress="$idle_now"
-                            idle_prev_out="$idle_out_size"
-                            idle_prev_err="$idle_err_size"
+                        if [ "$idle_output_changed" = "true" ]; then
                             continue
                         fi
                         if [ "$((idle_now - idle_last_progress))" -ge "$idle_timeout" ]; then
