@@ -274,7 +274,7 @@ ProcessRunner.run() {
                             # long model/tool operations emit no further CLI output
                             # until they finish, so a trailing unfinished step is
                             # bounded active work even when stdout/stderr are quiet.
-                            idle_step_status="$(tail -n 200 "$idle_jsonl_file" 2>/dev/null |
+                            idle_step_status="$(tail -n 2000 "$idle_jsonl_file" 2>/dev/null |
                                 jq -Rr 'try fromjson catch empty | select(.type == "step_start" or .type == "step_finish") | .type' 2>/dev/null |
                                 awk 'NF { value=$0 } END { print value }')"
                         else
@@ -323,7 +323,7 @@ ProcessRunner.run() {
                         fi
                         if [ "$((idle_now - idle_last_progress))" -ge "$idle_timeout" ]; then
                             if [ -n "$idle_jsonl_file" ]; then
-                                printf 'ProcessRunner: no stdout/stderr or active-tool JSONL progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
+                                printf 'ProcessRunner: no stdout/stderr or recognized active JSONL step/tool progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
                             else
                                 printf 'ProcessRunner: no stdout/stderr progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
                             fi
