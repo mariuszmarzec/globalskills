@@ -395,14 +395,21 @@ the daemon's existing retry/session handling remains authoritative.
 
 The OpenCode adapter applies `automation.agentNoProgressTimeoutSeconds`
 (default `900`) to the current run's stdout/stderr stream. A fresh JSONL
-event or stderr write resets the idle timer; a heartbeat alone does not. When
-the most recent OpenCode `tool_use` event explicitly reports a running/pending
-tool, the generic idle timer pauses while that tool call is active. That state
-has its own bounded `automation.agentToolNoProgressTimeoutSeconds` (default
-`3600`, overridable with `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`) so a
-hung tool cannot disable timeout protection indefinitely. On expiry,
-`ProcessRunner` terminates only the isolated runtime process group and returns
-`AGENT_NO_PROGRESS_TIMEOUT` for generic idle or
+event or stderr write resets the generic idle timer; a heartbeat alone does
+not. OpenCode CLI JSON streams may not emit a `tool_use` event until the tool
+has completed, so an unfinished `step_start` without a corresponding
+`step_finish` is also treated as bounded active model/tool work. During that
+unfinished step, the generic idle timer pauses but
+`automation.agentStepNoProgressTimeoutSeconds` (default `3600`, overridable
+with `MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT`) remains a hard limit. If the
+JSONL stream explicitly reports a running/pending tool, the adapter separately
+applies `automation.agentToolNoProgressTimeoutSeconds` (default `3600`,
+overridable with `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`). Thus model/tool
+work is not killed by the shorter generic idle budget, but neither an active
+step nor an active tool can suppress timeouts indefinitely. On expiry,
+`ProcessRunner` terminates only the isolated runtime process group and
+returns `AGENT_NO_PROGRESS_TIMEOUT` for generic idle,
+`AGENT_STEP_NO_PROGRESS_TIMEOUT` for an unfinished JSONL step, or
 `AGENT_TOOL_NO_PROGRESS_TIMEOUT` for an active tool that never completes.
 The aggregate JSONL log and stderr diagnostics are retained for task recovery. This timeout is
 independent of the overall agent timeout and of the daemon lease/heartbeat.
@@ -551,7 +558,10 @@ Failure codes must be stable and actionable:
 - `RUNTIME_PERMISSION_BLOCKED` — runtime rejected a tool call because of a permission boundary.
 - `PROVIDER_ERROR` — provider returned a structured runtime/provider error.
 - `RUNTIME_FAILURE` — generic runtime execution failure.
-- `RUNTIME_TIMEOUT` — runtime execution timed out.
+- `RUNTIME_TIMEOUT` — the overall runtime execution budget expired.
+- `AGENT_NO_PROGRESS_TIMEOUT` — neither runtime output nor recognized JSONL activity progressed within the idle budget.
+- `AGENT_STEP_NO_PROGRESS_TIMEOUT` — an OpenCode `step_start` remained unfinished past the bounded active-step budget.
+- `AGENT_TOOL_NO_PROGRESS_TIMEOUT` — an explicitly active OpenCode tool call failed to complete within its bounded budget.
 - `TASK_NEEDS_USER` — structured user decision is required.
 - `NEEDS_CONTINUATION` — runtime can continue an existing session.
 - `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion; the dirty workspace is preserved for diagnosis and must not be treated as delivered.
