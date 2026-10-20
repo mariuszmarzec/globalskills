@@ -53,7 +53,9 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
             --head) i=$((i+1)); head="${!i}" ;;
         esac
     done
-    if [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
+    if [ "$head" = "manul-task-COMMENT_X" ]; then
+        printf '[{"number":999,"url":"https://github.com/test/repo/pull/999","state":"OPEN","baseRefName":"master","headRefName":"manul-task-COMMENT_X"}]\\n'
+    elif [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
         printf '['
         first=1
         while read -r h b; do
