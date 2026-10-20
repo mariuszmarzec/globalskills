@@ -2762,6 +2762,12 @@ evaluate_task_completion() {
           FAIL_REASON="PR review task changed repository on unexpected branch ($current_branch, expected $PR_HEAD_BRANCH)"
           log "dispatch: task $COMMENT_ID changed repository on unexpected PR branch $current_branch (expected $PR_HEAD_BRANCH)"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=unexpected_pr_branch branch=$current_branch expected=$PR_HEAD_BRANCH"
+        elif [ "$repo_state_clean" != "true" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="DELIVERY_NOT_COMMITTED"
+          FAIL_REASON="Delivery rejected: TASK_DONE left uncommitted repository changes on PR head branch $current_branch (${repo_state_issues% })"
+          log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on PR head branch $current_branch (${repo_state_issues% })"
+          lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
         else
           log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
         fi
