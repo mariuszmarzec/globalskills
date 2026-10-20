@@ -8,7 +8,7 @@
 #
 # The production return value begins with one protocol line:
 #   exit_code|duration_seconds|interrupted|timed_out[|timeout_reason]
-# timeout_reason is present for idle_timeout or tool_idle_timeout, and absent
+# timeout_reason is present for idle_timeout, step_idle_timeout, or tool_idle_timeout, and absent
 # for normal completion / the generic wall-clock timeout. Adapter output is
 # written to the supplied stdout/stderr files; no runtime JSONL is mixed into
 # this protocol line.
@@ -27,7 +27,7 @@
 #   # ProcessRunner.run returns the fixture output instead of spawning.
 #
 # Public API:
-#   ProcessRunner.run [--timeout N] [--idle-timeout N] [--idle-jsonl-file PATH] [--idle-tool-timeout N] [--cwd PATH] [--env K=V ...] <COMMAND> [ARGS...]
+#   ProcessRunner.run [--timeout N] [--idle-timeout N] [--idle-jsonl-file PATH] [--idle-tool-timeout N] [--idle-step-timeout N] [--cwd PATH] [--env K=V ...] <COMMAND> [ARGS...]
 #     → stdout: protocol line exit_code|duration|interrupted|timed_out[|timeout_reason]
 #     → adapter stdout/stderr are captured in caller-supplied files when present
 #
