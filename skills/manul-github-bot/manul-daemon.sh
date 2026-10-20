@@ -2777,12 +2777,6 @@ evaluate_task_completion() {
         FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch (${repo_state_issues% })"
         log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
         lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
-      elif [ "$repo_state_clean" != "true" ]; then
-        SUCCESS="false"
-        FAILURE_CODE="DELIVERY_NOT_COMMITTED"
-        FAIL_REASON="Delivery rejected: TASK_DONE left uncommitted repository changes on branch $current_branch (${repo_state_issues% })"
-        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
-        lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
