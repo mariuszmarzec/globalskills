@@ -53,6 +53,7 @@ ProcessRunner_WaitPid=""
 ProcessRunner_Rc=""
 ProcessRunner_TimedOut=""
 ProcessRunner_ToolIdleTimedOut="false"
+ProcessRunner_StepIdleTimedOut="false"
 ProcessRunner_Interrupted=""
 
 # Track whether ProcessRunner created the stdout/stderr temp files itself.
@@ -89,12 +90,13 @@ ProcessRunner.override() {
 }
 
 ProcessRunner.run() {
-    local timeout="" idle_timeout="" idle_jsonl_file="" idle_tool_timeout="" cwd="" env_args=() cmd_args=()
+    local timeout="" idle_timeout="" idle_jsonl_file="" idle_tool_timeout="" idle_step_timeout="" cwd="" env_args=() cmd_args=()
     ProcessRunner_Rc=""
     ProcessRunner_Interrupted="false"
     ProcessRunner_TimedOut="false"
     ProcessRunner_IdleTimedOut="false"
     ProcessRunner_ToolIdleTimedOut="false"
+    ProcessRunner_StepIdleTimedOut="false"
     ProcessRunner_ManagedStdout=""
     ProcessRunner_ManagedStderr=""
 
@@ -104,6 +106,7 @@ ProcessRunner.run() {
             --idle-timeout) idle_timeout="$2"; shift 2 ;;
             --idle-jsonl-file) idle_jsonl_file="$2"; shift 2 ;;
             --idle-tool-timeout) idle_tool_timeout="$2"; shift 2 ;;
+            --idle-step-timeout) idle_step_timeout="$2"; shift 2 ;;
             --cwd)     cwd="$2";     shift 2 ;;
             --env)     env_args+=("$2"); shift 2 ;;
             --)        shift; cmd_args+=("$@"); break ;;
@@ -195,12 +198,16 @@ ProcessRunner.run() {
                     ProcessRunner_Rc=127
                 fi
                 if [ -z "${ProcessRunner_Rc:-}" ]; then
-                    local idle_runner_pid idle_last_progress idle_now idle_out_size idle_err_size idle_prev_out idle_prev_err idle_state idle_pgid idle_tool_status idle_tool_started
+                    local idle_runner_pid idle_last_progress idle_now idle_out_size idle_err_size idle_prev_out idle_prev_err idle_state idle_pgid idle_tool_status idle_tool_started idle_step_status idle_step_started
                     idle_runner_pid=$!
                     idle_last_progress="$(date +%s)"
                     idle_tool_started=""
+                    idle_step_started=""
                     if ! [[ "$idle_tool_timeout" =~ ^[0-9]+$ ]] || [ "$idle_tool_timeout" -lt 1 ]; then
                         idle_tool_timeout=3600
+                    fi
+                    if ! [[ "$idle_step_timeout" =~ ^[0-9]+$ ]] || [ "$idle_step_timeout" -lt 1 ]; then
+                        idle_step_timeout=3600
                     fi
                     idle_prev_out="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
                     idle_prev_err="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
@@ -261,6 +268,51 @@ ProcessRunner.run() {
                                 ;;
                         esac
 
+                        if [ -n "$idle_jsonl_file" ] && [ -s "$idle_jsonl_file" ]; then
+                            # opencode run --format json emits step_start before
+                            # its model/tool work and step_finish at the end. Some
+                            # long model/tool operations emit no further CLI output
+                            # until they finish, so a trailing unfinished step is
+                            # bounded active work even when stdout/stderr are quiet.
+                            idle_step_status="$(tail -n 200 "$idle_jsonl_file" 2>/dev/null |
+                                jq -Rr 'try fromjson catch empty | select(.type == "step_start" or .type == "step_finish") | .type' 2>/dev/null |
+                                awk 'NF { value=$0 } END { print value }')"
+                        else
+                            idle_step_status=""
+                        fi
+                        if [ "$idle_step_status" = "step_start" ]; then
+                            [ -n "$idle_step_started" ] || idle_step_started="$idle_now"
+                            if [ "$((idle_now - idle_step_started))" -ge "$idle_step_timeout" ]; then
+                                printf 'ProcessRunner: OpenCode step remained unfinished without output for %ss; terminating isolated runtime process group\n' "$idle_step_timeout" >>"$err_file"
+                                idle_pgid="$(ps -o pgid= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
+                                if [ "$idle_pgid" = "$idle_runner_pid" ]; then
+                                    kill -TERM -- "-$idle_runner_pid" 2>/dev/null || true
+                                else
+                                    kill -TERM "$idle_runner_pid" 2>/dev/null || true
+                                fi
+                                sleep 2
+                                idle_state="$(ps -o stat= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
+                                case "$idle_state" in
+                                    ""|*Z*) ;;
+                                    *)
+                                        if [ "$idle_pgid" = "$idle_runner_pid" ]; then
+                                            kill -KILL -- "-$idle_runner_pid" 2>/dev/null || true
+                                        else
+                                            kill -KILL "$idle_runner_pid" 2>/dev/null || true
+                                        fi
+                                        ;;
+                                esac
+                                wait "$idle_runner_pid" 2>/dev/null || true
+                                ProcessRunner_Rc=124
+                                ProcessRunner_TimedOut="true"
+                                ProcessRunner_StepIdleTimedOut="true"
+                                break
+                            fi
+                            idle_last_progress="$idle_now"
+                        else
+                            idle_step_started=""
+                        fi
+
                         idle_out_size="$(stat -c '%s' "$out_file" 2>/dev/null || echo 0)"
                         idle_err_size="$(stat -c '%s' "$err_file" 2>/dev/null || echo 0)"
                         if [ "$idle_out_size" != "$idle_prev_out" ] || [ "$idle_err_size" != "$idle_prev_err" ]; then
@@ -300,7 +352,7 @@ ProcessRunner.run() {
                             break
                         fi
                     done
-                    if [ "${ProcessRunner_IdleTimedOut:-false}" != "true" ] && [ "${ProcessRunner_ToolIdleTimedOut:-false}" != "true" ]; then
+                    if [ "${ProcessRunner_IdleTimedOut:-false}" != "true" ] && [ "${ProcessRunner_ToolIdleTimedOut:-false}" != "true" ] && [ "${ProcessRunner_StepIdleTimedOut:-false}" != "true" ]; then
                         wait "$idle_runner_pid"
                         ProcessRunner_Rc=$?
                         if [ "$ProcessRunner_Rc" -eq 124 ]; then ProcessRunner_TimedOut="true"; fi
@@ -338,6 +390,8 @@ ProcessRunner.run() {
 
     if [ "${ProcessRunner_ToolIdleTimedOut:-false}" = "true" ]; then
         printf '%s|%s|false|true|tool_idle_timeout\n' "$ProcessRunner_Rc" "$dur"
+    elif [ "${ProcessRunner_StepIdleTimedOut:-false}" = "true" ]; then
+        printf '%s|%s|false|true|step_idle_timeout\n' "$ProcessRunner_Rc" "$dur"
     elif [ "${ProcessRunner_IdleTimedOut:-false}" = "true" ]; then
         printf '%s|%s|false|true|idle_timeout\n' "$ProcessRunner_Rc" "$dur"
     else
