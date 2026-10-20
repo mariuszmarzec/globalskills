@@ -682,7 +682,7 @@ MOCK
   [ "$rc" -eq 124 ] && ok "Active-step timeout returns timeout exit code" || fail "Active-step timeout rc=$rc"
   [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_STEP_NO_PROGRESS_TIMEOUT" ] && ok "Active-step timeout has a distinct failure code" || fail "Wrong active-step failure code"
   printf '%s' "$out" | jq -r '.summary' | grep -Fq 'step remained unfinished without JSONL output for 2s' && ok "Active-step timeout explains the missing step_finish" || fail "Active-step timeout summary missing"
-  grep -Fq 'AGENT_STEP_NO_PROGRESS_TIMEOUT' "$tmp/stderr" && ok "Active-step timeout is recorded in task logs" || fail "Active-step timeout log missing"
+  grep -Fq 'OpenCode step remained unfinished without output for 2s' "$tmp/stderr" && ok "Active-step timeout is recorded in task stderr" || fail "Active-step timeout diagnostic missing"
 }
 
 # ---------------------------------------------------------------------------
@@ -709,7 +709,7 @@ MOCK
   [ "$rc" -eq 124 ] && ok "OpenCode active-tool timeout returns timeout exit code" || fail "Active-tool timeout rc=$rc"
   [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_TOOL_NO_PROGRESS_TIMEOUT" ] && ok "Active-tool timeout has its own failure code" || fail "Wrong active-tool failure code"
   printf '%s' "$out" | jq -r '.summary' | grep -Fq 'tool call remained active without completion for 2s' && ok "Active-tool timeout explains its cause" || fail "Active-tool timeout summary missing"
-  grep -Fq 'AGENT_TOOL_NO_PROGRESS_TIMEOUT' "$tmp/stderr" && ok "Active-tool timeout is recorded in task logs" || fail "Active-tool timeout log missing"
+  grep -Fq 'OpenCode JSONL tool call remained active without completion for 2s' "$tmp/stderr" && ok "Active-tool timeout is recorded in task stderr" || fail "Active-tool timeout diagnostic missing"
 }
 
 # ---------------------------------------------------------------------------
