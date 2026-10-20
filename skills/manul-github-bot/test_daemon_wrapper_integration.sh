@@ -70,14 +70,6 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
     exit 0
 fi
 if [[ "$1" == "api" ]]; then
-    # Return the valid result marker for the PR-review regression only when
-    # the exact endpoint is requested by verify_result_comment().
-    for arg in "$@"; do
-        if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
-            printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
-            exit 0
-        fi
-    done
     has_jq=false
     method_patch=false
     body_value=""
@@ -98,6 +90,10 @@ if [[ "$1" == "api" ]]; then
         fi
     done
     for arg in "$@"; do
+        if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
+            printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
+            exit 0
+        fi
         if [[ "$arg" == repos/* ]]; then
             path="$arg"
             path="${path#repos/}"
