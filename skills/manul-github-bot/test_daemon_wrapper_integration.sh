@@ -793,7 +793,7 @@ git -C "$WORKDIR_Y" add README.md
 git -C "$WORKDIR_Y" commit -qm "verified implementation"
 git -C "$WORKDIR_Y" push -q -u origin manul-task-COMMENT_Y
 # Simulate the real PR discovered by gh pr list for this exact branch/base.
-printf '%s %s\\n' "manul-task-COMMENT_Y" "master" >>"$FAKE_GH_STATE"
+printf '%s %s\n' "manul-task-COMMENT_Y" "master" >>"$FAKE_GH_STATE"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Y';" 2>/dev/null
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Y','test/repo',64,'https://github.com/test/repo/issues/64#issuecomment-1064','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutY.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
