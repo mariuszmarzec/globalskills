@@ -70,8 +70,8 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
     exit 0
 fi
 if [[ "$1" == "api" ]]; then
-    # Review result comments are fetched from the PR review-comments endpoint.
-    # Test PR's review-task fixture must be exposed through that exact endpoint.
+    # Return the valid result marker for the PR-review regression only when
+    # the exact endpoint is requested by verify_result_comment().
     for arg in "$@"; do
         if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
             printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
