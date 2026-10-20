@@ -692,6 +692,72 @@ if [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
 fi
 echo "[OK] Test N: PASSED (FAILURE_CODE=$FAILURE_CODE)"
 
+# ─── Test W: remote SHA equals HEAD but dirty requested edits are not delivered
+echo ""
+echo "=== Test W: remote SHA equals HEAD + dirty changes -> DELIVERY_NOT_COMMITTED ==="
+WORKDIR_W="$TEST_TMPDIR/workdir-w"
+mkdir -p "$WORKDIR_W"
+git -C "$WORKDIR_W" init -q
+git -C "$WORKDIR_W" config user.email test@example.com
+git -C "$WORKDIR_W" config user.name test
+printf "baseline\\n" >"$WORKDIR_W/README.md"
+git -C "$WORKDIR_W" add README.md
+git -C "$WORKDIR_W" commit -qm initial
+INITIAL_HEAD_W="$(git -C "$WORKDIR_W" rev-parse HEAD)"
+git -C "$WORKDIR_W" checkout -qb manul-task-COMMENT_W
+ORIGIN_W="$TEST_TMPDIR/origin-w.git"
+git init --bare -q "$ORIGIN_W"
+git -C "$WORKDIR_W" remote add origin "$ORIGIN_W"
+git -C "$WORKDIR_W" push -q -u origin manul-task-COMMENT_W
+echo "uncommitted requested edit" >>"$WORKDIR_W/README.md"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_W';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_W','test/repo',62,'https://github.com/test/repo/issues/62#issuecomment-1062','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutW.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+evaluate_task_completion "test/repo" "62" "COMMENT_W" "COMMENT_W" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_W" "" "$INITIAL_HEAD_W" "manul-task-COMMENT_W" "master" "" "" "" "" ""
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
+  echo "FAIL: Test W - expected dirty edit rejection, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+if ! grep -q "DELIVERY_NOT_COMMITTED.*task=COMMENT_W" "$LIFECYCLE_LOG"; then
+  echo "FAIL: Test W - expected concrete lifecycle delivery failure log" >&2
+  exit 1
+fi
+echo "[OK] Test W: remote SHA equals HEAD does not mask uncommitted edits"
+
+# ─── Test X: missing result marker cannot be reported as successful delivery
+echo ""
+echo "=== Test X: missing result marker -> DELIVERY_COMMENT_MISSING ==="
+WORKDIR_X="$TEST_TMPDIR/workdir-x"
+mkdir -p "$WORKDIR_X"
+git -C "$WORKDIR_X" init -q
+git -C "$WORKDIR_X" config user.email test@example.com
+git -C "$WORKDIR_X" config user.name test
+printf "baseline\\n" >"$WORKDIR_X/README.md"
+git -C "$WORKDIR_X" add README.md
+git -C "$WORKDIR_X" commit -qm initial
+INITIAL_HEAD_X="$(git -C "$WORKDIR_X" rev-parse HEAD)"
+git -C "$WORKDIR_X" checkout -qb manul-task-COMMENT_X
+echo "implementation change" >>"$WORKDIR_X/README.md"
+git -C "$WORKDIR_X" add README.md
+git -C "$WORKDIR_X" commit -qm "implementation change"
+ORIGIN_X="$TEST_TMPDIR/origin-x.git"
+git init --bare -q "$ORIGIN_X"
+git -C "$WORKDIR_X" remote add origin "$ORIGIN_X"
+git -C "$WORKDIR_X" push -q -u origin manul-task-COMMENT_X
+# The fixture for issue #63 has no valid result comment marker.
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_X';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutX.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+evaluate_task_completion "test/repo" "63" "COMMENT_X" "COMMENT_X" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_X" "" "$INITIAL_HEAD_X" "manul-task-COMMENT_X" "master" "" "" "" "" ""
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then
+  echo "FAIL: Test X - missing result marker must reject success, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+echo "[OK] Test X: missing result marker fails closed"
+
+
 # ─── Test O: clean local commit with origin but no remote branch is not delivered
 echo ""
 echo "=== Test O: local commit + unpushed origin -> DELIVERY_NOT_PUSHED ==="
