@@ -6,9 +6,12 @@
 # process. This file provides both the interface contract and a production
 # implementation backed by bash's built-in process management.
 #
-# The mockable return value is a single string on stdout in the format:
-#   exit_code<TAB>duration_seconds<TAB>interrupted<TAB>timed_out
-# followed by zero or more lines of captured stdout and stderr on fd 1 and fd 2.
+# The production return value begins with one protocol line:
+#   exit_code|duration_seconds|interrupted|timed_out[|timeout_reason]
+# timeout_reason is present for idle_timeout or tool_idle_timeout, and absent
+# for normal completion / the generic wall-clock timeout. Adapter output is
+# written to the supplied stdout/stderr files; no runtime JSONL is mixed into
+# this protocol line.
 #
 # Production usage (inside an adapter):
 #   source "$SCRIPT_DIR/process-runner.sh"
@@ -25,9 +28,8 @@
 #
 # Public API:
 #   ProcessRunner.run [--timeout N] [--idle-timeout N] [--idle-jsonl-file PATH] [--idle-tool-timeout N] [--cwd PATH] [--env K=V ...] <COMMAND> [ARGS...]
-#     → stdout: single line with fields: exit_code|duration|interrupted|timed_out
-#     → stdout then: captured adapter stdout
-#     → stderr: captured adapter stderr
+#     → stdout: protocol line exit_code|duration|interrupted|timed_out[|timeout_reason]
+#     → adapter stdout/stderr are captured in caller-supplied files when present
 #
 # ProcessRunner.fixture() — set the mock return value from a test.
 #   ProcessRunner.fixture '0|5.2|false|false'
