@@ -90,6 +90,14 @@ if [[ "$1" == "api" ]]; then
         fi
     done
     for arg in "$@"; do
+        if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
+            if [ "$has_jq" = "true" ]; then
+                printf '"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result"\n'
+            else
+                printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\n'
+            fi
+            exit 0
+        fi
         if [[ "$arg" == repos/* ]]; then
             path="$arg"
             path="${path#repos/}"
@@ -174,9 +182,17 @@ if [[ "$1" == "api" ]]; then
                     59)
                         json_output='[{"id":1018,"body":"<!-- manul-task:COMMENT_T:attempt:1 -->\n\n— manul 🐈","in_reply_to_id":null}]'
                         ;;
+                    60)
+                        # Test PR: valid task/attempt result marker in the review thread.
+                        json_output='[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]'
+                        ;;
                     55)
                         # Test O: existing PR is verified but the task branch was never pushed.
                         json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
+                        ;;
+                    64)
+                        # Test Y: pushed commit with canonical PR URL and task marker.
+                        json_output='[{"id":1064,"body":"<!-- manul-task:COMMENT_Y:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
                         ;;
                     *)
                         json_output='[]'
@@ -691,6 +707,115 @@ if [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
     exit 1
 fi
 echo "[OK] Test N: PASSED (FAILURE_CODE=$FAILURE_CODE)"
+
+# ─── Test W: remote SHA equals HEAD but dirty requested edits are not delivered
+echo ""
+echo "=== Test W: remote SHA equals HEAD + dirty changes -> DELIVERY_NOT_COMMITTED ==="
+WORKDIR_W="$TEST_TMPDIR/workdir-w"
+mkdir -p "$WORKDIR_W"
+git -C "$WORKDIR_W" init -q
+git -C "$WORKDIR_W" config user.email test@example.com
+git -C "$WORKDIR_W" config user.name test
+printf "baseline\\n" >"$WORKDIR_W/README.md"
+git -C "$WORKDIR_W" add README.md
+git -C "$WORKDIR_W" commit -qm initial
+INITIAL_HEAD_W="$(git -C "$WORKDIR_W" rev-parse HEAD)"
+git -C "$WORKDIR_W" checkout -qb manul-task-COMMENT_W
+ORIGIN_W="$TEST_TMPDIR/origin-w.git"
+git init --bare -q "$ORIGIN_W"
+git -C "$WORKDIR_W" remote add origin "$ORIGIN_W"
+git -C "$WORKDIR_W" push -q -u origin manul-task-COMMENT_W
+echo "uncommitted requested edit" >>"$WORKDIR_W/README.md"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='review:COMMENT_W';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('review:COMMENT_W','test/repo',62,'https://github.com/test/repo/pull/62#discussion_r1062','user','test','task','running',1,${BASHPID},'REVIEW_FIX');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutW.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+TASK_ACTION="REVIEW_FIX"
+evaluate_task_completion "test/repo" "62" "review:COMMENT_W" "review:COMMENT_W" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_W" "" "$INITIAL_HEAD_W" "manul-task-COMMENT_W" "master" "" "" "manul-task-COMMENT_W" "" ""
+TASK_ACTION="IMPLEMENT"
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_NOT_COMMITTED" ]; then
+  echo "FAIL: Test W - REVIEW_FIX must reject dirty edits even when origin SHA equals HEAD, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+if ! grep -q "DELIVERY_NOT_COMMITTED.*COMMENT_W" "$LIFECYCLE_LOG"; then
+  echo "FAIL: Test W - expected concrete lifecycle delivery failure log" >&2
+  exit 1
+fi
+if ! grep -q "uncommitted requested edit" "$WORKDIR_W/README.md"; then
+  echo "FAIL: Test W - undelivered edit must remain in the worktree for diagnosis" >&2
+  exit 1
+fi
+echo "[OK] Test W: dirty REVIEW_FIX is rejected and the edit remains available for diagnosis"
+
+# ─── Test X: missing result marker cannot be reported as successful delivery
+echo ""
+echo "=== Test X: missing result marker -> DELIVERY_COMMENT_MISSING ==="
+WORKDIR_X="$TEST_TMPDIR/workdir-x"
+mkdir -p "$WORKDIR_X"
+git -C "$WORKDIR_X" init -q
+git -C "$WORKDIR_X" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_X" config user.email test@example.com
+git -C "$WORKDIR_X" config user.name test
+printf "baseline\\n" >"$WORKDIR_X/README.md"
+git -C "$WORKDIR_X" add README.md
+git -C "$WORKDIR_X" commit -qm initial
+INITIAL_HEAD_X="$(git -C "$WORKDIR_X" rev-parse HEAD)"
+# No repository change is intentional here: exercise the required marker
+# check independently of the implementation PR verification pipeline.
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_X';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$$,'REVIEW_FIX');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutX.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+TASK_ACTION="REVIEW_FIX"
+evaluate_task_completion "test/repo" "63" "COMMENT_X" "COMMENT_X" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_X" "" "$INITIAL_HEAD_X" "master" "master" "" "" "" "" ""
+TASK_ACTION="IMPLEMENT"
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then
+  echo "FAIL: Test X - missing result marker must reject success, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+echo "[OK] Test X: missing result marker fails closed"
+
+
+# ─── Test Y: committed and pushed changes with verified PR are accepted
+echo ""
+echo "=== Test Y: commit pushed to origin + verified PR/result -> COMPLETION_SUCCESS=true ==="
+WORKDIR_Y="$TEST_TMPDIR/workdir-y"
+mkdir -p "$WORKDIR_Y"
+git -C "$WORKDIR_Y" init -q
+git -C "$WORKDIR_Y" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_Y" config user.email test@example.com
+git -C "$WORKDIR_Y" config user.name test
+printf "baseline\\n" >"$WORKDIR_Y/README.md"
+git -C "$WORKDIR_Y" add README.md
+git -C "$WORKDIR_Y" commit -qm initial
+INITIAL_HEAD_Y="$(git -C "$WORKDIR_Y" rev-parse HEAD)"
+ORIGIN_Y="$TEST_TMPDIR/origin-y.git"
+git init --bare -q "$ORIGIN_Y"
+git -C "$WORKDIR_Y" remote add origin "$ORIGIN_Y"
+git -C "$WORKDIR_Y" push -q -u origin master
+git -C "$WORKDIR_Y" checkout -qb manul-task-COMMENT_Y
+echo "verified implementation" >>"$WORKDIR_Y/README.md"
+git -C "$WORKDIR_Y" add README.md
+git -C "$WORKDIR_Y" commit -qm "verified implementation"
+git -C "$WORKDIR_Y" push -q -u origin manul-task-COMMENT_Y
+# Simulate the real PR discovered by gh pr list for this exact branch/base.
+printf '%s %s\n' "manul-task-COMMENT_Y" "master" >>"$FAKE_GH_STATE"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Y';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Y','test/repo',64,'https://github.com/test/repo/issues/64#issuecomment-1064','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutY.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+TASK_ACTION="IMPLEMENT"
+evaluate_task_completion "test/repo" "64" "COMMENT_Y" "COMMENT_Y" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Y" "" "$INITIAL_HEAD_Y" "manul-task-COMMENT_Y" "master" "" "" "" "" ""
+if [ "$COMPLETION_SUCCESS" != "true" ]; then
+  echo "FAIL: Test Y - pushed commit with verified PR/result should succeed, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+if [ "$(git -C "$WORKDIR_Y" ls-remote --heads origin manul-task-COMMENT_Y | awk '{print $1}')" != "$(git -C "$WORKDIR_Y" rev-parse HEAD)" ]; then
+  echo "FAIL: Test Y - expected remote branch SHA to equal delivered HEAD" >&2
+  exit 1
+fi
+echo "[OK] Test Y: committed work is pushed and verified remotely before success"
+
 
 # ─── Test O: clean local commit with origin but no remote branch is not delivered
 echo ""

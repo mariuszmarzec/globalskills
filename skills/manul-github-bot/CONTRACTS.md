@@ -537,8 +537,9 @@ Failure codes must be stable and actionable:
 - `RUNTIME_TIMEOUT` — runtime execution timed out.
 - `TASK_NEEDS_USER` — structured user decision is required.
 - `NEEDS_CONTINUATION` — runtime can continue an existing session.
-- `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion.
+- `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion; the dirty workspace is preserved for diagnosis and must not be treated as delivered.
 - `DELIVERY_NOT_PUSHED` — committed work is not present on the remote/PR head.
+- `DELIVERY_COMMENT_MISSING` — the required task/attempt result marker could not be verified; a completion marker from the agent is not a substitute for delivery evidence.
 - `WORKSPACE_DIRTY` — workspace contains unexpected residue that is not the agent's intended repository change.
 - `VERIFICATION_FAILED` — branch, PR identity, or another required invariant could not be verified.
 - `CONTROLLER_ERROR` — execution controller could not construct/return a valid execution result.
