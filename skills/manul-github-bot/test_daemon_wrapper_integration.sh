@@ -98,6 +98,10 @@ if [[ "$1" == "api" ]]; then
             fi
             exit 0
         fi
+        if [[ "$1" == "pr" && "$2" == "list" ]]; then
+            printf '[{"number":999,"url":"https://github.com/test/repo/pull/999","baseRefName":"master","headRefName":"manul-task-COMMENT_X","state":"OPEN"}]\\n'
+            exit 0
+        fi
         if [[ "$arg" == "repos/test/repo/pulls/999" ]]; then
             printf '{"number":999,"html_url":"https://github.com/test/repo/pull/999","url":"https://api.github.com/repos/test/repo/pulls/999","state":"open","base":{"ref":"master"},"head":{"ref":"manul-task-COMMENT_X"}}\\n'
             exit 0
