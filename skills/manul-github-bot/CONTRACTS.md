@@ -147,6 +147,17 @@ For an agent execution:
 
 A `TASK_DONE` without a verified result comment is not accepted as successful completion.
 
+Recovery for a stale attempt marker is deliberately narrow: when the current
+running claim has `agentStartedAt`, the daemon may repair the marker in the
+existing comment only if exactly one non-lifecycle comment for the same task
+contains a lower numeric attempt marker and its `created_at` timestamp is at
+or after the current attempt's start. The daemon changes only the invisible
+marker, patches the existing comment in place, and verifies the returned body
+before accepting delivery. Missing timestamps, multiple candidates, a comment
+older than the current attempt, or an API/update/read-back error remain
+fail-closed. This handles an agent accidentally copying an old attempt number
+without accepting a previous attempt's result or creating duplicate comments.
+
 Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR is required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
@@ -382,12 +393,18 @@ When the configured internal budget is exhausted and OpenCode still reports a
 step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
 the daemon's existing retry/session handling remains authoritative.
 
-The OpenCode adapter also applies `automation.agentNoProgressTimeoutSeconds`
-(default `900`) to the current run's actual stdout/stderr stream. A fresh JSONL
-event or stderr write resets the idle timer; a heartbeat alone does not. On
-expiry, `ProcessRunner` terminates only the isolated runtime process group and
-returns the distinct `AGENT_NO_PROGRESS_TIMEOUT` failure code. The aggregate
-JSONL log and stderr diagnostics are retained for task recovery. This timeout is
+The OpenCode adapter applies `automation.agentNoProgressTimeoutSeconds`
+(default `900`) to the current run's stdout/stderr stream. A fresh JSONL
+event or stderr write resets the idle timer; a heartbeat alone does not. When
+the most recent OpenCode `tool_use` event explicitly reports a running/pending
+tool, the generic idle timer pauses while that tool call is active. That state
+has its own bounded `automation.agentToolNoProgressTimeoutSeconds` (default
+`3600`, overridable with `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`) so a
+hung tool cannot disable timeout protection indefinitely. On expiry,
+`ProcessRunner` terminates only the isolated runtime process group and returns
+`AGENT_NO_PROGRESS_TIMEOUT` for generic idle or
+`AGENT_TOOL_NO_PROGRESS_TIMEOUT` for an active tool that never completes.
+The aggregate JSONL log and stderr diagnostics are retained for task recovery. This timeout is
 independent of the overall agent timeout and of the daemon lease/heartbeat.
 
 Every adapter failure result should preserve actionable diagnostics in its
