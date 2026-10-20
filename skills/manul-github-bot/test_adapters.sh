@@ -596,9 +596,65 @@ MOCK
   assert_json_status "$out" "TIMEOUT" "OpenCode no-progress watchdog reports timeout status"
   [ "$rc" -eq 124 ] && ok "OpenCode no-progress watchdog returns timeout rc" || fail "OpenCode no-progress watchdog rc=$rc"
   [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_NO_PROGRESS_TIMEOUT" ] && ok "OpenCode no-progress watchdog has distinct failure code" || fail "Wrong no-progress failure code: $(printf '%s' "$out" | jq -r '.failure_code // empty')"
-  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'no stdout/stderr progress for 2s' && ok "OpenCode summary explains stalled progress" || fail "No-progress summary missing"
+  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'no stdout/stderr or active-tool JSONL progress for 2s' && ok "OpenCode summary explains stalled progress" || fail "No-progress summary missing"
   [ -f "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" ] && grep -Fq 'step_start' "$tmp/runtime/logs/tasks/task-oc-stalled.attempt-1.opencode.jsonl" && ok "OpenCode keeps partial JSONL output for diagnosis" || fail "Partial JSONL runtime output was not retained"
   grep -Fq 'no stdout/stderr progress for 2s' "$tmp/stderr" && ok "OpenCode preserves the watchdog diagnostic in task stderr" || fail "Task stderr omitted no-progress diagnosis"
+}
+
+# ---------------------------------------------------------------------------
+# 8d. A long-running OpenCode tool event counts as active progress
+# ---------------------------------------------------------------------------
+test_opencode_active_tool_jsonl_progress() {
+  local tmp out rc
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentToolNoProgressTimeoutSeconds":8}}' > "$tmp/runtime/config.json"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_active_tool","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
+sleep 4
+printf '%s\n' '{"type":"tool_use","timestamp":5000,"sessionID":"ses_active_tool","part":{"type":"tool-use","tool":"bash","state":{"status":"completed","input":{},"output":"ok"}}}'
+printf '%s\n' '{"type":"text","timestamp":5100,"sessionID":"ses_active_tool","part":{"type":"text","text":"TASK_DONE active tool finished"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":5200,"sessionID":"ses_active_tool","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\n' "Do the task" > "$tmp/prompt"
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-active-tool --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 30 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "Running OpenCode JSONL tool event suspends generic idle timeout"
+  [ "$rc" -eq 0 ] && ok "OpenCode active-tool run exits successfully after the tool completes" || fail "Active-tool run rc=$rc"
+  grep -Fq 'TASK_DONE active tool finished' "$tmp/stdout" && ok "OpenCode recovers TASK_DONE after long-running tool" || fail "TASK_DONE missing after active tool"
+}
+
+# ---------------------------------------------------------------------------
+# 8e. A tool call that never completes has a distinct bounded timeout
+# ---------------------------------------------------------------------------
+test_opencode_active_tool_timeout() {
+  local tmp out rc
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/runtime"
+  printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentToolNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_tool_stuck","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
+sleep 30
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\n' "Do the task" > "$tmp/prompt"
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-tool-stuck --prompt "$tmp/prompt" --workspace "$tmp" \
+      --attempt 1 --timeout 20 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "TIMEOUT" "Tool call that stays running hits bounded tool timeout"
+  [ "$rc" -eq 124 ] && ok "OpenCode active-tool timeout returns timeout exit code" || fail "Active-tool timeout rc=$rc"
+  [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "AGENT_TOOL_NO_PROGRESS_TIMEOUT" ] && ok "Active-tool timeout has its own failure code" || fail "Wrong active-tool failure code"
+  printf '%s' "$out" | jq -r '.summary' | grep -Fq 'tool call remained active without completion for 2s' && ok "Active-tool timeout explains its cause" || fail "Active-tool timeout summary missing"
+  grep -Fq 'AGENT_TOOL_NO_PROGRESS_TIMEOUT' "$tmp/stderr" && ok "Active-tool timeout is recorded in task logs" || fail "Active-tool timeout log missing"
 }
 
 # ---------------------------------------------------------------------------
@@ -1085,6 +1141,8 @@ test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
 test_opencode_no_progress_timeout
+test_opencode_active_tool_jsonl_progress
+test_opencode_active_tool_timeout
 test_opencode_task_scoped_config
 test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
