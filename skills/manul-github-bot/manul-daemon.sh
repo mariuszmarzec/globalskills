@@ -1806,6 +1806,9 @@ repair_result_comment_marker() {
     [ -n "$candidate" ] || continue
     body="$(printf '%s' "$candidate" | jq -r '.body // ""' 2>/dev/null)"
     [[ "$body" == '🔄'* || "$body" == '✅'* || "$body" == '❌'* || "$body" == '⚠️'* ]] && continue
+    # Only repair a comment that follows the established Manul result-signature
+    # contract; never rewrite a user's arbitrary prose even if it quotes a marker.
+    [[ "$body" == *"— manul 🐈"* ]] || continue
     [[ "$body" == *"$marker_prefix"* ]] || continue
 
     marker_tail="${body#*"$marker_prefix"}"
@@ -1818,7 +1821,7 @@ repair_result_comment_marker() {
     [[ "$candidate_epoch" =~ ^[0-9]+$ ]] || continue
     # The timestamp guard prevents a previous attempt's legitimate result from
     # being mistaken for the current agent's comment.
-    [ "$candidate_epoch" -ge "$started_epoch" ] || continue
+    [ "$candidate_epoch" -gt "$started_epoch" ] || continue
 
     candidate_id="$(printf '%s' "$candidate" | jq -r '.id // empty' 2>/dev/null)"
     [[ "$candidate_id" =~ ^[0-9]+$ ]] || continue
