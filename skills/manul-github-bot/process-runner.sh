@@ -268,7 +268,11 @@ ProcessRunner.run() {
                             continue
                         fi
                         if [ "$((idle_now - idle_last_progress))" -ge "$idle_timeout" ]; then
-                            printf 'ProcessRunner: no stdout/stderr or active-tool JSONL progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
+                            if [ -n "$idle_jsonl_file" ]; then
+                                printf 'ProcessRunner: no stdout/stderr or active-tool JSONL progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
+                            else
+                                printf 'ProcessRunner: no stdout/stderr progress for %ss; terminating isolated runtime process group\n' "$idle_timeout" >>"$err_file"
+                            fi
                             idle_pgid="$(ps -o pgid= -p "$idle_runner_pid" 2>/dev/null | tr -d '[:space:]')"
                             if [ "$idle_pgid" = "$idle_runner_pid" ]; then
                                 kill -TERM -- "-$idle_runner_pid" 2>/dev/null || true
