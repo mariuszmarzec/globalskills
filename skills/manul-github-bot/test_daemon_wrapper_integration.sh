@@ -190,6 +190,10 @@ if [[ "$1" == "api" ]]; then
                         # Test O: existing PR is verified but the task branch was never pushed.
                         json_output='[{"id":1014,"body":"<!-- manul-task:COMMENT_O:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
                         ;;
+                    64)
+                        # Test Y: pushed commit with canonical PR URL and task marker.
+                        json_output='[{"id":1064,"body":"<!-- manul-task:COMMENT_Y:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
+                        ;;
                     *)
                         json_output='[]'
                         ;;
@@ -764,6 +768,47 @@ if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_
   exit 1
 fi
 echo "[OK] Test X: missing result marker fails closed"
+
+
+# ─── Test Y: committed and pushed changes with verified PR are accepted
+echo ""
+echo "=== Test Y: commit pushed to origin + verified PR/result -> COMPLETION_SUCCESS=true ==="
+WORKDIR_Y="$TEST_TMPDIR/workdir-y"
+mkdir -p "$WORKDIR_Y"
+git -C "$WORKDIR_Y" init -q
+git -C "$WORKDIR_Y" symbolic-ref HEAD refs/heads/master
+git -C "$WORKDIR_Y" config user.email test@example.com
+git -C "$WORKDIR_Y" config user.name test
+printf "baseline\\n" >"$WORKDIR_Y/README.md"
+git -C "$WORKDIR_Y" add README.md
+git -C "$WORKDIR_Y" commit -qm initial
+INITIAL_HEAD_Y="$(git -C "$WORKDIR_Y" rev-parse HEAD)"
+ORIGIN_Y="$TEST_TMPDIR/origin-y.git"
+git init --bare -q "$ORIGIN_Y"
+git -C "$WORKDIR_Y" remote add origin "$ORIGIN_Y"
+git -C "$WORKDIR_Y" push -q -u origin master
+git -C "$WORKDIR_Y" checkout -qb manul-task-COMMENT_Y
+echo "verified implementation" >>"$WORKDIR_Y/README.md"
+git -C "$WORKDIR_Y" add README.md
+git -C "$WORKDIR_Y" commit -qm "verified implementation"
+git -C "$WORKDIR_Y" push -q -u origin manul-task-COMMENT_Y
+# Simulate the real PR discovered by gh pr list for this exact branch/base.
+printf '%s %s\\n' "manul-task-COMMENT_Y" "master" >>"$FAKE_GH_STATE"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Y';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Y','test/repo',64,'https://github.com/test/repo/issues/64#issuecomment-1064','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdoutY.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
+TASK_ACTION="IMPLEMENT"
+evaluate_task_completion "test/repo" "64" "COMMENT_Y" "COMMENT_Y" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Y" "" "$INITIAL_HEAD_Y" "manul-task-COMMENT_Y" "master" "" "" "" "" ""
+if [ "$COMPLETION_SUCCESS" != "true" ]; then
+  echo "FAIL: Test Y - pushed commit with verified PR/result should succeed, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
+  exit 1
+fi
+if [ "$(git -C "$WORKDIR_Y" ls-remote --heads origin manul-task-COMMENT_Y | awk '{print $1}')" != "$(git -C "$WORKDIR_Y" rev-parse HEAD)" ]; then
+  echo "FAIL: Test Y - expected remote branch SHA to equal delivered HEAD" >&2
+  exit 1
+fi
+echo "[OK] Test Y: committed work is pushed and verified remotely before success"
 
 
 # ─── Test O: clean local commit with origin but no remote branch is not delivered
