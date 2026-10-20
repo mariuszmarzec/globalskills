@@ -92,11 +92,9 @@ if [[ "$1" == "api" ]]; then
     for arg in "$@"; do
         if [[ "$arg" == "repos/test/repo/pulls/60/comments" ]]; then
             if [ "$has_jq" = "true" ]; then
-                # verify_result_comment's jq filter emits a JSON string with
-                # literal backslash-n between marker and visible result.
-                printf '"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\\\nReview fix result"\\n'
+                printf '"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result"\n'
             else
-                printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\\n'
+                printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\n'
             fi
             exit 0
         fi
