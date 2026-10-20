@@ -741,7 +741,11 @@ if ! grep -q "DELIVERY_NOT_COMMITTED.*COMMENT_W" "$LIFECYCLE_LOG"; then
   echo "FAIL: Test W - expected concrete lifecycle delivery failure log" >&2
   exit 1
 fi
-echo "[OK] Test W: remote SHA equals HEAD does not mask uncommitted edits"
+if ! grep -q "uncommitted requested edit" "$WORKDIR_W/README.md"; then
+  echo "FAIL: Test W - undelivered edit must remain in the worktree for diagnosis" >&2
+  exit 1
+fi
+echo "[OK] Test W: dirty REVIEW_FIX is rejected and the edit remains available for diagnosis"
 
 # ─── Test X: missing result marker cannot be reported as successful delivery
 echo ""
