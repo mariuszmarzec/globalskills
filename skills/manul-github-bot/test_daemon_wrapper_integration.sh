@@ -53,9 +53,7 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
             --head) i=$((i+1)); head="${!i}" ;;
         esac
     done
-    if [ "$head" = "manul-task-COMMENT_X" ]; then
-        printf '[{"number":999,"url":"https://github.com/test/repo/pull/999","state":"OPEN","baseRefName":"master","headRefName":"manul-task-COMMENT_X"}]\\n'
-    elif [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
+    if [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
         printf '['
         first=1
         while read -r h b; do
@@ -98,14 +96,6 @@ if [[ "$1" == "api" ]]; then
             else
                 printf '[{"id":1060,"body":"<!-- manul-task:review:PR_REVIEW:attempt:1 -->\\nReview fix result","in_reply_to_id":null}]\n'
             fi
-            exit 0
-        fi
-        if [[ "$1" == "pr" && "$2" == "list" ]]; then
-            printf '[{"number":999,"url":"https://github.com/test/repo/pull/999","baseRefName":"master","headRefName":"manul-task-COMMENT_X","state":"OPEN"}]\\n'
-            exit 0
-        fi
-        if [[ "$arg" == "repos/test/repo/pulls/999" ]]; then
-            printf '{"number":999,"html_url":"https://github.com/test/repo/pull/999","url":"https://api.github.com/repos/test/repo/pulls/999","state":"open","base":{"ref":"master"},"head":{"ref":"manul-task-COMMENT_X"}}\\n'
             exit 0
         fi
         if [[ "$arg" == repos/* ]]; then
@@ -753,26 +743,22 @@ echo "=== Test X: missing result marker -> DELIVERY_COMMENT_MISSING ==="
 WORKDIR_X="$TEST_TMPDIR/workdir-x"
 mkdir -p "$WORKDIR_X"
 git -C "$WORKDIR_X" init -q
+git -C "$WORKDIR_X" symbolic-ref HEAD refs/heads/master
 git -C "$WORKDIR_X" config user.email test@example.com
 git -C "$WORKDIR_X" config user.name test
 printf "baseline\\n" >"$WORKDIR_X/README.md"
 git -C "$WORKDIR_X" add README.md
 git -C "$WORKDIR_X" commit -qm initial
 INITIAL_HEAD_X="$(git -C "$WORKDIR_X" rev-parse HEAD)"
-git -C "$WORKDIR_X" checkout -qb manul-task-COMMENT_X
-echo "implementation change" >>"$WORKDIR_X/README.md"
-git -C "$WORKDIR_X" add README.md
-git -C "$WORKDIR_X" commit -qm "implementation change"
-ORIGIN_X="$TEST_TMPDIR/origin-x.git"
-git init --bare -q "$ORIGIN_X"
-git -C "$WORKDIR_X" remote add origin "$ORIGIN_X"
-git -C "$WORKDIR_X" push -q -u origin manul-task-COMMENT_X
-# The fixture for issue #63 has no valid result comment marker.
+# No repository change is intentional here: exercise the required marker
+# check independently of the implementation PR verification pipeline.
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_X';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$$,'IMPLEMENT');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_X','test/repo',63,'https://github.com/test/repo/issues/63#issuecomment-1063','user','test','task','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutX.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""
-evaluate_task_completion "test/repo" "63" "COMMENT_X" "COMMENT_X" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_X" "" "$INITIAL_HEAD_X" "manul-task-COMMENT_X" "master" "" "" "" "" ""
+TASK_ACTION="REVIEW_FIX"
+evaluate_task_completion "test/repo" "63" "COMMENT_X" "COMMENT_X" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_X" "" "$INITIAL_HEAD_X" "master" "master" "" "" "" "" ""
+TASK_ACTION="IMPLEMENT"
 if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then
   echo "FAIL: Test X - missing result marker must reject success, got $COMPLETION_SUCCESS / $FAILURE_CODE / $FAIL_REASON" >&2
   exit 1
