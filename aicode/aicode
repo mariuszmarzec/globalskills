@@ -101,7 +101,7 @@ ensure_caracal_mcp() {
     fi
 
     # Keep the config valid but disconnected if Caracal cannot safely start.
-    export CARACAL_MCP_URL="http://127.0.0.1:1/mcp"
+    export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"
 
     if [ ! -x "$CARACAL_CLI" ]; then
         echo "WARNING: Caracal is not installed at $CARACAL_CLI; run the WSL setup skill."
