@@ -199,6 +199,7 @@ PY
     local caracal_pid=$!
     printf '%s\n' "$caracal_pid" > "$CARACAL_PID_FILE"
     chmod 0600 "$CARACAL_PID_FILE"
+    umask 022
 
     for _ in $(seq 1 20); do
         if caracal_http_ready "$mcp_url" && caracal_pid_matches "$caracal_pid"; then
