@@ -68,6 +68,159 @@ if ! pgrep -f '[l]itellm' >/dev/null; then
     sleep 3
 fi
 
+
+# Start Caracal RAG after LiteLLM. Only attach credentials to a service that
+# this launcher verifies it owns; never kill processes by a fuzzy name.
+CARACAL_HOME="${CARACAL_HOME:-$HOME/.caracal}"
+export CARACAL_HOME
+CARACAL_CLI="$CARACAL_HOME/bin/caracal-rag"
+CARACAL_RUN_DIR="$CARACAL_HOME/run"
+CARACAL_PID_FILE="$CARACAL_RUN_DIR/mcp.pid"
+CARACAL_LOG="/tmp/caracal-mcp.log"
+
+caracal_http_ready() {
+    local url="$1" status
+    status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null || true)"
+    [[ "$status" =~ ^[1-4][0-9][0-9]$ ]]
+}
+
+caracal_pid_matches() {
+    local pid="$1" command_line
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
+    command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$command_line" == *"caracal-rag mcp --transport http"* &&
+       "$command_line" == *"--port $CARACAL_MCP_PORT"* &&
+       "$command_line" == *"--path $CARACAL_MCP_PATH"* ]]
+}
+
+ensure_caracal_mcp() {
+    # An explicit URL is an opt-in to an externally managed MCP endpoint.
+    if [ -n "${CARACAL_MCP_URL:-}" ]; then
+        echo "Using explicitly configured Caracal MCP URL."
+        return
+    fi
+
+    # Keep the config valid but disconnected if Caracal cannot safely start.
+    export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"
+
+    if [ ! -x "$CARACAL_CLI" ]; then
+        echo "WARNING: Caracal is not installed at $CARACAL_CLI; run the WSL setup skill."
+        return
+    fi
+
+    # OpenCode needs the bearer token in its inherited environment. Read it
+    # through Caracal's permission-checking loader; never print it to the log.
+    if [ -z "${CARACAL_ACCESS_TOKEN:-}" ] && [ -x "$CARACAL_HOME/venv/bin/python" ]; then
+        CARACAL_ACCESS_TOKEN="$("$CARACAL_HOME/venv/bin/python" - "$CARACAL_HOME/config/secrets.yaml" 2>/dev/null <<'PY'
+import sys
+from pathlib import Path
+from caracal_rag.config import load_secrets
+print(load_secrets(Path(sys.argv[1])).get("access_token", ""), end="")
+PY
+)" || CARACAL_ACCESS_TOKEN=""
+        if [ -n "$CARACAL_ACCESS_TOKEN" ]; then
+            export CARACAL_ACCESS_TOKEN
+        fi
+    fi
+
+    local check_output mcp_host mcp_port mcp_path mcp_url
+    if ! check_output="$("$CARACAL_CLI" check 2>&1)"; then
+        echo "WARNING: Caracal check failed; MCP was not started. Caracal output:"
+        printf '%s\n' "$check_output" | tail -n 8
+        return
+    fi
+
+    mcp_host="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_host=\([^ ]*\).*/\1/p' | tail -n 1)"
+    mcp_port="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_port=\([^ ]*\).*/\1/p' | tail -n 1)"
+    mcp_path="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_path=\([^ ]*\).*/\1/p' | tail -n 1)"
+
+    # This automatic launcher intentionally only manages loopback HTTP MCP.
+    # A non-loopback bind would expose an authenticated service more broadly.
+    if [ "$mcp_host" != "127.0.0.1" ] ||
+       ! [[ "$mcp_port" =~ ^[0-9]{1,5}$ ]] ||
+       (( mcp_port < 1 || mcp_port > 65535 )) ||
+       ! [[ "$mcp_path" =~ ^/[A-Za-z0-9/_-]+$ ]]; then
+        echo "WARNING: Caracal MCP settings are unsupported for automatic local startup; expected host 127.0.0.1, a valid port, and a simple absolute path."
+        return
+    fi
+
+    CARACAL_MCP_PORT="$mcp_port"
+    CARACAL_MCP_PATH="$mcp_path"
+    mcp_url="http://127.0.0.1:$mcp_port$mcp_path"
+
+    if [ -L "$CARACAL_RUN_DIR" ] || [ -L "$CARACAL_PID_FILE" ]; then
+        echo "WARNING: refusing symlinked Caracal runtime/PID path; inspect $CARACAL_RUN_DIR."
+        return
+    fi
+    mkdir -p "$CARACAL_RUN_DIR" || {
+        echo "WARNING: could not create $CARACAL_RUN_DIR."
+        return
+    }
+    chmod 0700 "$CARACAL_RUN_DIR"
+
+    if [ -e "$CARACAL_PID_FILE" ]; then
+        if [ ! -f "$CARACAL_PID_FILE" ]; then
+            echo "WARNING: refusing unexpected Caracal PID path: $CARACAL_PID_FILE"
+            return
+        fi
+        local old_pid
+        IFS= read -r old_pid < "$CARACAL_PID_FILE" || old_pid=""
+        if caracal_pid_matches "$old_pid"; then
+            for _ in $(seq 1 20); do
+                if caracal_http_ready "$mcp_url"; then
+                    export CARACAL_MCP_URL="$mcp_url"
+                    echo "Caracal MCP already running at $mcp_url (PID $old_pid)."
+                    return
+                fi
+                if ! kill -0 "$old_pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 1
+            done
+            echo "WARNING: tracked Caracal MCP process (PID $old_pid) is not responding; not starting a duplicate. See $CARACAL_LOG."
+            return
+        fi
+        # The recorded PID is stale or reused by another command. Remove only
+        # our stale PID file; never signal that process.
+        rm -f -- "$CARACAL_PID_FILE"
+    fi
+
+    if caracal_http_ready "$mcp_url"; then
+        echo "WARNING: $mcp_url already responds, but its process is not owned by a valid Caracal PID file. Refusing to attach the Caracal token or start a duplicate."
+        return
+    fi
+
+    umask 077
+    touch "$CARACAL_LOG"
+    chmod 0600 "$CARACAL_LOG"
+    echo "Starting Caracal MCP after LiteLLM..."
+    nohup "$CARACAL_CLI" mcp --transport http --host 127.0.0.1 --port "$mcp_port" --path "$mcp_path" \
+        </dev/null >>"$CARACAL_LOG" 2>&1 &
+    local caracal_pid=$!
+    printf '%s\n' "$caracal_pid" > "$CARACAL_PID_FILE"
+    chmod 0600 "$CARACAL_PID_FILE"
+    umask 022
+
+    for _ in $(seq 1 20); do
+        if caracal_http_ready "$mcp_url" && caracal_pid_matches "$caracal_pid"; then
+            export CARACAL_MCP_URL="$mcp_url"
+            echo "Caracal MCP ready at $mcp_url."
+            return
+        fi
+        if ! kill -0 "$caracal_pid" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+
+    echo "WARNING: Caracal MCP did not become ready; continuing with OpenCode. See $CARACAL_LOG."
+    if ! kill -0 "$caracal_pid" 2>/dev/null; then
+        rm -f -- "$CARACAL_PID_FILE"
+    fi
+}
+
+ensure_caracal_mcp
+
 # Ensure OpenClaw Gateway is running
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 gateway_responding() {

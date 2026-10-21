@@ -1,13 +1,13 @@
 ---
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop). Includes hardware-aware model selection, strict healthchecks, self-healing loop, and multi-model LiteLLM routing across 6+ free providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, and OpenClaw.
+description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop), hardware-aware model selection, strict healthchecks, self-healing, multi-model LiteLLM routing, local Ollama, and Caracal RAG MCP integration. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, OpenClaw, and Caracal RAG.
 ---
 
 # WSL AI Dev Autopilot Skill
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models from 7 sources to the OpenCode TUI and the OpenClaw Gateway, allowing the user to select cloud models (with fallback), strictly cloud, or strictly local models.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models from 7 sources to OpenCode and OpenClaw, installs Caracal RAG into its isolated runtime under ~/.caracal, and wires an authenticated loopback HTTP MCP endpoint into OpenCode. The aicode launcher starts Caracal after LiteLLM and before launching OpenCode. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
 
 ## Architecture
 
@@ -48,6 +48,8 @@ LiteLLM (Router & Proxy - Port 4000)
             └── local-coder (Fallback)
 ```
 
+The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes query embeddings through the explicit FreeLLMAPI-compatible endpoint in ~/.caracal/config/sources.yaml. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
+
 # Execution Rules
 
 * Execute sequentially.
@@ -77,6 +79,10 @@ LiteLLM (Router & Proxy - Port 4000)
 * OpenClaw Gateway installed, connected to LiteLLM, and responding to agent turns
 * Test prompt succeeds
 * Fallback routing verified
+* Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/caracal-rag
+* Caracal has an explicit embedding family, private API key/access token, valid Chroma settings, and a passing `caracal-rag check`
+* The configured Fiteo API documentation source is indexed successfully
+* `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM and before OpenCode; OpenCode reports the MCP server as connected
 
 # User Interaction Policy
 
@@ -173,7 +179,7 @@ Ask the user only if automatic detection is impossible.
 **Command**
 
 ```bash
-sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip
+sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip python3-venv
 
 ```
 
@@ -590,6 +596,52 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
 
 *If SSH fails on a fresh machine (no key deployed), fall back to the HTTPS clone URL shown above.*
 
+
+### Step 8d — Install and configure Caracal RAG (Desktop and Laptop)
+
+Caracal is installed on each machine using its repository installer. This creates an isolated environment under `~/.caracal` and preserves existing configuration, secrets, and index state. Do not use a system-wide `pip install`.
+
+```bash
+CARACAL_REPO="$HOME/caracal-rag"
+if [ -e "$CARACAL_REPO" ]; then
+  if [ ! -d "$CARACAL_REPO/.git" ]; then
+    echo "ERROR: $CARACAL_REPO exists but is not a Git checkout; preserve it and inspect the path."
+    exit 1
+  fi
+  if [ -n "$(git -C "$CARACAL_REPO" status --porcelain)" ]; then
+    echo "ERROR: Caracal checkout has local changes. Commit/stash them or review before updating."
+    git -C "$CARACAL_REPO" status --short
+    exit 1
+  fi
+  git -C "$CARACAL_REPO" pull --ff-only
+else
+  git clone git@github.com:mariuszmarzec/caracal-rag.git "$CARACAL_REPO" \
+    || git clone https://github.com/mariuszmarzec/caracal-rag.git "$CARACAL_REPO"
+fi
+
+cd "$CARACAL_REPO"
+bash ./install.sh
+export PATH="$HOME/.caracal/bin:$PATH"
+```
+
+Configure Caracal interactively so credentials are entered into hidden prompts, not shell history or process arguments:
+
+```bash
+"$HOME/.caracal/bin/caracal-rag" setup
+```
+
+During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and the `fiteo-docs` source. Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:8000/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+
+```bash
+"$HOME/.caracal/bin/caracal-rag" check
+"$HOME/.caracal/bin/caracal-rag" index --source fiteo-docs
+"$HOME/.caracal/bin/caracal-rag" check
+```
+
+**Healthcheck:** both `check` calls succeed, indexing completes, and `~/.caracal/config/secrets.yaml` has mode `0600`. Do not start MCP or claim setup is complete if credentials, embedding-model validation, or Chroma connectivity fails; fix the reported dependency and rerun the check.
+
+The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.host: 127.0.0.1`; never expose the token-authenticated listener on a public interface. The launcher tracks only its own PID in `~/.caracal/run/mcp.pid`, logs to `/tmp/caracal-mcp.log`, and does not kill an unknown process that happens to use the configured port.
+
 ## Step 9 — Configure OpenCode
 
 `~/.config/opencode/opencode.json`
@@ -601,6 +653,17 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
   "small_model": "litellm/groq-llama-8b",
   "skills": { 
     "paths": ["~/.globalskills/skills"] 
+  },
+  "mcp": {
+    "caracal-rag": {
+      "type": "remote",
+      "url": "{env:CARACAL_MCP_URL}",
+      "oauth": false,
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
+      }
+    }
   },
   "permission": {
     "external_directory": {
@@ -905,95 +968,15 @@ openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: Li
 
 # Daily Startup Script
 
-`~/.aicode/aicode`
+The maintained launcher is `~/.globalskills/aicode/aicode`; `install.sh` links it to `~/.aicode/aicode`. Avoid maintaining a divergent copied launcher. If an existing file occupies that path, the installer preserves it in a timestamped backup before linking the maintained version.
+
+On each startup, `aicode` starts/validates LiteLLM first, then validates Caracal and starts its authenticated HTTP MCP on loopback only when `caracal-rag check` passes, then continues with OpenClaw/Manul and launches OpenCode. The launcher exports `CARACAL_MCP_URL` and `CARACAL_ACCESS_TOKEN` for the MCP config above. It reuses a healthy process only when the PID file and command line prove it owns that process; it will not kill an unrelated process or send credentials to an unverified endpoint. See `/tmp/caracal-mcp.log` for Caracal startup errors.
 
 ```bash
-#!/bin/bash
-# aicode - Start AI dev environment and launch OpenCode
-
-export PATH="$HOME/.opencode/bin:$PATH"
-
-if [ -f "$HOME/.config/opencode/opencode.env" ]; then
-    set -a
-    . "$HOME/.config/opencode/opencode.env"
-    set +a
-fi
-
-if [ -z "${OPENCODE_API_KEY:-}" ]; then
-    echo "OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable until you add it to ~/.config/opencode/opencode.env."
-fi
-
-# Ensure Ollama is running
-if ! pgrep -x "ollama" > /dev/null; then
-    nohup ollama serve > /tmp/ollama.log 2>&1 &
-    sleep 3
-fi
-
-# Ensure PostgreSQL is available for LiteLLM UI/auth
-if command -v pg_isready >/dev/null 2>&1; then
-    if ! pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
-        if command -v service >/dev/null 2>&1; then
-            sudo service postgresql start >/dev/null 2>&1 || true
-        fi
-        if command -v pg_ctlcluster >/dev/null 2>&1; then
-            pg_ctlcluster 12 main start >/dev/null 2>&1 || true
-        fi
-        sleep 3
-    fi
-    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
-        if ! sudo -n -u postgres psql -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw 'litellm' 2>/dev/null; then
-            sudo -u postgres psql -c "CREATE USER litellm WITH PASSWORD 'litellm';" >/dev/null 2>&1 || true
-            sudo -u postgres psql -c "CREATE DATABASE litellm OWNER litellm;" >/dev/null 2>&1 || true
-        fi
-    fi
-fi
-
-# Ensure LiteLLM is running (with all API keys loaded)
-if ! pgrep -f "litellm" > /dev/null; then
-    if [ -f "$HOME/litellm/.env" ]; then
-        set -a
-        . "$HOME/litellm/.env"
-        set +a
-    fi
-    nohup litellm --config "$HOME/litellm/config.yaml" --port 4000 > /tmp/litellm.log 2>&1 &
-    sleep 3
-fi
-
-# Ensure OpenClaw Gateway is running (serves all LiteLLM models too)
-if ! pgrep -f "openclaw gateway" > /dev/null; then
-    nohup openclaw gateway --force --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
-    sleep 3
-fi
-
-# Ensure manul GitHub bot daemon is running (polls /manul comments on watched repos)
-# Idempotent: start is a no-op when the daemon is already up.
-MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
-MANUL_DAEMON="$MANUL_RUNTIME_DIR/manul-daemon.sh"
-if [ -x "$MANUL_DAEMON" ]; then
-    "$MANUL_DAEMON" start >/dev/null 2>&1
-else
-    echo "WARNING: Manul daemon not found at $MANUL_DAEMON; run install-manul.sh first." >&2
-fi
-
-# Launch OpenCode
-if [ -n "${OPENCODE_API_KEY:-}" ]; then
-    echo "OpenCode Zen API key detected; all Zen models available."
-else
-    echo "No OPENCODE_API_KEY detected; Zen models unavailable."
-fi
-echo "Free cloud models: Groq, Cerebras, Gemini, Mistral, OpenRouter"
-echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
-echo "OpenClaw Gateway: http://127.0.0.1:18789 (openclaw chat / openclaw dashboard)"
-
-exec opencode "$@"
-```
-
-```bash
-mkdir -p ~/.aicode
-chmod +x ~/.aicode/aicode
-echo "alias aicode='~/.aicode/aicode'" >> ~/.bashrc
+bash ~/.globalskills/install.sh
+grep -qF "alias aicode='~/.aicode/aicode'" ~/.bashrc || echo "alias aicode='~/.aicode/aicode'" >> ~/.bashrc
 source ~/.bashrc
-
+aicode
 ```
 
 # FreeLLMAPI integration
@@ -1023,6 +1006,8 @@ Verify:
 * Startup script loads all API keys from `~/litellm/.env`.
 * OpenCode agents symlinked and readable (`~/.config/opencode/agents/orchestrator.md`).
 * Shared skills symlinked (`~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
+* Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
+* `opencode mcp list` reports `caracal-rag` connected when launched through `aicode`.
 
 Only then report:
 

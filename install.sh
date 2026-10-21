@@ -41,5 +41,30 @@ else
   echo "Created symlink: $AGENTS_LINK -> $AGENTS_DIR"
 fi
 
+
+# Install the maintained aicode launcher as a symlink so global-skills updates
+# also update the daily startup workflow. Preserve any existing local launcher.
+AICODE_SOURCE="$REPO_DIR/aicode/aicode"
+AICODE_DIR="$HOME/.aicode"
+AICODE_LINK="$AICODE_DIR/aicode"
+mkdir -p "$AICODE_DIR"
+if [ -f "$AICODE_SOURCE" ]; then
+  chmod +x "$AICODE_SOURCE"
+  if [ -L "$AICODE_LINK" ] && [ "$(readlink -f "$AICODE_LINK" 2>/dev/null || true)" = "$(readlink -f "$AICODE_SOURCE")" ]; then
+    echo "aicode launcher already points to the maintained source."
+  else
+    if [ -e "$AICODE_LINK" ] || [ -L "$AICODE_LINK" ]; then
+      AICODE_BACKUP="$AICODE_LINK.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+      while [ -e "$AICODE_BACKUP" ] || [ -L "$AICODE_BACKUP" ]; do
+        AICODE_BACKUP="$AICODE_BACKUP.$$"
+      done
+      mv -- "$AICODE_LINK" "$AICODE_BACKUP"
+      echo "Preserved previous aicode launcher at $AICODE_BACKUP"
+    fi
+    ln -s "$AICODE_SOURCE" "$AICODE_LINK"
+    echo "Linked aicode launcher: $AICODE_LINK -> $AICODE_SOURCE"
+  fi
+fi
+
 echo "Done. Skills available at: $SKILLS_LINK"
 echo "Done. Agents available at: $AGENTS_LINK"
