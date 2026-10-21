@@ -658,6 +658,7 @@ The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.ho
     "caracal-rag": {
       "type": "remote",
       "url": "{env:CARACAL_MCP_URL}",
+      "oauth": false,
       "enabled": true,
       "headers": {
         "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
