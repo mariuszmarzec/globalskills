@@ -6,7 +6,7 @@ TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$TEST_DIR/chroma-lifecycle.sh"
 
 TEST_ROOT=""
-MOCK_HOST="127.0.0.1"
+MOCK_HOST="localhost"
 MOCK_PORT="3400"
 MOCK_SSL="false"
 MOCK_READY="false"
