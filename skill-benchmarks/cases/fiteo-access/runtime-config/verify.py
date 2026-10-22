@@ -139,29 +139,33 @@ def main() -> int:
     missing_ok = module is not None and callable(getattr(module, "load_fiteo_config", None))
     if missing_ok:
         for missing_name in REQUIRED:
-            environment = dict(SENTINELS_A)
-            missing_value = environment.pop(missing_name)
-            configured_values = list(environment.values())
-            _, error, output = call_config(module, environment)
-            error_message = str(error) if error is not None else ""
-            if not isinstance(error, ValueError):
-                missing_ok = False
-            if missing_name not in error_message:
-                missing_ok = False
-            if any(other_name in error_message for other_name in REQUIRED if other_name != missing_name):
-                missing_ok = False
-            if any(value in error_message or value in output for value in configured_values):
-                missing_ok = False
-            if missing_value in error_message or missing_value in output:
-                missing_ok = False
-            if output:
-                missing_ok = False
+            for missing_state in ("unset", "empty"):
+                environment = dict(SENTINELS_A)
+                if missing_state == "unset":
+                    environment.pop(missing_name)
+                else:
+                    environment[missing_name] = ""
+                configured_values = [
+                    value for key, value in environment.items() if key != missing_name and value
+                ]
+                _, error, output = call_config(module, environment)
+                error_message = str(error) if error is not None else ""
+                if not isinstance(error, ValueError):
+                    missing_ok = False
+                if missing_name not in error_message:
+                    missing_ok = False
+                if any(other_name in error_message for other_name in REQUIRED if other_name != missing_name):
+                    missing_ok = False
+                if any(value in error_message or value in output for value in configured_values):
+                    missing_ok = False
+                if output:
+                    missing_ok = False
     add(
-        "missing-config-reports-names-only",
+        "missing-or-empty-config-reports-names-only",
         missing_ok,
-        "ValueError names only the missing variable; configured values are not shown",
-        "missing configuration handled safely" if missing_ok else "missing config behavior or disclosure check failed",
-        "tested each required variable missing while the other two are configured",
+        "ValueError names only the missing/empty variable; configured values are not shown",
+        "missing and empty configuration handled safely" if missing_ok else "missing/empty config behavior or disclosure check failed",
+        "tested every required variable both unset and empty while other variables are configured",
     )
 
     result = {
