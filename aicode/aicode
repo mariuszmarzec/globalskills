@@ -219,6 +219,21 @@ PY
     fi
 }
 
+# Chroma is a separate local database service; Caracal's check needs it reachable.
+# An explicit CARACAL_MCP_URL means the MCP endpoint is externally managed, so
+# do not start a local Chroma instance for that mode.
+if [ -z "${CARACAL_MCP_URL:-}" ]; then
+    AICODE_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+    AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
+    if [ -r "$AICODE_SOURCE_DIR/chroma-lifecycle.sh" ]; then
+        # shellcheck source=aicode/chroma-lifecycle.sh
+        . "$AICODE_SOURCE_DIR/chroma-lifecycle.sh"
+        ensure_chroma_server "$CARACAL_HOME" || true
+    else
+        echo "WARNING: Chroma lifecycle helper is missing next to aicode; automatic Chroma startup is skipped."
+    fi
+fi
+
 ensure_caracal_mcp
 
 # Ensure OpenClaw Gateway is running
