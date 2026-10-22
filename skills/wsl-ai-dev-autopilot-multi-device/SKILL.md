@@ -630,7 +630,7 @@ Configure Caracal interactively so credentials are entered into hidden prompts, 
 "$HOME/.caracal/bin/caracal-rag" setup
 ```
 
-During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and the `fiteo-docs` source. Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:8000/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and the `fiteo-docs` source. Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
 
 ```bash
 "$HOME/.caracal/bin/caracal-rag" check
