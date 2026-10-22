@@ -46,23 +46,42 @@ fi
 # also update the daily startup workflow. Preserve any existing local launcher.
 AICODE_SOURCE="$REPO_DIR/aicode/aicode"
 AICODE_DIR="$HOME/.aicode"
-AICODE_LINK="$AICODE_DIR/aicode"
-mkdir -p "$AICODE_DIR"
+
 if [ -f "$AICODE_SOURCE" ]; then
-  chmod +x "$AICODE_SOURCE"
-  if [ -L "$AICODE_LINK" ] && [ "$(readlink -f "$AICODE_LINK" 2>/dev/null || true)" = "$(readlink -f "$AICODE_SOURCE")" ]; then
-    echo "aicode launcher already points to the maintained source."
+  # Do not mutate AICODE_SOURCE when ~/.aicode is an alias of the repository's
+  # aicode directory. In that layout AICODE_LINK and AICODE_SOURCE are the same
+  # filesystem path, so moving it aside and linking it back creates a self-link
+  # and leaves the checkout dirty.
+  AICODE_SOURCE_PARENT="$(cd "$(dirname "$AICODE_SOURCE")" && pwd -P)"
+  AICODE_DIR_REAL="$(readlink -f "$AICODE_DIR" 2>/dev/null || true)"
+
+  if [ -n "$AICODE_DIR_REAL" ] && [ "$AICODE_DIR_REAL" = "$AICODE_SOURCE_PARENT" ]; then
+    echo "Detected ~/.aicode aliases $AICODE_SOURCE_PARENT; keeping the maintained launcher in place."
   else
-    if [ -e "$AICODE_LINK" ] || [ -L "$AICODE_LINK" ]; then
-      AICODE_BACKUP="$AICODE_LINK.backup.$(date -u +%Y%m%dT%H%M%SZ)"
-      while [ -e "$AICODE_BACKUP" ] || [ -L "$AICODE_BACKUP" ]; do
-        AICODE_BACKUP="$AICODE_BACKUP.$$"
-      done
-      mv -- "$AICODE_LINK" "$AICODE_BACKUP"
-      echo "Preserved previous aicode launcher at $AICODE_BACKUP"
+    mkdir -p "$AICODE_DIR"
+    AICODE_DIR_REAL="$(cd "$AICODE_DIR" && pwd -P)"
+    if [ "$AICODE_DIR_REAL" = "$AICODE_SOURCE_PARENT" ]; then
+      echo "Detected ~/.aicode aliases $AICODE_SOURCE_PARENT; keeping the maintained launcher in place."
+    else
+      AICODE_LINK="$AICODE_DIR/aicode"
+      AICODE_SOURCE_REAL="$(readlink -f "$AICODE_SOURCE" 2>/dev/null || true)"
+      AICODE_LINK_REAL="$(readlink -f "$AICODE_LINK" 2>/dev/null || true)"
+
+      if [ -L "$AICODE_LINK" ] && [ -n "$AICODE_SOURCE_REAL" ] && [ "$AICODE_LINK_REAL" = "$AICODE_SOURCE_REAL" ]; then
+        echo "aicode launcher already points to the maintained source."
+      else
+        if [ -e "$AICODE_LINK" ] || [ -L "$AICODE_LINK" ]; then
+          AICODE_BACKUP="$AICODE_LINK.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+          while [ -e "$AICODE_BACKUP" ] || [ -L "$AICODE_BACKUP" ]; do
+            AICODE_BACKUP="$AICODE_BACKUP.$"
+          done
+          mv -- "$AICODE_LINK" "$AICODE_BACKUP"
+          echo "Preserved previous aicode launcher at $AICODE_BACKUP"
+        fi
+        ln -s "$AICODE_SOURCE" "$AICODE_LINK"
+        echo "Linked aicode launcher: $AICODE_LINK -> $AICODE_SOURCE"
+      fi
     fi
-    ln -s "$AICODE_SOURCE" "$AICODE_LINK"
-    echo "Linked aicode launcher: $AICODE_LINK -> $AICODE_SOURCE"
   fi
 fi
 
