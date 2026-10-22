@@ -223,7 +223,7 @@ ensure_chroma_server() {
     host_lower="${host,,}"
     case "$host_lower" in
         localhost|127.0.0.1) bind_host="127.0.0.1" ;;
-        ::1|[::1]) bind_host="::1" ;;
+        ::1) bind_host="::1" ;;
         *)
             echo "Chroma host '$host' is not loopback; leaving the server externally managed."
             return 0
