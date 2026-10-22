@@ -41,6 +41,7 @@ git -C ~/.globalskills pull
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible), including isolated Caracal RAG installation, authenticated MCP startup after LiteLLM, hardware-aware model selection, healthchecks, and multi-model LiteLLM routing. |
 | `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
+| `fiteo-access` | Connect to the Fiteo backend using the current `FITEO_BASE_URL`, `FITEO_MANUL_USERNAME`, and `FITEO_MANUL_PASSWORD` environment variables. Never hardcode or print their values. |
 | `fiteo-backend-api` | Use for Fiteo backend endpoint/API contract questions and related implementation or review work. Search the indexed Fiteo API docs through Caracal RAG MCP first; verify current code/tests before claiming implementation behavior. |
 
 ## Agents (multi-agent orchestration)

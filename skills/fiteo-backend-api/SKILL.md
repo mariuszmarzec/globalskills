@@ -36,6 +36,14 @@ Documentation search remains mandatory, but documentation is not proof that curr
 
 If the `caracal-rag` MCP server or `search_api` tool is missing/disconnected, do not pretend the indexed docs were searched. Check the MCP connection (for example, `opencode mcp list`) and report the blocker. If useful, inspect the source Markdown directly in the Fiteo repository as a fallback, clearly stating that the answer came from the repository rather than Caracal search.
 
+## Runtime host and Manul account configuration
+
+When a task needs to connect to a running Fiteo instance, also follow the
+`fiteo-access` skill for the base URL and Manul account configuration. This
+skill remains the source of truth for endpoint contracts: search Caracal RAG
+as described above and verify implementation/tests when needed. Never store
+runtime host or credential values in either skill or repository files.
+
 ## Scope
 
 Apply this skill to Fiteo backend API contracts and code that interacts with those contracts. Do not invoke it for unrelated APIs or general Fiteo product/business questions with no endpoint dependency.

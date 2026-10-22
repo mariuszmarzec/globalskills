@@ -1,0 +1,7 @@
+{
+  "id": "runtime-config",
+  "skill": "fiteo-access",
+  "fixture": "fixture",
+  "prompt": "prompt.md",
+  "verifier": "verify.py"
+}
