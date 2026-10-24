@@ -295,8 +295,17 @@ ensure_opencode_caracal_config() {
         echo "OpenCode Caracal MCP config updated (backup retained when replacing an existing file)."
     fi
 
-    local mcp_output
-    if ! mcp_output="$(opencode mcp list 2>&1)" ||
+    local mcp_output opencode_cli
+    if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
+        opencode_cli="$OPENCODE_BIN"
+    else
+        opencode_cli="$(command -v opencode 2>/dev/null || true)"
+    fi
+    if [ -z "$opencode_cli" ] || [ ! -x "$opencode_cli" ]; then
+        echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
+        return 1
+    fi
+    if ! mcp_output="$("$opencode_cli" mcp list 2>&1)" ||
        ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
         echo "ERROR: OpenCode does not report caracal-rag as connected; see the output of 'opencode mcp list'. No agent runtime will start." >&2
         return 1
