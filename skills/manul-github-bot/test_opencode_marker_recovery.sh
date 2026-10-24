@@ -12,6 +12,10 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
 cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\n' 'caracal-rag connected'
+  exit 0
+fi
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
 printf '%s\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
@@ -21,6 +25,7 @@ chmod +x "$tmp/bin/opencode"
 printf '%s\n' 'Do the task' >"$tmp/prompt"
 
 out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  CARACAL_MCP_URL="http://127.0.0.1:3500/mcp" CARACAL_ACCESS_TOKEN="test-caracal-token" \
   AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
   bash "$SCRIPT_DIR/opencode-adapter.sh" \
     --task-id marker-docs --prompt "$tmp/prompt" --workspace "$tmp" \
