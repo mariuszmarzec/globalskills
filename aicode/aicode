@@ -418,7 +418,7 @@ configure_openclaw_caracal_access() {
             else {} end)
         )
       }
-    ')"" || {
+    ')" || {
         echo "ERROR: unable to prepare OpenClaw Caracal access policies." >&2
         return 1
     }
