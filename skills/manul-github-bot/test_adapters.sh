@@ -1088,6 +1088,96 @@ MOCK
   grep -q '^TASK_DONE continued successfully$' "$tmp/stdout2"     && ok "OpenCode continuation produces the completion marker"     || fail "OpenCode continuation lost TASK_DONE"
 }
 # ---------------------------------------------------------------------------
+# 10b. Caracal MCP is injected into the task-local OpenCode config and must be live
+# ---------------------------------------------------------------------------
+test_opencode_caracal_mcp() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  local home="$tmp/home"
+  local workspace="$home/.manul/workspace/ws-caracal"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$workspace"
+  cat >"$home/.config/opencode/opencode.json" <<'JSON'
+{
+  "model": "test/provider",
+  "mcp": {
+    "servers": {
+      "other-server": {
+        "url": "https://example.invalid/mcp",
+        "transport": "streamable-http",
+        "enabled": true
+      }
+    }
+  },
+  "agent": {
+    "coder": {"tools": {"*": true}},
+    "chat": {"tools": {"*": false}}
+  }
+}
+JSON
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "list" ]; then
+  config="\${OPENCODE_CONFIG:?effective task config missing}"
+  jq -e '
+    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
+    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].enabled == true
+    and .tools["caracal-rag_*"] == true
+    and .agent.coder.tools["caracal-rag_*"] == true
+    and .agent.chat.tools["caracal-rag_*"] == null
+  ' "$config" >/dev/null
+  : >"\${MOCK_CONFIG_CHECK_FILE:?}"
+  if [ "\${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
+: >"\${MOCK_TASK_STARTED_FILE:?}"
+cat >/dev/null
+printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_caracal","part":{"type":"step-start"}}'
+printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_caracal","part":{"type":"text","text":"TASK_DONE caracal verified"}}'
+printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_caracal","part":{"type":"step-finish"}}'
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' "Use Caracal MCP for this task" >"$tmp/prompt"
+
+  local out rc
+  # A configured URL/token is insufficient: the CLI must report connected.
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    MOCK_CARACAL_MCP_STATE=disconnected MOCK_CONFIG_CHECK_FILE="$tmp/config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-caracal-disconnected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/disconnected.stdout" --stderr-file "$tmp/disconnected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "FAILED" "OpenCode refuses a task when Caracal MCP is disconnected"
+  [ "$rc" -eq 78 ] && ok "Disconnected Caracal MCP fails with explicit capability error" || fail "Disconnected Caracal rc=$rc"
+  [ -f "$tmp/config-checked" ] && ok "Task-local OpenCode config preserves existing MCP and injects authenticated Caracal" || fail "Caracal MCP config injection failed"
+  [ ! -f "$tmp/task-started" ] && ok "Task execution never starts without a live Caracal connection" || fail "Task started despite disconnected Caracal MCP"
+
+  rm -f "$tmp/config-checked" "$tmp/task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    MOCK_CARACAL_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-caracal-connected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/connected.stdout" --stderr-file "$tmp/connected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode runs task after Caracal MCP preflight passes"
+  [ "$rc" -eq 0 ] && ok "Connected Caracal MCP permits task execution" || fail "Connected Caracal rc=$rc"
+  [ -f "$tmp/task-started" ] && ok "Task starts after positive Caracal MCP healthcheck" || fail "Task did not start after positive MCP healthcheck"
+}
+
+# ---------------------------------------------------------------------------
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
 test_agent_executor_dispatch() {
@@ -1393,6 +1483,7 @@ test_opencode_permission_blocked
 test_opencode_permission_recovery
 test_opencode_missing
 test_opencode_continuation
+test_opencode_caracal_mcp
 test_agent_executor_dispatch
 test_runtime_selection
 test_unknown_runtime
