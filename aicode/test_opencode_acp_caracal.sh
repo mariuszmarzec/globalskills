@@ -2,8 +2,8 @@
 # Offline integration tests for the OpenCode ACP Caracal wrapper.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
-WRAPPER="$ROOT/aicode/opencode-acp-caracal.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+WRAPPER="$SCRIPT_DIR/opencode-acp-caracal.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
