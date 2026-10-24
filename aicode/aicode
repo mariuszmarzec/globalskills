@@ -523,6 +523,24 @@ MANUL_RUNTIME="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_DB="$MANUL_RUNTIME/manul.db"
 MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
+MANUL_ENV_HELPER="$HOME/.globalskills/skills/manul-github-bot/manul-env.sh"
+
+# Refresh the Caracal endpoint/token pair before any installer, repairer or
+# existing daemon can load a stale ~/.manul/.env. This update is atomic and
+# preserves unrelated operator-owned values.
+if [ ! -r "$MANUL_ENV_HELPER" ]; then
+    echo "ERROR: Manul environment helper is missing: $MANUL_ENV_HELPER" >&2
+    exit 1
+fi
+# shellcheck source=skills/manul-github-bot/manul-env.sh
+source "$MANUL_ENV_HELPER" || {
+    echo "ERROR: could not load the Manul environment helper." >&2
+    exit 1
+}
+if ! manul_env_bootstrap "$MANUL_RUNTIME" >/dev/null; then
+    echo "ERROR: could not persist the current Caracal MCP endpoint/token for Manul." >&2
+    exit 1
+fi
 
 # Prepare Manul without ever replacing existing task state implicitly.
 # repair-manul-runtime.sh restores a missing/corrupt DB from a known backup.
