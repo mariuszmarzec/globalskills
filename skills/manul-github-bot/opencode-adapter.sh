@@ -241,8 +241,8 @@ if [ -n "$_workdir_real" ]; then
 fi
 
 # Build an invocation-local OpenCode config for every task. Merge Caracal into
-# it even when the operator's base config has no MCP entry. Support both the
-# legacy OpenCode shape (.mcp["caracal-rag"]) and newer (.mcp.servers) shape.
+# it even when the operator's base config has no MCP entry. Use OpenCode's canonical named-server shape (.mcp["caracal-rag"]); do not
+# confuse it with OpenClaw's distinct .mcp.servers schema.
 # Preserve unrelated settings and keep the operator/global file immutable.
 OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 _original_opencode_config="$_OPENCODE_BASE_CONFIG"
