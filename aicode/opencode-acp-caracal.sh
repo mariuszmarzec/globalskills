@@ -15,7 +15,7 @@ OPENCODE_ENV="$HOME/.config/opencode/opencode.env"
 if [ -f "$OPENCODE_ENV" ]; then
     set -a
     # shellcheck disable=SC1090
-    . "$OPENCODE_ENV"
+    . "$OPENCODE_ENV" >/dev/null
     set +a
 fi
 
