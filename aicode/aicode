@@ -354,10 +354,11 @@ configure_openclaw_opencode_acp() {
     fi
 
     # Avoid writing the Gateway config on every aicode launch. config.patch can
-    # hot-reload ACPX, so only patch when the harness command or allowlist needs
-    # a change.
+    # hot-reload ACPX, so only patch when its probe agent, harness command, or
+    # allowlist needs a change.
     if printf '%s\n' "$snapshot_config" | jq -e --arg wrapper "$wrapper" '
-      (.plugins.entries.acpx.config.agents.opencode.command == "bash")
+      (.plugins.entries.acpx.config.probeAgent == "opencode")
+      and (.plugins.entries.acpx.config.agents.opencode.command == "bash")
       and (.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
       and (
         ((.acp.allowedAgents | type) != "array")
@@ -375,6 +376,7 @@ configure_openclaw_opencode_acp() {
             entries: {
               acpx: {
                 config: {
+                  probeAgent: "opencode",
                   agents: {
                     opencode: {
                       command: "bash",
@@ -402,7 +404,8 @@ configure_openclaw_opencode_acp() {
 
     if ! verified="$(openclaw gateway call config.get --params '{}' 2>/dev/null)" ||
        ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
-         (.payload.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
+         (.payload.config.plugins.entries.acpx.config.probeAgent == "opencode")
+         and (.payload.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
          and (.payload.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
          and (
            ((.payload.config.acp.allowedAgents | type) != "array")
