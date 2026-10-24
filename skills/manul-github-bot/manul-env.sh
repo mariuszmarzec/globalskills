@@ -7,9 +7,9 @@
 # Runtime-owned environment file:
 #   ~/.manul/.env
 #
-# The bootstrap operation preserves an existing .env and only adds supported
-# provider settings that are present in the installer/repair process environment.
-# It never copies arbitrary environment variables or secrets into runtime state.
+# The bootstrap operation preserves existing operator settings, adds supported
+# provider settings, and refreshes Caracal endpoint credentials when the launcher
+# supplies current values. It never copies arbitrary environment variables.
 
 manul_env_file() {
   local runtime_dir="${1:-${MANUL_DIR:-$HOME/.manul}}"
@@ -64,7 +64,7 @@ EOF
     chmod 600 "$env_file" || return 1
   fi
 
-  local variable value
+  local variable value refreshed_file
   for variable in \
     OPENCLAW_STATE_DIR \
     OPENCLAW_CONFIG_PATH \
@@ -73,13 +73,36 @@ EOF
     OPENCLAW_BIN \
     OPENCODE_BIN \
     OPENCODE_CONFIG \
+    CARACAL_MCP_URL \
+    CARACAL_ACCESS_TOKEN \
     MANUL_JIRA_USER \
     MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
-    if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
-      printf '%s=%q\n' "$variable" "$value" >> "$env_file"
-      echo "  Captured $variable for unattended Manul processes" >&2
-    fi
+    [ -n "$value" ] || continue
+
+    # Caracal's URL/token can change between launcher runs. Refresh those two
+    # allowlisted values so each isolated task runner loads the current endpoint
+    # and credential from ~/.manul/.env, even when the long-lived daemon predates
+    # the latest launcher invocation. Preserve every unrelated operator setting.
+    case "$variable" in
+      CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)
+        refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+        if ! awk -v name="$variable" '$0 !~ "^[[:space:]]*(export[[:space:]]+)?" name "="' "$env_file" > "$refreshed_file"; then
+          rm -f -- "$refreshed_file"
+          return 1
+        fi
+        printf '%s=%q\n' "$variable" "$value" >> "$refreshed_file"
+        chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+        mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+        echo "  Refreshed $variable for unattended Manul processes" >&2
+        ;;
+      *)
+        if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
+          printf '%s=%q\n' "$variable" "$value" >> "$env_file"
+          echo "  Captured $variable for unattended Manul processes" >&2
+        fi
+        ;;
+    esac
   done
 
   # Jira credentials may use operator-selected environment variable names.
