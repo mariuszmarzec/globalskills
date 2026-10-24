@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AICODE="$ROOT/aicode/aicode"
+ACP_WRAPPER="$ROOT/aicode/opencode-acp-caracal.sh"
 MANUL="$ROOT/skills/manul-github-bot"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -17,6 +18,7 @@ contains() {
 }
 
 bash -n "$AICODE" || fail "aicode shell syntax"
+bash -n "$ACP_WRAPPER" || fail "OpenCode ACP wrapper shell syntax"
 bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 ok "Caracal runtime scripts have valid shell syntax"
@@ -30,14 +32,16 @@ contains "$AICODE" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "OpenCode bearer token is
 contains "$AICODE" 'opencode mcp list' "aicode probes the real OpenCode MCP registry"
 contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if OpenCode MCP is disconnected"
 
-# Native OpenClaw MCP config and policy access must be handled separately.
-contains "$AICODE" 'mcp: {' "aicode patches native OpenClaw MCP config"
-contains "$AICODE" 'transport: "streamable-http"' "OpenClaw uses streamable HTTP transport"
-contains "$AICODE" 'headers: {Authorization: "Bearer ${CARACAL_ACCESS_TOKEN}"}' "OpenClaw uses the environment-backed bearer token"
-contains "$AICODE" 'bundle-mcp' "OpenClaw MCP tools are included in tool-policy configuration"
-contains "$AICODE" 'openclaw mcp doctor caracal-rag --probe' "aicode probes the live OpenClaw Caracal connection"
-contains "$AICODE" 'explicit tool-deny rule blocking MCP tools' "aicode refuses to bypass explicit MCP denies"
-contains "$AICODE" 'No agent runtime will start' "aicode fails closed when Caracal is unavailable"
+# OpenClaw delegates to the OpenCode ACP harness. The launcher configures that
+# specific target; it deliberately does not register a duplicate native MCP in OpenClaw.
+contains "$AICODE" 'configure_openclaw_opencode_acp' "aicode configures the OpenCode ACP target"
+contains "$AICODE" 'plugins.entries.acpx.enabled == true' "aicode requires the ACPX plugin to be enabled"
+contains "$AICODE" 'command: "bash"' "ACPX starts the verified wrapper through bash"
+contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wrapper"
+contains "$AICODE" 'OpenClaw ACP OpenCode harness configured' "aicode verifies the ACP wrapper configuration"
+contains "$ACP_WRAPPER" 'opencode mcp list' "ACP wrapper checks the effective OpenCode MCP registry"
+contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
+contains "$ACP_WRAPPER" 'load_caracal_token' "ACP wrapper refreshes Caracal credentials from the local secret store"
 
 # Manul must preserve a current endpoint/token for unattended tasks and must
 # make a task-local config plus a live MCP preflight before running OpenCode.
