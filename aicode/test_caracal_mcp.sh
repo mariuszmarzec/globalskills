@@ -37,6 +37,7 @@ contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode f
 # specific target; it deliberately does not register a duplicate native MCP in OpenClaw.
 contains "$AICODE" 'configure_openclaw_opencode_acp' "aicode configures the OpenCode ACP target"
 contains "$AICODE" 'plugins.entries.acpx.enabled == true' "aicode requires the ACPX plugin to be enabled"
+contains "$AICODE" 'probeAgent: "opencode"' "ACPX startup healthcheck selects the OpenCode harness"
 contains "$AICODE" 'command: "bash"' "ACPX starts the verified wrapper through bash"
 contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wrapper"
 contains "$AICODE" 'OpenClaw ACP OpenCode harness configured' "aicode verifies the ACP wrapper configuration"
