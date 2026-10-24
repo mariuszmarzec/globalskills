@@ -370,8 +370,11 @@ configure_openclaw_caracal_access() {
     # Never silently bypass an explicit tool deny. We can add bundle-mcp to
     # allow/alsoAllow policies, but a broad deny must be resolved by the operator.
     if printf '%s\n' "$snapshot_config" | jq -e '
-        def blocks_mcp: test("^(\\*|bundle-mcp|bundle-mcp__\\*|group:plugins|.*mcp.*)$"; "i");
+        def blocks_mcp: test("^(\\*|bundle-mcp.*|group:plugins|caracal-rag.*|.*mcp.*)$"; "i");
         any((.tools.deny // [])[]?; blocks_mcp)
+        or any((.tools.sandbox.tools.deny // [])[]?; blocks_mcp)
+        or any((.agents.defaults.tools.deny // [])[]?; blocks_mcp)
+        or any((.agents.defaults.sandbox.tools.deny // [])[]?; blocks_mcp)
         or any((.agents.entries // {} | if type == "object" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
         or any((.agents.list // [] | if type == "array" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
     ' >/dev/null 2>&1; then
@@ -402,13 +405,16 @@ configure_openclaw_caracal_access() {
           + {sandbox: {tools: mcp_access(.tools.sandbox.tools // {})}}
         ),
         agents: (
-          if (.agents.entries | type) == "object" then
-            {entries: (.agents.entries | with_entries(
-              .value.tools = mcp_access(.value.tools // {})
-            ))}
-          elif (.agents.list | type) == "array" then
-            {list: (.agents.list | map(.tools = mcp_access(.tools // {})))}
-          else {} end
+          {defaults: {tools: mcp_access(.agents.defaults.tools // {})}}
+          + if (.agents.entries | type) == "object" then
+              {entries: (reduce (.agents.entries | keys[]) as $id
+                ({}; .[$id] = {tools: mcp_access(.agents.entries[$id].tools // {})}))}
+            elif (.agents.list | type) == "array" then
+              {list: [(.agents.list[] as $agent
+                | if ($agent.id | type) != "string" then error("legacy agent entry has no stable id")
+                  else {id: $agent.id, tools: mcp_access($agent.tools // {})}
+                  end)]}
+            else {} end
         )
       }
     ')" || {
