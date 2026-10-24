@@ -79,7 +79,7 @@ The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> con
 * OpenClaw Gateway installed, connected to LiteLLM, and responding to agent turns
 * Test prompt succeeds
 * Fallback routing verified
-* Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/caracal-rag
+* Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/.caracal-rag
 * Caracal has an explicit embedding family, private API key/access token, valid Chroma settings, and a passing `caracal-rag check`
 * The configured Fiteo API documentation source is indexed successfully
 * `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM and before OpenCode; OpenCode reports the MCP server as connected
@@ -602,7 +602,7 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
 Caracal is installed on each machine using its repository installer. This creates an isolated environment under `~/.caracal` and preserves existing configuration, secrets, and index state. Do not use a system-wide `pip install`.
 
 ```bash
-CARACAL_REPO="$HOME/caracal-rag"
+CARACAL_REPO="$HOME/.caracal-rag"
 if [ -e "$CARACAL_REPO" ]; then
   if [ ! -d "$CARACAL_REPO/.git" ]; then
     echo "ERROR: $CARACAL_REPO exists but is not a Git checkout; preserve it and inspect the path."
