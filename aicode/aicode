@@ -360,7 +360,8 @@ configure_openclaw_caracal_access() {
 
     # Never silently bypass an explicit tool deny. We can add bundle-mcp to
     # allow/alsoAllow policies, but a broad deny must be resolved by the operator.
-    if printf '%s\n' "$snapshot_config" | jq -e '
+    local mcp_policy_blocked
+    if ! mcp_policy_blocked="$(printf '%s\n' "$snapshot_config" | jq -r '
         def blocks_mcp: test("^(\\*|bundle-mcp.*|group:plugins|caracal-rag__.*)$"; "i");
         any((.tools.deny // [])[]?; blocks_mcp)
         or any((.tools.sandbox.tools.deny // [])[]?; blocks_mcp)
@@ -368,7 +369,11 @@ configure_openclaw_caracal_access() {
         or any((.agents.defaults.sandbox.tools.deny // [])[]?; blocks_mcp)
         or any((.agents.entries // {} | if type == "object" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
         or any((.agents.list // [] | if type == "array" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
-    ' >/dev/null 2>&1; then
+    ')"; then
+        echo "ERROR: could not evaluate OpenClaw's MCP tool-deny policy; refusing to grant MCP access." >&2
+        return 1
+    fi
+    if [ "$mcp_policy_blocked" = "true" ]; then
         echo "ERROR: OpenClaw has an explicit tool-deny rule blocking MCP tools; refusing to bypass it." >&2
         return 1
     fi
