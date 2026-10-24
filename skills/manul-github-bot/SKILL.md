@@ -495,17 +495,20 @@ Before starting the task, it runs `opencode mcp list` and refuses to launch the
 task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.
 
-The `aicode` launcher also configures the native OpenClaw MCP registry
-(`mcp.servers.caracal-rag`), persists its endpoint/token into the OpenClaw
-state directory's mode-600 `.env`, and verifies it with
-`openclaw mcp doctor caracal-rag --probe`. It grants the `bundle-mcp` tool
-family at global, sandbox and agent policy scopes as needed, but fails rather
-than overriding an explicit tool denial.
+In this deployment, OpenClaw runs OpenCode through ACPX. The `aicode`
+launcher therefore configures the ACPX `opencode` harness to invoke
+`aicode/opencode-acp-caracal.sh`. The wrapper resolves the current Caracal
+loopback endpoint and token from Caracal's local config/secret store, sets
+`OPENCODE_CONFIG`, checks that `opencode mcp list` reports Caracal connected,
+and only then starts `opencode acp`. Its stdout remains reserved for ACP
+protocol messages. This avoids relying on environment captured when a long-lived
+OpenClaw Gateway first started and avoids registering a duplicate native
+OpenClaw MCP server for the same tools.
 
-An OpenClaw model provider that uses OpenCode is not the same as OpenClaw
-launching the OpenCode CLI through ACP. The former does not inherit OpenCode's
-MCP configuration. The latter needs the OpenCode configuration and environment
-as well; `aicode` prepares both sides independently.
+The ACPX plugin must already be installed and enabled. The launcher fails if
+it cannot configure the `opencode` ACP target or if Caracal is not connected.
+Selecting an OpenCode model provider alone is not ACP delegation; this setup
+specifically configures the ACPX `opencode` harness.
 
 The current installer deliberately does not start the daemon automatically.
 
