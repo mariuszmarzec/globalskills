@@ -263,27 +263,16 @@ ensure_opencode_caracal_config() {
     if ! jq -s '
         (.[0] // {})
         | .mcp = (
-            (.mcp // {}) as $mcp
-            | if ($mcp.servers | type) == "object" then
-                $mcp + {servers: ($mcp.servers + {
-                    "caracal-rag": {
-                        url: "{env:CARACAL_MCP_URL}",
-                        transport: "streamable-http",
-                        enabled: true,
-                        headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-                    }
-                })}
-              else
-                $mcp + {
-                    "caracal-rag": {
-                        type: "remote",
-                        url: "{env:CARACAL_MCP_URL}",
-                        oauth: false,
-                        enabled: true,
-                        headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-                    }
+            (.mcp // {}) | if type == "object" then . else {} end
+            | . + {
+                "caracal-rag": {
+                    type: "remote",
+                    url: "{env:CARACAL_MCP_URL}",
+                    oauth: false,
+                    enabled: true,
+                    headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
                 }
-              end
+            }
           )
         | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
     ' "$config_input" > "$tmp"; then
