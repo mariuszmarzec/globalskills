@@ -39,7 +39,7 @@ contains "$AICODE" 'plugins.entries.acpx.enabled == true' "aicode requires the A
 contains "$AICODE" 'command: "bash"' "ACPX starts the verified wrapper through bash"
 contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wrapper"
 contains "$AICODE" 'OpenClaw ACP OpenCode harness configured' "aicode verifies the ACP wrapper configuration"
-contains "$ACP_WRAPPER" 'opencode mcp list' "ACP wrapper checks the effective OpenCode MCP registry"
+contains "$ACP_WRAPPER" '"$opencode_bin" mcp list' "ACP wrapper checks the effective OpenCode MCP registry"
 contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
 contains "$ACP_WRAPPER" 'load_caracal_token' "ACP wrapper refreshes Caracal credentials from the local secret store"
 
