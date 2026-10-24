@@ -56,6 +56,8 @@ OPENCLAW_CONFIG_PATH="$TMP/openclaw/config with spaces.json"
 OPENCLAW_BIN="$TMP/bin/openclaw-custom"
 OPENCODE_BIN="$TMP/bin/opencode-custom"
 OPENCODE_CONFIG="$TMP/custom opencode config.json"
+CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
+CARACAL_ACCESS_TOKEN="caracal-test-token"
 UNSAFE_SECRET="must-not-be-copied"
 CUSTOM_JIRA_USER="custom-jira-user"
 CUSTOM_JIRA_PASSWORD="custom-jira-password"
@@ -64,7 +66,7 @@ cat > "$RUNTIME/config.json" <<'EOF'
 {"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CARACAL_MCP_URL CARACAL_ACCESS_TOKEN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -76,6 +78,8 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
    ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
    ! grep -q '^OPENCODE_CONFIG=' "$ENV_FILE" ||
+   ! grep -q '^CARACAL_MCP_URL=' "$ENV_FILE" ||
+   ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
@@ -90,13 +94,15 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
   source "$ENV_FILE"
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
   [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
   [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
   [ "$OPENCODE_CONFIG" = "$TMP/custom opencode config.json" ] &&
+  [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
+  [ "$CARACAL_ACCESS_TOKEN" = "caracal-test-token" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
@@ -129,6 +135,35 @@ if (
   ok "Existing operator provider configuration is preserved"
 else
   fail "Bootstrap overwrote or failed to append provider configuration"
+fi
+
+# Caracal runtime values are the exception to general preservation: the launcher
+# refreshes these two allowlisted keys so background task runners do not keep a
+# stale endpoint or bearer token after Caracal config changes.
+PRESERVE_CARACAL="$TMP/preserve-caracal"
+mkdir -p "$PRESERVE_CARACAL"
+cat > "$PRESERVE_CARACAL/.env" <<'EOF'
+OPENCLAW_STATE_DIR=/operator/chosen/state
+OPENCODE_CONFIG=/operator/chosen/opencode.json
+CARACAL_MCP_URL=http://127.0.0.1:1234/old
+CARACAL_ACCESS_TOKEN=old-token
+EOF
+chmod 600 "$PRESERVE_CARACAL/.env"
+CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
+CARACAL_ACCESS_TOKEN="new-caracal-test-token"
+export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+ENV_FILE3="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_CARACAL")"
+if (
+  unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN OPENCLAW_STATE_DIR OPENCODE_CONFIG
+  source "$ENV_FILE3"
+  [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
+  [ "$CARACAL_ACCESS_TOKEN" = "new-caracal-test-token" ] &&
+  [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
+  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+); then
+  ok "Bootstrap refreshes Caracal URL/token while preserving unrelated operator settings"
+else
+  fail "Bootstrap did not refresh Caracal runtime credentials correctly"
 fi
 
 INVALID="$TMP/invalid"
