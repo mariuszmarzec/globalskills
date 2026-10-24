@@ -496,14 +496,16 @@ task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.
 
 In this deployment, OpenClaw runs OpenCode through ACPX. The `aicode`
-launcher therefore configures the ACPX `opencode` harness to invoke
-`aicode/opencode-acp-caracal.sh`. The wrapper resolves the current Caracal
-loopback endpoint and token from Caracal's local config/secret store, sets
-`OPENCODE_CONFIG`, checks that `opencode mcp list` reports Caracal connected,
-and only then starts `opencode acp`. Its stdout remains reserved for ACP
-protocol messages. This avoids relying on environment captured when a long-lived
-OpenClaw Gateway first started and avoids registering a duplicate native
-OpenClaw MCP server for the same tools.
+launcher configures the ACPX `opencode` harness to invoke
+`aicode/opencode-acp-caracal.sh` and sets
+`plugins.entries.acpx.config.probeAgent` to `opencode`, so ACPX startup
+healthchecks validate the harness actually used. The wrapper resolves the
+current Caracal loopback endpoint and token from Caracal's local config/secret
+store, sets `OPENCODE_CONFIG`, checks that `opencode mcp list` reports Caracal
+connected, and only then starts `opencode acp`. Its stdout remains reserved for
+ACP protocol messages. This avoids relying on environment captured when a
+long-lived OpenClaw Gateway first started and avoids registering a duplicate
+native OpenClaw MCP server for the same tools.
 
 The ACPX plugin must already be installed and enabled. The launcher fails if
 it cannot configure the `opencode` ACP target or if Caracal is not connected.
