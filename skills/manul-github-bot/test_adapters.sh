@@ -276,10 +276,10 @@ test_opencode_success() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
@@ -361,10 +361,10 @@ JSON
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 set -euo pipefail
@@ -414,10 +414,10 @@ test_opencode_large_prompt_uses_stdin() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
@@ -466,10 +466,10 @@ test_opencode_no_marker_continuation() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
@@ -514,10 +514,10 @@ test_opencode_step_limit_resumes_inside_attempt() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
@@ -567,10 +567,10 @@ test_opencode_stop_without_marker() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_stop","part":{"type":"text","text":"The file is inconsistent. Let me rewrite it cleanly:"}}'
@@ -602,10 +602,10 @@ test_opencode_failure() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
@@ -653,10 +653,10 @@ test_opencode_no_progress_timeout() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"metadata","timestamp":1000,"sessionID":"ses_stalled"}'
@@ -690,10 +690,10 @@ test_opencode_active_tool_jsonl_progress() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_active_tool","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
@@ -728,10 +728,10 @@ test_opencode_active_step_jsonl_progress() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_active_step","part":{"type":"step-start"}}'
@@ -765,10 +765,10 @@ test_opencode_active_step_timeout() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_step_stuck","part":{"type":"step-start"}}'
@@ -801,10 +801,10 @@ test_opencode_active_tool_timeout() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_tool_stuck","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
@@ -855,10 +855,10 @@ test_opencode_permission_blocked() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s
@@ -891,10 +891,10 @@ MOCK
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' '{"type":"tool_use","timestamp":2000,"part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
@@ -944,10 +944,10 @@ JSON
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 set -euo pipefail
@@ -1041,10 +1041,10 @@ test_opencode_continuation() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
@@ -1130,20 +1130,20 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   ' "$config" >/dev/null
   : >"${MOCK_CONFIG_CHECK_FILE:?}"
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 : >"${MOCK_TASK_STARTED_FILE:?}"
 cat >/dev/null
-printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_caracal","part":{"type":"step-start"}}'
-printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_caracal","part":{"type":"text","text":"TASK_DONE caracal verified"}}'
-printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_caracal","part":{"type":"step-finish"}}'
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_caracal","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_caracal","part":{"type":"text","text":"TASK_DONE caracal verified"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_caracal","part":{"type":"step-finish"}}'
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' "Use Caracal MCP for this task" >"$tmp/prompt"
+  printf '%s\n' "Use Caracal MCP for this task" >"$tmp/prompt"
 
   local out rc
   # A configured URL/token is insufficient: the CLI must report connected.
@@ -1193,10 +1193,10 @@ test_agent_executor_dispatch() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
@@ -1280,10 +1280,10 @@ test_controller_stdout_path() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 sleep 5
@@ -1343,10 +1343,10 @@ test_agent_executor_dispatch() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
@@ -1423,10 +1423,10 @@ test_controller_stdout_path() {
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
 sleep 5
