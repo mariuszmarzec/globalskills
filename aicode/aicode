@@ -277,6 +277,17 @@ ensure_opencode_caracal_config() {
             }
           )
         | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+        | .agent = (
+            (.agent // {})
+            | if type == "object" then
+                with_entries(
+                  if .key == "chat" then .
+                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+                  end
+                )
+              else {}
+              end
+          )
     ' "$config_input" > "$tmp"; then
         rm -f -- "$tmp"
         echo "ERROR: unable to merge Caracal MCP into the OpenCode config." >&2
