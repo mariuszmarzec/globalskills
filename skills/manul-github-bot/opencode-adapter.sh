@@ -222,6 +222,17 @@ else
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
 fi
 
+# Caracal is a required capability for Manul's OpenCode runtime. Never start
+# a task with a half-configured MCP definition: OpenCode resolves env placeholders
+# in the adapter's child process, not from an interactive OpenCode UI session.
+if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
+   [[ "${CARACAL_MCP_URL:-}" =~ ^http://127\.0\.0\.1:0/ ]]; then
+    log "required Caracal MCP URL/token is missing or disconnected"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    exit 78
+fi
+export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+
 if [ -n "$_workspace_real" ]; then
     export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
 fi
@@ -229,38 +240,91 @@ if [ -n "$_workdir_real" ]; then
     export MANUL_TASK_WORKDIR="$_workdir_real"
 fi
 
-if [ -f "$_OPENCODE_BASE_CONFIG" ]; then
-    OPENCODE_CONFIG="$_OPENCODE_BASE_CONFIG"
-    OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
-    _original_opencode_config="$OPENCODE_CONFIG"
-    OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
-    if ! jq --arg workspace "$_workspace_real" --arg workspaceBase "$_workspace_base_real" '
-        .permission.external_directory = (
-          (.permission.external_directory // {})
-          | if type == "object" then . else {} end
-          | with_entries(
-              ((.key
-                | if startswith("~/") then (env.HOME + .[1:])
-                  elif startswith("$HOME/") then (env.HOME + .[5:])
-                  else .
-                  end) as $path
-               | select((($path == $workspaceBase) or ($path | startswith($workspaceBase + "/"))) | not))
-            )
-          | . + {
-              ($workspaceBase + "/**"): "deny",
-              ($workspace): "allow",
-              ($workspace + "/**"): "allow"
-            }
-        )
-    ' "$_original_opencode_config" >"$OPENCODE_CONFIG"; then
-        cleanup_opencode_task_config
-        printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
-        exit 65
-    fi
-    chmod 600 "$OPENCODE_CONFIG"
-    export OPENCODE_CONFIG
-    log "using task-scoped OpenCode config (provider/global config unchanged)"
+# Build an invocation-local OpenCode config for every task. Merge Caracal into
+# it even when the operator's base config has no MCP entry. Use OpenCode's canonical named-server shape (.mcp["caracal-rag"]); do not
+# confuse it with OpenClaw's distinct .mcp.servers schema.
+# Preserve unrelated settings and keep the operator/global file immutable.
+OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
+_original_opencode_config="$_OPENCODE_BASE_CONFIG"
+OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
+if [ -f "$_original_opencode_config" ]; then
+    _config_input="$_original_opencode_config"
+else
+    _config_input="/dev/null"
 fi
+if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
+    (.[0] // {})
+    | .permission.external_directory = (
+        if ($workspaceBase | length) > 0 then
+          ((.permission.external_directory // {})
+           | if type == "object" then . else {} end
+           | with_entries(
+               ((.key
+                 | if startswith("~/") then (env.HOME + .[1:])
+                   elif startswith("$HOME/") then (env.HOME + .[5:])
+                   else .
+                   end) as $path
+                | select((($path == $workspaceBase) or ($path | startswith($workspaceBase + "/"))) | not))
+             )
+           | . + {
+               ($workspaceBase + "/**"): "deny",
+               ($workspace): "allow",
+               ($workspace + "/**"): "allow"
+             })
+        else
+          ((.permission.external_directory // {}) | if type == "object" then . else {} end)
+        end
+      )
+    | .mcp = (
+        (.mcp // {}) | if type == "object" then . else {} end
+        | . + {
+            "caracal-rag": {
+              type: "remote",
+              url: "{env:CARACAL_MCP_URL}",
+              oauth: false,
+              enabled: true,
+              headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
+            }
+          }
+      )
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+    | .agent = (
+        (.agent // {})
+        | if type == "object" then
+            with_entries(
+              if .key == "chat" then .
+              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+              end
+            )
+          else {}
+          end
+      )
+' "$_config_input" >"$OPENCODE_CONFIG"; then
+    cleanup_opencode_task_config
+    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    exit 65
+fi
+chmod 600 "$OPENCODE_CONFIG"
+export OPENCODE_CONFIG
+log "using task-scoped OpenCode config with required Caracal MCP; global config unchanged"
+
+# A saved URL/token is not proof that Caracal is reachable and authenticated.
+# Check OpenCode's actual MCP registry before running any task tools.
+CARACAL_PREFLIGHT_STDOUT="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stdout"
+CARACAL_PREFLIGHT_STDERR="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
+: >"$CARACAL_PREFLIGHT_STDOUT"
+: >"$CARACAL_PREFLIGHT_STDERR"
+ProcessRunner_TmpStdout="$CARACAL_PREFLIGHT_STDOUT"
+ProcessRunner_TmpStderr="$CARACAL_PREFLIGHT_STDERR"
+_caracal_preflight_result="$(ProcessRunner.run --timeout 45 --cwd "$OPT_WORKSPACE" -- "$OPENCODE_BIN" mcp list)"
+_caracal_preflight_rc="$(printf '%s\n' "$_caracal_preflight_result" | head -n 1 | cut -d'|' -f1)"
+if [ "$_caracal_preflight_rc" != "0" ] ||
+   ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
+    log "required Caracal MCP preflight failed; OpenCode reported the server disconnected or unavailable"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    exit 78
+fi
+log "Caracal MCP preflight passed"
 
 # Append a truthful capability snapshot to every initial and resumed prompt.
 # It is derived from this invocation's effective OpenCode config (including the

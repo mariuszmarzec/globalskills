@@ -7,7 +7,7 @@ description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compat
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models from 7 sources to OpenCode and OpenClaw, installs Caracal RAG into its isolated runtime under ~/.caracal, and wires an authenticated loopback HTTP MCP endpoint into OpenCode. The aicode launcher starts Caracal after LiteLLM and before launching OpenCode. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models to OpenCode and OpenClaw, installs Caracal RAG into its isolated runtime under ~/.caracal, and configures the authenticated loopback HTTP MCP endpoint for OpenCode. In this deployment, OpenClaw invokes OpenCode through ACPX, so the aicode launcher configures the ACPX opencode harness to use a wrapper that refreshes Caracal credentials and checks the live MCP connection before starting opencode acp. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
 
 ## Architecture
 
@@ -82,7 +82,7 @@ The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> con
 * Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/.caracal-rag
 * Caracal has an explicit embedding family, private API key/access token, valid Chroma settings, and a passing `caracal-rag check`
 * The configured Fiteo API documentation source is indexed successfully
-* `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM and before OpenCode; OpenCode reports the MCP server as connected
+* `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM; `opencode mcp list` verifies the connection, and OpenClaw's ACPX `opencode` target points to `~/.globalskills/aicode/opencode-acp-caracal.sh` which repeats the MCP check before starting each ACP harness
 
 # User Interaction Policy
 
@@ -970,7 +970,7 @@ openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: Li
 
 The maintained launcher is `~/.globalskills/aicode/aicode`; `install.sh` links it to `~/.aicode/aicode`. Avoid maintaining a divergent copied launcher. If an existing file occupies that path, the installer preserves it in a timestamped backup before linking the maintained version.
 
-On each startup, `aicode` starts/validates LiteLLM first, then validates Caracal and starts its authenticated HTTP MCP on loopback only when `caracal-rag check` passes, then continues with OpenClaw/Manul and launches OpenCode. The launcher exports `CARACAL_MCP_URL` and `CARACAL_ACCESS_TOKEN` for the MCP config above. It reuses a healthy process only when the PID file and command line prove it owns that process; it will not kill an unrelated process or send credentials to an unverified endpoint. See `/tmp/caracal-mcp.log` for Caracal startup errors.
+On each startup, `aicode` starts/validates LiteLLM first, then validates Caracal and starts its authenticated HTTP MCP on loopback only when `caracal-rag check` passes. It configures the canonical OpenCode entry `mcp["caracal-rag"]` and points OpenClaw's ACPX `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`. It also sets `plugins.entries.acpx.config.probeAgent: "opencode"` so ACPX startup healthchecks validate this exact harness. Before each ACP session, the wrapper resolves the current local endpoint/token, exports `CARACAL_MCP_URL`, `CARACAL_ACCESS_TOKEN` and `OPENCODE_CONFIG`, and requires `opencode mcp list` to report Caracal connected before it executes `opencode acp`. This keeps the configuration on the process that actually owns Caracal tools and avoids duplicating Caracal as a native OpenClaw MCP server. The ACPX plugin must already be enabled. If Caracal is unavailable, the config is missing, or the live probe fails, the launcher or ACP wrapper stops instead of starting a partially configured agent. The launcher reuses a healthy Caracal process only when the PID file and command line prove it owns that process; it will not kill an unrelated process or send credentials to an unverified endpoint. See `/tmp/caracal-mcp.log` for startup errors.
 
 ```bash
 bash ~/.globalskills/install.sh
@@ -1008,6 +1008,9 @@ Verify:
 * Shared skills symlinked (`~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
 * Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
 * `opencode mcp list` reports `caracal-rag` connected when launched through `aicode`.
+* The OpenClaw ACPX config points the `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`.
+* The ACP wrapper verifies Caracal using the current secret and effective OpenCode config, then starts `opencode acp`; a disconnected MCP must prevent ACP startup.
+* The Manul OpenCode adapter injects Caracal into its task-local config and refuses to start the task if `opencode mcp list` does not report a live connection.
 
 Only then report:
 

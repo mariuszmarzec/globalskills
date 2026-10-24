@@ -483,7 +483,34 @@ diagnostic archives under `/tmp/manul-diagnostics`, ensure that directory is
 user-owned and mode `700`, and redact credentials before sharing artifacts.
 
 The operator `.env` is runtime-owned and mode 600. It carries only explicitly
-supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`.
+supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`,
+plus `CARACAL_MCP_URL` and `CARACAL_ACCESS_TOKEN`. The Caracal URL/token are
+refreshed from the launcher's current environment while unrelated operator settings
+are preserved. Arbitrary environment variables are never copied.
+
+For an OpenCode task, `opencode-adapter.sh` adds the authenticated `caracal-rag`
+MCP entry to an invocation-local `opencode.json` using OpenCode's canonical
+`mcp["caracal-rag"]` schema. It does not mutate the operator's global config.
+Before starting the task, it runs `opencode mcp list` and refuses to launch the
+task unless Caracal reports a live connected status. A URL or token alone is not
+treated as proof of access.
+
+In this deployment, OpenClaw runs OpenCode through ACPX. The `aicode`
+launcher configures the ACPX `opencode` harness to invoke
+`aicode/opencode-acp-caracal.sh` and sets
+`plugins.entries.acpx.config.probeAgent` to `opencode`, so ACPX startup
+healthchecks validate the harness actually used. The wrapper resolves the
+current Caracal loopback endpoint and token from Caracal's local config/secret
+store, sets `OPENCODE_CONFIG`, checks that `opencode mcp list` reports Caracal
+connected, and only then starts `opencode acp`. Its stdout remains reserved for
+ACP protocol messages. This avoids relying on environment captured when a
+long-lived OpenClaw Gateway first started and avoids registering a duplicate
+native OpenClaw MCP server for the same tools.
+
+The ACPX plugin must already be installed and enabled. The launcher fails if
+it cannot configure the `opencode` ACP target or if Caracal is not connected.
+Selecting an OpenCode model provider alone is not ACP delegation; this setup
+specifically configures the ACPX `opencode` harness.
 
 The current installer deliberately does not start the daemon automatically.
 
