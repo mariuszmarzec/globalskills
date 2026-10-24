@@ -29,6 +29,7 @@ contains "$AICODE" '"caracal-rag": {' "aicode registers Caracal in OpenCode"
 contains "$AICODE" 'type: "remote"' "OpenCode config uses its native remote MCP type"
 contains "$AICODE" 'url: "{env:CARACAL_MCP_URL}"' "OpenCode endpoint is injected via environment"
 contains "$AICODE" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "OpenCode bearer token is injected via environment"
+contains "$AICODE" '"caracal-rag_*": true' "configured OpenCode agents can call Caracal tools"
 contains "$AICODE" 'opencode mcp list' "aicode probes the real OpenCode MCP registry"
 contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if OpenCode MCP is disconnected"
 
