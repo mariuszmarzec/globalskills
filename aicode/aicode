@@ -262,6 +262,8 @@ ensure_opencode_caracal_config() {
     fi
     if ! jq -s '
         (.[0] // {})
+        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's
+        # separate .mcp.servers schema.
         | .mcp = (
             (.mcp // {}) | if type == "object" then . else {} end
             | . + {
