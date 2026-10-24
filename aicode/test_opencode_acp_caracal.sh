@@ -35,7 +35,7 @@ chmod 600 "$CARACAL/config/secrets.yaml"
 cat >"$CARACAL/bin/caracal-rag" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-[ "\${1:-}" = "check" ] || exit 2
+[ "${1:-}" = "check" ] || exit 2
 printf '%s\n' 'status=ok mcp_host=127.0.0.1 mcp_port=3510 mcp_path=/mcp'
 MOCK
 chmod +x "$CARACAL/bin/caracal-rag"
@@ -51,26 +51,26 @@ chmod +x "$CARACAL/venv/bin/python"
 cat >"$BIN/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "list" ]; then
-  [ "\${CARACAL_MCP_URL:-}" = "http://127.0.0.1:3510/mcp" ] || exit 71
-  [ "\${CARACAL_ACCESS_TOKEN:-}" = "test-caracal-token" ] || exit 72
-  [ "\${OPENCODE_CONFIG:-}" = "\${EXPECTED_CONFIG:-}" ] || exit 73
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  [ "${CARACAL_MCP_URL:-}" = "http://127.0.0.1:3510/mcp" ] || exit 71
+  [ "${CARACAL_ACCESS_TOKEN:-}" = "test-caracal-token" ] || exit 72
+  [ "${OPENCODE_CONFIG:-}" = "${EXPECTED_CONFIG:-}" ] || exit 73
   jq -e '
     .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
     and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
     and .mcp["caracal-rag"].enabled == true
   ' "$OPENCODE_CONFIG" >/dev/null
-  : > "\${PREFLIGHT_FILE:?}"
-  if [ "\${MOCK_MCP_STATE:-connected}" = "connected" ]; then
+  : > "${PREFLIGHT_FILE:?}"
+  if [ "${MOCK_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
   printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
-if [ "\${1:-}" = "acp" ]; then
-  printf '%s\n' "$*" > "\${ACP_ARGS_FILE:?}"
-  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" > "\${ACP_ENV_FILE:?}"
+if [ "${1:-}" = "acp" ]; then
+  printf '%s\n' "$*" > "${ACP_ARGS_FILE:?}"
+  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" > "${ACP_ENV_FILE:?}"
   exit 0
 fi
 exit 2
