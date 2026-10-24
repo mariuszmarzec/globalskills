@@ -7,6 +7,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# These local test endpoints are handled by the fake OpenCode binaries below.
+export CARACAL_MCP_URL="${CARACAL_MCP_URL:-http://127.0.0.1:3400/mcp}"
+export CARACAL_ACCESS_TOKEN="${CARACAL_ACCESS_TOKEN:-test-caracal-token}"
 PASS=0
 FAIL=0
 
@@ -270,6 +273,15 @@ test_opencode_success() {
   mkdir -p "$tmp/bin" "$tmp/src"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
 printf 'PYTHONPATH=%s\n' "${PYTHONPATH-<unset>}" > "$MOCK_ENV_FILE"
@@ -346,6 +358,15 @@ JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 set -euo pipefail
 if [ "${1:-}" = "run" ]; then
   # Inspect the actual config used by this run, not a debug command that the
@@ -390,6 +411,15 @@ test_opencode_large_prompt_uses_stdin() {
 
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 cat > "$MOCK_STDIN_FILE"
 printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_large","part":{"type":"text","text":"TASK_DONE large prompt accepted"}}'
@@ -433,6 +463,15 @@ test_opencode_no_marker_continuation() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
 count=$((count + 1))
 printf '%s\n' "$count" >"$MOCK_COUNT_FILE"
@@ -472,6 +511,15 @@ test_opencode_step_limit_resumes_inside_attempt() {
   printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":1}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
 count=$((count + 1))
 printf '%s\n' "$count" >"$MOCK_COUNT_FILE"
@@ -516,6 +564,15 @@ test_opencode_stop_without_marker() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_stop","part":{"type":"text","text":"The file is inconsistent. Let me rewrite it cleanly:"}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1100,"sessionID":"ses_stop","part":{"type":"step-finish","reason":"stop"}}'
 exit 0
@@ -542,6 +599,15 @@ test_opencode_failure() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"error","timestamp":1000,"sessionID":"ses_fail","error":{"name":"ProviderError","message":"provider failed"}}'
 printf '%s\n' '! permission requested: external_directory (/tmp/*); auto-rejecting.' >&2
 exit 1
@@ -584,6 +650,15 @@ test_opencode_no_progress_timeout() {
   printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"metadata","timestamp":1000,"sessionID":"ses_stalled"}'
 sleep 30
 MOCK
@@ -612,6 +687,15 @@ test_opencode_active_tool_jsonl_progress() {
   printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentToolNoProgressTimeoutSeconds":8}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_active_tool","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
 sleep 4
 printf '%s\n' '{"type":"tool_use","timestamp":5000,"sessionID":"ses_active_tool","part":{"type":"tool-use","tool":"bash","state":{"status":"completed","input":{},"output":"ok"}}}'
@@ -641,6 +725,15 @@ test_opencode_active_step_jsonl_progress() {
   printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentStepNoProgressTimeoutSeconds":8}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_active_step","part":{"type":"step-start"}}'
 sleep 4
 printf '%s\n' '{"type":"text","timestamp":5100,"sessionID":"ses_active_step","part":{"type":"text","text":"TASK_DONE active step finished"}}'
@@ -669,6 +762,15 @@ test_opencode_active_step_timeout() {
   printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentStepNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_step_stuck","part":{"type":"step-start"}}'
 sleep 30
 MOCK
@@ -696,6 +798,15 @@ test_opencode_active_tool_timeout() {
   printf '%s\n' '{"automation":{"agentNoProgressTimeoutSeconds":2,"agentToolNoProgressTimeoutSeconds":2}}' > "$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_tool_stuck","part":{"type":"tool-use","tool":"bash","state":{"status":"running","input":{}}}}'
 sleep 30
 MOCK
@@ -741,6 +852,15 @@ test_opencode_permission_blocked() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s
 ' '{"type":"tool_use","timestamp":1000,"part":{"type":"tool-use","tool":"external_directory","state":{"status":"error","error":"permission requested: external_directory (/etc/*); auto-rejecting"}}}'
 exit 1
@@ -768,6 +888,15 @@ MOCK
   # stderr often contains the actionable target that must be preserved.
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' '{"type":"tool_use","timestamp":2000,"part":{"type":"tool-use","tool":"bash","state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}}'
 printf '%s\n' '! permission requested: bash (cd /home/marzec/.manul/workspace/ws-old/src && git log); auto-rejecting' >&2
 exit 1
@@ -812,6 +941,15 @@ test_opencode_permission_recovery() {
 JSON
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 set -euo pipefail
 printf '%s\n' "$*" >>"$MOCK_ARGS_FILE"
 count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
@@ -900,6 +1038,15 @@ test_opencode_continuation() {
   printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":0}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
 cat > "$MOCK_STDIN_FILE"
 has_session=false
@@ -954,6 +1101,15 @@ test_agent_executor_dispatch() {
   mkdir -p "$tmp/bin" "$workspace_root" "$workdir" "$tmp/home"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
@@ -1032,6 +1188,15 @@ test_controller_stdout_path() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 sleep 5
 exit 0
 MOCK
@@ -1086,6 +1251,15 @@ test_agent_executor_dispatch() {
   mkdir -p "$tmp/bin" "$workspace_root" "$workdir" "$tmp/home"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
@@ -1157,6 +1331,15 @@ test_controller_stdout_path() {
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+# Universal Caracal MCP fixture for OpenCode adapter tests.
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+    printf '%s\\n' 'caracal-rag connected'
+    exit 0
+  fi
+  printf '%s\\n' 'caracal-rag failed'
+  exit 1
+fi
 sleep 5
 exit 0
 MOCK
