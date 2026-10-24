@@ -25,6 +25,7 @@ env:
   MANUL_CI_TESTS: |
     aicode/test_chroma_lifecycle.sh
     aicode/test_caracal_mcp.sh
+    aicode/test_opencode_acp_caracal.sh
     skills/manul-github-bot/test_manul_cli.sh
     skills/manul-github-bot/test_queue_reset.sh
     skills/manul-github-bot/test_daemon_wrapper_integration.sh
