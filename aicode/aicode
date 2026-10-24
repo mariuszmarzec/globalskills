@@ -353,6 +353,21 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
+    # Avoid writing the Gateway config on every aicode launch. config.patch can
+    # hot-reload ACPX, so only patch when the harness command or allowlist needs
+    # a change.
+    if printf '%s\n' "$snapshot_config" | jq -e --arg wrapper "$wrapper" '
+      (.plugins.entries.acpx.config.agents.opencode.command == "bash")
+      and (.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
+      and (
+        ((.acp.allowedAgents | type) != "array")
+        or ((.acp.allowedAgents | index("opencode")) != null)
+      )
+    ' >/dev/null 2>&1; then
+        echo "OpenClaw ACP OpenCode harness already uses the Caracal-verifying wrapper."
+        return 0
+    fi
+
     patch="$(printf '%s\n' "$snapshot_config" | jq -c --arg wrapper "$wrapper" '
       . as $cfg
       | {
