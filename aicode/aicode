@@ -420,13 +420,17 @@ configure_openclaw_caracal_access() {
         return 1
     fi
 
-    local doctor_log="/tmp/openclaw-caracal-mcp-doctor.log"
+    local doctor_log="/tmp/openclaw-caracal-mcp-doctor.log" doctor_old_umask
+    doctor_old_umask="$(umask)"
+    umask 077
+    : >"$doctor_log" || { umask "$doctor_old_umask"; echo "ERROR: could not create the private OpenClaw MCP probe log." >&2; return 1; }
+    chmod 0600 "$doctor_log" || { umask "$doctor_old_umask"; return 1; }
     if ! openclaw mcp doctor caracal-rag --probe >"$doctor_log" 2>&1; then
-        chmod 0600 "$doctor_log" 2>/dev/null || true
+        umask "$doctor_old_umask"
         echo "ERROR: OpenClaw did not pass the live authenticated Caracal MCP probe; see $doctor_log." >&2
         return 1
     fi
-    chmod 0600 "$doctor_log" 2>/dev/null || true
+    umask "$doctor_old_umask"
     echo "OpenClaw Caracal MCP connection and tool access verified."
 }
 
