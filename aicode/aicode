@@ -380,13 +380,12 @@ configure_openclaw_caracal_access() {
     fi
 
     patch="$(printf '%s\n' "$snapshot_config" | jq -c --arg url "$CARACAL_MCP_URL" '
-      def mcp_access:
-        . as $p
-        | if (($p.allow | type) == "array") then
-            {allow: (($p.allow + ["bundle-mcp"]) | unique)}
-          else
-            {alsoAllow: ((($p.alsoAllow // []) + ["bundle-mcp"]) | unique)}
-          end;
+      def mcp_access($p):
+        if (($p.allow | type) == "array") then
+          {allow: (($p.allow + ["bundle-mcp"]) | unique)}
+        else
+          {alsoAllow: ((($p.alsoAllow // []) + ["bundle-mcp"]) | unique)}
+        end;
       {
         mcp: {
           servers: {
@@ -399,7 +398,7 @@ configure_openclaw_caracal_access() {
           }
         },
         tools: (
-          mcp_access
+          mcp_access(.tools // {})
           + {sandbox: {tools: mcp_access(.tools.sandbox.tools // {})}}
         ),
         agents: (
@@ -449,15 +448,30 @@ if [ -z "${CARACAL_MCP_URL:-}" ]; then
     fi
 fi
 
-ensure_caracal_mcp
+if ! ensure_caracal_mcp; then
+    exit 1
+fi
+if ! ensure_opencode_caracal_config; then
+    exit 1
+fi
+if ! persist_openclaw_caracal_environment; then
+    exit 1
+fi
 
-# Ensure OpenClaw Gateway is running
+# Ensure OpenClaw Gateway is running with the current Caracal URL/token in its
+# inherited environment. A pre-existing process must be restarted if the global
+# dotenv values changed, because dotenv intentionally does not override its env.
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 gateway_responding() {
     curl -fsS --max-time 2 \
         "http://127.0.0.1:${GATEWAY_PORT}" \
         >/dev/null 2>&1
 }
+
+OPENCLAW_GATEWAY_WAS_RUNNING=false
+if gateway_responding; then
+    OPENCLAW_GATEWAY_WAS_RUNNING=true
+fi
 
 if ! gateway_responding; then
     nohup openclaw gateway \
@@ -479,10 +493,27 @@ if ! gateway_responding; then
     if [ "$ready" -eq 1 ]; then
         echo "OpenClaw Gateway is up on http://127.0.0.1:${GATEWAY_PORT}"
     else
-        echo "WARNING: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log"
+        echo "ERROR: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log" >&2
+        exit 1
     fi
 else
     echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
+fi
+
+if [ "$OPENCLAW_GATEWAY_WAS_RUNNING" = true ] && [ "${OPENCLAW_CARACAL_ENV_CHANGED:-0}" = 1 ]; then
+    echo "Caracal runtime credentials changed; restarting the existing OpenClaw Gateway to reload its environment."
+    if ! openclaw gateway restart --wait 30s >/tmp/openclaw-gateway-restart.log 2>&1; then
+        echo "ERROR: could not restart the existing OpenClaw Gateway with the current Caracal credentials; see /tmp/openclaw-gateway-restart.log." >&2
+        exit 1
+    fi
+    if ! gateway_responding; then
+        echo "ERROR: OpenClaw Gateway did not respond after restart." >&2
+        exit 1
+    fi
+fi
+
+if ! configure_openclaw_caracal_access; then
+    exit 1
 fi
 
 # Ensure Manul GitHub bot daemon is running.
