@@ -483,7 +483,29 @@ diagnostic archives under `/tmp/manul-diagnostics`, ensure that directory is
 user-owned and mode `700`, and redact credentials before sharing artifacts.
 
 The operator `.env` is runtime-owned and mode 600. It carries only explicitly
-supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`.
+supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`,
+plus `CARACAL_MCP_URL` and `CARACAL_ACCESS_TOKEN`. The Caracal URL/token are
+refreshed from the launcher's current environment while unrelated operator settings
+are preserved. Arbitrary environment variables are never copied.
+
+For an OpenCode task, `opencode-adapter.sh` adds the authenticated `caracal-rag`
+MCP entry to an invocation-local `opencode.json` using OpenCode's canonical
+`mcp["caracal-rag"]` schema. It does not mutate the operator's global config.
+Before starting the task, it runs `opencode mcp list` and refuses to launch the
+task unless Caracal reports a live connected status. A URL or token alone is not
+treated as proof of access.
+
+The `aicode` launcher also configures the native OpenClaw MCP registry
+(`mcp.servers.caracal-rag`), persists its endpoint/token into the OpenClaw
+state directory's mode-600 `.env`, and verifies it with
+`openclaw mcp doctor caracal-rag --probe`. It grants the `bundle-mcp` tool
+family at global, sandbox and agent policy scopes as needed, but fails rather
+than overriding an explicit tool denial.
+
+An OpenClaw model provider that uses OpenCode is not the same as OpenClaw
+launching the OpenCode CLI through ACP. The former does not inherit OpenCode's
+MCP configuration. The latter needs the OpenCode configuration and environment
+as well; `aicode` prepares both sides independently.
 
 The current installer deliberately does not start the daemon automatically.
 
