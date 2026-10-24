@@ -115,7 +115,7 @@ fi
 
 # The CLI checks effective config, environment expansion, HTTP connection, and
 # bearer authentication. Do not print its output; it may expose endpoint details.
-if ! mcp_output="$("$opencode_bin" mcp list 2>&1)" ||
+if ! mcp_output="$(timeout 45 "$opencode_bin" mcp list 2>&1)" ||
    ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
     log "OpenCode did not report caracal-rag as connected; refusing the ACP session"
     exit 78
