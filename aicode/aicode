@@ -383,12 +383,13 @@ configure_openclaw_caracal_access() {
     fi
 
     patch="$(printf '%s\n' "$snapshot_config" | jq -c --arg url "$CARACAL_MCP_URL" '
-      def mcp_access($p):
-        if (($p.allow | type) == "array") then
-          {allow: (($p.allow + ["bundle-mcp"]) | unique)}
-        else
-          {alsoAllow: ((($p.alsoAllow // []) + ["bundle-mcp"]) | unique)}
-        end;
+      . as $cfg
+      | def mcp_access($p):
+          if (($p.allow | type) == "array") then
+            {allow: (($p.allow + ["bundle-mcp"]) | unique)}
+          else
+            {alsoAllow: ((($p.alsoAllow // []) + ["bundle-mcp"]) | unique)}
+          end;
       {
         mcp: {
           servers: {
@@ -401,23 +402,23 @@ configure_openclaw_caracal_access() {
           }
         },
         tools: (
-          mcp_access(.tools // {})
-          + {sandbox: {tools: mcp_access(.tools.sandbox.tools // {})}}
+          mcp_access($cfg.tools // {})
+          + {sandbox: {tools: mcp_access($cfg.tools.sandbox.tools // {})}}
         ),
         agents: (
-          {defaults: {tools: mcp_access(.agents.defaults.tools // {})}}
-          + if (.agents.entries | type) == "object" then
-              {entries: (reduce (.agents.entries | keys[]) as $id
-                ({}; .[$id] = {tools: mcp_access(.agents.entries[$id].tools // {})}))}
-            elif (.agents.list | type) == "array" then
-              {list: [(.agents.list[] as $agent
+          {defaults: {tools: mcp_access($cfg.agents.defaults.tools // {})}}
+          + (if ($cfg.agents.entries | type) == "object" then
+              {entries: (reduce ($cfg.agents.entries | keys[]) as $id
+                ({}; .[$id] = {tools: mcp_access($cfg.agents.entries[$id].tools // {})}))}
+            elif ($cfg.agents.list | type) == "array" then
+              {list: [($cfg.agents.list[] as $agent
                 | if ($agent.id | type) != "string" then error("legacy agent entry has no stable id")
                   else {id: $agent.id, tools: mcp_access($agent.tools // {})}
                   end)]}
-            else {} end
+            else {} end)
         )
       }
-    ')" || {
+    ')"" || {
         echo "ERROR: unable to prepare OpenClaw Caracal access policies." >&2
         return 1
     }
