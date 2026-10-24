@@ -73,37 +73,35 @@ EOF
     OPENCLAW_BIN \
     OPENCODE_BIN \
     OPENCODE_CONFIG \
-    CARACAL_MCP_URL \
-    CARACAL_ACCESS_TOKEN \
     MANUL_JIRA_USER \
     MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
     [ -n "$value" ] || continue
 
-    # Caracal's URL/token can change between launcher runs. Refresh those two
-    # allowlisted values so each isolated task runner loads the current endpoint
-    # and credential from ~/.manul/.env, even when the long-lived daemon predates
-    # the latest launcher invocation. Preserve every unrelated operator setting.
-    case "$variable" in
-      CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)
-        refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-        if ! awk -v name="$variable" '$0 !~ "^[[:space:]]*(export[[:space:]]+)?" name "="' "$env_file" > "$refreshed_file"; then
-          rm -f -- "$refreshed_file"
-          return 1
-        fi
-        printf '%s=%q\n' "$variable" "$value" >> "$refreshed_file"
-        chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
-        mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-        echo "  Refreshed $variable for unattended Manul processes" >&2
-        ;;
-      *)
-        if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
-          printf '%s=%q\n' "$variable" "$value" >> "$env_file"
-          echo "  Captured $variable for unattended Manul processes" >&2
-        fi
-        ;;
-    esac
+    if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${variable}=" "$env_file"; then
+      printf '%s=%q\n' "$variable" "$value" >> "$env_file"
+      echo "  Captured $variable for unattended Manul processes" >&2
+    fi
   done
+
+  # Refresh URL and token together in one atomic file replacement. Task runners
+  # never observe a mixed old/new credential pair if a launcher is refreshing
+  # Caracal while the long-lived daemon is active.
+  if [ -n "${CARACAL_MCP_URL:-}" ] && [ -n "${CARACAL_ACCESS_TOKEN:-}" ]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/
+    ' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'CARACAL_MCP_URL=%q\nCARACAL_ACCESS_TOKEN=%q\n' \
+      "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Caracal MCP endpoint/token for unattended Manul processes" >&2
+  fi
 
   # Jira credentials may use operator-selected environment variable names.
   # Capture only names explicitly configured by enabled Jira task sources; never
