@@ -1101,12 +1101,10 @@ test_opencode_caracal_mcp() {
 {
   "model": "test/provider",
   "mcp": {
-    "servers": {
-      "other-server": {
-        "url": "https://example.invalid/mcp",
-        "transport": "streamable-http",
-        "enabled": true
-      }
+    "other-server": {
+      "type": "remote",
+      "url": "https://example.invalid/mcp",
+      "enabled": true
     }
   },
   "agent": {
@@ -1118,26 +1116,27 @@ JSON
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "\${1:-}" = "mcp" ] && [ "\${2:-}" = "list" ]; then
-  config="\${OPENCODE_CONFIG:?effective task config missing}"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  config="${OPENCODE_CONFIG:?effective task config missing}"
   jq -e '
-    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
-    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp.servers["caracal-rag"].enabled == true
+    .mcp["other-server"].url == "https://example.invalid/mcp"
+    and .mcp["caracal-rag"].type == "remote"
+    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp["caracal-rag"].enabled == true
     and .tools["caracal-rag_*"] == true
     and .agent.coder.tools["caracal-rag_*"] == true
     and .agent.chat.tools["caracal-rag_*"] == null
   ' "$config" >/dev/null
-  : >"\${MOCK_CONFIG_CHECK_FILE:?}"
-  if [ "\${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
+  : >"${MOCK_CONFIG_CHECK_FILE:?}"
+  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\\n' 'caracal-rag connected'
     exit 0
   fi
   printf '%s\\n' 'caracal-rag failed'
   exit 1
 fi
-: >"\${MOCK_TASK_STARTED_FILE:?}"
+: >"${MOCK_TASK_STARTED_FILE:?}"
 cat >/dev/null
 printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_caracal","part":{"type":"step-start"}}'
 printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_caracal","part":{"type":"text","text":"TASK_DONE caracal verified"}}'
