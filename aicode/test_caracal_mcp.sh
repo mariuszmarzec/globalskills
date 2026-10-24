@@ -44,7 +44,7 @@ contains "$AICODE" 'No agent runtime will start' "aicode fails closed when Carac
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL' "Manul persists the Caracal endpoint"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN' "Manul persists the Caracal token"
 contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "Manul injects Caracal into its task-local OpenCode config"
-contains "$MANUL/opencode-adapter.sh" 'opencode" mcp list' "Manul checks the live OpenCode MCP registry"
+contains "$MANUL/opencode-adapter.sh" 'ProcessRunner.run --timeout 45' "Manul checks the live OpenCode MCP registry"
 contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to start a task without a live Caracal connection"
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
 contains "$MANUL/test_manul_environment.sh" 'Bootstrap refreshes Caracal URL/token' "environment tests cover Caracal endpoint/token refresh"
