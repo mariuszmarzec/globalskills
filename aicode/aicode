@@ -304,49 +304,15 @@ ensure_opencode_caracal_config() {
     echo "OpenCode reports caracal-rag connected."
 }
 
-persist_openclaw_caracal_environment() {
-    local state_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-    local env_file="$state_dir/.env" tmp old_umask
-    if [[ "$CARACAL_MCP_URL" == *[$'\r\n\"']* ]]; then
-        echo "ERROR: Caracal URL cannot be represented safely in OpenClaw's global dotenv file." >&2
+configure_openclaw_opencode_acp() {
+    local snapshot snapshot_config base_hash patch params verified
+    local wrapper="$HOME/.globalskills/aicode/opencode-acp-caracal.sh"
+
+    if [ ! -r "$wrapper" ]; then
+        echo "ERROR: OpenCode ACP Caracal wrapper is missing: $wrapper" >&2
         return 1
     fi
-    mkdir -p "$state_dir" || return 1
-    [ ! -L "$state_dir" ] && [ ! -L "$env_file" ] || {
-        echo "ERROR: refusing symlinked OpenClaw environment path." >&2
-        return 1
-    }
-    chmod 0700 "$state_dir" 2>/dev/null || true
 
-    old_umask="$(umask)"
-    umask 077
-    tmp="$(mktemp "$state_dir/.env.caracal.XXXXXX")" || { umask "$old_umask"; return 1; }
-    if [ -f "$env_file" ]; then
-        if ! awk '
-          $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-          $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/
-        ' "$env_file" > "$tmp"; then
-            rm -f -- "$tmp"
-            umask "$old_umask"
-            return 1
-        fi
-    fi
-    printf 'CARACAL_MCP_URL="%s"\nCARACAL_ACCESS_TOKEN="%s"\n' \
-        "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" >> "$tmp"
-    chmod 0600 "$tmp" || { rm -f -- "$tmp"; umask "$old_umask"; return 1; }
-
-    if [ -f "$env_file" ] && cmp -s "$tmp" "$env_file"; then
-        rm -f -- "$tmp"
-        OPENCLAW_CARACAL_ENV_CHANGED=0
-    else
-        mv -- "$tmp" "$env_file" || { rm -f -- "$tmp"; umask "$old_umask"; return 1; }
-        OPENCLAW_CARACAL_ENV_CHANGED=1
-    fi
-    umask "$old_umask"
-}
-
-configure_openclaw_caracal_access() {
-    local snapshot snapshot_config base_hash patch params output
     if ! snapshot="$(openclaw gateway call config.get --params '{}' 2>/dev/null)"; then
         echo "ERROR: could not read the active OpenClaw config through the Gateway." >&2
         return 1
@@ -358,87 +324,62 @@ configure_openclaw_caracal_access() {
         return 1
     fi
 
-    # Never silently bypass an explicit tool deny. We can add bundle-mcp to
-    # allow/alsoAllow policies, but a broad deny must be resolved by the operator.
-    local mcp_policy_blocked
-    if ! mcp_policy_blocked="$(printf '%s\n' "$snapshot_config" | jq -r '
-        def blocks_mcp: test("^(\\*|bundle-mcp.*|group:plugins|caracal-rag__.*)$"; "i");
-        any((.tools.deny // [])[]?; blocks_mcp)
-        or any((.tools.sandbox.tools.deny // [])[]?; blocks_mcp)
-        or any((.agents.defaults.tools.deny // [])[]?; blocks_mcp)
-        or any((.agents.defaults.sandbox.tools.deny // [])[]?; blocks_mcp)
-        or any((.agents.entries // {} | if type == "object" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
-        or any((.agents.list // [] | if type == "array" then .[] else empty end | .tools.deny // [])[]?; blocks_mcp)
-    ')"; then
-        echo "ERROR: could not evaluate OpenClaw's MCP tool-deny policy; refusing to grant MCP access." >&2
-        return 1
-    fi
-    if [ "$mcp_policy_blocked" = "true" ]; then
-        echo "ERROR: OpenClaw has an explicit tool-deny rule blocking MCP tools; refusing to bypass it." >&2
+    # ACPX owns the OpenCode harness process. Configure that one target to use a
+    # wrapper which refreshes Caracal credentials and runs opencode mcp list
+    # before opencode acp. Do not register a duplicate native OpenClaw MCP:
+    # Caracal tools are provided by the OpenCode harness in this deployment.
+    if ! printf '%s\n' "$snapshot_config" | jq -e '.plugins.entries.acpx.enabled == true' >/dev/null 2>&1; then
+        echo "ERROR: the OpenClaw ACPX plugin must be installed and enabled before configuring the OpenCode harness." >&2
         return 1
     fi
 
-    patch="$(printf '%s\n' "$snapshot_config" | jq -c --arg url "$CARACAL_MCP_URL" '
+    patch="$(printf '%s\n' "$snapshot_config" | jq -c --arg wrapper "$wrapper" '
       . as $cfg
-      | def mcp_access($p):
-          if (($p.allow | type) == "array") then
-            {allow: (($p.allow + ["bundle-mcp"]) | unique)}
-          else
-            {alsoAllow: ((($p.alsoAllow // []) + ["bundle-mcp"]) | unique)}
-          end;
-      {
-        mcp: {
-          servers: {
-            "caracal-rag": {
-              url: $url,
-              transport: "streamable-http",
-              enabled: true,
-              headers: {Authorization: "Bearer ${CARACAL_ACCESS_TOKEN}"}
+      | {
+          plugins: {
+            entries: {
+              acpx: {
+                config: {
+                  agents: {
+                    opencode: {
+                      command: "bash",
+                      args: [$wrapper, "acp"]
+                    }
+                  }
+                }
+              }
             }
           }
-        },
-        tools: (
-          mcp_access($cfg.tools // {})
-          + {sandbox: {tools: mcp_access($cfg.tools.sandbox.tools // {})}}
-        ),
-        agents: (
-          {defaults: {tools: mcp_access($cfg.agents.defaults.tools // {})}}
-          + (if ($cfg.agents.entries | type) == "object" then
-              {entries: (reduce ($cfg.agents.entries | keys[]) as $id
-                ({}; .[$id] = {tools: mcp_access($cfg.agents.entries[$id].tools // {})}))}
-            elif ($cfg.agents.list | type) == "array" then
-              {list: [($cfg.agents.list[] as $agent
-                | if ($agent.id | type) != "string" then error("legacy agent entry has no stable id")
-                  else {id: $agent.id, tools: mcp_access($agent.tools // {})}
-                  end)]}
-            else {} end)
-        )
-      }
+        }
+        + (if ($cfg.acp.allowedAgents | type) == "array" then
+             {acp: {allowedAgents: (($cfg.acp.allowedAgents + ["opencode"]) | unique)}}
+           else {} end)
     ')" || {
-        echo "ERROR: unable to prepare OpenClaw Caracal access policies." >&2
+        echo "ERROR: unable to prepare OpenCode ACP harness configuration." >&2
         return 1
     }
     params="$(jq -cn --arg raw "$patch" --arg baseHash "$base_hash" \
-        '{raw:$raw,baseHash:$baseHash,note:"Ensure authenticated Caracal MCP access for OpenClaw agents"}')" || return 1
+        '{raw:$raw,baseHash:$baseHash,note:"Route OpenClaw ACP OpenCode through the Caracal-verified wrapper"}')" || return 1
     if ! openclaw gateway call config.patch --params "$params" >/dev/null 2>&1; then
-        echo "ERROR: OpenClaw rejected the Caracal MCP/tool-access config patch." >&2
+        echo "ERROR: OpenClaw rejected the OpenCode ACP harness configuration." >&2
         return 1
     fi
 
-    local doctor_log="/tmp/openclaw-caracal-mcp-doctor.log" doctor_old_umask
-    doctor_old_umask="$(umask)"
-    umask 077
-    : >"$doctor_log" || { umask "$doctor_old_umask"; echo "ERROR: could not create the private OpenClaw MCP probe log." >&2; return 1; }
-    chmod 0600 "$doctor_log" || { umask "$doctor_old_umask"; return 1; }
-    if ! openclaw mcp doctor caracal-rag --probe >"$doctor_log" 2>&1; then
-        umask "$doctor_old_umask"
-        echo "ERROR: OpenClaw did not pass the live authenticated Caracal MCP probe; see $doctor_log." >&2
+    if ! verified="$(openclaw gateway call config.get --params '{}' 2>/dev/null)" ||
+       ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
+         (.payload.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
+         and (.payload.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
+         and (
+           ((.payload.config.acp.allowedAgents | type) != "array")
+           or ((.payload.config.acp.allowedAgents | index("opencode")) != null)
+         )
+       ' >/dev/null 2>&1; then
+        echo "ERROR: OpenClaw did not retain the expected OpenCode ACP wrapper configuration." >&2
         return 1
     fi
-    umask "$doctor_old_umask"
-    echo "OpenClaw Caracal MCP connection and tool access verified."
+
+    echo "OpenClaw ACP OpenCode harness configured with the Caracal-verifying wrapper."
 }
-
 
 # Chroma is a separate local database service; Caracal's check needs it reachable.
 # An explicit CARACAL_MCP_URL means the MCP endpoint is externally managed, so
@@ -461,24 +402,14 @@ fi
 if ! ensure_opencode_caracal_config; then
     exit 1
 fi
-if ! persist_openclaw_caracal_environment; then
-    exit 1
-fi
-
-# Ensure OpenClaw Gateway is running with the current Caracal URL/token in its
-# inherited environment. A pre-existing process must be restarted if the global
-# dotenv values changed, because dotenv intentionally does not override its env.
+# The ACP wrapper loads current Caracal credentials directly when each
+# OpenCode harness starts, so no Gateway restart is needed just to refresh them.
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 gateway_responding() {
     curl -fsS --max-time 2 \
         "http://127.0.0.1:${GATEWAY_PORT}" \
         >/dev/null 2>&1
 }
-
-OPENCLAW_GATEWAY_WAS_RUNNING=false
-if gateway_responding; then
-    OPENCLAW_GATEWAY_WAS_RUNNING=true
-fi
 
 if ! gateway_responding; then
     nohup openclaw gateway \
@@ -507,19 +438,7 @@ else
     echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
 fi
 
-if [ "$OPENCLAW_GATEWAY_WAS_RUNNING" = true ] && [ "${OPENCLAW_CARACAL_ENV_CHANGED:-0}" = 1 ]; then
-    echo "Caracal runtime credentials changed; restarting the existing OpenClaw Gateway to reload its environment."
-    if ! openclaw gateway restart --wait 30s >/tmp/openclaw-gateway-restart.log 2>&1; then
-        echo "ERROR: could not restart the existing OpenClaw Gateway with the current Caracal credentials; see /tmp/openclaw-gateway-restart.log." >&2
-        exit 1
-    fi
-    if ! gateway_responding; then
-        echo "ERROR: OpenClaw Gateway did not respond after restart." >&2
-        exit 1
-    fi
-fi
-
-if ! configure_openclaw_caracal_access; then
+if ! configure_openclaw_opencode_acp; then
     exit 1
 fi
 
