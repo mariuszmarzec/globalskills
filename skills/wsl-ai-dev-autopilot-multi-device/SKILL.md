@@ -81,7 +81,7 @@ The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> con
 * Fallback routing verified
 * Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/.caracal-rag
 * Caracal has an explicit embedding family, private API key/access token, valid Chroma settings, and a passing `caracal-rag check`
-* The configured Fiteo API documentation source is indexed successfully
+* Both configured knowledge sources (`fiteo-docs` and `quickmvi-readme`) are indexed successfully
 * `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM; `opencode mcp list` verifies the connection, and OpenClaw's ACPX `opencode` target points to `~/.globalskills/aicode/opencode-acp-caracal.sh` which repeats the MCP check before starting each ACP harness
 
 # User Interaction Policy
@@ -630,11 +630,25 @@ Configure Caracal interactively so credentials are entered into hidden prompts, 
 "$HOME/.caracal/bin/caracal-rag" setup
 ```
 
-During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and the `fiteo-docs` source. Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and includes both knowledge sources:
+
+- `fiteo-docs` — API Markdown documents from `mariuszmarzec/fiteo/docs/api/` on `master`.
+- `quickmvi-readme` — `https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md`, covering QuickMVI library usage at README level.
+
+The installer preserves an existing `sources.yaml`; updating `config/sources.example.yaml` does not merge new sources into an already-installed config. If `quickmvi-readme` is missing, add this item under the existing `sources:` list (do not create a duplicate `sources:` key):
+
+```yaml
+  - name: quickmvi-readme
+    type: markdown
+    url: https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md
+```
+
+Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
 
 ```bash
 "$HOME/.caracal/bin/caracal-rag" check
 "$HOME/.caracal/bin/caracal-rag" index --source fiteo-docs
+"$HOME/.caracal/bin/caracal-rag" index --source quickmvi-readme
 "$HOME/.caracal/bin/caracal-rag" check
 ```
 
