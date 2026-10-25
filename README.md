@@ -35,14 +35,14 @@ git -C ~/.globalskills pull
 | `pr-description-management` | Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update descriptions when pushing changes. Uses gh CLI for all PR operations. Follows feature-branching-strategy for branch naming. |
 | `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). |
 | `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
-| `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Based on QuickMVI library patterns, testing utilities, and best practices extracted from the QuickMVI project. |
+| `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Consults Caracal RAG's indexed QuickMVI README for documented usage; verify exact behavior against source and tests. |
 | `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing LiteLLM database connection issues. |
 | `manul-github-bot` | Set up, operate, and debug Manul, the GitHub task orchestrator. Automatic tasks use the configured runtime (OpenClaw by default); explicitly selected canonical roles use the configured role runtime (OpenCode by default). Manul owns task state, workspace isolation, retries, result verification, and GitHub delivery. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible), including isolated Caracal RAG installation, authenticated MCP startup after LiteLLM, hardware-aware model selection, healthchecks, and multi-model LiteLLM routing. |
 | `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
 | `fiteo-access` | Connect to the Fiteo backend using the current `FITEO_BASE_URL`, `FITEO_MANUL_USERNAME`, and `FITEO_MANUL_PASSWORD` environment variables. Never hardcode or print their values. |
-| `fiteo-backend-api` | Use for Fiteo backend endpoint/API contract questions and related implementation or review work. Search the indexed Fiteo API docs through Caracal RAG MCP first; verify current code/tests before claiming implementation behavior. |
+| `fiteo-backend-api` | Use for Fiteo backend endpoint/API contract questions and related implementation or review work. Search Caracal RAG's `fiteo-docs` source first; verify current code/tests before claiming implementation behavior. |
 
 ## Agents (multi-agent orchestration)
 
