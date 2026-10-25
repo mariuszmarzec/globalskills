@@ -6,7 +6,17 @@ license: MIT
 
 # QuickMVI Usage and Testing Guide
 
-QuickMVI is a Kotlin Multiplatform library implementing the Model-View-Intent (MVI) architecture pattern. This skill documents usage patterns, testing strategies, and best practices derived from the QuickMVI codebase and its comprehensive test suite.
+QuickMVI is a Kotlin Multiplatform library implementing the Model-View-Intent (MVI) architecture pattern. This skill documents usage patterns, testing strategies, and best practices derived from the QuickMVI codebase and its tests.
+
+## Caracal RAG knowledge
+
+Before answering a QuickMVI usage/API question, query the `caracal-rag` MCP server's `search_api` tool instead of relying on model memory alone. The expected source is:
+
+- `quickmvi-readme` — `mariuszmarzec/QuickMVI`'s `README.md` from the `develop` branch.
+
+The indexed README covers the library overview and dependency coordinates, Store and intent patterns, `onTrigger`, `reducer`, `sideEffect`, intent IDs and cancellation, delegates, parent-child stores, Compose state collection, and navigation examples. Use focused queries, for example `QuickMVI Store4Impl intent reducer sideEffect` or `quickmvi-navigation NavigationStore NavigationHost`, with `top_k` around 6–10.
+
+**Scope limitation:** `quickmvi-readme` indexes the README only, not the complete implementation or test suite. Use Caracal to find documented usage, then inspect the current QuickMVI source and tests when a question depends on exact API signatures, edge cases, or actual behavior. If the MCP tool is disconnected or the source has not been indexed locally, report that limitation and inspect the repository directly; do not claim you searched Caracal when you did not.
 
 ## Project Structure and Components
 
