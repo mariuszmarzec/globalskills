@@ -159,3 +159,7 @@ src/androidTest/
 - Not cleaning up coroutines (use `runTest` scope)
 - Sharing test databases between tests
 - Testing UI logic in unit tests (move to UI tests)
+
+## Assertion style
+
+Follow the language-agnostic assertion guidelines in `skills/unit-testing-language-agnostic/SKILL.md`. In particular, when testing a repository or service that returns a Kotlin data class/value object with deterministic expected fields, prefer one whole-object comparison (for example, `assertEquals(expected, actual)` or the project's equivalent) over separate assertions for every property. Control clocks/IDs/randomness in tests when practical so the expected object is deterministic. Use targeted property assertions only when value equality is unavailable or inappropriate, the relevant values are intentionally variable, or the behavior specifically concerns a property/state transition/exception/interaction.
