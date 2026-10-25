@@ -1,6 +1,6 @@
 # Manul Unit Testing Guide
 
-This guide applies whenever a repository task requires adding or changing unit tests.
+This guide applies whenever a repository task requires adding or changing unit tests. It supplements the repository's test conventions and the general, language-agnostic guidelines in `skills/unit-testing-language-agnostic/SKILL.md`.
 
 ## Core rule
 
@@ -15,6 +15,43 @@ Before writing the test:
 3. Find existing unit tests for that class, component, or use case and extend them when appropriate.
 4. Inspect the real dependencies and existing test infrastructure before choosing mocks.
 5. Define the observable result that proves the behavior.
+
+## Assertions: compare complete values by default
+
+Prefer the smallest set of assertions that clearly proves the intended behavior.
+
+When a repository/service returns a value object, data class, record, DTO, model, entity, collection, or other type with meaningful value equality, compare the **whole expected value** with the actual result rather than checking each property separately. This is the default in every language, not only Kotlin.
+
+For example, in Kotlin prefer:
+
+```kotlin
+val expectedToken = PersonalAccessToken(
+    userId = 1,
+    name = "Test Token",
+    tokenHash = "hash123",
+    tokenPrefix = "abc1",
+    createdAt = fixedCreatedAt,
+    expiresAt = null,
+    lastUsedAt = null,
+)
+assertEquals(expectedToken, token)
+```
+
+instead of one assertion per property.
+
+Build an explicit, deterministic expected object in Arrange. Prefer fixing the clock, IDs, randomness, and other variable sources in the test so the entire returned object can be compared reliably.
+
+Do not force whole-object equality when it is not appropriate. Use targeted assertions when:
+- the type has no meaningful value-equality implementation (for example, a regular class with identity equality or an incomplete/custom `equals`);
+- some fields are intentionally nondeterministic and are not part of the behavior being tested, and the source cannot reasonably be controlled;
+- the test concerns a specific state transition, property, exception, side effect, or interaction rather than a returned value;
+- whole-object comparison would hide the behavior under test or make the test misleading.
+
+If only one or two fields represent the behavior under test and the rest are intentionally irrelevant, a focused assertion can be clearer than constructing a misleading full expected object. When whole-object comparison is inappropriate, keep targeted assertions minimal and explain the reason when it is not obvious.
+
+For collections, compare the full expected collection when both contents and order are part of the contract. Use order-insensitive comparisons only when ordering is explicitly irrelevant.
+
+Use the project's existing assertion library and style. Do not introduce a new dependency solely to compare objects.
 
 ## Review-fix tasks
 
@@ -78,6 +115,8 @@ Before declaring the test complete, ask:
 - Does the test execute the production path named or implied by the requirement?
 - Would the test fail if the requested behavior were deleted?
 - Does it verify the observable outcome, not just input setup?
+- Could the returned value be checked with one whole-object/value equality assertion instead of many per-property assertions?
+- If using per-property assertions, is whole-value equality unavailable, nondeterministic, or less expressive for this test?
 - Does it cover the important actors or branches from the requirement?
 - Did I accidentally create a duplicate scenario instead of extending an existing one?
 - Did I weaken the test to make it pass after encountering mocking or build problems?
