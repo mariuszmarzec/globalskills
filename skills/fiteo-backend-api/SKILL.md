@@ -20,7 +20,12 @@ Example searches:
 - `GET /fiteo/api/1/trainings query parameters response DTO`
 - `trainings_get.md limit cursor nextCursor validation authentication status codes`
 
-The indexed source is the `fiteo-docs` source, currently built from API Markdown documents in `mariuszmarzec/fiteo` under `docs/api/`. Search results can include neighboring endpoints; do not treat them as evidence for the endpoint in question unless the returned content actually applies.
+Caracal's relevant configured knowledge sources are:
+
+- `fiteo-docs` — API Markdown documents from `mariuszmarzec/fiteo/docs/api/` on `master`. Use this for Fiteo HTTP endpoint contracts.
+- `quickmvi-readme` — the README from `mariuszmarzec/QuickMVI` on `develop`. It covers high-level QuickMVI usage only; it is not evidence for Fiteo endpoint behavior.
+
+Use the returned source metadata and URL to make sure a snippet comes from the relevant source. Search results can include neighboring endpoints; do not treat them as evidence for the endpoint in question unless the returned content actually applies. The expected source inventory may differ from a machine's active index, so if a source appears missing, verify the active Caracal configuration/index rather than assuming it has been indexed.
 
 ## When implementing or reviewing code
 
