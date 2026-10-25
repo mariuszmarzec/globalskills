@@ -128,3 +128,10 @@ A test that passes while the requested behavior is removed is not an acceptable 
 Run the most focused test first, then the relevant broader test suite when practical.
 
 Report the exact commands actually run. Do not claim a test proves behavior that the test does not execute or assert.
+
+## Whole-value assertion policy (global default)
+
+Use `skills/unit-testing-language-agnostic/SKILL.md` as the source of truth for assertion style across languages. When the system under test returns a value object/model/DTO/entity or collection with reliable value equality and deterministic fields, assert the complete expected value instead of writing one assertion per property. In Kotlin this commonly means `assertEquals(expectedObject, actualObject)` for data classes.
+
+Prefer to control clocks, IDs and other nondeterministic sources so full-value equality remains possible. Use field-level assertions only when equality is absent or misleading, the relevant field is intentionally variable and cannot reasonably be controlled, or the test concerns a specific property/state transition/exception/interaction rather than the whole returned value. Keep those assertions minimal. This applies to all languages; language-specific testing skills may add syntax but should not weaken this default.
+
