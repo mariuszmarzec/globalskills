@@ -260,7 +260,13 @@ ensure_opencode_caracal_config() {
     else
         config_input="/dev/null"
     fi
-    if ! jq -s '
+    # The jq program is written to a file with a quoted heredoc so that literal
+    # apostrophes in comments (OpenCode's, OpenClaw's) never terminate the
+    # surrounding single-quoted program argument. An inline multi-line single
+    # quote breaks the program into many arguments that jq treats as filenames.
+    local jq_program
+    jq_program="$(mktemp "$config_dir/.opencode-caracal-jq.XXXXXX")" || return 1
+    cat >"$jq_program" <<'JQ'
         (.[0] // {})
         # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's
         # separate .mcp.servers schema.
@@ -288,11 +294,14 @@ ensure_opencode_caracal_config() {
               else {}
               end
           )
-    ' "$config_input" > "$tmp"; then
+JQ
+    if ! jq -s -f "$jq_program" "$config_input" > "$tmp"; then
+        rm -f -- "$jq_program"
         rm -f -- "$tmp"
         echo "ERROR: unable to merge Caracal MCP into the OpenCode config." >&2
         return 1
     fi
+    rm -f -- "$jq_program"
     if [ -f "$OPENCODE_CONFIG" ] && cmp -s "$tmp" "$OPENCODE_CONFIG"; then
         rm -f -- "$tmp"
     else
@@ -333,12 +342,14 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    if ! snapshot="$(openclaw gateway call config.get --params '{}' 2>/dev/null)"; then
+    # openclaw gateway call prints a "Gateway call: <method>" advisory line on
+    # stdout before the JSON payload; strip it so jq sees clean JSON.
+    if ! snapshot="$(openclaw gateway call config.get --params '{}' 2>/dev/null | tail -n +2)"; then
         echo "ERROR: could not read the active OpenClaw config through the Gateway." >&2
         return 1
     fi
-    base_hash="$(printf '%s\n' "$snapshot" | jq -r '.payload.hash // .hash // empty' 2>/dev/null)"
-    snapshot_config="$(printf '%s\n' "$snapshot" | jq -ce '.payload.config // .config // empty' 2>/dev/null)" || true
+    base_hash="$(printf '%s\n' "$snapshot" | jq -r '.configRevisionHash // .appliedConfigHash // .hash // empty' 2>/dev/null)"
+    snapshot_config="$(printf '%s\n' "$snapshot" | jq -ce '.config // empty' 2>/dev/null)" || true
     if [ -z "$base_hash" ] || [ -z "$snapshot_config" ]; then
         echo "ERROR: OpenClaw config snapshot did not include its config and revision hash." >&2
         return 1
@@ -402,14 +413,14 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    if ! verified="$(openclaw gateway call config.get --params '{}' 2>/dev/null)" ||
+    if ! verified="$(openclaw gateway call config.get --params '{}' 2>/dev/null | tail -n +2)" ||
        ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
-         (.payload.config.plugins.entries.acpx.config.probeAgent == "opencode")
-         and (.payload.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
-         and (.payload.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
+         (.config.plugins.entries.acpx.config.probeAgent == "opencode")
+         and (.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
+         and (.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
          and (
-           ((.payload.config.acp.allowedAgents | type) != "array")
-           or ((.payload.config.acp.allowedAgents | index("opencode")) != null)
+           ((.config.acp.allowedAgents | type) != "array")
+           or ((.config.acp.allowedAgents | index("opencode")) != null)
          )
        ' >/dev/null 2>&1; then
         echo "ERROR: OpenClaw did not retain the expected OpenCode ACP wrapper configuration." >&2

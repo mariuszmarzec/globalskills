@@ -60,5 +60,90 @@ contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to s
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
 contains "$MANUL/test_manul_environment.sh" 'Bootstrap refreshes Caracal URL/token' "environment tests cover Caracal endpoint/token refresh"
 
+# The jq merge program contains literal apostrophes in comments
+# ("OpenCode's", "OpenClaw's"). They must be delivered to jq as a single
+# program, never as an inline single-quoted argument: the apostrophes would
+# terminate the shell quote early and jq would treat the comment words as
+# filenames ("Could not open file MCP: No such file or directory").
+contains "$AICODE" 'jq -s -f "$jq_program"' "aicode feeds the jq program from a file, not an inline quote"
+contains "$AICODE" 'cat >"$jq_program" <<'"'"'JQ'"'"'' "aicode writes the jq program via a quoted heredoc"
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+merge_input="$tmp_dir/input.json"
+merge_output="$tmp_dir/output.json"
+printf '{"mcp":{"existing":true},"tools":{"foo":true},"agent":{"chat":{"tools":{"*":false}}}}' > "$merge_input"
+if ! jq -s -f <(cat <<'JQ'
+        (.[0] // {})
+        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's
+        # separate .mcp.servers schema.
+        | .mcp = (
+            (.mcp // {}) | if type == "object" then . else {} end
+            | . + {
+                "caracal-rag": {
+                    type: "remote",
+                    url: "{env:CARACAL_MCP_URL}",
+                    oauth: false,
+                    enabled: true,
+                    headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
+                }
+            }
+          )
+        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+        | .agent = (
+            (.agent // {})
+            | if type == "object" then
+                with_entries(
+                  if .key == "chat" then .
+                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+                  end
+                )
+              else {}
+              end
+          )
+JQ
+) "$merge_input" > "$merge_output" 2>/dev/null; then
+    fail "jq merge with apostrophes in comments failed to produce output"
+fi
+jq -e '.mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"' "$merge_output" >/dev/null || fail "merged config lost the caracal-rag url"
+jq -e '.mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"' "$merge_output" >/dev/null || fail "merged config lost the bearer header"
+jq -e '.mcp.existing == true' "$merge_output" >/dev/null || fail "merged config dropped unrelated .mcp entries"
+jq -e '.tools.foo == true and .tools["caracal-rag_*"] == true' "$merge_output" >/dev/null || fail "merged config lost unrelated .tools entries"
+jq -e '.agent.chat.tools."*" == false' "$merge_output" >/dev/null || fail "merged config dropped the chat agent"
+ok "jq merge preserves existing config and registers caracal-rag"
+
+# An inline single-quoted multi-line program with literal apostrophes must fail,
+# which is exactly the defect this test guards against. The broken program is
+# written to a file with literal apostrophes (not the '"'"' escape) so the
+# shell quote is genuinely terminated mid-line.
+broken_tmp="$tmp_dir/broken.json"
+broken_prog="$tmp_dir/broken.jq"
+printf '{"mcp":{}}' > "$broken_tmp"
+printf '%s\n' \
+    "        (.[0] // {})" \
+    "        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's" \
+    "        | .mcp = {}" \
+    > "$broken_prog"
+# Assemble the broken invocation the way the old aicode did: an inline
+# single-quoted program followed by the input file argument.
+broken_cmd="$tmp_dir/broken.sh"
+{
+    printf '#!/usr/bin/env bash\n'
+    printf 'jq -s '
+    # emit the literal single-quoted program, line by line
+    while IFS= read -r line; do
+        printf "'%s'" "$line"
+    done < "$broken_prog"
+    printf ' "%s"\n' "$broken_tmp"
+} > "$broken_cmd"
+chmod +x "$broken_cmd"
+set +e
+bash "$broken_cmd" > /dev/null 2>"$tmp_dir/broken.err"
+broken_rc=$?
+set -e
+[ "$broken_rc" -ne 0 ] || fail "the broken inline-quote form unexpectedly succeeded"
+grep -q "Could not open file" "$tmp_dir/broken.err" || grep -q "no matches found" "$tmp_dir/broken.err" || fail "the broken inline-quote form produced an unexpected error"
+ok "the original inline single-quote defect is reproduced by this test"
+
 echo
 echo "All Caracal MCP regression guards passed."
