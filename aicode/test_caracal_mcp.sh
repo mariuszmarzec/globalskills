@@ -33,6 +33,15 @@ contains "$AICODE" '"caracal-rag_*": true' "configured OpenCode agents can call 
 contains "$AICODE" 'opencode mcp list' "aicode probes the real OpenCode MCP registry"
 contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if OpenCode MCP is disconnected"
 
+# The OpenClaw snapshot reader must be shared with its unit test, must use
+# the file hash for config.patch concurrency, and must not blindly drop stdout's first line.
+contains "$AICODE" '. "$OPENCLAW_SNAPSHOT_HELPER"' "aicode loads the tested OpenClaw snapshot helper"
+contains "$AICODE" 'openclaw_config_snapshot_base_hash' "config.patch receives the validated file revision hash"
+if grep -Fq 'tail -n +2' "$AICODE"; then
+  fail "aicode must not blindly discard the first line of Gateway stdout"
+fi
+ok "OpenClaw snapshot integration uses validated parsing and the correct base hash"
+
 # OpenClaw delegates to the OpenCode ACP harness. The launcher configures that
 # specific target; it deliberately does not register a duplicate native MCP in OpenClaw.
 contains "$AICODE" 'configure_openclaw_opencode_acp' "aicode configures the OpenCode ACP target"
