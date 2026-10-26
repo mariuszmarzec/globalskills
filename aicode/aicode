@@ -3,6 +3,16 @@
 
 export PATH="$HOME/.opencode/bin:$PATH"
 
+AICODE_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
+OPENCLAW_SNAPSHOT_HELPER="$AICODE_SOURCE_DIR/openclaw-config-snapshot.sh"
+if [ ! -r "$OPENCLAW_SNAPSHOT_HELPER" ]; then
+    echo "ERROR: OpenClaw config snapshot helper is missing: $OPENCLAW_SNAPSHOT_HELPER" >&2
+    exit 1
+fi
+# shellcheck source=aicode/openclaw-config-snapshot.sh
+. "$OPENCLAW_SNAPSHOT_HELPER"
+
 if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     set -a
     . "$HOME/.config/opencode/opencode.env"
@@ -342,18 +352,20 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    # openclaw gateway call prints a "Gateway call: <method>" advisory line on
-    # stdout before the JSON payload; strip it so jq sees clean JSON.
-    if ! snapshot="$(openclaw gateway call config.get --params '{}' 2>/dev/null | tail -n +2)"; then
-        echo "ERROR: could not read the active OpenClaw config through the Gateway." >&2
+    # The helper captures the CLI exit status before parsing stdout, strips
+    # only the known advisory prefix, and validates the config plus raw file hash.
+    if ! snapshot="$(openclaw_config_get_snapshot)"; then
+        echo "ERROR: OpenClaw config snapshot is invalid or missing its config/file hash." >&2
         return 1
     fi
-    base_hash="$(printf '%s\n' "$snapshot" | jq -r '.configRevisionHash // .appliedConfigHash // .hash // empty' 2>/dev/null)"
-    snapshot_config="$(printf '%s\n' "$snapshot" | jq -ce '.config // empty' 2>/dev/null)" || true
-    if [ -z "$base_hash" ] || [ -z "$snapshot_config" ]; then
-        echo "ERROR: OpenClaw config snapshot did not include its config and revision hash." >&2
+    base_hash="$(printf '%s\n' "$snapshot" | openclaw_config_snapshot_base_hash)" || {
+        echo "ERROR: OpenClaw config snapshot did not include a valid file revision hash." >&2
         return 1
-    fi
+    }
+    snapshot_config="$(printf '%s\n' "$snapshot" | openclaw_config_snapshot_config)" || {
+        echo "ERROR: OpenClaw config snapshot did not include a valid config object." >&2
+        return 1
+    }
 
     # ACPX owns the OpenCode harness process. Configure that one target to use a
     # wrapper which refreshes Caracal credentials and runs opencode mcp list
@@ -413,7 +425,7 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    if ! verified="$(openclaw gateway call config.get --params '{}' 2>/dev/null | tail -n +2)" ||
+    if ! verified="$(openclaw_config_get_snapshot)" ||
        ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
          (.config.plugins.entries.acpx.config.probeAgent == "opencode")
          and (.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
@@ -434,8 +446,6 @@ configure_openclaw_opencode_acp() {
 # An explicit CARACAL_MCP_URL means the MCP endpoint is externally managed, so
 # do not start a local Chroma instance for that mode.
 if [ -z "${CARACAL_MCP_URL:-}" ]; then
-    AICODE_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
-    AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
     if [ -r "$AICODE_SOURCE_DIR/chroma-lifecycle.sh" ]; then
         # shellcheck source=aicode/chroma-lifecycle.sh
         . "$AICODE_SOURCE_DIR/chroma-lifecycle.sh"
