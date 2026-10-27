@@ -395,17 +395,18 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    # Avoid writing the Gateway config on every aicode launch. config.patch can
-    # hot-reload ACPX, so only patch when its probe agent, harness command, or
-    # allowlist needs a change.
+    # OpenClaw ACP must be explicitly enabled and select the installed
+    # ACPX backend. allowedAgents alone does not activate ACP.
+    # Avoid writing the Gateway config on every launch once all fields match.
     if printf '%s\n' "$snapshot_config" | jq -e --arg wrapper "$wrapper" '
-      (.plugins.entries.acpx.config.probeAgent == "opencode")
+      (.acp.enabled == true)
+      and (.acp.backend == "acpx")
+      and (.plugins.entries.acpx.enabled == true)
+      and (.plugins.entries.acpx.config.probeAgent == "opencode")
       and (.plugins.entries.acpx.config.agents.opencode.command == "bash")
       and (.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
-      and (
-        ((.acp.allowedAgents | type) != "array")
-        or ((.acp.allowedAgents | index("opencode")) != null)
-      )
+      and ((.acp.allowedAgents | type) == "array")
+      and ((.acp.allowedAgents | index("opencode")) != null)
     ' >/dev/null 2>&1; then
         echo "OpenClaw ACP OpenCode harness already uses the Caracal-verifying wrapper."
         return 0
@@ -430,9 +431,18 @@ configure_openclaw_opencode_acp() {
             }
           }
         }
-        + (if ($cfg.acp.allowedAgents | type) == "array" then
-             {acp: {allowedAgents: (($cfg.acp.allowedAgents + ["opencode"]) | unique)}}
-           else {} end)
+        + {
+            acp: (
+              ($cfg.acp // {})
+              | .enabled = true
+              | .backend = "acpx"
+              | .allowedAgents = (
+                  (if (.allowedAgents | type) == "array" then .allowedAgents else [] end)
+                  + ["opencode"]
+                  | unique
+                )
+            )
+          }
     ')" || {
         echo "ERROR: unable to prepare OpenCode ACP harness configuration." >&2
         return 1
@@ -446,14 +456,14 @@ configure_openclaw_opencode_acp() {
 
     if ! verified="$(openclaw_config_get_snapshot)" ||
        ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
-         (.config.plugins.entries.acpx.config.probeAgent == "opencode")
+         (.config.acp.enabled == true)
+         and (.config.acp.backend == "acpx")
+         and (.config.plugins.entries.acpx.enabled == true)
+         and (.config.plugins.entries.acpx.config.probeAgent == "opencode")
          and (.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
          and (.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
-         and (
-           ((.config.acp.allowedAgents | type) != "array")
-           or ((.config.acp.allowedAgents | index("opencode")) != null)
-         )
-       ' >/dev/null 2>&1; then
+         and ((.config.acp.allowedAgents | type) == "array")
+         and ((.config.acp.allowedAgents | index("opencode")) != null)       ' >/dev/null 2>&1; then
         echo "ERROR: OpenClaw did not retain the expected OpenCode ACP wrapper configuration." >&2
         return 1
     fi
