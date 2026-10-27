@@ -439,7 +439,7 @@ cmd_status() {
   latest_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE conversationId='$(sql_escape "$CONVERSATION_ID")' AND status='completed' ORDER BY processedAt DESC LIMIT 1;" 2>/dev/null)"
   
   if [ -n "$latest_task_id" ]; then
-    local result_file="$(manul_task_file_path "$MANUL_DIR/results" "$latest_task_id" "json")"
+    local result_file="$MANUL_DIR/results/$(manul_task_file_key "$latest_task_id").json"
     if [ -f "$result_file" ]; then
       latest_task_result="$(cat "$result_file" | jq -c '. // empty' 2>/dev/null || echo "null")"
     fi
@@ -509,7 +509,7 @@ cmd_result() {
   local result_json=""
   
   # Try to get result from file
-  local result_file="$(manul_task_file_path "$MANUL_DIR/results" "$TASK_ID" "json")"
+  local result_file="$MANUL_DIR/results/$(manul_task_file_key "$TASK_ID").json"
   local final_result="{}"
   
   if [ -f "$result_file" ]; then
