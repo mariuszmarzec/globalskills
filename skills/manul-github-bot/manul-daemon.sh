@@ -1455,6 +1455,18 @@ stop() {
   terminate_all_task_executors
 
   if [ ! -f "$PID_FILE" ]; then
+    # A crashed supervisor may have left its producer PID marker behind.
+    if [ -f "$POLLER_PID_FILE" ]; then
+      local orphan_poller_pid orphan_poller_cmdline
+      orphan_poller_pid="$(cat "$POLLER_PID_FILE" 2>/dev/null || true)"
+      if [[ "$orphan_poller_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$orphan_poller_pid" 2>/dev/null; then
+        orphan_poller_cmdline="$(tr '\0' ' ' < "/proc/$orphan_poller_pid/cmdline" 2>/dev/null || true)"
+        if [[ "$orphan_poller_cmdline" == *"manul-daemon.sh"* && "$orphan_poller_cmdline" == *"--poller"* ]]; then
+          kill -- "-$orphan_poller_pid" 2>/dev/null || kill "$orphan_poller_pid" 2>/dev/null || true
+        fi
+      fi
+      rm -f "$POLLER_PID_FILE"
+    fi
     echo "not running"
     return 0
   fi
@@ -3262,8 +3274,8 @@ poll_once() {
   local poll_timeout="${MANUL_POLL_TIMEOUT:-$(( ${#REPOS[@]} * (REPO_POLL_TIMEOUT + 10) + 60 ))}"
   # Capture poll.sh output to a file so a partial result emitted by poll.sh's
   # signal trap (when the global timeout kills it mid-cycle) is NOT lost.
-  # Without this, every interrupted cycle reports fire:false and the daemon
-  # never dispatches the queued task.
+  # Poll results remain useful for observability even though consumers now read
+  # SQLite independently and never gate dispatch on the poller's result.
   local poll_out_file
   poll_out_file="$(mktemp)"
   local poll_rc=0
@@ -3291,7 +3303,7 @@ poll_once() {
   record_poll "$poll_fire" "$poll_new" "$poll_pending"
 
   if [ "$poll_fire" = "true" ]; then
-    log "dispatch: $out"
+    log "poller: $out"
     lc_log "POLL" "fire=true new=$poll_new pending=$poll_pending"
   else
     lc_log "POLL" "fire=false new=$poll_new pending=$poll_pending"
@@ -3334,7 +3346,7 @@ dispatch_once() {
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: queued task was no longer eligible at claim time"
-      lc_log "NO_TASK" "fire=true but_queue_empty"
+      lc_log "NO_TASK" "reason=queue_empty"
       release_task_lock
       return 0
     fi
