@@ -46,6 +46,8 @@ ok "OpenClaw snapshot integration uses validated parsing and the correct base ha
 # specific target; it deliberately does not register a duplicate native MCP in OpenClaw.
 contains "$AICODE" 'configure_openclaw_opencode_acp' "aicode configures the OpenCode ACP target"
 contains "$AICODE" 'plugins.entries.acpx.enabled == true' "aicode requires the ACPX plugin to be enabled"
+contains "$AICODE" '(.acp.enabled == true)' "aicode enables OpenClaw ACP when configuring the OpenCode harness"
+contains "$AICODE" '.backend = "acpx"' "aicode selects the ACPX runtime backend"
 contains "$AICODE" 'probeAgent: "opencode"' "ACPX startup healthcheck selects the OpenCode harness"
 contains "$AICODE" 'command: "bash"' "ACPX starts the verified wrapper through bash"
 contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wrapper"
