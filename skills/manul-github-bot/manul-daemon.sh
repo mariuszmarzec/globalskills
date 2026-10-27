@@ -3300,21 +3300,6 @@ poll_once() {
 }
 
 dispatch_once() {
-  configure_task_retention
-  ensure_recovery_tracking_columns || {
-    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
-    return 1
-  }
-  cleanup_expired_tasks
-  cleanup_expired_logs
-
-  # Reconcile the workspace pool on every cycle. A long-lived daemon must not
-  # rely on start() because the watchdog may clean stale idle workspaces later.
-  if ! ensure_workspace_pool; then
-    log "dispatch: workspace pool reconciliation failed"
-    lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
-  fi
-
   # SQLite is the sole input to the consumer. Polling is handled by a
   # separate producer process and can never block this queue check.
   local eligible_queued
@@ -3324,6 +3309,13 @@ dispatch_once() {
   fi
   log "dispatch: SQLite has eligible queued task(s); attempting dispatch"
   lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
+
+  # Reconcile the workspace pool only when a task is ready to run.
+  if ! ensure_workspace_pool; then
+    log "dispatch: workspace pool reconciliation failed"
+    lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
+    return 0
+  fi
 
     # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races
     if ! acquire_task_lock; then
@@ -4344,6 +4336,13 @@ PROMPT_APPEND
 # The long-lived daemon does NOT use this combined path; its poller and consumers
 # are supervised independently below.
 run_once() {
+  configure_task_retention
+  ensure_recovery_tracking_columns || {
+    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
+    return 1
+  }
+  cleanup_expired_tasks
+  cleanup_expired_logs
   poll_once
   dispatch_once
 }
@@ -4376,6 +4375,9 @@ loop() {
         lc_log "POLLER_STOP" "reason=parent_exited parent=$parent_pid"
         break
       fi
+      configure_task_retention
+      cleanup_expired_tasks
+      cleanup_expired_logs
       poll_once || log "WARN: poller cycle returned non-zero"
       sleep "$INTERVAL"
     done
@@ -4391,6 +4393,10 @@ loop() {
   # Ensure task claim ownership support before any claim/recovery.
   if ! ensure_claim_token_column; then
     log "FATAL: claimToken schema migration failed, cannot start loop"
+    exit 1
+  fi
+  if ! ensure_recovery_tracking_columns; then
+    log "FATAL: recovery tracking schema unavailable, cannot start consumer"
     exit 1
   fi
 
