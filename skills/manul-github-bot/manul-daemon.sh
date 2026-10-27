@@ -1209,13 +1209,15 @@ cleanup_orphaned_task_executors() {
 }
 
 cleanup_orphaned_task_heartbeats() {
-  local pid_file base task_id safe_task_id task_state
+  local pid_file base file_key task_id resolved_task_id safe_task_id task_state
   for pid_file in "$MANUL_DIR"/task-*.heartbeat.pid; do
     [ -f "$pid_file" ] || continue
     base="${pid_file##*/}"
-    task_id="${base#task-}"
-    task_id="${task_id%.heartbeat.pid}"
-    [ -n "$task_id" ] || continue
+    file_key="${base#task-}"
+    file_key="${file_key%.heartbeat.pid}"
+    [ -n "$file_key" ] || continue
+    resolved_task_id="$(task_id_from_file_key "$file_key" 2>/dev/null || true)"
+    task_id="${resolved_task_id:-$file_key}"
     safe_task_id="$(sql_escape "$task_id")"
     task_state="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
     if [ "$task_state" != "running" ]; then
