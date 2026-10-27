@@ -5,13 +5,6 @@ export PATH="$HOME/.opencode/bin:$PATH"
 
 AICODE_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
 AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
-OPENCLAW_SNAPSHOT_HELPER="$AICODE_SOURCE_DIR/openclaw-config-snapshot.sh"
-if [ ! -r "$OPENCLAW_SNAPSHOT_HELPER" ]; then
-    echo "ERROR: OpenClaw config snapshot helper is missing: $OPENCLAW_SNAPSHOT_HELPER" >&2
-    exit 1
-fi
-# shellcheck source=aicode/openclaw-config-snapshot.sh
-. "$OPENCLAW_SNAPSHOT_HELPER"
 
 if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     set -a
@@ -21,6 +14,32 @@ fi
 
 if [ -z "${OPENCODE_API_KEY:-}" ]; then
     echo "WARNING: OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable."
+fi
+
+# Resolve Manul's automatic agent runtime before touching OpenClaw. Use the
+# same config/env precedence as Manul itself; selecting OpenCode means this
+# launcher must not start, query, or configure an OpenClaw Gateway.
+MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
+MANUL_DIR="${MANUL_DIR:-$MANUL_RUNTIME_DIR}"
+export MANUL_DIR
+MANUL_PATHS_HELPER="$HOME/.globalskills/skills/manul-github-bot/manul-paths.sh"
+if [ ! -r "$MANUL_PATHS_HELPER" ]; then
+    echo "ERROR: Manul runtime selector is missing: $MANUL_PATHS_HELPER" >&2
+    exit 1
+fi
+# shellcheck source=skills/manul-github-bot/manul-paths.sh
+. "$MANUL_PATHS_HELPER"
+
+OPENCLAW_SNAPSHOT_HELPER="$AICODE_SOURCE_DIR/openclaw-config-snapshot.sh"
+if [ "$AGENT_RUNTIME" = "openclaw" ]; then
+    if [ ! -r "$OPENCLAW_SNAPSHOT_HELPER" ]; then
+        echo "ERROR: OpenClaw config snapshot helper is missing: $OPENCLAW_SNAPSHOT_HELPER" >&2
+        exit 1
+    fi
+    # shellcheck source=aicode/openclaw-config-snapshot.sh
+    . "$OPENCLAW_SNAPSHOT_HELPER"
+else
+    echo "Manul agentRuntime=$AGENT_RUNTIME; skipping OpenClaw Gateway and ACPX setup."
 fi
 
 # Ensure Ollama is running
@@ -376,17 +395,18 @@ configure_openclaw_opencode_acp() {
         return 1
     fi
 
-    # Avoid writing the Gateway config on every aicode launch. config.patch can
-    # hot-reload ACPX, so only patch when its probe agent, harness command, or
-    # allowlist needs a change.
+    # OpenClaw ACP must be explicitly enabled and select the installed
+    # ACPX backend. allowedAgents alone does not activate ACP.
+    # Avoid writing the Gateway config on every launch once all fields match.
     if printf '%s\n' "$snapshot_config" | jq -e --arg wrapper "$wrapper" '
-      (.plugins.entries.acpx.config.probeAgent == "opencode")
+      (.acp.enabled == true)
+      and (.acp.backend == "acpx")
+      and (.plugins.entries.acpx.enabled == true)
+      and (.plugins.entries.acpx.config.probeAgent == "opencode")
       and (.plugins.entries.acpx.config.agents.opencode.command == "bash")
       and (.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
-      and (
-        ((.acp.allowedAgents | type) != "array")
-        or ((.acp.allowedAgents | index("opencode")) != null)
-      )
+      and ((.acp.allowedAgents | type) == "array")
+      and ((.acp.allowedAgents | index("opencode")) != null)
     ' >/dev/null 2>&1; then
         echo "OpenClaw ACP OpenCode harness already uses the Caracal-verifying wrapper."
         return 0
@@ -411,9 +431,18 @@ configure_openclaw_opencode_acp() {
             }
           }
         }
-        + (if ($cfg.acp.allowedAgents | type) == "array" then
-             {acp: {allowedAgents: (($cfg.acp.allowedAgents + ["opencode"]) | unique)}}
-           else {} end)
+        + {
+            acp: (
+              ($cfg.acp // {})
+              | .enabled = true
+              | .backend = "acpx"
+              | .allowedAgents = (
+                  (if (.allowedAgents | type) == "array" then .allowedAgents else [] end)
+                  + ["opencode"]
+                  | unique
+                )
+            )
+          }
     ')" || {
         echo "ERROR: unable to prepare OpenCode ACP harness configuration." >&2
         return 1
@@ -427,13 +456,14 @@ configure_openclaw_opencode_acp() {
 
     if ! verified="$(openclaw_config_get_snapshot)" ||
        ! printf '%s\n' "$verified" | jq -e --arg wrapper "$wrapper" '
-         (.config.plugins.entries.acpx.config.probeAgent == "opencode")
+         (.config.acp.enabled == true)
+         and (.config.acp.backend == "acpx")
+         and (.config.plugins.entries.acpx.enabled == true)
+         and (.config.plugins.entries.acpx.config.probeAgent == "opencode")
          and (.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
          and (.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
-         and (
-           ((.config.acp.allowedAgents | type) != "array")
-           or ((.config.acp.allowedAgents | index("opencode")) != null)
-         )
+         and ((.config.acp.allowedAgents | type) == "array")
+         and ((.config.acp.allowedAgents | index("opencode")) != null)
        ' >/dev/null 2>&1; then
         echo "ERROR: OpenClaw did not retain the expected OpenCode ACP wrapper configuration." >&2
         return 1
@@ -461,44 +491,50 @@ fi
 if ! ensure_opencode_caracal_config; then
     exit 1
 fi
-# The ACP wrapper loads current Caracal credentials directly when each
-# OpenCode harness starts, so no Gateway restart is needed just to refresh them.
-GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
-gateway_responding() {
-    curl -fsS --max-time 2 \
-        "http://127.0.0.1:${GATEWAY_PORT}" \
-        >/dev/null 2>&1
-}
+if [ "$AGENT_RUNTIME" = "openclaw" ]; then
+    # The ACP wrapper loads current Caracal credentials directly when each
+    # OpenCode harness starts, so no Gateway restart is needed just to refresh them.
+    GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+    gateway_responding() {
+        curl -fsS --max-time 2 \
+            "http://127.0.0.1:${GATEWAY_PORT}" \
+            >/dev/null 2>&1
+    }
 
-if ! gateway_responding; then
-    nohup openclaw gateway \
-        --force \
-        --allow-unconfigured \
-        --port "$GATEWAY_PORT" \
-        >/tmp/openclaw-gateway.log 2>&1 &
+    if ! gateway_responding; then
+        nohup openclaw gateway \
+            --force \
+            --allow-unconfigured \
+            --port "$GATEWAY_PORT" \
+            >/tmp/openclaw-gateway.log 2>&1 &
 
-    echo "Waiting for OpenClaw Gateway to become ready on 127.0.0.1:${GATEWAY_PORT}..."
-    ready=0
-    for _ in $(seq 1 20); do
-        if gateway_responding; then
-            ready=1
-            break
+        echo "Waiting for OpenClaw Gateway to become ready on 127.0.0.1:${GATEWAY_PORT}..."
+        ready=0
+        for _ in $(seq 1 20); do
+            if gateway_responding; then
+                ready=1
+                break
+            fi
+            sleep 1
+        done
+
+        if [ "$ready" -eq 1 ]; then
+            echo "OpenClaw Gateway is up on http://127.0.0.1:${GATEWAY_PORT}"
+        else
+            echo "ERROR: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log" >&2
+            exit 1
         fi
-        sleep 1
-    done
-
-    if [ "$ready" -eq 1 ]; then
-        echo "OpenClaw Gateway is up on http://127.0.0.1:${GATEWAY_PORT}"
     else
-        echo "ERROR: OpenClaw Gateway did not become ready; see /tmp/openclaw-gateway.log" >&2
+        echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
+    fi
+
+    if ! configure_openclaw_opencode_acp; then
         exit 1
     fi
 else
-    echo "OpenClaw Gateway is already running on http://127.0.0.1:${GATEWAY_PORT}"
-fi
-
-if ! configure_openclaw_opencode_acp; then
-    exit 1
+    # In direct OpenCode mode, ACPX is irrelevant: Manul starts OpenCode
+    # through its own adapter and must not touch the OpenClaw Gateway.
+    echo "OpenClaw Gateway/ACPX skipped (Manul agentRuntime=$AGENT_RUNTIME)."
 fi
 
 # Ensure Manul GitHub bot daemon is running.
@@ -506,7 +542,7 @@ fi
 # The canonical installer/repairer is authoritative for ~/.manul runtime state.
 MANUL_INSTALLER="$HOME/.globalskills/skills/manul-github-bot/install-manul.sh"
 MANUL_REPAIRER="$HOME/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh"
-MANUL_RUNTIME="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
+MANUL_RUNTIME="$MANUL_DIR"
 MANUL_DB="$MANUL_RUNTIME/manul.db"
 MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
@@ -576,7 +612,11 @@ else
 fi
 
 echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
-echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
+if [ "$AGENT_RUNTIME" = "openclaw" ]; then
+    echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
+else
+    echo "OpenClaw Gateway not required (Manul agentRuntime=$AGENT_RUNTIME)."
+fi
 
 type -p opencode >/dev/null 2>&1 || {
     echo "ERROR: opencode command not found in PATH." >&2

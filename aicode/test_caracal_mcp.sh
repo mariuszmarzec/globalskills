@@ -46,6 +46,8 @@ ok "OpenClaw snapshot integration uses validated parsing and the correct base ha
 # specific target; it deliberately does not register a duplicate native MCP in OpenClaw.
 contains "$AICODE" 'configure_openclaw_opencode_acp' "aicode configures the OpenCode ACP target"
 contains "$AICODE" 'plugins.entries.acpx.enabled == true' "aicode requires the ACPX plugin to be enabled"
+contains "$AICODE" '(.acp.enabled == true)' "aicode enables OpenClaw ACP when configuring the OpenCode harness"
+contains "$AICODE" '.backend = "acpx"' "aicode selects the ACPX runtime backend"
 contains "$AICODE" 'probeAgent: "opencode"' "ACPX startup healthcheck selects the OpenCode harness"
 contains "$AICODE" 'command: "bash"' "ACPX starts the verified wrapper through bash"
 contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wrapper"
@@ -79,6 +81,38 @@ contains "$AICODE" 'cat >"$jq_program" <<'"'"'JQ'"'"'' "aicode writes the jq pro
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+
+# The launcher must follow the exact same runtime precedence as Manul:
+# automation.agentRuntime=opencode means no OpenClaw Gateway/ACPX setup,
+# while roleRuntime alone must not override the automatic agent runtime.
+runtime_config_dir="$tmp_dir/manul-runtime"
+mkdir -p "$runtime_config_dir"
+printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' > "$runtime_config_dir/config.json"
+selected_runtime="$(MANUL_DIR="$runtime_config_dir" AGENT_RUNTIME= MANUL_AGENT_RUNTIME= bash -c 'source "$1"; printf "%s" "$AGENT_RUNTIME"' _ "$MANUL/manul-paths.sh")"
+[ "$selected_runtime" = "opencode" ] || fail "runtime selection ignored automation.agentRuntime=opencode (got $selected_runtime)"
+ok "Manul config selects OpenCode as the automatic agent runtime"
+
+selected_runtime="$(MANUL_DIR="$runtime_config_dir" AGENT_RUNTIME=openclaw MANUL_AGENT_RUNTIME= bash -c 'source "$1"; printf "%s" "$AGENT_RUNTIME"' _ "$MANUL/manul-paths.sh")"
+[ "$selected_runtime" = "openclaw" ] || fail "explicit AGENT_RUNTIME environment override was ignored (got $selected_runtime)"
+ok "explicit runtime environment override takes precedence over Manul config"
+
+runtime_role_only_dir="$tmp_dir/manul-role-only"
+mkdir -p "$runtime_role_only_dir"
+printf '%s\n' '{"automation":{"roleRuntime":"opencode"}}' > "$runtime_role_only_dir/config.json"
+selected_runtime="$(MANUL_DIR="$runtime_role_only_dir" AGENT_RUNTIME= MANUL_AGENT_RUNTIME= bash -c 'source "$1"; printf "%s" "$AGENT_RUNTIME"' _ "$MANUL/manul-paths.sh")"
+[ "$selected_runtime" = "openclaw" ] || fail "roleRuntime=opencode incorrectly changed the automatic runtime (got $selected_runtime)"
+ok "roleRuntime=opencode alone retains Manul's default automatic OpenClaw runtime"
+
+# The final Gateway startup and ACPX configuration call must be guarded by
+# AGENT_RUNTIME=openclaw. The earlier matching guard loads the snapshot helper;
+# this later guard must enclose the actual Gateway launch/configuration calls.
+runtime_gate_line="$(grep -nF 'if [ "$AGENT_RUNTIME" = "openclaw" ]; then' "$AICODE" | sed -n '2p' | cut -d: -f1)"
+gateway_start_line="$(grep -nF 'nohup openclaw gateway' "$AICODE" | cut -d: -f1)"
+acpx_call_line="$(grep -nF 'if ! configure_openclaw_opencode_acp; then' "$AICODE" | cut -d: -f1)"
+[ -n "$runtime_gate_line" ] && [ -n "$gateway_start_line" ] && [ -n "$acpx_call_line" ] &&
+  [ "$runtime_gate_line" -lt "$gateway_start_line" ] && [ "$gateway_start_line" -lt "$acpx_call_line" ] ||
+  fail "OpenClaw Gateway/ACPX operations are not gated by the selected agent runtime"
+ok "OpenClaw Gateway and ACPX are only initialized for OpenClaw agentRuntime"
 merge_input="$tmp_dir/input.json"
 merge_output="$tmp_dir/output.json"
 printf '{"mcp":{"existing":true},"tools":{"foo":true},"agent":{"chat":{"tools":{"*":false}}}}' > "$merge_input"
