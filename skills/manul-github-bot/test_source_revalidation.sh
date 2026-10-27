@@ -149,10 +149,12 @@ case "$url" in
   */pulls/3006) echo '{"state":"open","merged":false,"head":{"ref":"feature/network-pr","repo":{"full_name":"owner/repo"}}}' ;;
   */pulls/3007) echo '{"state":"open"}' ;;
   */pulls/9999|*/pulls/4999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
-  */pulls/5000) echo '{"message":"network"}'; exit 7 ;;
+  */pulls/5000) echo '{"state":"open","merged":false,"head":{"ref":"feature/graphql-error","repo":{"full_name":"owner/repo"}}}' ;;
+  */pulls/5001) echo '{"message":"network"}'; exit 7 ;;
   */branches/feature%2Fopen-pr) echo '{"name":"feature/open-pr"}' ;;
   */branches/feature%2Fdeleted-pr) echo '{"message":"Branch not found","status":"404"}'; exit 1 ;;
   */branches/feature%2Fnetwork-pr) echo '{"message":"network"}'; exit 7 ;;
+  */branches/feature%2Fgraphql-error) echo '{"name":"feature/graphql-error"}' ;;
   *) echo "unexpected REST fixture: $url" >&2; exit 1 ;;
 esac
 EOF
@@ -246,7 +248,7 @@ revalidate_pr_state "ci_fix:owner/repo:3001:run1" "$REPO"; rc=$?; assert_rc "ope
 revalidate_pr_state "ci_fix:owner/repo:3002:run1" "$REPO"; rc=$?; assert_rc "closed PR stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3003:run1" "$REPO"; rc=$?; assert_rc "merged PR stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:9999:run1" "$REPO"; rc=$?; assert_rc "404 PR stale" 1 "$rc"
-revalidate_pr_state "ci_fix:owner/repo:5000:run1" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:5001:run1" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3004:run1" "$REPO"; rc=$?; assert_rc "open PR with deleted head branch stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3005:run1" "$REPO"; rc=$?; assert_rc "open PR with missing head repo stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3006:run1" "$REPO"; rc=$?; assert_rc "head branch API error transient" 2 "$rc"
