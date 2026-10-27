@@ -313,6 +313,9 @@ manul-queue-reset.sh --all-tasks --execute --poll-after
 
 The optional poll runs once without restarting the daemon. Both modes preserve the install baseline, configuration, workspace state, logs, and unrelated runtime state. Any poll still obeys the existing baseline and configured source filters. The backup retains the pre-reset task history.
 
+
+The long-lived daemon runs a dedicated GitHub poller alongside independent SQLite queue-consumer workers. The poller only discovers and persists work; it never claims or executes tasks. Consumers inspect eligible queued rows at a short dispatch interval and do not invoke `poll.sh`, so slow GitHub/API polling cannot delay work already in SQLite. The explicit `run-once` command retains its combined poll-then-dispatch behavior for manual diagnostics.
+
 ## State and recovery
 
 Core task flow:
