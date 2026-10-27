@@ -495,7 +495,8 @@ echo ""
 echo "=== Test 8b: CI-fix task artifact paths are flat and recoverable ==="
 CI_TASK_ID="ci_fix:mariuszmarzec/fiteoApp:14:40488568269"
 CI_TASK_KEY="$(manul_task_file_key "$CI_TASK_ID")"
-assert_eq "ci_fix:mariuszmarzec_fiteoApp:14:40488568269" "$CI_TASK_KEY" "CI task path key flattens repository slash"
+CI_TASK_HASH="$(printf '%s' "$CI_TASK_ID" | sha256sum | cut -c1-16)"
+assert_eq "ci_fix:mariuszmarzec_fiteoApp:14:40488568269--$CI_TASK_HASH" "$CI_TASK_KEY" "CI task path key flattens repository slash and remains unique"
 assert_eq "issue:123" "$(manul_task_file_key "issue:123")" "existing single-component task IDs keep their legacy path key"
 
 CI_PROMPT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "md")"
@@ -516,8 +517,8 @@ assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.executor.pid" "$CI_EXECUTOR_PID_FILE" "e
 assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.heartbeat.pid" "$CI_HEARTBEAT_PID_FILE" "heartbeat PID path uses the same canonical task key"
 
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts) VALUES('$CI_TASK_ID','mariuszmarzec/fiteoApp',14,'https://github.com/mariuszmarzec/fiteoApp/pull/14','IMPLEMENT','failed',3);"
-printf '%s\\n' '{}' >"$CI_CTX_FILE"
-printf '%s\\n' "$CURRENT_TEST_PID" >"$CI_EXECUTOR_PID_FILE"
+printf '%s\n' '{}' >"$CI_CTX_FILE"
+printf '%s\n' "$CURRENT_TEST_PID" >"$CI_EXECUTOR_PID_FILE"
 assert_eq "$CI_TASK_ID" "$(task_id_from_file_key "$CI_TASK_KEY")" "safe filename maps back to original database task ID"
 if list_task_executor_ids | grep -Fxq "$CI_TASK_ID"; then
   echo "PASS: orphan-executor enumeration preserves the original CI task ID"
