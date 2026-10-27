@@ -3325,19 +3325,21 @@ dispatch_once() {
   log "dispatch: SQLite has eligible queued task(s); attempting dispatch"
   lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
 
+  # Serialize shared workspace reconciliation with task claiming. With a
+  # short consumer interval, several workers can see the same queued row at once.
+  if ! acquire_task_lock; then
+    log "dispatch: could not acquire lock, skipping"
+    lc_log "LOCK_FAIL" "could_not_acquire"
+    return 0
+  fi
+
   # Reconcile the workspace pool only when a task is ready to run.
   if ! ensure_workspace_pool; then
     log "dispatch: workspace pool reconciliation failed"
     lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
+    release_task_lock
     return 0
   fi
-
-    # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races
-    if ! acquire_task_lock; then
-      log "dispatch: could not acquire lock, skipping"
-      lc_log "LOCK_FAIL" "could_not_acquire"
-      return 0
-    fi
 
     # 1. Find next eligible task using proper SQLite query with retry backoff
     # Query only the fields we need, not the prompt (which may contain |)
