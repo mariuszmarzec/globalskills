@@ -4372,7 +4372,11 @@ loop() {
     esac
   done
   if [ -n "$parent_pid" ] && { ! [[ "$parent_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$parent_pid" 2>/dev/null; }; then
-    log "loop startup aborted: owning daemon is not alive (parent=$parent_pid worker=$worker_id poller=$poller_mode)"
+    if [ "$poller_mode" = "true" ]; then
+      log "poller startup aborted: owning daemon is not alive (parent=$parent_pid)"
+    else
+      log "worker startup aborted: owning daemon is not alive (parent=$parent_pid worker=$worker_id)"
+    fi
     return 0
   fi
 
@@ -4425,7 +4429,7 @@ loop() {
   # In worker mode, skip flock (each worker has its own lock)
   if [ -n "$worker_id" ]; then
     log "consumer loop started as worker $worker_id (dispatch interval ${DISPATCH_INTERVAL}s parent=${parent_pid:-legacy})"
-    lc_log "CONSUMER_LOOP_START" "worker=$worker_id dispatchInterval=${DISPATCH_INTERVAL}s parent=${parent_pid:-legacy}"
+    lc_log "LOOP_START" "worker=$worker_id role=consumer dispatchInterval=${DISPATCH_INTERVAL}s parent=${parent_pid:-legacy}"
     while true; do
       if [ -n "$parent_pid" ] && ! kill -0 "$parent_pid" 2>/dev/null; then
         log "worker $worker_id stopping because owning daemon $parent_pid exited"
