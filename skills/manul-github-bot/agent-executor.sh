@@ -60,10 +60,10 @@ AgentExecutor.execute() {
     stdout_file="$(jq -r '.stdout_file // ""' "$ctx_file" 2>/dev/null)"
     stderr_file="$(jq -r '.stderr_file // ""' "$ctx_file" 2>/dev/null)"
     if [ -z "$stdout_file" ] || [ "$stdout_file" = "null" ]; then
-        stdout_file="$MANUL_TASKS_DIR/task-${task_id}.stdout"
+        stdout_file="$(manul_task_file_path "$MANUL_TASKS_DIR" "$task_id" "stdout")"
     fi
     if [ -z "$stderr_file" ] || [ "$stderr_file" = "null" ]; then
-        stderr_file="$MANUL_TASKS_DIR/task-${task_id}.stderr"
+        stderr_file="$(manul_task_file_path "$MANUL_TASKS_DIR" "$task_id" "stderr")"
     fi
     mkdir -p "$(dirname "$stdout_file")" "$(dirname "$stderr_file")" 2>/dev/null || true
     mkdir -p "$MANUL_TASKS_DIR" 2>/dev/null || true
