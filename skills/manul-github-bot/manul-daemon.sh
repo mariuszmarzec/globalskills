@@ -2491,6 +2491,11 @@ revalidate_pr_target() {
   local state merged head_ref head_repo
   state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || true)"
   merged="$(printf '%s' "$resp" | jq -r '.merged // false' 2>/dev/null || echo false)"
+  if [ -z "$state" ]; then
+    log "revalidate_source: PR $pr_num response omitted state for $repo; treating as transient"
+    lc_log "SOURCE_REVALIDATION_ERROR" "task=$comment_id repo=$repo kind=$source_kind reason=missing_pr_state"
+    return 2
+  fi
   if [ "$state" != "open" ] || [ "$merged" = "true" ]; then
     local reason="pr_${state:-unknown}"
     [ "$merged" = "true" ] && reason="pr_merged"
