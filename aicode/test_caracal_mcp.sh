@@ -104,7 +104,7 @@ ok "roleRuntime=opencode alone retains Manul's default automatic OpenClaw runtim
 # The final Gateway startup and ACPX configuration call must be guarded by
 # AGENT_RUNTIME=openclaw. The earlier matching guard loads the snapshot helper;
 # this later guard must enclose the actual Gateway launch/configuration calls.
-runtime_gate_line="$(grep -nF 'if [ "$AGENT_RUNTIME" = "openclaw" ]; then' "$AICODE" | tail -n 1 | cut -d: -f1)"
+runtime_gate_line="$(grep -nF 'if [ "$AGENT_RUNTIME" = "openclaw" ]; then' "$AICODE" | sed -n '2p' | cut -d: -f1)"
 gateway_start_line="$(grep -nF 'nohup openclaw gateway' "$AICODE" | cut -d: -f1)"
 acpx_call_line="$(grep -nF 'if ! configure_openclaw_opencode_acp; then' "$AICODE" | cut -d: -f1)"
 [ -n "$runtime_gate_line" ] && [ -n "$gateway_start_line" ] && [ -n "$acpx_call_line" ] &&
