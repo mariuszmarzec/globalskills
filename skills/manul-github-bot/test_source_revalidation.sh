@@ -151,7 +151,6 @@ case "$url" in
   */pulls/9999|*/pulls/4999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   */pulls/5000) echo '{"message":"network"}'; exit 7 ;;
   */branches/feature%2Fopen-pr) echo '{"name":"feature/open-pr"}' ;;
-  */branches/feature%2Fdeleted-comment) echo '{"message":"Branch not found","status":"404"}'; exit 1 ;;
   */branches/feature%2Fdeleted-pr) echo '{"message":"Branch not found","status":"404"}'; exit 1 ;;
   */branches/feature%2Fnetwork-pr) echo '{"message":"network"}'; exit 7 ;;
   *) echo "unexpected REST fixture: $url" >&2; exit 1 ;;
