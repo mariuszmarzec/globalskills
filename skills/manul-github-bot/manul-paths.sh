@@ -36,7 +36,18 @@ MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 # that are already single path components. The "task-" prefix also prevents a
 # leading "." or ".." in a source ID from becoming a traversal segment.
 manul_task_file_key() {
-    printf '%s' "${1:-}" | sed 's|/|_|g'
+    local task_id="${1:-}"
+    local flat_key
+    flat_key="$(printf '%s' "$task_id" | sed 's|/|_|g')"
+    if [[ "$task_id" == *"/"* ]]; then
+        # Preserve uniqueness when distinct task IDs flatten to the same text.
+        # Existing IDs without "/" keep their legacy filenames.
+        local task_hash
+        task_hash="$(printf '%s' "$task_id" | sha256sum | cut -c1-16)"
+        printf '%s--%s' "$flat_key" "$task_hash"
+    else
+        printf '%s' "$flat_key"
+    fi
 }
 
 manul_task_file_path() {
