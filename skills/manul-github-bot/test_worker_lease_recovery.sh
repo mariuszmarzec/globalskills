@@ -489,5 +489,41 @@ grep -q 'worker startup aborted: owning daemon is not alive' "$LOG" \
   && echo "PASS: orphan worker refuses to start without its owning daemon" \
   || { echo "FAIL: orphan worker startup was not rejected" >&2; exit 1; }
 
+# 8b) CI-fix task IDs contain the owner/repository slash, but filesystem paths
+# must remain flat and recovery must recover the exact original ID from SQLite.
+echo ""
+echo "=== Test 8b: CI-fix task artifact paths are flat and recoverable ==="
+CI_TASK_ID="ci_fix:mariuszmarzec/fiteoApp:14:40488568269"
+CI_TASK_KEY="$(manul_task_file_key "$CI_TASK_ID")"
+assert_eq "ci_fix:mariuszmarzec_fiteoApp:14:40488568269" "$CI_TASK_KEY" "CI task path key flattens repository slash"
+assert_eq "issue:123" "$(manul_task_file_key "issue:123")" "existing single-component task IDs keep their legacy path key"
+
+CI_PROMPT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "md")"
+CI_STDOUT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "stdout")"
+CI_STDERR_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "stderr")"
+CI_CTX_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "ctx.json")"
+CI_RESULT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "executor-result")"
+CI_EXECUTOR_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "$CI_TASK_ID" "executor.pid")"
+CI_HEARTBEAT_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "$CI_TASK_ID" "heartbeat.pid")"
+
+for artifact_path in "$CI_PROMPT_FILE" "$CI_STDOUT_FILE" "$CI_STDERR_FILE" "$CI_CTX_FILE" "$CI_RESULT_FILE" "$CI_EXECUTOR_PID_FILE" "$CI_HEARTBEAT_PID_FILE"; do
+  assert_eq "$(dirname "$MANUL_TASKS_DIR/task-placeholder")" "$(dirname "$artifact_path")" "artifact path has no task-ID-created nested directory"
+done
+assert_eq "$MANUL_TASKS_DIR/task-$CI_TASK_KEY.ctx.json" "$CI_CTX_FILE" "context path uses the canonical task key"
+assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.executor.pid" "$CI_EXECUTOR_PID_FILE" "executor PID path uses the same canonical task key"
+assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.heartbeat.pid" "$CI_HEARTBEAT_PID_FILE" "heartbeat PID path uses the same canonical task key"
+
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts) VALUES('$CI_TASK_ID','mariuszmarzec/fiteoApp',14,'https://github.com/mariuszmarzec/fiteoApp/pull/14','IMPLEMENT','failed',3);"
+printf '%s\\n' '{}' >"$CI_CTX_FILE"
+printf '%s\\n' "$CURRENT_TEST_PID" >"$CI_EXECUTOR_PID_FILE"
+assert_eq "$CI_TASK_ID" "$(task_id_from_file_key "$CI_TASK_KEY")" "safe filename maps back to original database task ID"
+if list_task_executor_ids | grep -Fxq "$CI_TASK_ID"; then
+  echo "PASS: orphan-executor enumeration preserves the original CI task ID"
+else
+  echo "FAIL: orphan-executor enumeration lost the original CI task ID" >&2
+  list_task_executor_ids >&2
+  exit 1
+fi
+
 echo "All focused worker lifecycle tests passed."
 exit 0
