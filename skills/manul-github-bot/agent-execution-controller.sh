@@ -74,7 +74,7 @@ AgentExecutionController.execute() {
     if [ "$status" = "TIMEOUT" ] || { [ "$exit_code" -eq 124 ] 2>/dev/null && [ "$status" != "COMPLETED" ]; }; then
         # Check if TASK_DONE was already emitted before the timeout killed us.
         if [ -z "$stdout_file" ] || [ "$stdout_file" = "null" ]; then
-            stdout_file="$MANUL_TASKS_DIR/task-${task_id}.stdout"
+            stdout_file="$(manul_task_file_path "$MANUL_TASKS_DIR" "$task_id" "stdout")"
         fi
         local check_file="$stdout_file"
         if [ -f "$check_file" ] && grep -qE '^TASK_DONE' "$check_file" 2>/dev/null; then

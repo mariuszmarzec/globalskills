@@ -30,6 +30,33 @@ MANUL_TASKS_DIR="${MANUL_TASKS_DIR:-$MANUL_STATE_DIR/tasks}"
 MANUL_TASK_LOG_DIR="${MANUL_TASK_LOG_DIR:-$MANUL_LOG_DIR/tasks}"
 MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 
+# Task IDs are business identifiers, not safe filename components. CI task IDs
+# include owner/repository (and therefore "/"), while most comment IDs do not.
+# Flatten path separators consistently but preserve existing filenames for IDs
+# that are already single path components. The "task-" prefix also prevents a
+# leading "." or ".." in a source ID from becoming a traversal segment.
+manul_task_file_key() {
+    local task_id="${1:-}"
+    local flat_key
+    flat_key="$(printf '%s' "$task_id" | sed 's|/|_|g')"
+    if [[ "$task_id" == *"/"* ]]; then
+        # Preserve uniqueness when distinct task IDs flatten to the same text.
+        # Existing IDs without "/" keep their legacy filenames.
+        local task_hash
+        task_hash="$(printf '%s' "$task_id" | sha256sum | cut -c1-16)"
+        printf '%s--%s' "$flat_key" "$task_hash"
+    else
+        printf '%s' "$flat_key"
+    fi
+}
+
+manul_task_file_path() {
+    local directory="$1"
+    local task_id="$2"
+    local suffix="$3"
+    printf '%s/task-%s.%s' "$directory" "$(manul_task_file_key "$task_id")" "$suffix"
+}
+
 # Manul operating mode (default: bot). Environment overrides config.
 # Config key: .mode
 _CONFIG_MODE=""

@@ -69,7 +69,7 @@ post_terminal_failure_feedback() {
 
 terminate_task_executor() {
     local comment_id="$1"
-    local pid_file="$MANUL_DIR/task-${comment_id}.executor.pid"
+    local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
     local executor_pid=""
 
     if [ -f "$pid_file" ]; then

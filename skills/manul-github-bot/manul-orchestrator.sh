@@ -164,7 +164,7 @@ get_conversation_state() {
 
 get_task_result() {
   local task_id="$1"
-  local result_file="$ORCHESTRATOR_DIR/results/${task_id}.json"
+  local result_file="$ORCHESTRATOR_DIR/results/$(manul_task_file_key "$task_id").json"
   if [ -f "$result_file" ]; then
     cat "$result_file"
   else
