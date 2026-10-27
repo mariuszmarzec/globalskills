@@ -131,10 +131,12 @@ TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
-if ! [[ "$DISPATCH_INTERVAL" =~ ^[0-9]+$ ]] || [ "$DISPATCH_INTERVAL" -lt 1 ]; then
-  log "WARN: invalid MANUL_DISPATCH_INTERVAL ($DISPATCH_INTERVAL); defaulting to 1s"
-  DISPATCH_INTERVAL=1
-fi
+validate_dispatch_interval() {
+  if ! [[ "$DISPATCH_INTERVAL" =~ ^[0-9]+$ ]] || [ "$DISPATCH_INTERVAL" -lt 1 ]; then
+    log "WARN: invalid MANUL_DISPATCH_INTERVAL ($DISPATCH_INTERVAL); defaulting to 1s"
+    DISPATCH_INTERVAL=1
+  fi
+}
   configure_task_retention() {
     local list_days history_days
     list_days="$(jq -r '.retention.listDays // empty' "$CONFIG" 2>/dev/null || true)"
@@ -1261,6 +1263,7 @@ refresh_heartbeat() {
 }
 
 start() {
+  validate_dispatch_interval
   configure_task_retention
 
   # Serialize the whole preparation/start path, including stale-workspace cleanup.
@@ -4360,6 +4363,7 @@ run_once() {
 }
 
 loop() {
+  validate_dispatch_interval
   # Parse worker mode and the daemon master that owns this worker. An orphaned
   # worker must exit after its master dies instead of competing with a
   # replacement daemon and repeatedly contending for the task-dispatch lock.
