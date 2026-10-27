@@ -64,6 +64,7 @@ CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
 PROMPT_FILE="$MANUL_DIR/orchestrator.prompt.md"
 PID_FILE="$MANUL_LOCKS_DIR/daemon.pid"
+POLLER_PID_FILE="$MANUL_DIR/poller.pid"
 LOG="$MANUL_LOG_DIR/daemon.log"
 LIFECYCLE_LOG="$MANUL_LOG_DIR/lifecycle.log"
 LAST_POLL_FILE="$MANUL_STATE_DIR/last-poll"
@@ -89,6 +90,8 @@ if ! [[ "$CFG_HUMAN_COMMENT_MAX_LINES" =~ ^[0-9]+$ ]] || [ "$CFG_HUMAN_COMMENT_M
   CFG_HUMAN_COMMENT_MAX_LINES=6
 fi
 INTERVAL="${MANUL_INTERVAL:-${CFG_INTERVAL:-60}}"
+# Consumers scan the durable SQLite queue independently of GitHub polling.
+DISPATCH_INTERVAL="${MANUL_DISPATCH_INTERVAL:-1}"
 CFG_AGENT_TIMEOUT="$(jq -r '.automation.agentTimeoutSeconds // 43500' "$CONFIG" 2>/dev/null)"
 AGENT_TIMEOUT="${MANUL_AGENT_TIMEOUT:-${CFG_AGENT_TIMEOUT:-43500}}"   # full Manul agent turn; keep longer than OpenClaw's explicit inner timeout
 POLL_TIMEOUT="${MANUL_POLL_TIMEOUT:-120}"      # seconds timeout for poll.sh
@@ -128,6 +131,12 @@ TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
+validate_dispatch_interval() {
+  if ! [[ "$DISPATCH_INTERVAL" =~ ^[0-9]+$ ]] || [ "$DISPATCH_INTERVAL" -lt 1 ]; then
+    log "WARN: invalid MANUL_DISPATCH_INTERVAL ($DISPATCH_INTERVAL); defaulting to 1s"
+    DISPATCH_INTERVAL=1
+  fi
+}
   configure_task_retention() {
     local list_days history_days
     list_days="$(jq -r '.retention.listDays // empty' "$CONFIG" 2>/dev/null || true)"
@@ -1254,6 +1263,7 @@ refresh_heartbeat() {
 }
 
 start() {
+  validate_dispatch_interval
   configure_task_retention
 
   # Serialize the whole preparation/start path, including stale-workspace cleanup.
@@ -1340,25 +1350,33 @@ start() {
     # Write PID only after owning the singleton lock.
     echo "$BASHPID" >"$PID_FILE"
 
-    # Spawn worker pool
-    local i worker_pid
+    # Start one independent producer. It polls GitHub and writes new tasks to
+    # SQLite; consumer workers never run poll.sh themselves.
     local master_pid=$BASHPID
+    local poller_pid
+    setsid nohup "$DAEMON_SCRIPT_ABS" loop --poller --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
+    poller_pid=$!
+    echo "$poller_pid" >"$POLLER_PID_FILE"
+    log "spawned poller (pid=$poller_pid interval=${INTERVAL}s)"
+
+    # Spawn independent queue consumers/executors.
+    local i worker_pid
     declare -a WORKER_PIDS=()
-for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
-       # Use an absolute path so the worker survives even if the daemon's cwd
-       # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
-       setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
+    for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
+      # Use an absolute path so the worker survives even if the daemon's cwd
+      # changes (nohup otherwise resolves a bare $0 against an unknown cwd).
+      setsid nohup "$DAEMON_SCRIPT_ABS" loop --worker="$i" --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
       worker_pid=$!
       echo "$worker_pid" >"$MANUL_DIR/worker-$i.pid"
       WORKER_PIDS+=("$worker_pid")
-      log "spawned worker $i (pid=$worker_pid)"
+      log "spawned consumer worker $i (pid=$worker_pid)"
     done
 
     flock -u 200
     exec 200>&-
     log "$TASK_RETENTION_CONFIG_MESSAGE"
-    lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s workers=$MAX_CONCURRENT_TASKS"
-    echo "manul daemon started (pid $master_pid, interval ${INTERVAL}s, workers=$MAX_CONCURRENT_TASKS)"
+    lc_log "DAEMON_START" "pid=$master_pid interval=${INTERVAL}s dispatchInterval=${DISPATCH_INTERVAL}s workers=$MAX_CONCURRENT_TASKS poller=$poller_pid"
+    echo "manul daemon started (pid $master_pid, pollInterval ${INTERVAL}s, dispatchInterval ${DISPATCH_INTERVAL}s, workers=$MAX_CONCURRENT_TASKS, poller=$poller_pid)"
 
     # Signal handler: stop all workers on termination
     local stopping=0
@@ -1369,10 +1387,13 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
       stopping=1
       log "daemon received stop signal, terminating workers"
       for wp in "${WORKER_PIDS[@]}"; do
-        kill "$wp" 2>/dev/null || true
+        kill -- "-$wp" 2>/dev/null || kill "$wp" 2>/dev/null || true
       done
+      if [[ "${poller_pid:-}" =~ ^[1-9][0-9]*$ ]]; then
+        kill -- "-$poller_pid" 2>/dev/null || kill "$poller_pid" 2>/dev/null || true
+      fi
       wait 2>/dev/null || true
-      rm -f "$PID_FILE"
+      rm -f "$PID_FILE" "$POLLER_PID_FILE"
       flock -u 220 2>/dev/null || true
       exec 220>&- 2>/dev/null || true
       lc_log "DAEMON_STOP" "pid=$BASHPID"
@@ -1382,11 +1403,11 @@ for ((i = 0; i < MAX_CONCURRENT_TASKS; i++)); do
 
     # Stay alive as the long-lived daemon process, watching over workers
     while true; do
-      # Wait for any worker to exit
+      # Wait for any consumer or the producer to exit so either can be recovered.
       if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
-        wait -n "${WORKER_PIDS[@]}" 2>/dev/null || true
+        wait -n "${WORKER_PIDS[@]}" "$poller_pid" 2>/dev/null || true
       else
-        sleep 1
+        wait "$poller_pid" 2>/dev/null || true
       fi
       # Check if we should stop
       if [ "$stopping" -eq 1 ]; then
@@ -1406,6 +1427,16 @@ if ! kill -0 "${WORKER_PIDS[$i]}" 2>/dev/null; then
         fi
       done
       WORKER_PIDS=("${new_pids[@]}")
+
+      # The poller is supervised independently from the consumer pool.
+      if ! kill -0 "$poller_pid" 2>/dev/null; then
+        log "poller died (pid=$poller_pid), restarting"
+        lc_log "POLLER_RESTART" "previousPid=$poller_pid"
+        setsid nohup "$DAEMON_SCRIPT_ABS" loop --poller --parent-pid="$master_pid" 220>&- >>"$LOG" 2>&1 &
+        poller_pid=$!
+        echo "$poller_pid" >"$POLLER_PID_FILE"
+        log "restarted poller (pid=$poller_pid)"
+      fi
     done
   ) &
   local daemon_pid=$!
@@ -1427,6 +1458,18 @@ stop() {
   terminate_all_task_executors
 
   if [ ! -f "$PID_FILE" ]; then
+    # A crashed supervisor may have left its producer PID marker behind.
+    if [ -f "$POLLER_PID_FILE" ]; then
+      local orphan_poller_pid orphan_poller_cmdline
+      orphan_poller_pid="$(cat "$POLLER_PID_FILE" 2>/dev/null || true)"
+      if [[ "$orphan_poller_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$orphan_poller_pid" 2>/dev/null; then
+        orphan_poller_cmdline="$(tr '\0' ' ' < "/proc/$orphan_poller_pid/cmdline" 2>/dev/null || true)"
+        if [[ "$orphan_poller_cmdline" == *"manul-daemon.sh"* && "$orphan_poller_cmdline" == *"--poller"* ]]; then
+          kill -- "-$orphan_poller_pid" 2>/dev/null || kill "$orphan_poller_pid" 2>/dev/null || true
+        fi
+      fi
+      rm -f "$POLLER_PID_FILE"
+    fi
     echo "not running"
     return 0
   fi
@@ -1446,6 +1489,20 @@ stop() {
     rm -f "$pf"
   done
   kill "$pid" 2>/dev/null
+  # The supervisor normally terminates the poller in its signal handler. Also
+  # reap its process group here in case shutdown races with supervisor exit.
+  if [ -f "$POLLER_PID_FILE" ]; then
+    local poller_pid
+    poller_pid="$(cat "$POLLER_PID_FILE" 2>/dev/null || true)"
+    if [[ "$poller_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$poller_pid" 2>/dev/null; then
+      local poller_cmdline
+      poller_cmdline="$(tr '\0' ' ' < "/proc/$poller_pid/cmdline" 2>/dev/null || true)"
+      if [[ "$poller_cmdline" == *"manul-daemon.sh"* && "$poller_cmdline" == *"--poller"* ]]; then
+        kill -- "-$poller_pid" 2>/dev/null || kill "$poller_pid" 2>/dev/null || true
+      fi
+    fi
+    rm -f "$POLLER_PID_FILE"
+  fi
   wait 2>/dev/null || true
   rm -f "$PID_FILE"
   lc_log "DAEMON_STOP" "pid=$pid"
@@ -3210,15 +3267,8 @@ else
   fi
 }
 
-run_once() {
-  configure_task_retention
-  ensure_recovery_tracking_columns || {
-    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
-    return 1
-  }
-  cleanup_expired_tasks
-  cleanup_expired_logs
-
+# Poll GitHub and enqueue source events. This path never claims or executes tasks.
+poll_once() {
   # Use timeout to prevent daemon deadlock if poll.sh hangs
   # This can happen if gh API is unresponsive or network is blocked.
   # The default scales with the number of configured repositories so one
@@ -3227,8 +3277,8 @@ run_once() {
   local poll_timeout="${MANUL_POLL_TIMEOUT:-$(( ${#REPOS[@]} * (REPO_POLL_TIMEOUT + 10) + 60 ))}"
   # Capture poll.sh output to a file so a partial result emitted by poll.sh's
   # signal trap (when the global timeout kills it mid-cycle) is NOT lost.
-  # Without this, every interrupted cycle reports fire:false and the daemon
-  # never dispatches the queued task.
+  # Poll results remain useful for observability even though consumers now read
+  # SQLite independently and never gate dispatch on the poller's result.
   local poll_out_file
   poll_out_file="$(mktemp)"
   local poll_rc=0
@@ -3256,38 +3306,40 @@ run_once() {
   record_poll "$poll_fire" "$poll_new" "$poll_pending"
 
   if [ "$poll_fire" = "true" ]; then
-    log "dispatch: $out"
+    log "poller: $out"
     lc_log "POLL" "fire=true new=$poll_new pending=$poll_pending"
   else
     lc_log "POLL" "fire=false new=$poll_new pending=$poll_pending"
   fi
 
-  # Reconcile the workspace pool on every cycle. A long-lived daemon must not
-  # rely on start() because the watchdog may clean stale idle workspaces later.
+}
+
+dispatch_once() {
+  # SQLite is the sole input to the consumer. Polling is handled by a
+  # separate producer process and can never block this queue check.
+  local eligible_queued
+  eligible_queued="$(eligible_queued_count)"
+  if [ "${eligible_queued:-0}" -eq 0 ]; then
+    return 0
+  fi
+  log "dispatch: SQLite has eligible queued task(s); attempting dispatch"
+  lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
+
+  # Serialize shared workspace reconciliation with task claiming. With a
+  # short consumer interval, several workers can see the same queued row at once.
+  if ! acquire_task_lock; then
+    log "dispatch: could not acquire lock, skipping"
+    lc_log "LOCK_FAIL" "could_not_acquire"
+    return 0
+  fi
+
+  # Reconcile the workspace pool only when a task is ready to run.
   if ! ensure_workspace_pool; then
     log "dispatch: workspace pool reconciliation failed"
     lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
-  fi
-
-  # SQLite is the authoritative task queue. poll_fire is only a wake-up hint:
-  # an existing eligible queued task must still be dispatched even when poll
-  # output is malformed, stale, or reports fire=false.
-  local eligible_queued
-  eligible_queued="$(eligible_queued_count)"
-  if [ "$poll_fire" != "true" ] && [ "${eligible_queued:-0}" -eq 0 ]; then
+    release_task_lock
     return 0
   fi
-  if [ "$poll_fire" != "true" ]; then
-    log "dispatch: poll fire=false but SQLite has eligible queued task(s); dispatching from queue"
-    lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
-  fi
-
-    # 0. Acquire singleton lock BEFORE any claim to prevent concurrent daemon races
-    if ! acquire_task_lock; then
-      log "dispatch: could not acquire lock, skipping"
-      lc_log "LOCK_FAIL" "could_not_acquire"
-      return 0
-    fi
 
     # 1. Find next eligible task using proper SQLite query with retry backoff
     # Query only the fields we need, not the prompt (which may contain |)
@@ -3298,8 +3350,8 @@ run_once() {
     TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
-      log "dispatch: fire:true but no eligible queued task found"
-      lc_log "NO_TASK" "fire=true but_queue_empty"
+      log "dispatch: queued task was no longer eligible at claim time"
+      lc_log "NO_TASK" "reason=queue_empty"
       release_task_lock
       return 0
     fi
@@ -4297,19 +4349,60 @@ PROMPT_APPEND
     set_activity "none" "idle"
 }
 
+# Compatibility entry point for explicit one-shot/manual runs: poll once, then dispatch.
+# The long-lived daemon does NOT use this combined path; its poller and consumers
+# are supervised independently below.
+run_once() {
+  configure_task_retention
+  ensure_recovery_tracking_columns || {
+    log "ERROR: recovery tracking schema unavailable; refusing to dispatch without retry bookkeeping"
+    return 1
+  }
+  cleanup_expired_tasks
+  cleanup_expired_logs
+  poll_once
+  dispatch_once
+}
+
 loop() {
+  validate_dispatch_interval
   # Parse worker mode and the daemon master that owns this worker. An orphaned
   # worker must exit after its master dies instead of competing with a
   # replacement daemon and repeatedly contending for the task-dispatch lock.
-  local worker_id="" parent_pid=""
+  local worker_id="" parent_pid="" poller_mode=false
   for arg in "$@"; do
     case "$arg" in
       --worker=*) worker_id="${arg#--worker=}" ;;
       --parent-pid=*) parent_pid="${arg#--parent-pid=}" ;;
+      --poller) poller_mode=true ;;
     esac
   done
   if [ -n "$parent_pid" ] && { ! [[ "$parent_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$parent_pid" 2>/dev/null; }; then
-    log "worker startup aborted: owning daemon is not alive (parent=$parent_pid worker=$worker_id)"
+    if [ "$poller_mode" = "true" ]; then
+      log "poller startup aborted: owning daemon is not alive (parent=$parent_pid)"
+    else
+      log "worker startup aborted: owning daemon is not alive (parent=$parent_pid worker=$worker_id)"
+    fi
+    return 0
+  fi
+
+  # The producer has a deliberately small lifecycle: poll, persist, sleep.
+  # It never performs worker recovery, workspace management, or task execution.
+  if [ "$poller_mode" = "true" ]; then
+    log "poller loop started (interval ${INTERVAL}s parent=${parent_pid:-legacy})"
+    lc_log "POLLER_LOOP_START" "interval=${INTERVAL}s parent=${parent_pid:-legacy}"
+    while true; do
+      if [ -n "$parent_pid" ] && ! kill -0 "$parent_pid" 2>/dev/null; then
+        log "poller stopping because owning daemon $parent_pid exited"
+        lc_log "POLLER_STOP" "reason=parent_exited parent=$parent_pid"
+        break
+      fi
+      configure_task_retention
+      cleanup_expired_tasks
+      cleanup_expired_logs
+      poll_once || log "WARN: poller cycle returned non-zero"
+      sleep "$INTERVAL"
+    done
     return 0
   fi
 
@@ -4322,6 +4415,10 @@ loop() {
   # Ensure task claim ownership support before any claim/recovery.
   if ! ensure_claim_token_column; then
     log "FATAL: claimToken schema migration failed, cannot start loop"
+    exit 1
+  fi
+  if ! ensure_recovery_tracking_columns; then
+    log "FATAL: recovery tracking schema unavailable, cannot start consumer"
     exit 1
   fi
 
@@ -4337,16 +4434,16 @@ loop() {
 
   # In worker mode, skip flock (each worker has its own lock)
   if [ -n "$worker_id" ]; then
-    log "daemon loop started as worker $worker_id (interval ${INTERVAL}s parent=${parent_pid:-legacy})"
-    lc_log "LOOP_START" "worker=$worker_id interval=${INTERVAL}s parent=${parent_pid:-legacy}"
+    log "consumer loop started as worker $worker_id (dispatch interval ${DISPATCH_INTERVAL}s parent=${parent_pid:-legacy})"
+    lc_log "LOOP_START" "worker=$worker_id role=consumer dispatchInterval=${DISPATCH_INTERVAL}s parent=${parent_pid:-legacy}"
     while true; do
       if [ -n "$parent_pid" ] && ! kill -0 "$parent_pid" 2>/dev/null; then
         log "worker $worker_id stopping because owning daemon $parent_pid exited"
         lc_log "WORKER_STOP" "worker=$worker_id reason=parent_exited parent=$parent_pid"
         break
       fi
-      run_once
-      sleep "$INTERVAL"
+      dispatch_once
+      sleep "$DISPATCH_INTERVAL"
     done
   else
     # Singleton enforcement: try to acquire flock; if another daemon holds it, exit
