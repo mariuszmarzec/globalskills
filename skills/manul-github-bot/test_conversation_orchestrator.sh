@@ -296,6 +296,25 @@ test_pr_merge_detection() {
   if echo "$result" | jq -e '.result.prMerged' >/dev/null 2>&1; then ok "$TEST_NAME"; else fail "$TEST_NAME (prMerged not detected in: $result)"; fi
 }
 
+test_ci_fix_task_result_path() {
+  TEST_NAME="CI-fix task result path supports slash-bearing task IDs"
+  local conv_id task_id task_key now result
+  conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='test-owner/test-repo' LIMIT 1;" 2>/dev/null)"
+  if [ -z "$conv_id" ]; then fail "$TEST_NAME (no conversation)"; return; fi
+  task_id="ci_fix:mariuszmarzec/fiteoApp:14:40488568269"
+  task_key="$(printf '%s' "$task_id" | sed 's|/|_|g')--$(printf '%s' "$task_id" | sha256sum | cut -c1-16)"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$DB" "INSERT OR REPLACE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, status, createdAt, processedAt, conversationId, action, prNumber) VALUES('$(printf '%s' "$task_id" | sed "s/'/''/g")', 'mariuszmarzec/fiteoApp', 14, 'https://github.com/mariuszmarzec/fiteoApp/pull/14', 'test', 'CI fix result path', 'completed', '$now', '$now', '$conv_id', 'IMPLEMENT', 14);"
+  mkdir -p "$MANUL_DIR/results"
+  printf '%s\n' '{"success":true,"prMerged":true}' >"$MANUL_DIR/results/${task_key}.json"
+  result="$(bash "$CONVERSATION_SCRIPT" result --task-id "$task_id" --json 2>/dev/null)" || result="{}"
+  if echo "$result" | jq -e '.result.prMerged == true' >/dev/null 2>&1; then
+    ok "$TEST_NAME"
+  else
+    fail "$TEST_NAME (CI-fix result artifact not found: $result)"
+  fi
+}
+
 test_completed_conversation() {
   TEST_NAME="completed conversation"; local conv_id output rc status
   conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='test-owner/test-repo' LIMIT 1;" 2>/dev/null)"
@@ -454,6 +473,7 @@ test_multiple_tasks_same_conversation
 test_concurrent_tasks_same_conversation
 test_task_result_exposes_pr
 test_pr_merge_detection
+test_ci_fix_task_result_path
 test_completed_conversation
 test_failed_conversation
 test_conversation_restart_recovery
