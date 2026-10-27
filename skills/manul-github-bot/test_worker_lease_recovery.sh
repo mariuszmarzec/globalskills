@@ -506,9 +506,11 @@ CI_RESULT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$CI_TASK_ID" "executo
 CI_EXECUTOR_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "$CI_TASK_ID" "executor.pid")"
 CI_HEARTBEAT_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "$CI_TASK_ID" "heartbeat.pid")"
 
-for artifact_path in "$CI_PROMPT_FILE" "$CI_STDOUT_FILE" "$CI_STDERR_FILE" "$CI_CTX_FILE" "$CI_RESULT_FILE" "$CI_EXECUTOR_PID_FILE" "$CI_HEARTBEAT_PID_FILE"; do
-  assert_eq "$(dirname "$MANUL_TASKS_DIR/task-placeholder")" "$(dirname "$artifact_path")" "artifact path has no task-ID-created nested directory"
+for artifact_path in "$CI_PROMPT_FILE" "$CI_STDOUT_FILE" "$CI_STDERR_FILE" "$CI_CTX_FILE" "$CI_RESULT_FILE"; do
+  assert_eq "$MANUL_TASKS_DIR" "$(dirname "$artifact_path")" "task artifact path has no task-ID-created nested directory"
 done
+assert_eq "$MANUL_DIR" "$(dirname "$CI_EXECUTOR_PID_FILE")" "executor PID path stays flat under MANUL_DIR"
+assert_eq "$MANUL_DIR" "$(dirname "$CI_HEARTBEAT_PID_FILE")" "heartbeat PID path stays flat under MANUL_DIR"
 assert_eq "$MANUL_TASKS_DIR/task-$CI_TASK_KEY.ctx.json" "$CI_CTX_FILE" "context path uses the canonical task key"
 assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.executor.pid" "$CI_EXECUTOR_PID_FILE" "executor PID path uses the same canonical task key"
 assert_eq "$MANUL_DIR/task-$CI_TASK_KEY.heartbeat.pid" "$CI_HEARTBEAT_PID_FILE" "heartbeat PID path uses the same canonical task key"
