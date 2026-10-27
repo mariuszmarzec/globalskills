@@ -54,7 +54,7 @@ contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wra
 contains "$AICODE" 'OpenClaw ACP OpenCode harness configured' "aicode verifies the ACP wrapper configuration"
 contains "$ACP_WRAPPER" '"$opencode_bin" mcp list' "ACP wrapper checks the effective OpenCode MCP registry"
 contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
-contains "$ACP_WRAPPER" 'load_caracal_token' "ACP wrapper refreshes Caracal credentials from the local secret store"
+contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caracal credentials from the Caracal provider"
 
 # Manul must preserve a current endpoint/token for unattended tasks and must
 # make a task-local config plus a live MCP preflight before running OpenCode.

@@ -225,11 +225,22 @@ fi
 # Caracal is a required capability for Manul's OpenCode runtime. Never start
 # a task with a half-configured MCP definition: OpenCode resolves env placeholders
 # in the adapter's child process, not from an interactive OpenCode UI session.
+# Fallback to the single Caracal provider (~/.caracal/env.sh) for credentials
+# when the daemon has not already provided them. The provider loads the token
+# from secrets.yaml and resolves the live loopback URL via caracal-rag check.
+# Manul-specific context (MANUL_TASK_WORKSPACE_ROOT, etc.) is preserved.
+# shellcheck source=~/.caracal/env.sh
 if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
    [[ "${CARACAL_MCP_URL:-}" =~ ^http://127\.0\.0\.1:0/ ]]; then
-    log "required Caracal MCP URL/token is missing or disconnected"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
-    exit 78
+    # Try the Caracal provider. Use CARACAL_RESOLVE_LIVE=1 to force a fresh
+    # healthcheck so a long-running daemon cannot pin a stale port.
+    if CARACAL_RESOLVE_LIVE=1 . "$HOME/.caracal/env.sh" 2>/dev/null; then
+        log "resolved Caracal MCP from ~/.caracal/env.sh"
+    else
+        log "required Caracal MCP URL/token is missing or disconnected"
+        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+        exit 78
+    fi
 fi
 export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
 

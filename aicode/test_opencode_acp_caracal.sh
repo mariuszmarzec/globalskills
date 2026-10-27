@@ -14,6 +14,84 @@ OPENCODE_CONFIG="$HOME_DIR/.config/opencode/opencode.json"
 mkdir -p "$HOME_DIR/.config/opencode" "$CARACAL/bin" "$CARACAL/venv/bin" "$CARACAL/config" "$BIN"
 chmod 700 "$HOME_DIR" "$CARACAL" "$CARACAL/config"
 
+# Caracal env provider (the wrapper sources this)
+cat >"$CARACAL/env.sh" <<'PROVIDER'
+#!/usr/bin/env bash
+set -euo pipefail
+CARACAL_HOME="${CARACAL_HOME:-$HOME/.caracal}"
+export CARACAL_HOME
+caracal_load_token() {
+    local secrets_dir secrets_file python3
+    secrets_dir="$CARACAL_HOME/config"
+    secrets_file="$secrets_dir/secrets.yaml"
+    python3="$CARACAL_HOME/venv/bin/python"
+    [ -x "$python3" ] && [ -f "$secrets_file" ] || return 1
+    "$python3" - "$secrets_file" <<'PY'
+import sys
+from pathlib import Path
+from caracal_rag.config import load_secrets
+token = load_secrets(Path(sys.argv[1])).get("access_token", "")
+if not token:
+    raise SystemExit("Caracal access token is missing")
+print(token, end="")
+PY
+}
+caracal_validate_token() {
+    local token="${CARACAL_ACCESS_TOKEN:-}"
+    [ -n "$token" ] || return 1
+    [[ "$token" =~ ^[A-Za-z0-9._~+/=-]+$ ]]
+}
+caracal_resolve_url() {
+    local current_url="${CARACAL_MCP_URL:-}"
+    case "$current_url" in
+        "" | http://127.0.0.1:0/* | http://127.0.0.1:* | \
+        http://localhost:* | http://[::1]:*)
+            local cli check_output mcp_host mcp_port mcp_path
+            cli="$CARACAL_HOME/bin/caracal-rag"
+            [ -x "$cli" ] || return 1
+            check_output="$("$cli" check 2>/dev/null)" || return 1
+            mcp_host="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_host=\([^ ]*\).*/\1/p' | tail -n 1)"
+            mcp_port="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_port=\([^ ]*\).*/\1/p' | tail -n 1)"
+            mcp_path="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_path=\([^ ]*\).*/\1/p' | tail -n 1)"
+            [ "$mcp_host" = "127.0.0.1" ] || return 1
+            [[ "$mcp_port" =~ ^[0-9]{1,5}$ ]] || return 1
+            (( mcp_port >= 1 && mcp_port <= 65535 )) || return 1
+            [[ "$mcp_path" =~ ^/[A-Za-z0-9/_-]+$ ]] || return 1
+            CARACAL_MCP_URL="http://127.0.0.1:$mcp_port$mcp_path"
+            ;;
+        http://* | https://*) ;;
+        *) return 1 ;;
+    esac
+    export CARACAL_MCP_URL
+}
+caracal_require_live() {
+    if [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
+        CARACAL_ACCESS_TOKEN="$(caracal_load_token)" || return 1
+    fi
+    caracal_validate_token || return 1
+    caracal_resolve_url || return 1
+    export CARACAL_ACCESS_TOKEN
+}
+if [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
+    if ! CARACAL_ACCESS_TOKEN="$(caracal_load_token)"; then
+        echo "caracal-env: ERROR: Caracal access token is unavailable at $CARACAL_HOME/config/secrets.yaml" >&2
+        return 1
+    fi
+fi
+if ! caracal_validate_token; then
+    echo "caracal-env: ERROR: Caracal token contains unsupported characters (must be safe for dotenv files)" >&2
+    return 1
+fi
+export CARACAL_ACCESS_TOKEN
+if [ "${CARACAL_RESOLVE_LIVE:-}" = "1" ]; then
+    caracal_require_live || {
+        echo "caracal-env: ERROR: Caracal MCP is not reachable (caracal-rag check failed); refusing to start OpenCode" >&2
+        return 1
+    }
+fi
+PROVIDER
+chmod +x "$CARACAL/env.sh"
+
 cat >"$OPENCODE_CONFIG" <<'JSON'
 {
   "mcp": {

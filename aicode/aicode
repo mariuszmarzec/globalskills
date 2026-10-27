@@ -122,40 +122,28 @@ caracal_pid_matches() {
        "$command_line" == *"--path $CARACAL_MCP_PATH"* ]]
 }
 
-caracal_load_access_token() {
-    if [ -z "${CARACAL_ACCESS_TOKEN:-}" ] &&
-       [ -x "$CARACAL_HOME/venv/bin/python" ] &&
-       [ -f "$CARACAL_HOME/config/secrets.yaml" ]; then
-        CARACAL_ACCESS_TOKEN="$("$CARACAL_HOME/venv/bin/python" - "$CARACAL_HOME/config/secrets.yaml" 2>/dev/null <<'PY'
-import sys
-from pathlib import Path
-from caracal_rag.config import load_secrets
-print(load_secrets(Path(sys.argv[1])).get("access_token", ""), end="")
-PY
-)" || CARACAL_ACCESS_TOKEN=""
-    fi
-
-    if [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
-        echo "ERROR: Caracal access token is unavailable; no agent runtime will start." >&2
-        return 1
-    fi
-    # Caracal uses an opaque bearer token. Refuse control characters or syntax
-    # that cannot be represented safely in the dotenv files used by the runtimes.
-    if [[ ! "$CARACAL_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
-        echo "ERROR: Caracal token contains unsupported characters for runtime environment configuration." >&2
-        return 1
-    fi
-    export CARACAL_ACCESS_TOKEN
-}
+# Load the Caracal bearer token from the single Caracal provider.
+# The provider (~/.caracal/env.sh) reads secrets.yaml, validates the token,
+# and (optionally) resolves the live loopback URL. aicode sources it without
+# CARACAL_RESOLVE_LIVE=1 because ensure_caracal_mcp manages the live URL and
+# Caracal service startup itself.
+# shellcheck source=~/.caracal/env.sh
+. "$CARACAL_HOME/env.sh"
 
 ensure_caracal_mcp() {
-    if ! caracal_load_access_token; then
+    # Token is already loaded and validated by the Caracal provider
+    # (~/.caracal/env.sh). The provider exports CARACAL_ACCESS_TOKEN.
+    # aicode sources it without CARACAL_RESOLVE_LIVE=1 because this function
+    # manages the live URL and Caracal service startup itself.
+    if [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
+        echo "ERROR: Caracal access token is unavailable; no agent runtime will start." >&2
         return 1
     fi
 
     # An explicitly configured URL opts into an externally managed endpoint.
     # It still must be reachable here and pass real authenticated probes below.
-    if [ -n "${CARACAL_MCP_URL:-}" ]; then
+    if [ -n "${CARACAL_MCP_URL:-}" ] &&
+       [[ "${CARACAL_MCP_URL:-}" != "http://127.0.0.1:0/mcp" ]]; then
         case "$CARACAL_MCP_URL" in
             http://*|https://*) ;;
             *)
