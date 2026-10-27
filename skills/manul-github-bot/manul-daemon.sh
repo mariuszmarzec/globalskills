@@ -2370,7 +2370,7 @@ revalidate_source() {
   local kind
   kind="$(detect_source_kind "$comment_id")"
   case "$kind" in
-    issue_comment)      revalidate_issue_comment "$comment_id" "$repo" ;;
+    issue_comment)      revalidate_issue_comment "$comment_id" "$repo" "$source_url" ;;
     issue_state)        revalidate_issue_state "$comment_id" "$repo" "$source_url" ;;
     pr_state)           revalidate_pr_state "$comment_id" "$repo" ;;
     pr_review_comment)  revalidate_pr_review_comment "$comment_id" "$repo" "$issue_num" ;;
@@ -2381,7 +2381,7 @@ revalidate_source() {
 # ── issue_comment ─────────────────────────────────────────────────────────────
 # Matched by prefix issue:<id>. Verifies the comment still exists on GitHub.
 revalidate_issue_comment() {
-  local comment_id="$1" repo="$2"
+  local comment_id="$1" repo="$2" source_url="${3:-}"
   local num="${comment_id#issue:}"
   local owner name
   IFS='/' read -r owner name _ <<<"$repo"
@@ -2402,6 +2402,15 @@ revalidate_issue_comment() {
   local returned_id
   returned_id="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
   if [ -n "$returned_id" ]; then
+    # PR conversation comments are stored through the Issues Comments API too.
+    # Their existence alone is insufficient: a merged/closed PR or deleted head
+    # branch cannot be checked out, so terminalize that source before workspace
+    # preparation. Ordinary issue comments retain the existing behavior.
+    if [[ "$source_url" =~ /pull/([0-9]+)([/#?]|$) ]]; then
+      local source_pr_num="${BASH_REMATCH[1]}"
+      revalidate_pr_target "$comment_id" "$repo" "$source_pr_num" "issue_comment"
+      return $?
+    fi
     log "revalidate_source: issue comment $num still exists on $repo — fresh"
     return 0
   fi
@@ -2452,6 +2461,95 @@ revalidate_issue_state() {
   return 1
 }
 
+# Validate a PR-backed task before checkout. A comment/CI event may remain in
+# SQLite after its PR has been merged or its head branch deleted. Returns:
+#   0 = open PR and exact head branch still exists
+#   1 = terminal source (closed/missing PR or missing head branch)
+#   2 = transient/ambiguous API failure; use the bounded infrastructure retry.
+revalidate_pr_target() {
+  local comment_id="$1" repo="$2" pr_num="$3" source_kind="${4:-pr_state}"
+  [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
+
+  local owner name
+  IFS='/' read -r owner name _ <<<"$repo"
+  local resp rc
+  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/pulls/$pr_num" 2>/dev/null)" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ]; then
+      log "revalidate_source: PR $pr_num lookup timed out for $repo"
+      return 2
+    fi
+    if printf '%s' "$resp" | jq -e '(.message // "" | strings | ascii_downcase | contains("not found"))' >/dev/null 2>&1; then
+      log "revalidate_source: PR $pr_num not found on $repo — stale"
+      lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=$source_kind reason=pr_not_found"
+      return 1
+    fi
+    log "revalidate_source: PR state API error for $comment_id (rc=$rc)"
+    return 2
+  fi
+
+  local state merged head_ref head_repo
+  state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || true)"
+  merged="$(printf '%s' "$resp" | jq -r '.merged // false' 2>/dev/null || echo false)"
+  if [ "$state" != "open" ] || [ "$merged" = "true" ]; then
+    local reason="pr_${state:-unknown}"
+    [ "$merged" = "true" ] && reason="pr_merged"
+    log "revalidate_source: PR $pr_num is ${state:-unknown} on $repo — stale"
+    lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=$source_kind reason=$reason"
+    return 1
+  fi
+
+  head_ref="$(printf '%s' "$resp" | jq -r '.head.ref // empty' 2>/dev/null || true)"
+  head_repo="$(printf '%s' "$resp" | jq -r '.head.repo.full_name // empty' 2>/dev/null || true)"
+  if [ -z "$head_ref" ]; then
+    log "revalidate_source: open PR $pr_num omitted head.ref for $repo; treating as transient"
+    lc_log "SOURCE_REVALIDATION_ERROR" "task=$comment_id repo=$repo kind=$source_kind reason=missing_head_ref"
+    return 2
+  fi
+  if [ -z "$head_repo" ]; then
+    log "revalidate_source: open PR $pr_num has no accessible head repository on $repo — stale"
+    lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=$source_kind reason=head_repo_missing"
+    return 1
+  fi
+  if [[ ! "$head_repo" =~ ^[^/]+/[^/]+$ ]]; then
+    log "revalidate_source: invalid head repository metadata for PR $pr_num on $repo"
+    lc_log "SOURCE_REVALIDATION_ERROR" "task=$comment_id repo=$repo kind=$source_kind reason=invalid_head_repo"
+    return 2
+  fi
+
+  # Encode the entire branch name as one URL path parameter; feature branches
+  # commonly contain slashes. Do not treat auth/rate-limit/network errors as a
+  # missing branch: only a definitive 404 is terminal.
+  local encoded_head_ref branch_resp branch_rc
+  encoded_head_ref="$(printf '%s' "$head_ref" | jq -sRr '@uri' 2>/dev/null)" || return 2
+  branch_resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$head_repo/branches/$encoded_head_ref" 2>/dev/null)" && branch_rc=0 || branch_rc=$?
+  if [ "$branch_rc" -ne 0 ]; then
+    if [ "$branch_rc" -eq 124 ]; then
+      log "revalidate_source: head branch lookup timed out for PR $pr_num ($head_repo/$head_ref)"
+      return 2
+    fi
+    if printf '%s' "$branch_resp" | jq -e '(.message // "" | strings | ascii_downcase | contains("not found"))' >/dev/null 2>&1; then
+      log "revalidate_source: head branch $head_repo/$head_ref missing for PR $pr_num — stale"
+      lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=$source_kind reason=head_branch_missing"
+      return 1
+    fi
+    log "revalidate_source: head branch API error for PR $pr_num ($head_repo/$head_ref, rc=$branch_rc)"
+    lc_log "SOURCE_REVALIDATION_ERROR" "task=$comment_id repo=$repo kind=$source_kind reason=head_branch_api_error rc=$branch_rc"
+    return 2
+  fi
+
+  local returned_branch
+  returned_branch="$(printf '%s' "$branch_resp" | jq -r '.name // empty' 2>/dev/null || true)"
+  if [ "$returned_branch" != "$head_ref" ]; then
+    log "revalidate_source: head branch response did not match PR $pr_num ($head_repo/$head_ref) — treating as transient"
+    lc_log "SOURCE_REVALIDATION_ERROR" "task=$comment_id repo=$repo kind=$source_kind reason=head_branch_mismatch"
+    return 2
+  fi
+
+  log "revalidate_source: PR $pr_num and head branch $head_repo/$head_ref are open and available on $repo — fresh"
+  return 0
+}
+
 # ── pr_state ──────────────────────────────────────────────────────────────────
 # Matched by prefix ci_fix:<repo>:<pr_num>:<run_id>. OPEN only.
 revalidate_pr_state() {
@@ -2461,31 +2559,7 @@ revalidate_pr_state() {
     ci_fix:*) pr_num="$(printf '%s' "$comment_id" | awk -F: '{print $3}')" ;;
     *) return 2 ;;
   esac
-  [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
-
-  local owner name
-  IFS='/' read -r owner name _ <<<"$repo"
-  local resp rc
-  resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$owner/$name/pulls/$pr_num" 2>/dev/null)" && rc=0 || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    if [ "$rc" -eq 124 ]; then return 2; fi
-    if printf '%s' "$resp" | jq -e -r '.message == "Not Found"' >/dev/null 2>&1; then
-      log "revalidate_source: PR $pr_num not found on $repo — stale"
-      lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_state reason=not_found"
-      return 1
-    fi
-    log "revalidate_source: PR state API error for $comment_id (rc=$rc)"
-    return 2
-  fi
-  local state
-  state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || true)"
-  if [ "$state" = "open" ]; then
-    log "revalidate_source: PR $pr_num is open on $repo — fresh"
-    return 0
-  fi
-  log "revalidate_source: PR $pr_num is ${state:-unknown} on $repo — stale"
-  lc_log "SOURCE_STALE" "task=$comment_id repo=$repo kind=pr_state reason=pr_${state:-unknown}"
-  return 1
+  revalidate_pr_target "$comment_id" "$repo" "$pr_num" "pr_state"
 }
 
 # ── pr_review_comment ─────────────────────────────────────────────────────────
@@ -2496,6 +2570,10 @@ revalidate_pr_review_comment() {
   local tid="${comment_id#review:}"
   [[ "$tid" =~ ^[0-9]+$ ]] || return 2
   [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
+
+  local target_rc=0
+  revalidate_pr_target "$comment_id" "$repo" "$pr_num" "pr_review_comment" || target_rc=$?
+  [ "$target_rc" -eq 0 ] || return "$target_rc"
 
   local owner name
   IFS='/' read -r owner name _ <<<"$repo"
