@@ -463,7 +463,8 @@ configure_openclaw_opencode_acp() {
          and (.config.plugins.entries.acpx.config.agents.opencode.command == "bash")
          and (.config.plugins.entries.acpx.config.agents.opencode.args == [$wrapper, "acp"])
          and ((.config.acp.allowedAgents | type) == "array")
-         and ((.config.acp.allowedAgents | index("opencode")) != null)       ' >/dev/null 2>&1; then
+         and ((.config.acp.allowedAgents | index("opencode")) != null)
+       ' >/dev/null 2>&1; then
         echo "ERROR: OpenClaw did not retain the expected OpenCode ACP wrapper configuration." >&2
         return 1
     fi
