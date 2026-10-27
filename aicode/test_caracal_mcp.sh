@@ -85,7 +85,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 # while roleRuntime alone must not override the automatic agent runtime.
 runtime_config_dir="$tmp_dir/manul-runtime"
 mkdir -p "$runtime_config_dir"
-printf '%s\\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' > "$runtime_config_dir/config.json"
+printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' > "$runtime_config_dir/config.json"
 selected_runtime="$(MANUL_DIR="$runtime_config_dir" AGENT_RUNTIME= MANUL_AGENT_RUNTIME= bash -c 'source "$1"; printf "%s" "$AGENT_RUNTIME"' _ "$MANUL/manul-paths.sh")"
 [ "$selected_runtime" = "opencode" ] || fail "runtime selection ignored automation.agentRuntime=opencode (got $selected_runtime)"
 ok "Manul config selects OpenCode as the automatic agent runtime"
@@ -96,7 +96,7 @@ ok "explicit runtime environment override takes precedence over Manul config"
 
 runtime_role_only_dir="$tmp_dir/manul-role-only"
 mkdir -p "$runtime_role_only_dir"
-printf '%s\\n' '{"automation":{"roleRuntime":"opencode"}}' > "$runtime_role_only_dir/config.json"
+printf '%s\n' '{"automation":{"roleRuntime":"opencode"}}' > "$runtime_role_only_dir/config.json"
 selected_runtime="$(MANUL_DIR="$runtime_role_only_dir" AGENT_RUNTIME= MANUL_AGENT_RUNTIME= bash -c 'source "$1"; printf "%s" "$AGENT_RUNTIME"' _ "$MANUL/manul-paths.sh")"
 [ "$selected_runtime" = "openclaw" ] || fail "roleRuntime=opencode incorrectly changed the automatic runtime (got $selected_runtime)"
 ok "roleRuntime=opencode alone retains Manul's default automatic OpenClaw runtime"
