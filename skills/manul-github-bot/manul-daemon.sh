@@ -521,7 +521,7 @@ verify_finalization() {
   # This must happen BEFORE we touch finalization state; the task must not
   # reach terminal status while its heartbeat is still alive.
   local heartbeat_pid
-  heartbeat_pid="$(cat "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null)"
+  heartbeat_pid="$(cat "$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")" 2>/dev/null)"
 
   if [ -n "$heartbeat_pid" ]; then
     if kill -0 "$heartbeat_pid" 2>/dev/null; then
@@ -531,7 +531,7 @@ verify_finalization() {
       wait "$heartbeat_pid" 2>/dev/null || true
     fi
     # Remove the PID file unconditionally (idempotent; no-op if already gone).
-    rm -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" 2>/dev/null || true
+    rm -f "$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")" 2>/dev/null || true
   fi
 
   # ── Step 1: verify task is completed in SQLite ─────────────────────────────
@@ -553,7 +553,7 @@ verify_finalization() {
   fi
 
   # ── Step 3: verify heartbeat PID file is gone (confirm we reaped it) ────────
-  if [ -f "$MANUL_DIR/task-${comment_id}.heartbeat.pid" ]; then
+  if [ -f "$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")" ]; then
     log "ERROR: Task $comment_id heartbeat PID file still present after shutdown"
     return 1
   fi
@@ -866,7 +866,7 @@ start_heartbeat() {
   local comment_id="$1"
   local worker_pid="${2:-$BASHPID}"
   local claim_token="${3:-}"
-  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")"
 
   local ownership_sql
   if [ -n "$claim_token" ]; then
@@ -947,8 +947,8 @@ task_descendant_pids() {
 # stop removed the PID marker before the isolated process had actually exited.
 find_task_executor_pid() {
   local comment_id="$1"
-  local expected_context="$MANUL_STATE_DIR/tasks/task-$comment_id.ctx.json"
-  local expected_pid_file="$MANUL_DIR/task-$comment_id.executor.pid"
+  local expected_context="$(manul_task_file_path "$MANUL_STATE_DIR/tasks" "$comment_id" "ctx.json")"
+  local expected_pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
   local cmdline_file cmdline pid
 
   for cmdline_file in /proc/[0-9]*/cmdline; do
@@ -967,7 +967,7 @@ find_task_executor_pid() {
 
 terminate_task_executor() {
   local comment_id="$1"
-  local pid_file="$MANUL_DIR/task-$comment_id.executor.pid"
+  local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
   local executor_pid="" executor_args="" executor_pgid=""
   local descendants=() process_pid wait_attempt alive forced=0
 
@@ -1043,20 +1043,39 @@ terminate_task_executor() {
   rm -f "$pid_file" 2>/dev/null || true
 }
 
+# Resolve a flattened artifact filename back to the canonical task ID through
+# SQLite. Never infer the DB identity from a filename because "/" is mapped to
+# "_" for CI task IDs.
+task_id_from_file_key() {
+  local file_key="$1"
+  local candidate
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    if [ "$(manul_task_file_key "$candidate")" = "$file_key" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(sqlite3 "$DB" "SELECT commentId FROM processed_comments;" 2>/dev/null || true)
+  return 1
+}
+
 # Return unique task IDs for executors still represented by PID files or live
 # agent-task-runner processes. The latter recovers from legacy stop paths that
 # removed PID markers before their process tree exited.
 list_task_executor_ids() {
-  local pid_file base task_id cmdline_file cmdline remainder
+  local pid_file base task_id file_key resolved_task_id cmdline_file cmdline remainder
   local context_prefix="$MANUL_STATE_DIR/tasks/task-"
   declare -A seen_task_ids=()
 
   for pid_file in "$MANUL_DIR"/task-*.executor.pid; do
     [ -f "$pid_file" ] || continue
     base="${pid_file##*/}"
-    task_id="${base#task-}"
-    task_id="${task_id%.executor.pid}"
-    [ -n "$task_id" ] && seen_task_ids["$task_id"]=1
+    file_key="${base#task-}"
+    file_key="${file_key%.executor.pid}"
+    [ -n "$file_key" ] || continue
+    resolved_task_id="$(task_id_from_file_key "$file_key" 2>/dev/null || true)"
+    task_id="${resolved_task_id:-$file_key}"
+    seen_task_ids["$task_id"]=1
   done
 
   for cmdline_file in /proc/[0-9]*/cmdline; do
@@ -1064,8 +1083,11 @@ list_task_executor_ids() {
     cmdline="$(tr '\0' ' ' < "$cmdline_file" 2>/dev/null || true)"
     [[ "$cmdline" == *agent-task-runner.sh*"$context_prefix"*".ctx.json"* ]] || continue
     remainder="${cmdline#*"$context_prefix"}"
-    task_id="${remainder%%.ctx.json*}"
-    [ -n "$task_id" ] && [ "$task_id" != "$remainder" ] && seen_task_ids["$task_id"]=1
+    file_key="${remainder%%.ctx.json*}"
+    [ -n "$file_key" ] && [ "$file_key" != "$remainder" ] || continue
+    resolved_task_id="$(task_id_from_file_key "$file_key" 2>/dev/null || true)"
+    task_id="${resolved_task_id:-$file_key}"
+    seen_task_ids["$task_id"]=1
   done
 
   for task_id in "${!seen_task_ids[@]}"; do
@@ -1106,7 +1128,7 @@ is_manul_heartbeat_process() {
 
 terminate_task_heartbeat() {
   local comment_id="$1"
-  local pid_file="$MANUL_DIR/task-$comment_id.heartbeat.pid"
+  local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")"
   local heartbeat_pid="" args="" process_pid wait_attempt alive forced=0
   local descendants=()
 
@@ -1159,17 +1181,18 @@ terminate_task_heartbeat() {
 }
 
 terminate_all_task_heartbeats() {
-  local pid_file base task_id
+  local pid_file base file_key task_id resolved_task_id
   for pid_file in "$MANUL_DIR"/task-*.heartbeat.pid; do
     [ -f "$pid_file" ] || continue
     base="${pid_file##*/}"
-    task_id="${base#task-}"
-    task_id="${task_id%.heartbeat.pid}"
-    [ -n "$task_id" ] || continue
-    terminate_task_heartbeat "$task_id" || true
+    file_key="${base#task-}"
+    file_key="${file_key%.heartbeat.pid}"
+    [ -n "$file_key" ] || continue
+    resolved_task_id="$(task_id_from_file_key "$file_key" 2>/dev/null || true)"
+    task_id="${resolved_task_id:-$file_key}"
+    terminate_task_heartbeat "$task_id"
   done
 }
-
 # A queued/terminal task must not retain a detached executor or heartbeat from
 # an earlier attempt. Running tasks are left alone unless recovery claimed them.
 cleanup_orphaned_task_executors() {
@@ -1204,7 +1227,7 @@ cleanup_orphaned_task_heartbeats() {
 
 stop_heartbeat() {
   local comment_id="$1"
-  local pid_file="$MANUL_DIR/task-${comment_id}.heartbeat.pid"
+  local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "heartbeat.pid")"
   local pid="${HEARTBEAT_PIDS[$comment_id]:-}"
   if [ -n "$pid" ]; then
     kill "$pid" 2>/dev/null || true
@@ -3479,7 +3502,8 @@ run_once() {
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
     mkdir -p "$TASK_PROMPT_DIR"
-    local TASK_PROMPT_FILE="$TASK_PROMPT_DIR/task-${COMMENT_ID}.md"
+    local TASK_PROMPT_FILE
+    TASK_PROMPT_FILE="$(manul_task_file_path "$TASK_PROMPT_DIR" "$COMMENT_ID" "md")"
 
     # Determine task type from commentUrl metadata (do NOT call gh pr view)
     local TASK_TYPE="issue"
@@ -4009,9 +4033,10 @@ PROMPT_APPEND
 # 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
      # The daemon never calls adapter scripts directly; the controller owns
      # timeout enforcement, session continuation, and result mapping.
-     local STDOUT_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stdout"
-     local STDERR_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.stderr"
-     local EXEC_CTX_FILE="$MANUL_TASKS_DIR/task-${COMMENT_ID}.ctx.json"
+     local STDOUT_FILE STDERR_FILE EXEC_CTX_FILE
+     STDOUT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "stdout")"
+     STDERR_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "stderr")"
+     EXEC_CTX_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "ctx.json")"
 
      log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
      lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
@@ -4059,8 +4084,9 @@ PROMPT_APPEND
        > "$EXEC_CTX_FILE"
 
      local executor_output
-     local executor_result_file="$MANUL_TASKS_DIR/task-${COMMENT_ID}.executor-result"
-     local executor_pid_file="$MANUL_DIR/task-${COMMENT_ID}.executor.pid"
+     local executor_result_file executor_pid_file
+     executor_result_file="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "executor-result")"
+     executor_pid_file="$(manul_task_file_path "$MANUL_DIR" "$COMMENT_ID" "executor.pid")"
      rm -f "$executor_result_file" "$executor_pid_file"
 
      # Run the controller in a dedicated process group. The task-local PID file
