@@ -140,11 +140,22 @@ case "$url" in
   */issues/35) echo '{"state":"open"}' ;;
   */issues/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   */issues/5000) echo '{"message":"network"}'; exit 7 ;;
-  */pulls/3001) echo '{"state":"open"}' ;;
-  */pulls/3002) echo '{"state":"closed"}' ;;
-  */pulls/3003) echo '{"state":"closed","merged":true}' ;;
-  */pulls/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
-  */pulls/5000) echo '{"message":"network"}'; exit 7 ;;
+  */pulls/3001|*/pulls/4001|*/pulls/4002|*/pulls/4003|*/pulls/4004|*/pulls/590)
+    echo '{"state":"open","merged":false,"head":{"ref":"feature/open-pr","repo":{"full_name":"owner/repo"}}}' ;;
+  */pulls/3002|*/pulls/4005) echo '{"state":"closed","merged":false}' ;;
+  */pulls/3003|*/pulls/4006|*/pulls/591) echo '{"state":"closed","merged":true}' ;;
+  */pulls/3004|*/pulls/592) echo '{"state":"open","merged":false,"head":{"ref":"feature/deleted-pr","repo":{"full_name":"owner/repo"}}}' ;;
+  */pulls/3005) echo '{"state":"open","merged":false,"head":{"ref":"feature/no-repo","repo":null}}' ;;
+  */pulls/3006) echo '{"state":"open","merged":false,"head":{"ref":"feature/network-pr","repo":{"full_name":"owner/repo"}}}' ;;
+  */pulls/3007) echo '{"state":"open"}' ;;
+  */pulls/3008) echo '{"merged":false}' ;;
+  */pulls/9999|*/pulls/4999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  */pulls/5000) echo '{"state":"open","merged":false,"head":{"ref":"feature/graphql-error","repo":{"full_name":"owner/repo"}}}' ;;
+  */pulls/5001) echo '{"message":"network"}'; exit 7 ;;
+  */branches/feature%2Fopen-pr) echo '{"name":"feature/open-pr"}' ;;
+  */branches/feature%2Fdeleted-pr) echo '{"message":"Branch not found","status":"404"}'; exit 1 ;;
+  */branches/feature%2Fnetwork-pr) echo '{"message":"network"}'; exit 7 ;;
+  */branches/feature%2Fgraphql-error) echo '{"name":"feature/graphql-error"}' ;;
   *) echo "unexpected REST fixture: $url" >&2; exit 1 ;;
 esac
 EOF
@@ -222,6 +233,9 @@ echo "=== issue_comment ==="
 revalidate_issue_comment "issue:1001" "$REPO"; rc=$?; assert_rc "existing comment fresh" 0 "$rc"
 revalidate_issue_comment "issue:9999" "$REPO"; rc=$?; assert_rc "404 comment stale" 1 "$rc"
 revalidate_issue_comment "issue:5000" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
+revalidate_issue_comment "issue:1001" "$REPO" "https://github.com/$REPO/pull/590#issuecomment-1001"; rc=$?; assert_rc "open PR comment with existing head is fresh" 0 "$rc"
+revalidate_issue_comment "issue:1001" "$REPO" "https://github.com/$REPO/pull/591#issuecomment-1001"; rc=$?; assert_rc "comment on merged PR is stale" 1 "$rc"
+revalidate_issue_comment "issue:1001" "$REPO" "https://github.com/$REPO/pull/592#issuecomment-1001"; rc=$?; assert_rc "comment on PR with deleted head is stale" 1 "$rc"
 
 echo "=== issue_state ==="
 revalidate_issue_state "issuebody:2001" "$REPO"; rc=$?; assert_rc "open issue fresh" 0 "$rc"
@@ -235,7 +249,12 @@ revalidate_pr_state "ci_fix:owner/repo:3001:run1" "$REPO"; rc=$?; assert_rc "ope
 revalidate_pr_state "ci_fix:owner/repo:3002:run1" "$REPO"; rc=$?; assert_rc "closed PR stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3003:run1" "$REPO"; rc=$?; assert_rc "merged PR stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:9999:run1" "$REPO"; rc=$?; assert_rc "404 PR stale" 1 "$rc"
-revalidate_pr_state "ci_fix:owner/repo:5000:run1" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:5001:run1" "$REPO"; rc=$?; assert_rc "REST error transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3004:run1" "$REPO"; rc=$?; assert_rc "open PR with deleted head branch stale" 1 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3005:run1" "$REPO"; rc=$?; assert_rc "open PR with missing head repo stale" 1 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3006:run1" "$REPO"; rc=$?; assert_rc "head branch API error transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3007:run1" "$REPO"; rc=$?; assert_rc "missing head metadata transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3008:run1" "$REPO"; rc=$?; assert_rc "missing PR state transient" 2 "$rc"
 
 echo "=== pr_review_comment ==="
 revalidate_pr_review_comment "review:1101" "$REPO" 4001; rc=$?; assert_rc "page1 unresolved target fresh" 0 "$rc"
@@ -249,6 +268,7 @@ revalidate_pr_review_comment "review:12345" "$REPO" 5000; rc=$?; assert_rc "Grap
 
 echo "=== revalidate_source ==="
 revalidate_source "review:1202" "$REPO" 4002; rc=$?; assert_rc "wrapper passes issueNumber to review" 0 "$rc"
+revalidate_source "issue:1001" "$REPO" 591 "https://github.com/$REPO/pull/591#issuecomment-1001"; rc=$?; assert_rc "wrapper routes PR comment sources through PR state validation" 1 "$rc"
 
 echo "=== stale/requeue helpers ==="
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid,heartbeatAt,leaseExpiresAt) VALUES('stale-test','$REPO',1,'url','IMPLEMENT','running',1,'token1',123,datetime('now'),datetime('now','+900 seconds'));"
