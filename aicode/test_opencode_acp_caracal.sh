@@ -161,6 +161,7 @@ run_wrapper() {
   PATH="$BIN:/usr/bin:/bin" \
   CARACAL_HOME="$CARACAL" \
   CARACAL_MCP_URL="http://127.0.0.1:0/mcp" \
+  CARACAL_ACCESS_TOKEN="" \
   OPENCODE_CONFIG="$OPENCODE_CONFIG" \
   OPENCODE_BIN="$BIN/opencode" \
   EXPECTED_CONFIG="$OPENCODE_CONFIG" \
