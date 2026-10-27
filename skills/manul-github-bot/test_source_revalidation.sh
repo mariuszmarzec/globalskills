@@ -148,6 +148,7 @@ case "$url" in
   */pulls/3005) echo '{"state":"open","merged":false,"head":{"ref":"feature/no-repo","repo":null}}' ;;
   */pulls/3006) echo '{"state":"open","merged":false,"head":{"ref":"feature/network-pr","repo":{"full_name":"owner/repo"}}}' ;;
   */pulls/3007) echo '{"state":"open"}' ;;
+  */pulls/3008) echo '{"merged":false}' ;;
   */pulls/9999|*/pulls/4999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   */pulls/5000) echo '{"state":"open","merged":false,"head":{"ref":"feature/graphql-error","repo":{"full_name":"owner/repo"}}}' ;;
   */pulls/5001) echo '{"message":"network"}'; exit 7 ;;
@@ -252,7 +253,8 @@ revalidate_pr_state "ci_fix:owner/repo:5001:run1" "$REPO"; rc=$?; assert_rc "RES
 revalidate_pr_state "ci_fix:owner/repo:3004:run1" "$REPO"; rc=$?; assert_rc "open PR with deleted head branch stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3005:run1" "$REPO"; rc=$?; assert_rc "open PR with missing head repo stale" 1 "$rc"
 revalidate_pr_state "ci_fix:owner/repo:3006:run1" "$REPO"; rc=$?; assert_rc "head branch API error transient" 2 "$rc"
-revalidate_pr_state "ci_fix:owner/repo:3007:run1" "$REPO"; rc=$?; assert_rc "incomplete PR metadata transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3007:run1" "$REPO"; rc=$?; assert_rc "missing head metadata transient" 2 "$rc"
+revalidate_pr_state "ci_fix:owner/repo:3008:run1" "$REPO"; rc=$?; assert_rc "missing PR state transient" 2 "$rc"
 
 echo "=== pr_review_comment ==="
 revalidate_pr_review_comment "review:1101" "$REPO" 4001; rc=$?; assert_rc "page1 unresolved target fresh" 0 "$rc"
