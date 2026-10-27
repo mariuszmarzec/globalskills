@@ -222,10 +222,16 @@ Before executing a queued task, Manul may revalidate that its GitHub source stil
 
 Examples:
 - closed issue -> stale;
-- closed PR -> stale;
+- closed or merged PR -> stale;
+- a PR-backed comment whose parent PR is closed/merged -> stale;
+- a PR whose head repository or head branch no longer exists -> stale;
 - resolved/deleted review context -> stale.
 
-A stale source is not treated as a successful task completion.
+PR-backed sources must be revalidated before workspace/checkout preparation. The
+check must distinguish a definitive missing/closed source from transient API,
+network, rate-limit, or permission errors: only confirmed terminal sources are
+marked `stale`, while ambiguous failures use the bounded pre-execution retry
+path. A stale source is not treated as a successful task completion.
 
 ## 13. Workspace contract
 
