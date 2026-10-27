@@ -62,7 +62,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     case "$status" in
       completed)
         # Get result from result file if available
-        result_file="$MANUL_DIR/results/${TASK_ID}.json"
+        result_file="$(manul_task_file_path "$MANUL_DIR/results" "$TASK_ID" "json")"
         result="{}"
         if [ -f "$result_file" ]; then
           result="$(cat "$result_file")"
