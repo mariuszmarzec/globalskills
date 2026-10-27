@@ -154,7 +154,7 @@ if [ "$OPT_AUTO" = "true" ]; then
     AUTO_ARGS=(--auto)
 fi
 
-RAW_STDOUT_FILE="${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}/task-${OPT_TASK_ID}.attempt-${OPT_ATTEMPT}.opencode.jsonl"
+RAW_STDOUT_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.jsonl")"
 CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
 CURRENT_RUN_STDERR_FILE="${RAW_STDOUT_FILE%.jsonl}.current.stderr"
 CURRENT_RUN_PROMPT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.prompt"
