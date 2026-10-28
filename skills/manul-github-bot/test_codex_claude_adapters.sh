@@ -123,7 +123,7 @@ for runtime in codex claude-code; do
   fi
   ProcessRunner_TmpStdout="$tool_stdout"
   ProcessRunner_TmpStderr="$tool_stderr"
-  result="$(ProcessRunner.run --timeout 10 --idle-timeout 1 --idle-jsonl-file "$tool_stdout" --idle-tool-timeout 5 --cwd "$TMP/workspace" -- bash -c 'printf "%s\n" "$1"; sleep 3; printf "%s\n" "$2"' _ "$tool_started" "$tool_completed)"
+  result="$(ProcessRunner.run --timeout 10 --idle-timeout 1 --idle-jsonl-file "$tool_stdout" --idle-tool-timeout 5 --cwd "$TMP/workspace" -- bash -c 'printf "%s\n" "$1"; sleep 3; printf "%s\n" "$2"' _ "$tool_started" "$tool_completed")"
   rc=$?
   header="$(printf '%s\n' "$result" | head -n 1)"
   header_rc="$(printf '%s' "$header" | cut -d'|' -f1)"
