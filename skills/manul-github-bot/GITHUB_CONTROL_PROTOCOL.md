@@ -42,10 +42,10 @@ value means automatic selection, not an implicit `main`.
 The automatic entry-point runtime is configured through
 `automation.agentRuntime` (default: `openclaw`). Explicit canonical worker
 roles are routed through `automation.roleRuntime` (default: `opencode`).
-This separation lets ordinary tasks continue to use OpenClaw while an explicit
-role such as `coder` is run by OpenCode's documented CLI
-(`opencode run --agent coder`). It uses OpenCode directly; it does not claim
-that OpenClaw has delegated the role through ACP.
+This separation lets ordinary tasks continue to use OpenClaw while explicit
+roles can use any supported role runtime. OpenCode maps a role to its native
+`opencode run --agent <role>` option; Codex and Claude Code prepend the canonical
+role instructions to the prompt because those CLIs have different role models.
 
 OpenClaw's `--agent` selects an OpenClaw configuration entry, not a Markdown
 role definition. If `automation.roleRuntime` is set to `openclaw`, Manul fails
@@ -248,8 +248,10 @@ never invokes an adapter script directly.
 - No explicit role: `automation.agentRuntime` (default `openclaw`) selects the
   automatic entry point.
 - Explicit canonical role: `automation.roleRuntime` (default `opencode`)
-  selects the runtime. OpenCode receives the role through its native
-  `--agent <role>` option.
+  selects the runtime. OpenCode receives the role through native
+  `--agent <role>`; Codex and Claude Code receive canonical role instructions
+  in the task prompt. Supported values are `openclaw`, `opencode`, `codex`, and
+  `claude-code`.
 - Unknown roles and explicit roles with `roleRuntime: "openclaw"` fail closed;
   they do not fall back to a different role or OpenClaw's `main`.
 
