@@ -156,9 +156,9 @@ if [ -f "$DB" ]; then
         SELECT commentId, repository, issueNumber, attempts, heartbeatAt, leaseExpiresAt, workerPid, claimToken,
                CASE
                  WHEN heartbeatAt IS NULL
-                   OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+                   OR datetime(heartbeatAt) < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
                    OR leaseExpiresAt IS NULL
-                   OR leaseExpiresAt < datetime('now')
+                   OR datetime(leaseExpiresAt) < datetime('now')
                  THEN 1 ELSE 0
                END AS lease_stale
         FROM processed_comments

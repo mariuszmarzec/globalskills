@@ -297,6 +297,28 @@ sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'h
 recover_stale_tasks
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
 
+# 3c.1) ISO-8601 UTC timestamps must be parsed as dates, not compared as strings.
+# The worker is alive, so recovery depends on recognizing its expired lease.
+ISO_OLD="$(date -u -d '2 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+ISO_EXPIRED="$(date -u -d '1 hour ago' '+%Y-%m-%dT%H:%M:%SZ')"
+sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('iso-stale-live','$REPO',421,'https://github.com/$REPO/issues/421','IMPLEMENT','running',1,'$ISO_OLD','$ISO_OLD','$ISO_EXPIRED',$CURRENT_TEST_PID,'iso-stale-live-token',NULL,NULL,0,'$ISO_OLD')"
+recover_stale_tasks
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='iso-stale-live';")" "live worker with expired ISO-format lease is recovered"
+
+if ! grep -Fq "datetime(nextAttemptAt) <= datetime('now')" "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: dispatcher scheduler does not normalize nextAttemptAt before comparison" >&2
+  exit 1
+fi
+if ! grep -Fq "datetime(heartbeatAt) < datetime('now', '-\${HEARTBEAT_TIMEOUT} seconds')" "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog does not normalize heartbeatAt before comparison" >&2
+  exit 1
+fi
+if ! grep -Fq "datetime(leaseExpiresAt) < datetime('now')" "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog does not normalize leaseExpiresAt before comparison" >&2
+  exit 1
+fi
+echo "PASS: scheduler and watchdog timestamp comparisons are normalized"
+
 # 3d) Recovery does not report success when its conditional SQLite transition fails.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES ('recovery-race','$REPO',43,'https://github.com/$REPO/issues/43','IMPLEMENT','running',1,datetime('now','-1 hour'),datetime('now','-1 hour'),datetime('now','-1 second'),999996,'recovery-race-token',NULL,NULL,0,datetime('now','-1 hour'));

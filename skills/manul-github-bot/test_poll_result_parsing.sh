@@ -97,6 +97,12 @@ echo "=== Queue eligibility: retry with NULL deadline is not stranded ==="
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('d','queued',2,NULL);"
 assert_eq "null-retry-deadline-is-eligible" "3" "$(eligible_queued_count)"
 
+echo "=== Queue eligibility: ISO UTC deadlines are normalized before comparison ==="
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('iso-due','queued',1,'2020-01-01T00:00:00Z');"
+assert_eq "iso-due-retry-eligible" "4" "$(eligible_queued_count)"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('iso-future','queued',1,'2099-01-01T00:00:00Z');"
+assert_eq "iso-future-retry-filtered" "4" "$(eligible_queued_count)"
+
 echo "=== Poll CI guard: no unresolved tasks returns false and emits nothing ==="
 if has_unresolved_manul_tasks "test/repo" "99"; then
   echo "FAIL: no-row unresolved query unexpectedly returned true" >&2
