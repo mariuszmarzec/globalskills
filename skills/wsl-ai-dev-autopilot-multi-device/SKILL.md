@@ -554,7 +554,7 @@ litellm --config ~/litellm/config.yaml --port 4000 &
 sleep 5
 
 # Verify models are registered
--H "Authorization: Bearer $LITELLM_MASTER_KEY"
+curl -fsS http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
 ```
 
 *Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, multilingual-e5-base, gemma4, local-coder.*
