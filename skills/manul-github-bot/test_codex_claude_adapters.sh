@@ -54,15 +54,16 @@ run_adapter() {
   stderr="$TMP/$runtime-$mode.stderr"
   args="$TMP/$runtime-$mode.args"
   received="$TMP/$runtime-$mode.prompt"
+  session_id="${3:-}"
   set +e
   if [ "$runtime" = "codex" ]; then
     CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="$mode" MOCK_ARGS_FILE="$args" MOCK_PROMPT_FILE="$received" \
       MANUL_DIR="$TMP/runtime" MANUL_TASK_LOG_DIR="$TMP/logs" AGENT_RUNTIME=codex \
-      bash "$adapter" --task-id "$runtime-$mode" --prompt "$TMP/prompt" --workspace "$TMP/workspace" --attempt 1 --timeout 10 --session-id "" --stdout-file "$stdout" --stderr-file "$stderr" > "$output"
+      bash "$adapter" --task-id "$runtime-$mode" --prompt "$TMP/prompt" --workspace "$TMP/workspace" --attempt 1 --timeout 10 --session-id "$session_id" --stdout-file "$stdout" --stderr-file "$stderr" > "$output"
   else
     CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="$mode" MOCK_ARGS_FILE="$args" MOCK_PROMPT_FILE="$received" \
       MANUL_DIR="$TMP/runtime" MANUL_TASK_LOG_DIR="$TMP/logs" AGENT_RUNTIME=claude-code \
-      bash "$adapter" --task-id "$runtime-$mode" --prompt "$TMP/prompt" --workspace "$TMP/workspace" --attempt 1 --timeout 10 --session-id "" --stdout-file "$stdout" --stderr-file "$stderr" > "$output"
+      bash "$adapter" --task-id "$runtime-$mode" --prompt "$TMP/prompt" --workspace "$TMP/workspace" --attempt 1 --timeout 10 --session-id "$session_id" --stdout-file "$stdout" --stderr-file "$stderr" > "$output"
   fi
   rc=$?
   set -e
@@ -79,12 +80,20 @@ run_adapter() {
     grep -Fq -- '--sandbox workspace-write' "$args" && ok "Codex uses workspace-write sandbox" || no "Codex sandbox not set"
     grep -Fq -- '--ask-for-approval never' "$args" && ok "Codex uses explicit noninteractive approval policy" || no "Codex approval policy missing"
     grep -Fq -- '--model mock-model' "$args" && ok "Codex forwards configured model" || no "Codex model missing"
+    if [ "$mode" = "resume" ]; then
+      grep -Eq 'exec --json --cd .* --sandbox workspace-write --ask-for-approval never --model mock-model resume codex-test-session -' "$args" \
+        && ok "Codex resume preserves exec-level sandbox/approval flags before the subcommand" \
+        || no "Codex resume argument ordering is invalid"
+    fi
   else
     assert_json "$output" '.session_id == "claude-test-session" and .diagnostics.runtime == "claude-code"' "$runtime returns session ID and runtime diagnostics"
     grep -Fq -- '--print' "$args" && ok "Claude Code uses noninteractive print mode" || no "Claude print flag missing"
     grep -Fq -- '--output-format stream-json' "$args" && ok "Claude Code emits stream-json events" || no "Claude stream-json flag missing"
     grep -Fq -- '--permission-mode acceptEdits' "$args" && ok "Claude Code uses an explicit non-bypass permission mode" || no "Claude permission mode missing"
     ! grep -Eq -- '--dangerously-skip-permissions|bypassPermissions' "$args" && ok "Claude Code adapter does not bypass permissions" || no "Claude permission bypass found"
+    if [ "$mode" = "resume" ]; then
+      grep -Fq -- "--resume claude-test-session" "$args" && ok "Claude Code resumes the supplied session" || no "Claude session resume flag missing"
+    fi
   fi
   cmp -s "$TMP/prompt" "$received" && ok "$runtime receives the exact prompt via stdin" || no "$runtime prompt stdin mismatch"
   grep -Fq "TASK_DONE $runtime-adapter-test" "$stdout" && ok "$runtime preserves the Manul completion marker" || no "$runtime lost TASK_DONE"
@@ -94,8 +103,35 @@ bash -n "$SCRIPT_DIR/codex-adapter.sh" && ok "Codex adapter syntax is valid" || 
 bash -n "$SCRIPT_DIR/claude-code-adapter.sh" && ok "Claude Code adapter syntax is valid" || no "Claude Code adapter syntax invalid"
 run_adapter codex success
 run_adapter codex missing-marker
+run_adapter codex resume codex-test-session
 run_adapter claude-code success
 run_adapter claude-code missing-marker
+run_adapter claude-code resume claude-test-session
+
+# An active tool call must pause the generic idle watchdog, but remain covered
+# by the bounded tool-idle and total execution timeouts.
+source "$SCRIPT_DIR/process-runner.sh"
+for runtime in codex claude-code; do
+  tool_stdout="$TMP/$runtime-active-tool.jsonl"
+  tool_stderr="$TMP/$runtime-active-tool.stderr"
+  if [ "$runtime" = "codex" ]; then
+    tool_started='{"type":"item.started","item":{"id":"command-1","type":"command_execution","status":"in_progress"}}'
+    tool_completed='{"type":"item.completed","item":{"id":"command-1","type":"command_execution","status":"completed","exit_code":0}}'
+  else
+    tool_started='{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"sleep 3"}}]}}'
+    tool_completed='{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"finished"}]}}'
+  fi
+  ProcessRunner_TmpStdout="$tool_stdout"
+  ProcessRunner_TmpStderr="$tool_stderr"
+  result="$(ProcessRunner.run --timeout 10 --idle-timeout 1 --idle-jsonl-file "$tool_stdout" --idle-tool-timeout 5 --cwd "$TMP/workspace" -- bash -c 'printf "%s\n" "$1"; sleep 3; printf "%s\n" "$2"' _ "$tool_started" "$tool_completed)"
+  rc=$?
+  header="$(printf '%s\n' "$result" | head -n 1)"
+  header_rc="$(printf '%s' "$header" | cut -d'|' -f1)"
+  timeout_flag="$(printf '%s' "$header" | cut -d'|' -f4)"
+  [ "$rc" -eq 0 ] && [ "$header_rc" = "0" ] && [ "$timeout_flag" = "false" ] \
+    && ok "$runtime active tool calls exceed the generic idle threshold without a false timeout" \
+    || no "$runtime active tool call was incorrectly timed out (rc=$rc header=$header)"
+done
 
 # Route through the production AgentExecutor, not only direct adapter calls.
 for runtime in codex claude-code; do
