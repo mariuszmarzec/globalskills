@@ -97,6 +97,10 @@ test_poller_discovers_review_comments() {
   count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$count"
 
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  assert_eq "$TEST_NAME (queued review has no lease metadata)" "0" "$queued_lease_count"
+
   # Verify context was enriched (PR info + linked issues)
   local has_context
   has_context="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='review:3952521856' AND context IS NOT NULL AND context != '';" 2>/dev/null)"
@@ -124,6 +128,10 @@ test_poller_discovers_pr_conversation_comments() {
   local count
   count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5575478422' AND repository='mariuszmarzec/caracal-rag' AND issueNumber=11 AND status='queued';" 2>/dev/null)"
   assert_eq "$TEST_NAME" "1" "$count"
+
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5575478422' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  assert_eq "$TEST_NAME (queued PR comment has no lease metadata)" "0" "$queued_lease_count"
 
   # Verify context was enriched (parent issue info)
   local has_context
