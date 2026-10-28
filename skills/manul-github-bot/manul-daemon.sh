@@ -4036,9 +4036,22 @@ PROMPT_APPEND
 - The daemon does NOT create your task branch for you
 - First determine whether this is informational or requires repository changes
 - For informational tasks: do NOT modify the repository and do NOT create a branch; post the answer to GitHub and finish
-- For repository changes: follow the repository's documented branching conventions and any relevant skill already available in the task context/workspace. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
-- Create the branch yourself before committing or pushing changes
-- If the task explicitly requires another branch as the base, including another feature branch, use it as the base and update it from the remote before creating your branch
+- For repository changes, **branch preparation is a mandatory precondition to every edit**: do not edit, patch, generate, format, or otherwise modify repository files until the branch preflight below has succeeded.
+- First run `git -C "__WORKDIR__" status --short` and `git -C "__WORKDIR__" branch --show-current`. Preserve any existing changes; never use `git reset --hard`, `git clean`, or discard/revert unknown work. If the checkout is dirty or its branch cannot be established safely, stop before editing and report the exact blocker.
+- Create the branch yourself before committing or pushing changes, and before the first repository edit.
+- For this standalone issue, use the initial prepared base branch `__INITIAL_BASE_BRANCH__` unless the task explicitly requires another base. The base branch must be updated from origin before you create the task branch.
+- Example preflight (replace `<short-description>` with a lowercase kebab-case summary):
+  ```bash
+  WORKDIR="__WORKDIR__"
+  BASE_BRANCH="__INITIAL_BASE_BRANCH__"
+  TASK_SUFFIX="$(printf '%s' '__COMMENT_ID__-attempt-__CURRENT_ATTEMPT__' | tr -cs '[:alnum:]-' '-')"
+  TASK_BRANCH="feature/__ISSUE_NUM__-manul-<short-description>-$TASK_SUFFIX"
+  git -C "$WORKDIR" fetch origin "$BASE_BRANCH" &&
+    git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
+  ```
+- Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Never overwrite/reuse a stale branch from an earlier attempt; use a unique task/attempt suffix.
+- Follow repository-local branching conventions or any branching instructions explicitly supplied in task context. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
+- If the task explicitly requires another branch as the base, including another feature branch, update that exact remote base before creating your branch and reflect that base in the PR.
 - Never commit or push repository changes directly to the prepared/base/default branch
 PROMPT_APPEND
     fi
