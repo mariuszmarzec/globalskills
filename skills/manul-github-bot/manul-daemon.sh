@@ -2976,6 +2976,8 @@ evaluate_task_completion() {
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
   local DELIVERY_MODE="${19:-implementation}"
+  # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
+  local VERIFIED_MERGED_RESULT_PR_BASE=""
 
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
