@@ -19,13 +19,14 @@ Supported commands parsed from a `/manul` command are:
 
 Without an explicit role, Manul uses `automation.agentRuntime` (default
 `openclaw`). With an explicit canonical role, it uses
-`automation.roleRuntime` (default `opencode`) and passes the role to the
-OpenCode CLI using its native `--agent <role>` option. Agent definitions stay
-canonical in `~/.globalskills/agents/`; Manul must not copy them into another
-source directory. Unknown/unconfigured roles, and explicit roles configured
-with `roleRuntime: "openclaw"`, fail closed rather than silently falling back
-to OpenClaw's `main`. This is direct OpenCode CLI routing, not ACP delegation
-from OpenClaw.
+`automation.roleRuntime` (default `opencode`). Supported runtime values are
+`openclaw`, `opencode`, `codex`, and `claude-code`. OpenCode receives a role
+through its native `--agent <role>` option. Codex and Claude Code receive the
+canonical role definition from `~/.globalskills/agents/<role>.md`, with YAML
+frontmatter stripped and the role instructions prepended to the task prompt.
+Agent definitions remain canonical; Manul must not copy them into another
+source directory. Unknown/unconfigured roles fail closed. OpenClaw does not
+receive canonical worker roles as its config-agent selector.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -374,8 +375,9 @@ through `AgentExecutor` to a backend adapter.
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. `automation.agentRuntime` (default OpenClaw) selects the
 automatic entry point; `automation.roleRuntime` (default OpenCode) selects the
-runtime for explicitly named canonical roles. Adapters must not spawn
-subprocesses directly and must not depend on each other.
+runtime for explicitly named canonical roles. Both accept `openclaw`, `opencode`,
+`codex`, and `claude-code`. Adapters must not spawn subprocesses directly and
+must not depend on each other.
 
 The adapter owns runtime session invocation/resume mechanics. Manul owns the
 persisted `processed_comments.session_id` pointer: retain it only when the
