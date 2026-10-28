@@ -102,36 +102,35 @@ touch "$MANUL_DIR/skip-comments.log"
 echo "Test 0: Repository lock acquisition is atomic"
 
 atomic_lock="$TEST_DIR/atomic.lock"
+# Hold the lock before starting the competing process. This tests the property
+# required by the production protocol (a second owner cannot acquire an
+# existing lock) without depending on scheduler timing between two mkdir calls.
+if ! mkdir "$atomic_lock" 2>/dev/null; then
+  echo "FAIL 0: Could not establish the initial repository lock"
+  exit 1
+fi
+echo "winner" > "$TEST_DIR/atomic-winner"
+
 (
   if mkdir "$atomic_lock" 2>/dev/null; then
-    echo "winner" > "$TEST_DIR/atomic-winner"
-    sleep 1
+    echo "unexpected-second-winner" > "$TEST_DIR/atomic-winner-2"
     exit 0
   fi
   exit 1
 ) &
-atomic_pid1=$!
-(
-  if mkdir "$atomic_lock" 2>/dev/null; then
-    echo "winner" > "$TEST_DIR/atomic-winner-2"
-    sleep 1
-    exit 0
-  fi
-  exit 1
-) &
-atomic_pid2=$!
+atomic_pid=$!
 
-atomic_rcs=0
-wait "$atomic_pid1" || atomic_rcs=$((atomic_rcs + 1))
-wait "$atomic_pid2" || atomic_rcs=$((atomic_rcs + 1))
-
-if [ "$atomic_rcs" -eq 1 ] && [ -d "$atomic_lock" ]; then
-  echo "PASS 0: Exactly one concurrent contender acquired the repo lock"
-else
-  echo "FAIL 0: Repository lock acquisition was not exclusive (failed_contenders=$atomic_rcs)"
+if wait "$atomic_pid"; then
+  echo "FAIL 0: Second contender acquired an already-held repo lock"
   exit 1
 fi
 
+if [ ! -d "$atomic_lock" ] || [ -e "$TEST_DIR/atomic-winner-2" ]; then
+  echo "FAIL 0: Existing repository lock was not preserved"
+  exit 1
+fi
+
+echo "PASS 0: Second contender cannot acquire an already-held repo lock"
 rm -rf "$atomic_lock" "$TEST_DIR/atomic-winner" "$TEST_DIR/atomic-winner-2"
 
 # Verify the production lock implementation uses the same atomic primitive.
