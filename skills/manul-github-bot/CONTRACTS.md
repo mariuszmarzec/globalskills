@@ -19,13 +19,14 @@ Supported commands parsed from a `/manul` command are:
 
 Without an explicit role, Manul uses `automation.agentRuntime` (default
 `openclaw`). With an explicit canonical role, it uses
-`automation.roleRuntime` (default `opencode`) and passes the role to the
-OpenCode CLI using its native `--agent <role>` option. Agent definitions stay
-canonical in `~/.globalskills/agents/`; Manul must not copy them into another
-source directory. Unknown/unconfigured roles, and explicit roles configured
-with `roleRuntime: "openclaw"`, fail closed rather than silently falling back
-to OpenClaw's `main`. This is direct OpenCode CLI routing, not ACP delegation
-from OpenClaw.
+`automation.roleRuntime` (default `opencode`). Supported runtime values are
+`openclaw`, `opencode`, `codex`, and `claude-code`. OpenCode receives a role
+through its native `--agent <role>` option. Codex and Claude Code receive the
+canonical role definition from `~/.globalskills/agents/<role>.md`, with YAML
+frontmatter stripped and the role instructions prepended to the task prompt.
+Agent definitions remain canonical; Manul must not copy them into another
+source directory. Unknown/unconfigured roles fail closed. OpenClaw does not
+receive canonical worker roles as its config-agent selector.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -352,8 +353,11 @@ The example configuration currently defines:
 - agent timeout;
 - `automation.opencodeMaxStepLimitContinuations` — maximum internal OpenCode
   same-session resumes after step-limit events (default 3, valid range 0..20);
-- `automation.agentNoProgressTimeoutSeconds` — maximum silent period for OpenCode
-  stdout/stderr before its isolated process group is terminated (default 900s);
+- `automation.agentNoProgressTimeoutSeconds` — maximum silent period for supported
+  CLI runtimes before their isolated process group is terminated (default 900s);
+- `automation.agentToolNoProgressTimeoutSeconds` — maximum period an explicitly
+  active tool call may remain without completion/progress before termination
+  (default 3600s);
 - heartbeat timeout;
 - lease timeout;
 - maximum attempts;
@@ -374,8 +378,9 @@ through `AgentExecutor` to a backend adapter.
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. `automation.agentRuntime` (default OpenClaw) selects the
 automatic entry point; `automation.roleRuntime` (default OpenCode) selects the
-runtime for explicitly named canonical roles. Adapters must not spawn
-subprocesses directly and must not depend on each other.
+runtime for explicitly named canonical roles. Both accept `openclaw`, `opencode`,
+`codex`, and `claude-code`. Adapters must not spawn subprocesses directly and
+must not depend on each other.
 
 The adapter owns runtime session invocation/resume mechanics. Manul owns the
 persisted `processed_comments.session_id` pointer: retain it only when the
@@ -399,24 +404,23 @@ When the configured internal budget is exhausted and OpenCode still reports a
 step limit, the adapter returns the existing `NEEDS_CONTINUATION` result so
 the daemon's existing retry/session handling remains authoritative.
 
-The OpenCode adapter applies `automation.agentNoProgressTimeoutSeconds`
+The CLI adapters apply `automation.agentNoProgressTimeoutSeconds`
 (default `900`) to the current run's stdout/stderr stream. A fresh JSONL
 event or stderr write resets the generic idle timer; a heartbeat alone does
-not. OpenCode CLI JSON streams may not emit a `tool_use` event until the tool
-has completed, so an unfinished `step_start` without a corresponding
-`step_finish` is also treated as bounded active model/tool work. During that
-unfinished step, the generic idle timer pauses but
+not. For Codex CLI and Claude Code, `ProcessRunner` recognizes the runtime's
+active-tool JSONL events and pauses the generic idle timer while a tool is
+running, bounded by `automation.agentToolNoProgressTimeoutSeconds` (default
+`3600`; runtime-specific overrides are `MANUL_CODEX_TOOL_NO_PROGRESS_TIMEOUT`
+and `MANUL_CLAUDE_TOOL_NO_PROGRESS_TIMEOUT`). For OpenCode, a running/pending
+tool uses `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`, while an unfinished
+`step_start` without a corresponding `step_finish` is bounded by
 `automation.agentStepNoProgressTimeoutSeconds` (default `3600`, overridable
-with `MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT`) remains a hard limit. If the
-JSONL stream explicitly reports a running/pending tool, the adapter separately
-applies `automation.agentToolNoProgressTimeoutSeconds` (default `3600`,
-overridable with `MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT`). Thus model/tool
-work is not killed by the shorter generic idle budget, but neither an active
-step nor an active tool can suppress timeouts indefinitely. On expiry,
-`ProcessRunner` terminates only the isolated runtime process group and
-returns `AGENT_NO_PROGRESS_TIMEOUT` for generic idle,
-`AGENT_STEP_NO_PROGRESS_TIMEOUT` for an unfinished JSONL step, or
-`AGENT_TOOL_NO_PROGRESS_TIMEOUT` for an active tool that never completes.
+with `MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT`). Thus an active tool/step
+cannot suppress timeouts indefinitely. On expiry, `ProcessRunner` terminates
+only the isolated runtime process group and reports
+`AGENT_NO_PROGRESS_TIMEOUT` for generic idle, `AGENT_STEP_NO_PROGRESS_TIMEOUT`
+for an unfinished OpenCode step, or `AGENT_TOOL_NO_PROGRESS_TIMEOUT` for an
+active tool that never completes.
 The aggregate JSONL log and stderr diagnostics are retained for task recovery. This timeout is
 independent of the overall agent timeout and of the daemon lease/heartbeat.
 

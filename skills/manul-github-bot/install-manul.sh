@@ -88,7 +88,9 @@ echo
 #   curl      - HTTP used by manul-comments-remove.sh
 #   openclaw  - default agent runtime (OpenClawAdapter)
 #   opencode  - alternate agent runtime (OpenCodeAdapter)
-# At least one agent runtime must be present; the daemon picks the default.
+#   codex     - alternate agent runtime (CodexAdapter)
+#   claude    - alternate agent runtime (ClaudeCodeAdapter)
+# At least one agent runtime must be present; config selects the default.
 MISSING_DEPS=()
 for cmd in bash git gh jq sqlite3 curl crontab; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -100,12 +102,14 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1; then
-    echo "ERROR: No agent runtime found (need openclaw or opencode)" >&2
-    echo "Install at least one of: openclaw, opencode" >&2
+if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && \
+   [ ! -x "${OPENCLAW_BIN:-}" ] && [ ! -x "${OPENCODE_BIN:-}" ] && \
+   [ ! -x "${CODEX_BIN:-}" ] && [ ! -x "${CLAUDE_BIN:-}" ]; then
+    echo "ERROR: No agent runtime found (need openclaw, opencode, codex, or claude, or a valid *_BIN override)" >&2
+    echo "Install at least one of: openclaw, opencode, codex, claude" >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git jq sqlite3 curl crontab + agent runtime (openclaw or opencode)"
+echo "Prerequisites OK: bash git jq sqlite3 curl crontab + at least one supported agent runtime"
 echo
 
 # 2. Ensure runtime directory

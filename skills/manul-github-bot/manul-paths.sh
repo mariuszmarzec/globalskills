@@ -84,17 +84,17 @@ AGENT_RUNTIME="${AGENT_RUNTIME:-${MANUL_AGENT_RUNTIME:-${_CONFIG_AGENT_RUNTIME:-
 
 # Validate runtime selection early so downstream code can assert it.
 case "$AGENT_RUNTIME" in
-    openclaw|opencode) ;;
+    openclaw|opencode|codex|claude-code) ;;
     "") AGENT_RUNTIME="openclaw" ;;
     *)
-        echo "ERROR: Unknown agent runtime '$AGENT_RUNTIME'. Must be 'openclaw' or 'opencode'." >&2
+        echo "ERROR: Unknown agent runtime '$AGENT_RUNTIME'. Must be 'openclaw', 'opencode', 'codex', or 'claude-code'." >&2
         exit 1
         ;;
 esac
 
 # Role execution is separate from the automatic/default entry-point runtime.
-# Explicit canonical roles use OpenCode's native --agent switch by default,
-# including when unselected tasks still enter through OpenClaw.
+# OpenCode uses its native --agent switch. Codex and Claude Code receive the
+# canonical role instructions through their independent adapters.
 _CONFIG_ROLE_RUNTIME=""
 if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
     _CONFIG_ROLE_RUNTIME="$(jq -r '.automation.roleRuntime // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
@@ -102,12 +102,12 @@ fi
 ROLE_RUNTIME="${ROLE_RUNTIME:-${MANUL_ROLE_RUNTIME:-${_CONFIG_ROLE_RUNTIME:-opencode}}}"
 
 case "$ROLE_RUNTIME" in
-    openclaw|opencode) ;;
+    openclaw|opencode|codex|claude-code) ;;
     "")
         ROLE_RUNTIME="opencode"
         ;;
     *)
-        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw' or 'opencode'." >&2
+        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw', 'opencode', 'codex', or 'claude-code'." >&2
         exit 1
         ;;
 esac

@@ -41,7 +41,8 @@ MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 Path resolution and runtime validation are centralized in
 `manul-paths.sh`. `AGENT_RUNTIME` selects the automatic entry-point runtime
 (default: `openclaw`); `ROLE_RUNTIME` selects the worker runtime for explicitly
-named canonical roles (default: `opencode`). The config keys are
+named canonical roles (default: `opencode`). Both accept `openclaw`,
+`opencode`, `codex`, and `claude-code`. The config keys are
 `automation.agentRuntime` and `automation.roleRuntime`. There is no
 `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
@@ -52,13 +53,20 @@ same-session resumes is configured by
 (default: 3, valid range: 0..20). These internal resumes share the original
 execution timeout and do not consume additional Manul attempts.
 
-The OpenCode adapter has an independent no-progress watchdog controlled by
-`automation.agentNoProgressTimeoutSeconds` in `~/.manul/config.json`
-(default: 900 seconds; `MANUL_OPENCODE_NO_PROGRESS_TIMEOUT` can override it for
-a specific invocation). Actual JSONL stdout or stderr activity resets the timer;
-ordinary task-heartbeat updates do not. On expiry, only the isolated OpenCode
-process group is terminated, the result is marked
-`AGENT_NO_PROGRESS_TIMEOUT`, and the raw JSONL/stderr artifacts are retained.
+The OpenCode, Codex CLI, and Claude Code adapters apply the no-progress
+watchdog controlled by `automation.agentNoProgressTimeoutSeconds` in
+`~/.manul/config.json` (default: 900 seconds; use
+`MANUL_OPENCODE_NO_PROGRESS_TIMEOUT`, `MANUL_CODEX_NO_PROGRESS_TIMEOUT`, or
+`MANUL_CLAUDE_NO_PROGRESS_TIMEOUT` for a runtime-specific override). Actual
+JSONL stdout or stderr activity resets the timer; task-heartbeat updates do not.
+For OpenCode, an unfinished step and an explicitly active tool call are tracked
+separately. Codex and Claude Code active tool calls are recognized from their
+JSONL events, so the generic idle timer pauses while a tool is active. All active
+tools remain bounded by `automation.agentToolNoProgressTimeoutSeconds` (default
+3600 seconds; overridden with `MANUL_CODEX_TOOL_NO_PROGRESS_TIMEOUT` or
+`MANUL_CLAUDE_TOOL_NO_PROGRESS_TIMEOUT` for those runtimes). On expiry,
+`ProcessRunner` terminates only the isolated runtime process group, emits the
+appropriate timeout cause, and retains raw JSONL/stderr diagnostics.
 
 For each OpenCode invocation, the adapter appends a runtime-capability snapshot
 to the initial prompt and every resumed turn. It identifies the assigned
@@ -165,20 +173,24 @@ The daemon never invokes an agent runtime directly. It calls
 `AgentExecutionController.execute`, which routes through `AgentExecutor`:
 
 ```
-No explicit role -> AGENT_RUNTIME -> OpenClawAdapter (default) or OpenCodeAdapter
-Explicit role    -> ROLE_RUNTIME  -> OpenCodeAdapter (default)
+No explicit role -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
+Explicit role    -> ROLE_RUNTIME  -> OpenCode / Codex / Claude Code (OpenClaw fails closed)
 ```
 
 This means a plain `/manul run <task>` uses OpenClaw by default, while
-`/manul run --agent coder <task>` runs the canonical `coder` role through
-OpenCode's native `--agent` option. This is direct CLI routing, not an ACP
-session spawned by OpenClaw. Setting `automation.roleRuntime` to `openclaw`
-fails closed for explicit roles until a native OpenClaw role adapter exists.
+`/manul run --agent coder <task>` routes the canonical `coder` role through
+`automation.roleRuntime`. OpenCode uses its native `--agent` option; Codex and
+Claude Code receive the canonical role instructions as part of the prompt.
+This is direct CLI routing, not an ACP session spawned by OpenClaw. Setting
+`automation.roleRuntime` to `openclaw` fails closed for explicit roles until a
+native OpenClaw role adapter exists.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
 the queue and passes the flag only to the OpenCode adapter; it overrides the
 normal runtime and role-runtime settings. OpenClaw does not support this mode.
+
+Codex and Claude Code are non-interactive CLI backends. Codex runs with the `workspace-write` sandbox and explicit non-interactive approval policy. Claude Code uses `--print --output-format stream-json --permission-mode acceptEdits`; it never enables `--dangerously-skip-permissions` or `bypassPermissions`. Shell/MCP actions must be permitted by the operator's existing Claude Code settings. Codex CLI's `workspace-write` mode keeps command network access disabled by default. If Manul tasks must use remote `git`/`gh` operations, enable `[sandbox_workspace_write] network_access = true` in the operator's `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`); Manul does not silently override that security setting. Network access broadens the destinations a task can contact, so leave it disabled for offline tasks or configure Codex's network proxy/domain policy as appropriate.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
@@ -410,8 +422,8 @@ Current automation controls include:
 - `mode`: `bot` (default) or `human`;
 - `commentStyle.human.concise` (default `true`) controls concise human-mode result comments;
 - `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
-- `automation.agentRuntime` (default `openclaw`) selects the runtime for tasks without an explicit role;
-- `automation.roleRuntime` (default `opencode`) selects the runtime for explicitly named canonical roles; `openclaw` fails closed for these roles until a native role adapter exists;
+- `automation.agentRuntime` (default `openclaw`) selects the runtime for tasks without an explicit role; supported values: `openclaw`, `opencode`, `codex`, `claude-code`;
+- `automation.roleRuntime` (default `opencode`) selects the runtime for explicitly named canonical roles; supported values are the same, but `openclaw` fails closed for these roles until a native role adapter exists;
 
 Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed). When `commentStyle.human.concise` is enabled, that result should read like a short teammate reply and stay within the configured visible line limit, without automation-report headings or boilerplate.
 
@@ -576,10 +588,10 @@ Use task recovery only for manual intervention; normal stale recovery belongs to
 ### Explicit role does not execute
 
 Check that the role is present in `agents[]` in `~/.manul/config.json`, then
-inspect `automation.roleRuntime`. The default is OpenCode and explicit roles
-are passed through its native `--agent <role>` option. An unknown role or
-`roleRuntime: "openclaw"` intentionally fails instead of silently running
-OpenClaw's `main` agent.
+inspect `automation.roleRuntime`. The default is OpenCode; OpenCode uses its
+native `--agent <role>` option, while Codex and Claude Code receive the canonical
+role instructions in the prompt. An unknown role or `roleRuntime: "openclaw"`
+intentionally fails instead of silently running OpenClaw's `main` agent.
 
 ### OpenClaw execution failure
 

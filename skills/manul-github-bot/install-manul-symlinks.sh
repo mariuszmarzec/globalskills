@@ -66,7 +66,7 @@ SCRIPTS=(
     "github-api-wrapper.sh"
     # manul-agent-wrapper.sh is DEPRECATED and intentionally NOT installed.
     # It is superseded by the AgentExecutor runtime abstraction
-    # (openclaw-adapter.sh / opencode-adapter.sh). Kept in source only as a
+    # (openclaw/opencode/codex/claude-code adapters). Kept in source only as a
     # historical reference for the original OpenClaw-only invocation path.
     "manul-comments-remove.sh"
     "manul-conversation-linker.sh"
@@ -102,6 +102,8 @@ SCRIPTS=(
     "manul-env.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
+    "codex-adapter.sh"
+    "claude-code-adapter.sh"
     "agent-task-runner.sh"
     "process-runner.sh"
 )
@@ -184,7 +186,7 @@ for script in "${SCRIPTS[@]}"; do
     # Executable entry points must remain executable even if the canonical
     # checkout lost its execute bit. agent-task-runner.sh is invoked directly
     # by setsid and therefore cannot rely on being sourced.
-    if [ "$script" = "agent-task-runner.sh" ] || [ "$script" = "manul-queue-reset.sh" ]; then
+    if [ "$script" = "agent-task-runner.sh" ] || [ "$script" = "manul-queue-reset.sh" ] || [ "$script" = "codex-adapter.sh" ] || [ "$script" = "claude-code-adapter.sh" ]; then
         chmod +x "$canonical_file" "$runtime_path" 2>/dev/null || true
     elif [ -x "$canonical_file" ]; then
         chmod +x "$runtime_path" 2>/dev/null || true

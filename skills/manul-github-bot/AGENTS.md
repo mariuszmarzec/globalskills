@@ -21,13 +21,15 @@ The runtime isolation refactor has landed. The current implementation:
 - Uses `~/.manul/` as the single canonical runtime directory
   (`MANUL_DIR`, resolved in `manul-paths.sh`).
 - Routes all agent execution through `AgentExecutor`. `AGENT_RUNTIME`
-  (`openclaw` default, `opencode` alternate) selects the automatic entry point;
-  `ROLE_RUNTIME` (`opencode` default) selects the runtime for an explicitly
-  named canonical role.
+  (default `openclaw`) selects the automatic entry point; `ROLE_RUNTIME`
+  (default `opencode`) selects the runtime for explicitly named canonical roles.
+  Both settings accept `openclaw`, `opencode`, `codex`, and `claude-code`.
 - Adapters are independent backends behind a single `ProcessRunner.run()`
   process boundary; they must not spawn subprocesses directly and must not
-  depend on each other. Explicit roles use OpenCode's native `--agent` flag by
-  default; do not route canonical role names to OpenClaw's config-agent selector.
+  depend on each other. OpenCode receives canonical roles through its native
+  `--agent` flag; Codex and Claude Code receive the matching canonical role
+  instructions from `~/.globalskills/agents/` prepended to the task prompt.
+  Never silently route role names to OpenClaw's config-agent selector.
 - Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
 Do not reintroduce `~/.openclaw/manul` ownership, compatibility shims, or

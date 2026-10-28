@@ -208,19 +208,21 @@ else
   fail "Installer default runtime is not HOME/.manul"
 fi
 
-# The installer no longer hard-requires OpenClaw: it accepts either the
-# OpenClaw or OpenCode agent runtime, and fails only when neither is present.
+# The installer accepts any supported agent runtime and fails only when
+# none of OpenClaw, OpenCode, Codex CLI, or Claude Code is available.
 if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab' "$SCRIPT_DIR/install-manul.sh"; then
   ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab)"
 else
   fail "Installer core-tool check is missing"
 fi
 
-# The installer must accept EITHER runtime, not require OpenClaw specifically.
-# Check: the opencode binary is probed, and the failure message lists both.
+# The installer must detect all supported CLI runtimes rather than requiring
+# OpenClaw specifically.
 if grep -q 'command -v opencode' "$SCRIPT_DIR/install-manul.sh" \
-   && grep -q 'openclaw or opencode' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer accepts OpenClaw OR OpenCode as agent runtime"
+   && grep -q 'command -v codex' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'command -v claude' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'openclaw, opencode, codex, or claude' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer accepts OpenClaw, OpenCode, Codex CLI, and Claude Code"
 else
   fail "Installer still hard-requires OpenClaw"
 fi

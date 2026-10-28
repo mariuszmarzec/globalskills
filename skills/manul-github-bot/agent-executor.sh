@@ -88,13 +88,13 @@ AgentExecutor.execute() {
     # "main" is a legacy runtime entry-point label, not a canonical OpenCode role.
     # When used with OpenCode, translate it to automatic selection so the default
     # primary agent configured by OpenCode (normally orchestrator) is selected.
-    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" = "opencode" ]; then
+    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" != "openclaw" ]; then
         agent=""
     fi
 
     # Preserve the selected runtime for tasks without an explicit canonical role.
-    # Explicit role names are worker roles and are executed by ROLE_RUNTIME,
-    # which defaults to OpenCode because it supports opencode run --agent <role>.
+    # Explicit role names are worker roles and are executed by ROLE_RUNTIME.
+    # OpenCode uses native --agent routing; Codex/Claude inject canonical role text.
     local execution_runtime="$AGENT_RUNTIME"
     if [ -n "$agent" ] && [ "$agent" != "main" ]; then
         local allowed_agents_json
@@ -117,7 +117,7 @@ AgentExecutor.execute() {
         # role adapter exists, rather than dispatching the role to "main".
         if [ "$execution_runtime" = "openclaw" ] && [ "$auto_accept" != "true" ]; then
             local routing_error
-            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to 'opencode' or MANUL_ROLE_RUNTIME=opencode"
+            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to opencode, codex, or claude-code"
             jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
               '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
             AgentExecutor_ExitCode=1
@@ -139,6 +139,12 @@ AgentExecutor.execute() {
             ;;
         opencode)
             adapter_script="$MANUL_SCRIPT_DIR/opencode-adapter.sh"
+            ;;
+        codex)
+            adapter_script="$MANUL_SCRIPT_DIR/codex-adapter.sh"
+            ;;
+        claude-code)
+            adapter_script="$MANUL_SCRIPT_DIR/claude-code-adapter.sh"
             ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unknown execution runtime: %s","session_id":"","duration_s":0}\n' "$task_id" "$execution_runtime"

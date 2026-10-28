@@ -56,6 +56,12 @@ OPENCLAW_CONFIG_PATH="$TMP/openclaw/config with spaces.json"
 OPENCLAW_BIN="$TMP/bin/openclaw-custom"
 OPENCODE_BIN="$TMP/bin/opencode-custom"
 OPENCODE_CONFIG="$TMP/custom opencode config.json"
+CODEX_HOME="$TMP/codex home"
+CODEX_BIN="$TMP/bin/codex-custom"
+CODEX_MODEL="codex-test-model"
+CLAUDE_CONFIG_DIR="$TMP/claude config"
+CLAUDE_BIN="$TMP/bin/claude-custom"
+CLAUDE_MODEL="claude-test-model"
 CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
 CARACAL_ACCESS_TOKEN="caracal-test-token"
 UNSAFE_SECRET="must-not-be-copied"
@@ -66,7 +72,7 @@ cat > "$RUNTIME/config.json" <<'EOF'
 {"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CARACAL_MCP_URL CARACAL_ACCESS_TOKEN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -78,6 +84,12 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
    ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
    ! grep -q '^OPENCODE_CONFIG=' "$ENV_FILE" ||
+   ! grep -q '^CODEX_HOME=' "$ENV_FILE" ||
+   ! grep -q '^CODEX_BIN=' "$ENV_FILE" ||
+   ! grep -q '^CODEX_MODEL=' "$ENV_FILE" ||
+   ! grep -q '^CLAUDE_CONFIG_DIR=' "$ENV_FILE" ||
+   ! grep -q '^CLAUDE_BIN=' "$ENV_FILE" ||
+   ! grep -q '^CLAUDE_MODEL=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_MCP_URL=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
@@ -94,13 +106,19 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
   source "$ENV_FILE"
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
   [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
   [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
   [ "$OPENCODE_CONFIG" = "$TMP/custom opencode config.json" ] &&
+  [ "$CODEX_HOME" = "$TMP/codex home" ] &&
+  [ "$CODEX_BIN" = "$TMP/bin/codex-custom" ] &&
+  [ "$CODEX_MODEL" = "codex-test-model" ] &&
+  [ "$CLAUDE_CONFIG_DIR" = "$TMP/claude config" ] &&
+  [ "$CLAUDE_BIN" = "$TMP/bin/claude-custom" ] &&
+  [ "$CLAUDE_MODEL" = "claude-test-model" ] &&
   [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
   [ "$CARACAL_ACCESS_TOKEN" = "caracal-test-token" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
