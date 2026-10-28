@@ -555,6 +555,13 @@ sleep 5
 
 # Verify models are registered
 curl -fsS http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
+
+# Verify the local embedding route and expected 768-dimensional output.
+curl -fsS http://localhost:4000/v1/embeddings \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"multilingual-e5-base","input":"query: Caracal RAG healthcheck"}' | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); n=len(d['data'][0]['embedding']); print(f'embedding_dim={n}'); sys.exit(0 if n == 768 else 1)"
 ```
 
 *Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, multilingual-e5-base, gemma4, local-coder.*
@@ -581,12 +588,6 @@ ssh <laptop-user>@<laptop-ip> "pkill -f litellm; nohup litellm --config ~/litell
 # Verify remote healthcheck
 ssh <laptop-user>@<laptop-ip> "cd ~/litellm && set -a && source .env && set +a && curl -fsS http://localhost:4000/v1/models -H \"Authorization: Bearer \\$LITELLM_MASTER_KEY\""
 
-# Verify the local embedding route and expected 768-dimensional output.
-curl -fsS http://localhost:4000/v1/embeddings \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"multilingual-e5-base","input":"query: Caracal RAG healthcheck"}' | \
-  python3 -c "import json,sys; d=json.load(sys.stdin); n=len(d['data'][0]['embedding']); print(f'embedding_dim={n}'); sys.exit(0 if n == 768 else 1)"
 ```
 
 *Skip this step when configuring the Laptop directly.*
