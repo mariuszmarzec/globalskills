@@ -629,12 +629,27 @@ if assert_file_not_contains "global branching skill path is not exposed" "$WORK/
 else
     :
 fi
-if assert_file_contains "agent told branch creation is its responsibility" "$WORK/prompt.md" "Create the branch yourself before committing or pushing changes"; then
+if assert_file_contains "agent told branch creation is its responsibility" "$WORK/prompt.md" "Create the branch yourself before committing or pushing changes, and before the first repository edit."; then
     :
 else
     :
 fi
-if assert_file_contains "agent told not to commit base" "$WORK/prompt.md" "Never commit or push changes directly to the base/default branch"; then
+if assert_file_contains "branch preflight must happen before every edit" "$WORK/prompt.md" "branch preparation is a mandatory precondition to every edit"; then
+    :
+else
+    :
+fi
+if assert_file_contains "task branch starts from explicit prepared base" "$WORK/prompt.md" 'git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"'; then
+    :
+else
+    :
+fi
+if assert_file_contains "branch creation failure stops edits" "$WORK/prompt.md" "If fetching or branch creation fails, do not continue with edits or commits"; then
+    :
+else
+    :
+fi
+if assert_file_contains "agent told not to commit base" "$WORK/prompt.md" "Never commit or push repository changes directly to the prepared/base/default branch"; then
     :
 else
     :
