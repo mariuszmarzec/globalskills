@@ -183,7 +183,7 @@ native `opencode run --auto` option. Manul persists this per-task choice in
 the queue and passes the flag only to the OpenCode adapter; it overrides the
 normal runtime and role-runtime settings. OpenClaw does not support this mode.
 
-Codex and Claude Code are non-interactive CLI backends. Codex runs with the `workspace-write` sandbox and explicit non-interactive approval policy. Claude Code uses `--print --output-format stream-json --permission-mode acceptEdits`; it never enables `--dangerously-skip-permissions` or `bypassPermissions`. Shell/MCP actions must be permitted by the operator's existing Claude Code settings.
+Codex and Claude Code are non-interactive CLI backends. Codex runs with the `workspace-write` sandbox and explicit non-interactive approval policy. Claude Code uses `--print --output-format stream-json --permission-mode acceptEdits`; it never enables `--dangerously-skip-permissions` or `bypassPermissions`. Shell/MCP actions must be permitted by the operator's existing Claude Code settings. Codex CLI's `workspace-write` mode keeps command network access disabled by default. If Manul tasks must use remote `git`/`gh` operations, enable `[sandbox_workspace_write] network_access = true` in the operator's `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`); Manul does not silently override that security setting. Network access broadens the destinations a task can contact, so leave it disabled for offline tasks or configure Codex's network proxy/domain policy as appropriate.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
