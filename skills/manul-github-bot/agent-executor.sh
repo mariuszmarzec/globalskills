@@ -117,7 +117,7 @@ AgentExecutor.execute() {
         # role adapter exists, rather than dispatching the role to "main".
         if [ "$execution_runtime" = "openclaw" ] && [ "$auto_accept" != "true" ]; then
             local routing_error
-            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to 'opencode' or MANUL_ROLE_RUNTIME=opencode"
+            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to opencode, codex, or claude-code"
             jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
               '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
             AgentExecutor_ExitCode=1
