@@ -66,7 +66,7 @@ SCRIPTS=(
     "github-api-wrapper.sh"
     # manul-agent-wrapper.sh is DEPRECATED and intentionally NOT installed.
     # It is superseded by the AgentExecutor runtime abstraction
-    # (openclaw-adapter.sh / opencode-adapter.sh). Kept in source only as a
+    # (openclaw/opencode/codex/claude-code adapters). Kept in source only as a
     # historical reference for the original OpenClaw-only invocation path.
     "manul-comments-remove.sh"
     "manul-conversation-linker.sh"
