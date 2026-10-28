@@ -48,7 +48,7 @@ LiteLLM (Router & Proxy - Port 4000)
             └── local-coder (Fallback)
 ```
 
-The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes query embeddings through the explicit FreeLLMAPI-compatible endpoint in ~/.caracal/config/sources.yaml. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
+The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes document and query embeddings through LiteLLM's OpenAI-compatible endpoint at `http://127.0.0.1:4000/v1`. LiteLLM exposes the alias `multilingual-e5-base`, routed to Ollama model `qllama/multilingual-e5-base`. Caracal automatically adds E5's `passage:` and `query:` prefixes. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
 
 # Execution Rules
 
@@ -265,6 +265,13 @@ ollama pull qwen2.5-coder:7b
 
 ```
 
+Caracal RAG embedding model (on each machine):
+
+```bash
+ollama pull qllama/multilingual-e5-base
+
+```
+
 **Healthcheck:**
 
 ```bash
@@ -441,6 +448,13 @@ model_list:
   # Local Ollama Models
   # ============================================================
 
+  # Caracal RAG embeddings: 768-dimensional multilingual E5 vectors.
+  - model_name: multilingual-e5-base
+    litellm_params:
+      model: ollama/qllama/multilingual-e5-base
+      api_base: http://localhost:11434
+      api_key: ollama-local
+
   - model_name: gemma4
     litellm_params:
       model: ollama/gemma4:12b
@@ -543,7 +557,7 @@ sleep 5
 curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
 ```
 
-*Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder.*
+*Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, multilingual-e5-base, gemma4, local-coder.*
 
 ### Step 8b — Desktop: Push Config to Remote (Laptop)
 
@@ -624,13 +638,16 @@ bash ./install.sh
 export PATH="$HOME/.caracal/bin:$PATH"
 ```
 
-Configure Caracal interactively so credentials are entered into hidden prompts, not shell history or process arguments:
+Configure Caracal to use the local E5 alias through LiteLLM. Load the master key from the private LiteLLM `.env` file; do not put the key in shell history or process arguments:
 
 ```bash
-"$HOME/.caracal/bin/caracal-rag" setup
+cd "$HOME/litellm" && set -a && source .env && set +a
+export CARACAL_EMBEDDING_API_KEY="$LITELLM_MASTER_KEY"
+"$HOME/.caracal/bin/caracal-rag" setup --model multilingual-e5-base --api-base http://127.0.0.1:4000/v1
+unset CARACAL_EMBEDDING_API_KEY
 ```
 
-During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and includes both knowledge sources:
+The active config should use `embedding.model: multilingual-e5-base` and `embedding.api_base: http://127.0.0.1:4000/v1`. The LiteLLM master key is persisted as Caracal's embedding API key; the Caracal MCP access token remains separate. Confirm `~/.caracal/config/sources.yaml` points to Chroma at `127.0.0.1:3400` and includes both knowledge sources:
 
 - `fiteo-docs` — API Markdown documents from `mariuszmarzec/fiteo/docs/api/` on `master`.
 - `quickmvi-readme` — `https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md`, covering QuickMVI library usage at README level.
@@ -643,13 +660,43 @@ The installer preserves an existing `sources.yaml`; updating `config/sources.exa
     url: https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md
 ```
 
-Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+Defaults in the template are LiteLLM at `http://127.0.0.1:4000/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`. The `multilingual-e5-base` alias is a separate LiteLLM entry routed to Ollama, not a chat-completion fallback.
+
+For an existing index built with another embedding family, do not run indexing against the old collection: BGE-M3 vectors are 1024-dimensional while multilingual E5 vectors are 768-dimensional. Back up Caracal's local config/secrets/manifest, then use the confirmation-gated block below to clear only the active Caracal collection and its manifest. The backup does not include Chroma vector data; clearing the collection is destructive.
+
+```bash
+bash "$CARACAL_REPO/backup.sh" --output "$HOME/caracal-backups/pre-multilingual-e5-$(date -u +%Y%m%dT%H%M%SZ)"
+export CARACAL_HOME="$HOME/.caracal"
+"$HOME/.caracal/venv/bin/python" - <<'PY'
+from caracal_rag.config import load_active_config, resolve_home
+from caracal_rag.vectorstore import _chroma_client
+
+config = load_active_config()
+client = _chroma_client(host=config.chroma.host, port=config.chroma.port, ssl=config.chroma.ssl)
+listed = client.list_collections()
+names = {item if isinstance(item, str) else item.name for item in listed}
+collection_name = config.chroma.collection
+count = client.get_collection(name=collection_name).count() if collection_name in names else 0
+print(f"Target collection: {collection_name}; current vector count: {count}")
+if input(f"Type DELETE {collection_name} to continue: ").strip() != f"DELETE {collection_name}":
+    raise SystemExit("Cancelled; no collection or manifest was deleted.")
+if collection_name in names:
+    client.delete_collection(name=collection_name)
+manifest_path = resolve_home().manifest_path
+if manifest_path.exists():
+    manifest_path.unlink()
+print("Old Caracal collection and manifest cleared.")
+PY
+```
+
+For a first-time install with no existing index, skip the destructive block. After the reset, `check` should pass and report 768 dimensions, then `index` rebuilds the configured knowledge sources. Confirm `search_api` returns relevant documents before considering migration complete.
 
 ```bash
 "$HOME/.caracal/bin/caracal-rag" check
-"$HOME/.caracal/bin/caracal-rag" index --source fiteo-docs
-"$HOME/.caracal/bin/caracal-rag" index --source quickmvi-readme
+"$HOME/.caracal/bin/caracal-rag" index
 "$HOME/.caracal/bin/caracal-rag" check
+```
+
 ```
 
 **Healthcheck:** both `check` calls succeed, indexing completes, and `~/.caracal/config/secrets.yaml` has mode `0600`. Do not start MCP or claim setup is complete if credentials, embedding-model validation, or Chroma connectivity fails; fix the reported dependency and rerun the check.
