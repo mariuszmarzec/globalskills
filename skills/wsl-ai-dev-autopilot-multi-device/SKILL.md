@@ -711,6 +711,37 @@ For a first-time install with no existing index, skip the destructive block. Aft
 "$HOME/.caracal/bin/caracal-rag" check
 ```
 
+After indexing, restart the existing Caracal MCP process so it reloads the new model/config. The launcher only trusts its own PID when the command line and configured port/path match; use the same ownership check here and do not use `pkill -f`:
+
+```bash
+CARACAL_PID_FILE="$HOME/.caracal/run/mcp.pid"
+if [ -f "$CARACAL_PID_FILE" ]; then
+  pid="$(cat "$CARACAL_PID_FILE")"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: invalid Caracal PID file; inspect $CARACAL_PID_FILE" >&2
+    exit 1
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    if [[ "$cmd" != *"caracal-rag mcp --transport http"* || "$cmd" != *"--port 3500"* || "$cmd" != *"--path /mcp"* ]]; then
+      echo "ERROR: refusing to stop a process that does not match the configured Caracal MCP command." >&2
+      exit 1
+    fi
+    kill -TERM "$pid"
+    for _ in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "ERROR: Caracal MCP did not stop; inspect PID $pid." >&2
+      exit 1
+    fi
+  fi
+  rm -f -- "$CARACAL_PID_FILE"
+fi
+# Run the normal environment launcher to start MCP against the new index.
+aicode
+```
 
 **Healthcheck:** both `check` calls succeed, indexing completes, and `~/.caracal/config/secrets.yaml` has mode `0600`. Do not start MCP or claim setup is complete if credentials, embedding-model validation, or Chroma connectivity fails; fix the reported dependency and rerun the check.
 
