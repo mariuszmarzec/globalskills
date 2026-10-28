@@ -27,7 +27,7 @@ GitHub
                AgentExecutor
                  /        \
                 v          v
-        OpenClawAdapter  OpenCodeAdapter
+        OpenClawAdapter  OpenCodeAdapter  CodexAdapter  ClaudeCodeAdapter
                 ^          ^
                 |          |
        automatic runtime   explicit role runtime
@@ -35,7 +35,8 @@ GitHub
 ```
 
 The daemon is runtime-neutral: it reaches an agent runtime only through
-`AgentExecutionController` → `AgentExecutor` → a backend adapter.
+`AgentExecutionController` → `AgentExecutor` → one of the OpenClaw, OpenCode,
+Codex CLI, or Claude Code backend adapters.
 `automation.agentRuntime` controls automatic entry-point selection (default
 OpenClaw); `automation.roleRuntime` controls execution of explicitly selected
 canonical roles (default OpenCode). With these defaults, a task without an
@@ -239,7 +240,7 @@ Manul still owns the claim-scoped SQLite pointer that tells a retry which runtim
 session to continue; it does not interpret or manipulate the runtime's session
 internals.
 
-Both the OpenClaw and OpenCode adapters are implemented. Explicit canonical roles use the configured `ROLE_RUNTIME` (OpenCode by default); if `ROLE_RUNTIME=openclaw`, explicit role routing fails closed rather than treating a role name as an OpenClaw config agent ID. Additional runtimes can be added behind the same `AgentExecutor` boundary.
+OpenClaw, OpenCode, Codex CLI, and Claude Code adapters are implemented behind the same `AgentExecutor` boundary. Explicit canonical roles use the configured `ROLE_RUNTIME` (OpenCode by default). OpenCode maps a role to its native `--agent` option; Codex and Claude Code prepend the canonical role definition to the prompt because those CLIs do not implement the same OpenCode role contract. If `ROLE_RUNTIME=openclaw`, explicit role routing fails closed rather than treating a role name as an OpenClaw config-agent ID.
 
 ## Ownership rule
 
