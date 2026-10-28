@@ -53,13 +53,20 @@ same-session resumes is configured by
 (default: 3, valid range: 0..20). These internal resumes share the original
 execution timeout and do not consume additional Manul attempts.
 
-The OpenCode adapter has an independent no-progress watchdog controlled by
-`automation.agentNoProgressTimeoutSeconds` in `~/.manul/config.json`
-(default: 900 seconds; `MANUL_OPENCODE_NO_PROGRESS_TIMEOUT` can override it for
-a specific invocation). Actual JSONL stdout or stderr activity resets the timer;
-ordinary task-heartbeat updates do not. On expiry, only the isolated OpenCode
-process group is terminated, the result is marked
-`AGENT_NO_PROGRESS_TIMEOUT`, and the raw JSONL/stderr artifacts are retained.
+The OpenCode, Codex CLI, and Claude Code adapters apply the no-progress
+watchdog controlled by `automation.agentNoProgressTimeoutSeconds` in
+`~/.manul/config.json` (default: 900 seconds; use
+`MANUL_OPENCODE_NO_PROGRESS_TIMEOUT`, `MANUL_CODEX_NO_PROGRESS_TIMEOUT`, or
+`MANUL_CLAUDE_NO_PROGRESS_TIMEOUT` for a runtime-specific override). Actual
+JSONL stdout or stderr activity resets the timer; task-heartbeat updates do not.
+For OpenCode, an unfinished step and an explicitly active tool call are tracked
+separately. Codex and Claude Code active tool calls are recognized from their
+JSONL events, so the generic idle timer pauses while a tool is active. All active
+tools remain bounded by `automation.agentToolNoProgressTimeoutSeconds` (default
+3600 seconds; overridden with `MANUL_CODEX_TOOL_NO_PROGRESS_TIMEOUT` or
+`MANUL_CLAUDE_TOOL_NO_PROGRESS_TIMEOUT` for those runtimes). On expiry,
+`ProcessRunner` terminates only the isolated runtime process group, emits the
+appropriate timeout cause, and retains raw JSONL/stderr diagnostics.
 
 For each OpenCode invocation, the adapter appends a runtime-capability snapshot
 to the initial prompt and every resumed turn. It identifies the assigned
