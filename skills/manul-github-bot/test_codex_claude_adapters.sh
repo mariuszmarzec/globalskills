@@ -21,12 +21,12 @@ printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 cat > "$MOCK_PROMPT_FILE"
 printf '%s\n' '{"type":"thread.started","thread_id":"codex-test-session"}'
 if [ "$MOCK_MODE" = "missing-marker" ]; then
-  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"finished without lifecycle marker"}}'
+  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"finished without lifecycle marker"}}'
 elif [ "$MOCK_MODE" = "stale-marker" ]; then
-  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE old turn"}}'
-  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Still working; no completion marker yet"}}'
+  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE old turn"}}'
+  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Still working; no completion marker yet"}}'
 else
-  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE codex-adapter-test"}}'
+  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE codex-adapter-test"}}'
 fi
 printf '%s\n' '{"type":"turn.completed"}'
 MOCK
