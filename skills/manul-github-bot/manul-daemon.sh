@@ -3206,11 +3206,20 @@ else
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
+        elif verify_merged_result_pr "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$current_attempt" "$INITIAL_BASE_BRANCH" "$DEFAULT_BRANCH"; then
+          # A prior attempt may have completed and merged its PR, then a retry
+          # can start from the updated base and produce no new repository diff.
+          # Accept this only when this attempt's exact result marker points to a
+          # real merged PR and the source issue is closed.
+          already_satisfied="true"
+          current_branch="$VERIFIED_EXISTING_PR_BRANCH"
+          log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
+          lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
         else
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing task PR"
-          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing task PR was verified"
+          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR"
+          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing or merged task PR was verified"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
         fi
       fi
@@ -3226,7 +3235,9 @@ else
       fi
       if [ "$SUCCESS" = "true" ]; then
         local verified_base
-        if [ "$already_satisfied" = "true" ]; then
+        if [ -n "$VERIFIED_MERGED_RESULT_PR_BASE" ]; then
+          verified_base="$VERIFIED_MERGED_RESULT_PR_BASE"
+        elif [ "$already_satisfied" = "true" ]; then
           verified_base="$INITIAL_BASE_BRANCH"
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
