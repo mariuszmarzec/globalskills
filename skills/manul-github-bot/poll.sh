@@ -35,8 +35,6 @@ REPO_LOCK_TTL="${MANUL_REPO_LOCK_TTL_SECONDS:-1800}"
 REPO_POLL_TIMEOUT="${MANUL_REPO_POLL_TIMEOUT:-60}"
 # Poll overlap prevention: prevents multiple poll.sh instances from running simultaneously
 POLL_LOCK_FILE="${MANUL_LOCKS_DIR}/poll.flock"
-LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
-LEASE_TIMEOUT="${LEASE_TIMEOUT:-900}"
 mkdir -p "$REPO_LOCK_DIR" 2>/dev/null || true
 
 log() { echo "[$(date -Is)] $*" >>"$LOG"; }
@@ -1094,8 +1092,6 @@ scan_failing_ci() {
            local esc_prompt
            esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
            local base_id="$comment_id"
-           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-           lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
            sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at',NULL,NULL,'$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id');" 2>>"$LOG"
            if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
             NEW=$((NEW + 1))
@@ -1141,9 +1137,7 @@ queue_normalized_source_task() {
     return 0
   fi
 
-  local task_id="source:${source_type}:${source_id}" now lease repo source_context
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  lease="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
+  local task_id="source:${source_type}:${source_id}" repo source_context
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
   local issue_number
   issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
@@ -1262,7 +1256,6 @@ process_repo_body() {
     already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
-    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
 
     if [ "$action" = "CONTINUE" ]; then
@@ -1358,7 +1351,6 @@ process_repo_body() {
     already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
-    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created',NULL,NULL,'$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
@@ -1459,7 +1451,6 @@ process_repo_body() {
       root_id="$raw_id"
     fi
     conv_id="$(generate_conversation_id "$repo" "$pr_num" "review-thread" "$root_id")" || continue
-    lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
 
     if [ "$action" = "CONTINUE" ]; then
