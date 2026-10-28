@@ -181,6 +181,14 @@ MOCK_EOF
     MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1
   done
 
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  if [ "${queued_lease_count:-0}" -ne 0 ]; then
+    echo "ERROR: queued issue tasks carry lease metadata (${queued_lease_count} row(s))"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
   local conv_id
   conv_id="$(sqlite3 "$poll_db" "SELECT DISTINCT conversationId FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
   if [ "$conv_id" != "conv-test-org/test-repo-issue-1" ]; then
@@ -336,6 +344,14 @@ MOCK_EOF
   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=50;" 2>/dev/null)"
   if [ "$msg_count" -ne 4 ]; then
     echo "ERROR: Expected 4 conversation_messages, found $msg_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  if [ "${queued_lease_count:-0}" -ne 0 ]; then
+    echo "ERROR: queued review-thread tasks carry lease metadata (${queued_lease_count} row(s))"
     rm -rf "$test_dir"
     return 1
   fi
