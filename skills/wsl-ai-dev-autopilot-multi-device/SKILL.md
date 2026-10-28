@@ -48,7 +48,7 @@ LiteLLM (Router & Proxy - Port 4000)
             └── local-coder (Fallback)
 ```
 
-The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes document and query embeddings through LiteLLM's OpenAI-compatible endpoint at `http://127.0.0.1:4000/v1`. LiteLLM exposes the alias `multilingual-e5-base`, routed to Ollama model `qllama/multilingual-e5-base`. Caracal automatically adds E5's `passage:` and `query:` prefixes. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
+The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes document and query embeddings through LiteLLM's OpenAI-compatible endpoint at `http://127.0.0.1:4000/v1`. LiteLLM exposes the alias `multilingual-e5-base`, routed to Ollama model `qllama/multilingual-e5-base`. The E5 prefix behavior is implemented in [caracal-rag PR #40](https://github.com/mariuszmarzec/caracal-rag/pull/40); merge that change before following this setup. Indexing prefixes document text with `passage:` and MCP search prefixes queries with `query:`. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
 
 # Execution Rules
 
