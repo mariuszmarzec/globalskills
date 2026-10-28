@@ -38,6 +38,11 @@ if ! [[ "$AGENT_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TIMEOUT" -lt 1 ]; then fail
 AGENT_IDLE_TIMEOUT="${MANUL_CLAUDE_NO_PROGRESS_TIMEOUT:-}"
 if ! [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_IDLE_TIMEOUT" -lt 1 ]; then AGENT_IDLE_TIMEOUT="$(jq -r '.automation.agentNoProgressTimeoutSeconds // 900' "$MANUL_CONFIG" 2>/dev/null)"; fi
 if ! [[ "$AGENT_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_IDLE_TIMEOUT" -lt 1 ]; then AGENT_IDLE_TIMEOUT=900; fi
+AGENT_TOOL_IDLE_TIMEOUT="${MANUL_CLAUDE_TOOL_NO_PROGRESS_TIMEOUT:-}"
+if ! [[ "$AGENT_TOOL_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TOOL_IDLE_TIMEOUT" -lt 1 ]; then
+  AGENT_TOOL_IDLE_TIMEOUT="$(jq -r '.automation.agentToolNoProgressTimeoutSeconds // 3600' "$MANUL_CONFIG" 2>/dev/null)"
+fi
+if ! [[ "$AGENT_TOOL_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_TOOL_IDLE_TIMEOUT" -lt 1 ]; then AGENT_TOOL_IDLE_TIMEOUT=3600; fi
 LOG_DIR="$MANUL_TASK_LOG_DIR"; [ -n "$LOG_DIR" ] || LOG_DIR="$(dirname "$OPT_STDOUT_FILE")"
 mkdir -p "$LOG_DIR" "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" 2>/dev/null || true
 RAW_STDOUT_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$OPT_ATTEMPT.claude-code.jsonl")"
@@ -55,7 +60,7 @@ else cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task 
 : > "$RAW_STDOUT_FILE"; : > "$RAW_STDERR_FILE"
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"; ProcessRunner_TmpStderr="$RAW_STDERR_FILE"
 printf '[%s] claude-code-adapter: task=%s attempt=%s session=%s role=%s binary=%s permission_mode=acceptEdits\n' "$(date -Is)" "$OPT_TASK_ID" "$OPT_ATTEMPT" "${OPT_SESSION_ID:-new}" "${OPT_AGENT:-automatic}" "$CLAUDE_BIN" >> "$OPT_STDERR_FILE"
-PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" -- bash -c '
+PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" -- bash -c '
   bin="$1"; set -- "$bin" --print --verbose --output-format stream-json --input-format text --permission-mode acceptEdits
   if [ -n "$MANUL_SESSION_ID" ]; then set -- "$@" --resume "$MANUL_SESSION_ID"; fi
   if [ -n "$MANUL_CLAUDE_MODEL" ]; then set -- "$@" --model "$MANUL_CLAUDE_MODEL"; fi
@@ -73,7 +78,13 @@ RUNTIME_ERROR="$(jq -sr '[.[] | select(.type == "result" and .is_error == true) 
 STATUS="FAILED"; EXIT_CODE="$PR_RC"; SUMMARY=""; CAUSE="RUNTIME_FAILURE"
 if [ "$PR_TIMED_OUT" = "true" ] || [ "$PR_RC" -eq 124 ]; then
   STATUS="TIMEOUT"; EXIT_CODE=124
-  if [ "$PR_TIMEOUT_REASON" = "idle_timeout" ]; then SUMMARY="Claude Code produced no output progress for ${AGENT_IDLE_TIMEOUT}s"; CAUSE="AGENT_NO_PROGRESS_TIMEOUT"; else SUMMARY="Claude Code execution timed out after ${AGENT_AGENT_TIMEOUT}s"; CAUSE="RUNTIME_TIMEOUT"; fi
+  if [ "$PR_TIMEOUT_REASON" = "idle_timeout" ]; then
+    SUMMARY="Claude Code produced no output progress for ${AGENT_IDLE_TIMEOUT}s"; CAUSE="AGENT_NO_PROGRESS_TIMEOUT"
+  elif [ "$PR_TIMEOUT_REASON" = "tool_idle_timeout" ]; then
+    SUMMARY="Claude Code tool call produced no completion/progress for ${AGENT_TOOL_IDLE_TIMEOUT}s"; CAUSE="AGENT_TOOL_NO_PROGRESS_TIMEOUT"
+  else
+    SUMMARY="Claude Code execution timed out after ${AGENT_TIMEOUT}s"; CAUSE="RUNTIME_TIMEOUT"
+  fi
 elif [ "$PR_RC" -eq 0 ] && grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE"; then STATUS="BLOCKED"; EXIT_CODE=0; SUMMARY="Claude Code agent needs user input"; CAUSE="TASK_NEEDS_USER"
 elif [ "$PR_RC" -eq 0 ] && grep -qE '^TASK_FAILED([[:space:]:]|$)' "$OPT_STDOUT_FILE"; then STATUS="FAILED"; EXIT_CODE=1; SUMMARY="Claude Code agent reported TASK_FAILED"; CAUSE="TASK_FAILED"
 elif [ "$PR_RC" -eq 0 ] && grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE"; then STATUS="COMPLETED"; EXIT_CODE=0; SUMMARY="$(grep -E '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" | head -1 | sed -E 's/^TASK_DONE[[:space:]]*//')"; [ -n "$SUMMARY" ] || SUMMARY="Agent completed"; CAUSE="TASK_DONE"
