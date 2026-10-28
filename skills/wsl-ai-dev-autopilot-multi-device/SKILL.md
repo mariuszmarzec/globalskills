@@ -540,7 +540,7 @@ litellm_settings:
 # ============================================================
 
 general_settings:
-  master_key: sk-12345678
+  master_key: os.environ/LITELLM_MASTER_KEY
   database_url: "postgresql://litellm:litellm@127.0.0.1:5432/litellm"
   completion_model: big-pickle
 ```
@@ -554,7 +554,7 @@ litellm --config ~/litellm/config.yaml --port 4000 &
 sleep 5
 
 # Verify models are registered
-curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
 ```
 
 *Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, multilingual-e5-base, gemma4, local-coder.*
@@ -580,6 +580,13 @@ ssh <laptop-user>@<laptop-ip> "pkill -f litellm; nohup litellm --config ~/litell
 
 # Verify remote healthcheck
 ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Authorization: Bearer sk-12345678'"
+
+# Verify the local embedding route and expected 768-dimensional output.
+curl -fsS http://localhost:4000/v1/embeddings \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"multilingual-e5-base","input":"query: Caracal RAG healthcheck"}' | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); n=len(d['data'][0]['embedding']); print(f'embedding_dim={n}'); sys.exit(0 if n == 768 else 1)"
 ```
 
 *Skip this step when configuring the Laptop directly.*
@@ -697,7 +704,6 @@ For a first-time install with no existing index, skip the destructive block. Aft
 "$HOME/.caracal/bin/caracal-rag" check
 ```
 
-```
 
 **Healthcheck:** both `check` calls succeed, indexing completes, and `~/.caracal/config/secrets.yaml` has mode `0600`. Do not start MCP or claim setup is complete if credentials, embedding-model validation, or Chroma connectivity fails; fix the reported dependency and rerun the check.
 
