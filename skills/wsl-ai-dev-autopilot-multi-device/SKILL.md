@@ -579,7 +579,7 @@ ssh <laptop-user>@<laptop-ip> "sed -i 's/qwen3-coder:14b/qwen2.5-coder:7b/g; s/q
 ssh <laptop-user>@<laptop-ip> "pkill -f litellm; nohup litellm --config ~/litellm/config.yaml --port 4000 >/tmp/litellm.log 2>&1 &"
 
 # Verify remote healthcheck
-ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Authorization: Bearer sk-12345678'"
+ssh <laptop-user>@<laptop-ip> "cd ~/litellm && set -a && source .env && set +a && curl -fsS http://localhost:4000/v1/models -H \"Authorization: Bearer \\$LITELLM_MASTER_KEY\""
 
 # Verify the local embedding route and expected 768-dimensional output.
 curl -fsS http://localhost:4000/v1/embeddings \
@@ -643,6 +643,12 @@ fi
 cd "$CARACAL_REPO"
 bash ./install.sh
 export PATH="$HOME/.caracal/bin:$PATH"
+
+# Back up the existing local config/secrets/manifest before switching embedding models.
+# This local backup does not include Chroma vector data.
+if [ -f "$HOME/.caracal/config/sources.yaml" ]; then
+  bash "$CARACAL_REPO/backup.sh" --output "$HOME/caracal-backups/pre-multilingual-e5-config-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
 ```
 
 Configure Caracal to use the local E5 alias through LiteLLM. Load the master key from the private LiteLLM `.env` file; do not put the key in shell history or process arguments:
@@ -669,10 +675,9 @@ The installer preserves an existing `sources.yaml`; updating `config/sources.exa
 
 Defaults in the template are LiteLLM at `http://127.0.0.1:4000/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`. The `multilingual-e5-base` alias is a separate LiteLLM entry routed to Ollama, not a chat-completion fallback.
 
-For an existing index built with another embedding family, do not run indexing against the old collection: BGE-M3 vectors are 1024-dimensional while multilingual E5 vectors are 768-dimensional. Back up Caracal's local config/secrets/manifest, then use the confirmation-gated block below to clear only the active Caracal collection and its manifest. The backup does not include Chroma vector data; clearing the collection is destructive.
+Use the backup created before `setup` above, then use the confirmation-gated block below to clear only the active Caracal collection and its manifest. The backup does not include Chroma vector data; clearing the collection is destructive.
 
 ```bash
-bash "$CARACAL_REPO/backup.sh" --output "$HOME/caracal-backups/pre-multilingual-e5-$(date -u +%Y%m%dT%H%M%SZ)"
 export CARACAL_HOME="$HOME/.caracal"
 "$HOME/.caracal/venv/bin/python" - <<'PY'
 from caracal_rag.config import load_active_config, resolve_home
