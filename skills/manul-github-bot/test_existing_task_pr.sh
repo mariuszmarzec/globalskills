@@ -30,11 +30,13 @@ log() { echo "$*" >>"$LOG"; }
 lc_log() { echo "$*" >>"$LIFECYCLE_LOG"; }
 
 verifier_source="$(sed -n '/^verify_existing_task_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
-if [ -z "$verifier_source" ]; then
-  echo "FAIL: verify_existing_task_pr() was not found in manul-daemon.sh" >&2
+merged_verifier_source="$(sed -n '/^verify_merged_result_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ]; then
+  echo "FAIL: existing-task PR verifier functions were not found in manul-daemon.sh" >&2
   exit 1
 fi
 eval "$verifier_source"
+eval "$merged_verifier_source"
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
@@ -76,10 +78,25 @@ DEFAULT_BRANCH="main"
 MANUL_TESTING=true
 
 export FAKE_GH_PR_LIST="$TMP/pr-list.json"
+export FAKE_RESULT_COMMENTS_JSON="$TMP/result-comments.json"
+export FAKE_PR_VIEW_JSON="$TMP/pr-view.json"
+export FAKE_ISSUE_STATE="closed"
 cat >"$TMP/bin-gh" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
   cat "$FAKE_GH_PR_LIST"
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  cat "$FAKE_PR_VIEW_JSON"
+  exit 0
+fi
+if [[ "$1" == "api" && "$2" == "repos/test/repo/issues/17/comments" ]]; then
+  cat "$FAKE_RESULT_COMMENTS_JSON"
+  exit 0
+fi
+if [[ "$1" == "api" && "$2" == "repos/test/repo/issues/17" ]]; then
+  printf '%s\n' "$FAKE_ISSUE_STATE"
   exit 0
 fi
 echo "unexpected gh command: $*" >&2
@@ -161,14 +178,59 @@ else
   exit 1
 fi
 
-# Assert that the real IMPLEMENT evaluator has a no-op path guarded by the
-# verifier, skips ordinary branch/PR verification after it qualifies, and still
-# validates the canonical PR URL before declaring success.
-evaluator_block="$(grep -F -A 42 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
+# Case 6: a prior attempt's result comment can independently prove that work
+# was delivered by a merged PR, even if the feature branch was deleted.
+MERGED_MARKER="<!-- manul-task:${CURRENT_TASK}:attempt:3 -->"
+jq -cn --arg marker "$MERGED_MARKER" --arg url "$PR_URL"   '[[{id:987,body:($marker + "\n# Task completed\nPR: " + $url)}]]' >"$FAKE_RESULT_COMMENTS_JSON"
+jq -cn --arg url "$PR_URL" --arg sha "$PR_HEAD_SHA"   '{url:$url,state:"MERGED",baseRefName:"main",headRefName:"feature/17-helloworld-java",headRefOid:$sha,mergedAt:"2026-10-28T00:00:00Z"}' >"$FAKE_PR_VIEW_JSON"
+git --git-dir="$ORIGIN" branch -D feature/17-helloworld-java >/dev/null
+if verify_merged_result_pr "test/repo" 17 "$CURRENT_TASK" 3 "main" "main"; then
+  [ "$VERIFIED_EXISTING_PR_BRANCH" = "feature/17-helloworld-java" ]
+  [ "$VERIFIED_EXISTING_PR_URL" = "$PR_URL" ]
+  [ "$VERIFIED_MERGED_RESULT_PR_BASE" = "main" ]
+  echo "PASS: accepts exact current-attempt result pointing to merged PR after remote head deletion"
+else
+  echo "FAIL: expected current attempt's merged PR result to qualify" >&2
+  exit 1
+fi
+
+# A still-open source issue must not be treated as already delivered.
+FAKE_ISSUE_STATE="open"
+if verify_merged_result_pr "test/repo" 17 "$CURRENT_TASK" 3 "main" "main"; then
+  echo "FAIL: accepted merged-result recovery for an open source issue" >&2
+  exit 1
+else
+  echo "PASS: rejects merged-result recovery while the source issue remains open"
+fi
+FAKE_ISSUE_STATE="closed"
+
+# An unmerged PR is not proof of delivered work.
+jq -cn --arg url "$PR_URL" --arg sha "$PR_HEAD_SHA"   '{url:$url,state:"OPEN",baseRefName:"main",headRefName:"feature/17-helloworld-java",headRefOid:$sha,mergedAt:null}' >"$FAKE_PR_VIEW_JSON"
+if verify_merged_result_pr "test/repo" 17 "$CURRENT_TASK" 3 "main" "main"; then
+  echo "FAIL: accepted a non-merged PR as completed delivery" >&2
+  exit 1
+else
+  echo "PASS: rejects a PR that has not been merged"
+fi
+
+# A PR targeting neither the initial nor repository-default base is invalid.
+jq -cn --arg url "$PR_URL" --arg sha "$PR_HEAD_SHA"   '{url:$url,state:"MERGED",baseRefName:"develop",headRefName:"feature/17-helloworld-java",headRefOid:$sha,mergedAt:"2026-10-28T00:00:00Z"}' >"$FAKE_PR_VIEW_JSON"
+if verify_merged_result_pr "test/repo" 17 "$CURRENT_TASK" 3 "main" "main"; then
+  echo "FAIL: accepted a merged PR against an unexpected base" >&2
+  exit 1
+else
+  echo "PASS: rejects merged PRs targeting an unexpected base"
+fi
+
+# Assert that the real IMPLEMENT evaluator allows a no-op retry only after one
+# of the verified-existing-PR paths succeeds and always validates the result URL.
+evaluator_block="$(grep -F -A 65 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-github-bot/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
+grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
 grep -q 'already_satisfied" != "true"' <<<"$evaluator_block"
+grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
-echo "PASS: IMPLEMENT evaluator verifies an existing PR and retains canonical URL validation"
+echo "PASS: IMPLEMENT evaluator recognizes independently verified merged PRs and retains result URL verification"
 
 echo "All existing-task PR regression tests passed."
