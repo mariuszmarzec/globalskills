@@ -21,9 +21,12 @@ printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 cat > "$MOCK_PROMPT_FILE"
 printf '%s\n' '{"type":"thread.started","thread_id":"codex-test-session"}'
 if [ "$MOCK_MODE" = "missing-marker" ]; then
-  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"finished without lifecycle marker"}}'
+  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"finished without lifecycle marker"}}'
+elif [ "$MOCK_MODE" = "stale-marker" ]; then
+  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE old turn"}}'
+  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Still working; no completion marker yet"}}'
 else
-  printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE codex-adapter-test"}}'
+  printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE codex-adapter-test"}}'
 fi
 printf '%s\n' '{"type":"turn.completed"}'
 MOCK
@@ -67,7 +70,7 @@ run_adapter() {
   fi
   rc=$?
   set -e
-  if [ "$mode" = "missing-marker" ]; then
+  if [ "$mode" = "missing-marker" ] || [ "$mode" = "stale-marker" ]; then
     [ "$rc" -ne 0 ] && jq -e '.status == "FAILED" and .diagnostics.cause == "MISSING_TASK_MARKER"' "$output" >/dev/null \
       && ok "$runtime rejects a clean exit without TASK_DONE" || no "$runtime missing-marker handling (rc=$rc)"
     return
@@ -103,6 +106,7 @@ bash -n "$SCRIPT_DIR/codex-adapter.sh" && ok "Codex adapter syntax is valid" || 
 bash -n "$SCRIPT_DIR/claude-code-adapter.sh" && ok "Claude Code adapter syntax is valid" || no "Claude Code adapter syntax invalid"
 run_adapter codex success
 run_adapter codex missing-marker
+run_adapter codex stale-marker
 run_adapter codex resume codex-test-session
 run_adapter claude-code success
 run_adapter claude-code missing-marker
