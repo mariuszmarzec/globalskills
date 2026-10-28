@@ -832,6 +832,14 @@ ensure_task_source_columns() {
 
 ensure_task_source_columns
 
+# Lease metadata belongs only to claimed/running tasks. Older pollers populated
+# these columns on queued rows, so normalize those rows when the poller loads.
+# Never touch running rows: their lease/ownership is managed by the daemon.
+cleared_queued_leases="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=NULL, leaseExpiresAt=NULL WHERE status='queued' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL); SELECT changes();" 2>>"$LOG" | tail -n 1)"
+if [[ "${cleared_queued_leases:-0}" =~ ^[0-9]+$ ]] && [ "$cleared_queued_leases" -gt 0 ]; then
+  log "cleared stale heartbeat/lease metadata for $cleared_queued_leases queued task(s)"
+fi
+
 # === context enrichment helpers ===
 declare -A CTX_PR_CACHE CTX_ISSUE_CACHE
 
