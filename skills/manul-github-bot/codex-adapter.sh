@@ -56,11 +56,11 @@ else cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task 
 : > "$RAW_STDOUT_FILE"; : > "$RAW_STDERR_FILE"
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"; ProcessRunner_TmpStderr="$RAW_STDERR_FILE"
 printf '[%s] codex-adapter: task=%s attempt=%s session=%s role=%s binary=%s\n' "$(date -Is)" "$OPT_TASK_ID" "$OPT_ATTEMPT" "${OPT_SESSION_ID:-new}" "${OPT_AGENT:-automatic}" "$CODEX_BIN" >> "$OPT_STDERR_FILE"
-PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_WORKDIR=$OPT_WORKSPACE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "CODEX_MODEL=$CODEX_MODEL" -- bash -c '
+PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_WORKDIR=$OPT_WORKSPACE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "CODEX_MODEL=$CODEX_MODEL" -- bash -c '
   bin="$1"
-  if [ -n "$MANUL_SESSION_ID" ]; then set -- "$bin" exec resume "$MANUL_SESSION_ID" --json --cd "$MANUL_WORKDIR" --sandbox workspace-write --ask-for-approval never
-  else set -- "$bin" exec --json --cd "$MANUL_WORKDIR" --sandbox workspace-write --ask-for-approval never; fi
+  set -- "$bin" exec --json --cd "$MANUL_WORKDIR" --sandbox workspace-write --ask-for-approval never
   if [ -n "$CODEX_MODEL" ]; then set -- "$@" --model "$CODEX_MODEL"; fi
+  if [ -n "$MANUL_SESSION_ID" ]; then set -- "$@" resume "$MANUL_SESSION_ID"; fi
   set -- "$@" -
   exec "$@" < "$MANUL_PROMPT_FILE"
 ' manul-codex "$CODEX_BIN")"
