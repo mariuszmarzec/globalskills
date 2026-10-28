@@ -93,8 +93,8 @@ AgentExecutor.execute() {
     fi
 
     # Preserve the selected runtime for tasks without an explicit canonical role.
-    # Explicit role names are worker roles and are executed by ROLE_RUNTIME,
-    # which defaults to OpenCode because it supports opencode run --agent <role>.
+    # Explicit role names are worker roles and are executed by ROLE_RUNTIME.
+    # OpenCode uses native --agent routing; Codex/Claude inject canonical role text.
     local execution_runtime="$AGENT_RUNTIME"
     if [ -n "$agent" ] && [ "$agent" != "main" ]; then
         local allowed_agents_json
