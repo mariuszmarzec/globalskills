@@ -73,7 +73,7 @@ PR_HEADER="$(printf '%s\n' "$PR_RESULT" | head -1)"
 PR_RC="$(printf '%s' "$PR_HEADER" | cut -d'|' -f1)"; PR_DURATION="$(printf '%s' "$PR_HEADER" | cut -d'|' -f2)"
 PR_TIMED_OUT="$(printf '%s' "$PR_HEADER" | cut -d'|' -f4)"; PR_TIMEOUT_REASON="$(printf '%s' "$PR_HEADER" | cut -d'|' -f5)"
 [ -n "$PR_RC" ] || PR_RC=127; [ -n "$PR_DURATION" ] || PR_DURATION=0; [ -n "$PR_TIMED_OUT" ] || PR_TIMED_OUT=false
-FINAL_TEXT="$(jq -sr '[.[] | select(.type == "item.completed" and .item.type == "agent_message") | (.item.text // empty)] | join("\n")' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
+FINAL_TEXT="$(jq -sr '[.[] | select(.type == "item.completed" and .item.type == "agent_message") | (.item.text // empty)] | if length > 0 then .[-1] else "" end' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
 SESSION_ID="$(jq -sr '[.[] | select(.type == "thread.started") | (.thread_id // empty) | select(length > 0)] | last // ""' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
 RUNTIME_ERROR="$(jq -sr '[.[] | select(.type == "turn.failed") | (.error.message // .error.code // "Codex turn failed") | tostring] | last // ""' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
 [ -n "$SESSION_ID" ] || SESSION_ID="$OPT_SESSION_ID"
