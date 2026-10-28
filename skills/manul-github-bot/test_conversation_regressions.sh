@@ -108,6 +108,9 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
+  # Simulate a queued row created by an older poller that incorrectly wrote a lease.
+  sqlite3 "$poll_db" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('legacy:queued-lease-metadata','test-org/test-repo',99,'https://github.com/test-org/test-repo/issues/99','legacy stale task','queued','2026-09-16T00:00:00Z','2026-09-16T00:00:00Z','2026-09-16T00:15:00Z');"
+
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
@@ -180,6 +183,14 @@ MOCK_EOF
     echo "$i" > "$test_dir/poll_number"
     MANUL_DIR="$manul_dir" TEST_DIR="$test_dir" PATH="$mock_gh_dir:$PATH" bash "$SCRIPT_DIR/poll.sh" test-org/test-repo >/dev/null 2>&1
   done
+
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  if [ "${queued_lease_count:-0}" -ne 0 ]; then
+    echo "ERROR: queued issue tasks carry lease metadata (${queued_lease_count} row(s))"
+    rm -rf "$test_dir"
+    return 1
+  fi
 
   local conv_id
   conv_id="$(sqlite3 "$poll_db" "SELECT DISTINCT conversationId FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=1;" 2>/dev/null)"
@@ -336,6 +347,14 @@ MOCK_EOF
   msg_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM conversation_messages WHERE repo='test-org/test-repo' AND issueNumber=50;" 2>/dev/null)"
   if [ "$msg_count" -ne 4 ]; then
     echo "ERROR: Expected 4 conversation_messages, found $msg_count"
+    rm -rf "$test_dir"
+    return 1
+  fi
+
+  local queued_lease_count
+  queued_lease_count="$(sqlite3 "$poll_db" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (heartbeatAt IS NOT NULL OR leaseExpiresAt IS NOT NULL);" 2>/dev/null)"
+  if [ "${queued_lease_count:-0}" -ne 0 ]; then
+    echo "ERROR: queued review-thread tasks carry lease metadata (${queued_lease_count} row(s))"
     rm -rf "$test_dir"
     return 1
   fi

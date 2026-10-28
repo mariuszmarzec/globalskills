@@ -117,6 +117,18 @@ actual_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE comm
 actual_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "VERIFY action persists through source queueing" "VERIFY" "$actual_action"
 assert_eq "verify prompt persists without command prefix" "Diagnose only and report findings without changing code" "$actual_prompt"
+actual_heartbeat="$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"
+assert_eq "queued source task starts without lease" "" "$actual_lease"
+
+# Guard every poller enqueue path, including the synthetic CI-fix path that is
+# not practical to exercise through the GitHub integration fixture above.
+queued_insert_lines="$(grep -F 'INSERT OR IGNORE INTO processed_comments(' "$SCRIPT_DIR/poll.sh" | grep -F "'queued'" || true)"
+queued_insert_count="$(printf '%s\n' "$queued_insert_lines" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+queued_insert_null_count="$(printf '%s\n' "$queued_insert_lines" | grep -Ec "'queued','[^']*',NULL,NULL," || true)"
+assert_eq "all five poller enqueue paths are checked" "5" "$queued_insert_count"
+assert_eq "every queued enqueue leaves heartbeat and lease NULL" "$queued_insert_count" "$queued_insert_null_count"
 
 echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
