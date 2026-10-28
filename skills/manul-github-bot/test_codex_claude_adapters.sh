@@ -121,6 +121,39 @@ for runtime in codex claude-code; do
     && ok "AgentExecutor dispatches tasks to $runtime" || no "AgentExecutor failed to dispatch $runtime (rc=$route_rc)"
 done
 
+# Explicit canonical roles route through ROLE_RUNTIME and receive canonical role text.
+mkdir -p "$TMP/rolehome/.globalskills/agents"
+cat > "$TMP/rolehome/.globalskills/agents/coder.md" <<'ROLE'
+---
+name: coder
+description: adapter test role
+---
+CODER_ROLE_INSTRUCTIONS_FOR_TEST
+ROLE
+for runtime in codex claude-code; do
+  role_runtime="$TMP/role-route-$runtime"
+  mkdir -p "$role_runtime"
+  ctx="$TMP/role-route-$runtime.context.json"
+  result="$TMP/role-route-$runtime.result.json"
+  route_stdout="$TMP/role-route-$runtime.stdout"
+  route_stderr="$TMP/role-route-$runtime.stderr"
+  jq -n --arg id "role-route-$runtime" --arg prompt "$TMP/prompt" --arg workspace "$TMP/workspace" --arg stdout "$route_stdout" --arg stderr "$route_stderr" \
+    '{taskId:$id,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,agent:"coder",attempt:1,timeout:10,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' > "$ctx"
+  set +e
+  if [ "$runtime" = "codex" ]; then
+    HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=codex \
+      bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
+  else
+    HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=claude-code \
+      bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
+  fi
+  role_rc=$?
+  set -e
+  [ "$role_rc" -eq 0 ] && jq -e '.status == "COMPLETED" and .exit_code == 0' "$result" >/dev/null \
+    && grep -Fq "CODER_ROLE_INSTRUCTIONS_FOR_TEST" "$TMP/role-route-$runtime.prompt" \
+    && ok "AgentExecutor routes canonical coder role through $runtime" || no "Canonical role routing failed for $runtime (rc=$role_rc)"
+done
+
 # Exercise runtime validation via the shared production path resolver.
 printf '%s\n' '{"automation":{"agentRuntime":"codex","roleRuntime":"claude-code"}}' > "$TMP/runtime/config.json"
 selection="$(MANUL_DIR="$TMP/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
