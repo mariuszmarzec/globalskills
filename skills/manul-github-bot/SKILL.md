@@ -41,7 +41,8 @@ MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 Path resolution and runtime validation are centralized in
 `manul-paths.sh`. `AGENT_RUNTIME` selects the automatic entry-point runtime
 (default: `openclaw`); `ROLE_RUNTIME` selects the worker runtime for explicitly
-named canonical roles (default: `opencode`). The config keys are
+named canonical roles (default: `opencode`). Both accept `openclaw`,
+`opencode`, `codex`, and `claude-code`. The config keys are
 `automation.agentRuntime` and `automation.roleRuntime`. There is no
 `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
@@ -165,8 +166,8 @@ The daemon never invokes an agent runtime directly. It calls
 `AgentExecutionController.execute`, which routes through `AgentExecutor`:
 
 ```
-No explicit role -> AGENT_RUNTIME -> OpenClawAdapter (default) or OpenCodeAdapter
-Explicit role    -> ROLE_RUNTIME  -> OpenCodeAdapter (default)
+No explicit role -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
+Explicit role    -> ROLE_RUNTIME  -> OpenCode / Codex / Claude Code (OpenClaw fails closed)
 ```
 
 This means a plain `/manul run <task>` uses OpenClaw by default, while
@@ -179,6 +180,8 @@ Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
 the queue and passes the flag only to the OpenCode adapter; it overrides the
 normal runtime and role-runtime settings. OpenClaw does not support this mode.
+
+Codex and Claude Code are non-interactive CLI backends. Codex runs with the `workspace-write` sandbox and explicit non-interactive approval policy. Claude Code uses `--print --output-format stream-json --permission-mode acceptEdits`; it never enables `--dangerously-skip-permissions` or `bypassPermissions`. Shell/MCP actions must be permitted by the operator's existing Claude Code settings.
 
 Adapters are independent backends behind a single `ProcessRunner.run()`
 process boundary. They must not spawn subprocesses directly and must not
