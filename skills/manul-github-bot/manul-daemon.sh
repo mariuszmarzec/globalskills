@@ -4050,7 +4050,7 @@ PROMPT_APPEND
     git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
   ```
 - Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Never overwrite/reuse a stale branch from an earlier attempt; use a unique task/attempt suffix.
-- Follow repository-local branching conventions or any branching instructions explicitly supplied in task context. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
+- For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
 - If the task explicitly requires another branch as the base, including another feature branch, update that exact remote base before creating your branch and reflect that base in the PR.
 - Never commit or push repository changes directly to the prepared/base/default branch
 PROMPT_APPEND
