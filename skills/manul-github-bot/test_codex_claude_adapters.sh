@@ -97,6 +97,30 @@ run_adapter codex missing-marker
 run_adapter claude-code success
 run_adapter claude-code missing-marker
 
+# Route through the production AgentExecutor, not only direct adapter calls.
+for runtime in codex claude-code; do
+  route_runtime="$TMP/route-$runtime"
+  mkdir -p "$route_runtime"
+  ctx="$TMP/route-$runtime.context.json"
+  route_result="$TMP/route-$runtime.result.json"
+  route_stdout="$TMP/route-$runtime.stdout"
+  route_stderr="$TMP/route-$runtime.stderr"
+  jq -n --arg id "route-$runtime" --arg prompt "$TMP/prompt" --arg workspace "$TMP/workspace" --arg stdout "$route_stdout" --arg stderr "$route_stderr" \
+    '{taskId:$id,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,agent:"main",attempt:1,timeout:10,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' > "$ctx"
+  set +e
+  if [ "$runtime" = "codex" ]; then
+    CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/route-codex.args" MOCK_PROMPT_FILE="$TMP/route-codex.prompt" MANUL_DIR="$route_runtime" AGENT_RUNTIME=codex \
+      bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$route_result"
+  else
+    CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/route-claude-code.args" MOCK_PROMPT_FILE="$TMP/route-claude-code.prompt" MANUL_DIR="$route_runtime" AGENT_RUNTIME=claude-code \
+      bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$route_result"
+  fi
+  route_rc=$?
+  set -e
+  [ "$route_rc" -eq 0 ] && jq -e '.status == "COMPLETED" and .exit_code == 0' "$route_result" >/dev/null \
+    && ok "AgentExecutor dispatches tasks to $runtime" || no "AgentExecutor failed to dispatch $runtime (rc=$route_rc)"
+done
+
 # Exercise runtime validation via the shared production path resolver.
 printf '%s\n' '{"automation":{"agentRuntime":"codex","roleRuntime":"claude-code"}}' > "$TMP/runtime/config.json"
 selection="$(MANUL_DIR="$TMP/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
