@@ -108,6 +108,9 @@ CFGEOF
   sqlite3 "$poll_db" "CREATE TABLE conversation_links(id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL, repo TEXT NOT NULL, issueNumber INTEGER, prNumber INTEGER, commentId TEXT, taskCommentId TEXT, linkType TEXT NOT NULL, createdAt TEXT NOT NULL);"
   sqlite3 "$poll_db" "CREATE TABLE conversation_messages(messageId TEXT PRIMARY KEY, conversationId TEXT NOT NULL, commentId TEXT, repo TEXT, issueNumber INTEGER, author TEXT, body TEXT, commentUrl TEXT, createdAt TEXT, messageType TEXT);"
 
+  # Simulate a queued row created by an older poller that incorrectly wrote a lease.
+  sqlite3 "$poll_db" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt,heartbeatAt,leaseExpiresAt) VALUES('legacy:queued-lease-metadata','test-org/test-repo',99,'https://github.com/test-org/test-repo/issues/99','legacy stale task','queued','2026-09-16T00:00:00Z','2026-09-16T00:00:00Z','2026-09-16T00:15:00Z');"
+
   cp "$SCRIPT_DIR/manul-pr-review.sh" "$manul_dir/manul-pr-review.sh"
   cp "$SCRIPT_DIR/manul-conversation.sh" "$manul_dir/manul-conversation.sh"
   cp "$SCRIPT_DIR/manul-paths.sh" "$manul_dir/manul-paths.sh"
