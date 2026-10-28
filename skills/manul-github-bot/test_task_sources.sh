@@ -122,5 +122,13 @@ actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed
 assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"
 assert_eq "queued source task starts without lease" "" "$actual_lease"
 
+# Guard every poller enqueue path, including the synthetic CI-fix path that is
+# not practical to exercise through the GitHub integration fixture above.
+queued_insert_lines="$(grep -E 'INSERT OR IGNORE INTO processed_comments\\(' "$SCRIPT_DIR/poll.sh" | grep -F "'queued'" || true)"
+queued_insert_count="$(printf '%s\\n' "$queued_insert_lines" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+queued_insert_null_count="$(printf '%s\\n' "$queued_insert_lines" | grep -Ec "'queued','[^']*',NULL,NULL," || true)"
+assert_eq "all five poller enqueue paths are checked" "5" "$queued_insert_count"
+assert_eq "every queued enqueue leaves heartbeat and lease NULL" "$queued_insert_count" "$queued_insert_null_count"
+
 echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
