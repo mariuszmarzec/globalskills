@@ -88,7 +88,7 @@ AgentExecutor.execute() {
     # "main" is a legacy runtime entry-point label, not a canonical OpenCode role.
     # When used with OpenCode, translate it to automatic selection so the default
     # primary agent configured by OpenCode (normally orchestrator) is selected.
-    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" = "opencode" ]; then
+    if [ "$agent" = "main" ] && [ "$AGENT_RUNTIME" != "openclaw" ]; then
         agent=""
     fi
 
@@ -139,6 +139,12 @@ AgentExecutor.execute() {
             ;;
         opencode)
             adapter_script="$MANUL_SCRIPT_DIR/opencode-adapter.sh"
+            ;;
+        codex)
+            adapter_script="$MANUL_SCRIPT_DIR/codex-adapter.sh"
+            ;;
+        claude-code)
+            adapter_script="$MANUL_SCRIPT_DIR/claude-code-adapter.sh"
             ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unknown execution runtime: %s","session_id":"","duration_s":0}\n' "$task_id" "$execution_runtime"
