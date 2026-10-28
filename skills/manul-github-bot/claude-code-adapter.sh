@@ -55,7 +55,7 @@ else cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task 
 : > "$RAW_STDOUT_FILE"; : > "$RAW_STDERR_FILE"
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"; ProcessRunner_TmpStderr="$RAW_STDERR_FILE"
 printf '[%s] claude-code-adapter: task=%s attempt=%s session=%s role=%s binary=%s permission_mode=acceptEdits\n' "$(date -Is)" "$OPT_TASK_ID" "$OPT_ATTEMPT" "${OPT_SESSION_ID:-new}" "${OPT_AGENT:-automatic}" "$CLAUDE_BIN" >> "$OPT_STDERR_FILE"
-PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" -- bash -c '
+PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" -- bash -c '
   bin="$1"; set -- "$bin" --print --verbose --output-format stream-json --input-format text --permission-mode acceptEdits
   if [ -n "$MANUL_SESSION_ID" ]; then set -- "$@" --resume "$MANUL_SESSION_ID"; fi
   if [ -n "$MANUL_CLAUDE_MODEL" ]; then set -- "$@" --model "$MANUL_CLAUDE_MODEL"; fi
