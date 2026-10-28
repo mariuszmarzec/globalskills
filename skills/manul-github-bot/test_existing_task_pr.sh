@@ -224,7 +224,7 @@ fi
 
 # Assert that the real IMPLEMENT evaluator allows a no-op retry only after one
 # of the verified-existing-PR paths succeeds and always validates the result URL.
-evaluator_block="$(grep -F -A 65 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-github-bot/manul-daemon.sh")"
+evaluator_block="$(grep -F -A 65 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
