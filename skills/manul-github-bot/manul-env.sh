@@ -75,8 +75,10 @@ EOF
     OPENCODE_CONFIG \
     CODEX_HOME \
     CODEX_BIN \
+    CODEX_MODEL \
     CLAUDE_CONFIG_DIR \
     CLAUDE_BIN \
+    CLAUDE_MODEL \
     MANUL_JIRA_USER \
     MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
