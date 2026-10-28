@@ -1096,7 +1096,7 @@ scan_failing_ci() {
            local base_id="$comment_id"
            now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
            lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
-           sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at','$now','$lease_expires','$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id');" 2>>"$LOG"
+           sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at',NULL,NULL,'$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id');" 2>>"$LOG"
            if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
             NEW=$((NEW + 1))
             log "queued CI fix task for $repo#$pr_num run $run_id (check: $check_name)"
@@ -1154,7 +1154,7 @@ queue_normalized_source_task() {
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) VALUES('$(sql_escape "$task_id")','$(sql_escape "$repo")',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")','$(sql_escape "$now")','$(sql_escape "$lease")',NULL,'$(sql_escape "$task_id")','$(sql_escape "$source_type")','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
+  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) VALUES('$(sql_escape "$task_id")','$(sql_escape "$repo")',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,NULL,'$(sql_escape "$task_id")','$(sql_escape "$source_type")','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
   fi
@@ -1274,7 +1274,7 @@ process_repo_body() {
       action="CONTINUE"
     fi
 
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created',NULL,NULL,'$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
@@ -1360,7 +1360,7 @@ process_repo_body() {
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     lease_expires="$(date -u -d "now + $LEASE_TIMEOUT seconds" +%Y-%m-%dT%H:%M:%SZ)"
     base_id="$id"
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created',NULL,NULL,'$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
@@ -1470,7 +1470,7 @@ process_repo_body() {
       action="CONTINUE"
     fi
 
-    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created','$now','$lease_expires','$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
+    ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$pr_num,'$url','$author','$esc_a','$esc','$action',$pr_num,'queued','$created',NULL,NULL,'$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
