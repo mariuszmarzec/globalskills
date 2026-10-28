@@ -38,7 +38,7 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-test-sessi
 if [ "$MOCK_MODE" = "missing-marker" ]; then
   printf '%s\n' '{"type":"result","subtype":"success","result":"finished without lifecycle marker","session_id":"claude-test-session","is_error":false}'
 else
-  printf '%s\n' '{"type":"result","subtype":"success","result":"TASK_DONE claude-adapter-test","session_id":"claude-test-session","is_error":false}'
+  printf '%s\n' '{"type":"result","subtype":"success","result":"TASK_DONE claude-code-adapter-test","session_id":"claude-test-session","is_error":false}'
 fi
 MOCK
 chmod +x "$TMP/bin/claude"
