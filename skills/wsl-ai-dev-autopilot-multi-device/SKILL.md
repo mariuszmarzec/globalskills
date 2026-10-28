@@ -556,6 +556,7 @@ sleep 5
 # Verify models are registered
 curl -fsS http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
 
+
 # Verify the local embedding route and expected 768-dimensional output.
 curl -fsS http://localhost:4000/v1/embeddings \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
