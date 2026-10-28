@@ -2567,10 +2567,6 @@ revalidate_issue_comment() {
   local returned_id
   returned_id="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
   if [ -n "$returned_id" ]; then
-    # PR conversation comments are stored through the Issues Comments API too.
-    # Their existence alone is insufficient: a merged/closed PR or deleted head
-    # branch cannot be checked out, so terminalize that source before workspace
-    # preparation. Ordinary issue comments retain the existing behavior.
     if [[ "$source_url" =~ /pull/([0-9]+)([/#?]|$) ]]; then
       local source_pr_num="${BASH_REMATCH[1]}"
       revalidate_pr_target "$comment_id" "$repo" "$source_pr_num" "issue_comment"
@@ -2626,11 +2622,6 @@ revalidate_issue_state() {
   return 1
 }
 
-# Validate a PR-backed task before checkout. A comment/CI event may remain in
-# SQLite after its PR has been merged or its head branch deleted. Returns:
-#   0 = open PR and exact head branch still exists
-#   1 = terminal source (closed/missing PR or missing head branch)
-#   2 = transient/ambiguous API failure; use the bounded infrastructure retry.
 revalidate_pr_target() {
   local comment_id="$1" repo="$2" pr_num="$3" source_kind="${4:-pr_state}"
   [[ "$pr_num" =~ ^[0-9]+$ ]] || return 2
@@ -2687,9 +2678,6 @@ revalidate_pr_target() {
     return 2
   fi
 
-  # Encode the entire branch name as one URL path parameter; feature branches
-  # commonly contain slashes. Do not treat auth/rate-limit/network errors as a
-  # missing branch: only a definitive 404 is terminal.
   local encoded_head_ref branch_resp branch_rc
   encoded_head_ref="$(printf '%s' "$head_ref" | jq -sRr '@uri' 2>/dev/null)" || return 2
   branch_resp="$(timeout "$GH_API_TIMEOUT" gh api "repos/$head_repo/branches/$encoded_head_ref" 2>/dev/null)" && branch_rc=0 || branch_rc=$?
