@@ -102,12 +102,12 @@ fi
 ROLE_RUNTIME="${ROLE_RUNTIME:-${MANUL_ROLE_RUNTIME:-${_CONFIG_ROLE_RUNTIME:-opencode}}}"
 
 case "$ROLE_RUNTIME" in
-    openclaw|opencode) ;;
+    openclaw|opencode|codex|claude-code) ;;
     "")
         ROLE_RUNTIME="opencode"
         ;;
     *)
-        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw' or 'opencode'." >&2
+        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw', 'opencode', 'codex', or 'claude-code'." >&2
         exit 1
         ;;
 esac
