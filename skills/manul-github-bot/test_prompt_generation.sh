@@ -300,9 +300,22 @@ PROMPT_APPEND
 - The daemon prepares an up-to-date base but does NOT create the task branch
 - First determine whether this is informational or requires repository changes
 - For informational tasks: do NOT modify the repository and do NOT create a branch
-- For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories
-- Create the branch yourself before committing or pushing changes
-- Never commit or push changes directly to the base/default branch
+- For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
+- For repository changes, **branch preparation is a mandatory precondition to every edit**: do not edit, patch, generate, format, or otherwise modify repository files until the branch preflight below has succeeded.
+- Preserve existing changes. Never use `git reset --hard`, `git clean`, or discard unknown work. If the checkout is dirty or the branch cannot be established safely, stop before editing and report the exact blocker.
+- Create the branch yourself before committing or pushing changes, and before the first repository edit.
+- Use `__INITIAL_BASE_BRANCH__` as the base unless the task explicitly requires another base. Example (replace `<short-description>` with a lowercase kebab-case summary):
+  ```bash
+  WORKDIR="__WORKDIR__"
+  BASE_BRANCH="__INITIAL_BASE_BRANCH__"
+  TASK_SUFFIX="$(printf '%s' '__COMMENT_ID__-attempt-__CURRENT_ATTEMPT__' | tr -cs '[:alnum:]-' '-')"
+  TASK_BRANCH="feature/__ISSUE_NUM__-manul-<short-description>-$TASK_SUFFIX"
+  git -C "$WORKDIR" fetch origin "$BASE_BRANCH" &&
+    git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
+  ```
+- Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Do not overwrite or reuse a stale branch from an earlier attempt; use a unique task/attempt suffix.
+- If the task explicitly requires another branch as the base, including another feature branch, fetch that exact remote base before creating your branch and use it as the PR base.
+- Never commit or push repository changes directly to the prepared/base/default branch
 PROMPT_APPEND
     fi
 
@@ -629,12 +642,27 @@ if assert_file_not_contains "global branching skill path is not exposed" "$WORK/
 else
     :
 fi
-if assert_file_contains "agent told branch creation is its responsibility" "$WORK/prompt.md" "Create the branch yourself before committing or pushing changes"; then
+if assert_file_contains "agent told branch creation is its responsibility" "$WORK/prompt.md" "Create the branch yourself before committing or pushing changes, and before the first repository edit."; then
     :
 else
     :
 fi
-if assert_file_contains "agent told not to commit base" "$WORK/prompt.md" "Never commit or push changes directly to the base/default branch"; then
+if assert_file_contains "branch preflight must happen before every edit" "$WORK/prompt.md" "branch preparation is a mandatory precondition to every edit"; then
+    :
+else
+    :
+fi
+if assert_file_contains "task branch starts from explicit prepared base" "$WORK/prompt.md" 'git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"'; then
+    :
+else
+    :
+fi
+if assert_file_contains "branch creation failure stops edits" "$WORK/prompt.md" "If fetching or branch creation fails, do not continue with edits or commits"; then
+    :
+else
+    :
+fi
+if assert_file_contains "agent told not to commit base" "$WORK/prompt.md" "Never commit or push repository changes directly to the prepared/base/default branch"; then
     :
 else
     :
