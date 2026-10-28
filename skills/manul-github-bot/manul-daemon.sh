@@ -2237,6 +2237,89 @@ verify_existing_task_pr() {
   return 0
 }
 
+# Verify a previously reported, now-merged task PR when a retry ends on a base
+# branch. Only accept this recovery path when the source issue is closed and
+# the current attempt's own result comment links to a real merged PR in the
+# initial or repository-default base. A deleted remote head branch is expected
+# after merge and is not required as evidence.
+VERIFIED_MERGED_RESULT_PR_BASE=""
+verify_merged_result_pr() {
+  local repo="$1" issue_num="$2" comment_id="$3" attempt="$4"
+  local initial_base="$5" default_branch="$6"
+  local issue_state comments_json marker matching_comments match_count result_body
+  local candidate_urls candidate_url pr_number pr_json verified_pr
+
+  VERIFIED_EXISTING_PR_BRANCH=""
+  VERIFIED_EXISTING_PR_URL=""
+  VERIFIED_MERGED_RESULT_PR_BASE=""
+
+  [[ "$issue_num" =~ ^[0-9]+$ ]] || return 1
+  [ -n "$comment_id" ] && [[ "$attempt" =~ ^[0-9]+$ ]] || return 1
+
+  issue_state="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$issue_num" --jq '.state' 2>>"$LOG")" || {
+    log "WARN: verify_merged_result_pr: source issue state query failed for $repo#$issue_num"
+    return 1
+  }
+  if [ "$issue_state" != "closed" ]; then
+    log "verify_merged_result_pr: source issue $repo#$issue_num is not closed; merged-result recovery declined"
+    return 1
+  fi
+
+  comments_json="$(timeout "$GH_API_TIMEOUT" gh api "repos/$repo/issues/$issue_num/comments" --paginate --slurp 2>>"$LOG")" || {
+    log "WARN: verify_merged_result_pr: result-comment query failed for $repo#$issue_num"
+    return 1
+  }
+
+  marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
+  matching_comments="$(printf '%s' "$comments_json" | jq -c --arg marker "$marker" '[.[][] | select(.body != null and (.body | contains($marker)))]' 2>/dev/null || echo '[]')"
+  match_count="$(printf '%s' "$matching_comments" | jq -r 'length' 2>/dev/null || echo 0)"
+  if [ "$match_count" != "1" ]; then
+    log "verify_merged_result_pr: expected exactly one result comment for task=$comment_id attempt=$attempt, found ${match_count:-0}"
+    return 1
+  fi
+
+  result_body="$(printf '%s' "$matching_comments" | jq -r '.[0].body // ""' 2>/dev/null || true)"
+  candidate_urls="$(printf '%s' "$result_body" | grep -oE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+' | sort -u || true)"
+  [ -n "$candidate_urls" ] || {
+    log "verify_merged_result_pr: current result comment has no canonical PR URL for task=$comment_id attempt=$attempt"
+    return 1
+  }
+
+  while IFS= read -r candidate_url; do
+    [ -n "$candidate_url" ] || continue
+    case "$candidate_url" in
+      "https://github.com/$repo/pull/"*) ;;
+      *) continue ;;
+    esac
+    pr_number="${candidate_url##*/}"
+    [[ "$pr_number" =~ ^[0-9]+$ ]] || continue
+
+    pr_json="$(timeout "$GH_API_TIMEOUT" gh pr view "$pr_number" --repo "$repo" --json url,state,baseRefName,headRefName,headRefOid,mergedAt 2>>"$LOG")" || {
+      log "WARN: verify_merged_result_pr: could not verify PR #$pr_number for task=$comment_id"
+      continue
+    }
+    verified_pr="$(printf '%s' "$pr_json" | jq -c       --arg url "$candidate_url"       --arg initial "$initial_base"       --arg default "$default_branch" '
+        select(.url == $url and .state == "MERGED"
+          and ((.baseRefName // "") == $initial or (.baseRefName // "") == $default)
+          and (.headRefName // "") != ""
+          and (.headRefName != .baseRefName)
+          and (.headRefOid // "") != ""
+          and (.mergedAt // "") != "")
+      ' 2>/dev/null || true)"
+    [ -n "$verified_pr" ] || continue
+
+    VERIFIED_EXISTING_PR_BRANCH="$(printf '%s' "$verified_pr" | jq -r '.headRefName')"
+    VERIFIED_EXISTING_PR_URL="$(printf '%s' "$verified_pr" | jq -r '.url')"
+    VERIFIED_MERGED_RESULT_PR_BASE="$(printf '%s' "$verified_pr" | jq -r '.baseRefName')"
+    log "verify_merged_result_pr: verified merged PR $VERIFIED_EXISTING_PR_URL for closed issue $repo#$issue_num task=$comment_id base=$VERIFIED_MERGED_RESULT_PR_BASE"
+    lc_log "MERGED_RESULT_PR_VERIFIED" "task=$comment_id repo=$repo issue=$issue_num url=$VERIFIED_EXISTING_PR_URL base=$VERIFIED_MERGED_RESULT_PR_BASE"
+    return 0
+  done <<< "$candidate_urls"
+
+  log "verify_merged_result_pr: no merged PR in current task result matched repository and allowed base for $repo#$issue_num"
+  return 1
+}
+
 verify_required_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
   local auto_create_pr
@@ -2893,6 +2976,8 @@ evaluate_task_completion() {
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
   local DELIVERY_MODE="${19:-implementation}"
+  # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
+  local VERIFIED_MERGED_RESULT_PR_BASE=""
 
   COMPLETION_SUCCESS="false"
   FAIL_REASON=""
@@ -3123,11 +3208,20 @@ else
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
+        elif verify_merged_result_pr "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$current_attempt" "$INITIAL_BASE_BRANCH" "$DEFAULT_BRANCH"; then
+          # A prior attempt may have completed and merged its PR, then a retry
+          # can start from the updated base and produce no new repository diff.
+          # Accept this only when this attempt's exact result marker points to a
+          # real merged PR and the source issue is closed.
+          already_satisfied="true"
+          current_branch="$VERIFIED_EXISTING_PR_BRANCH"
+          log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
+          lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
         else
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing task PR"
-          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing task PR was verified"
+          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR"
+          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing or merged task PR was verified"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
         fi
       fi
@@ -3143,7 +3237,9 @@ else
       fi
       if [ "$SUCCESS" = "true" ]; then
         local verified_base
-        if [ "$already_satisfied" = "true" ]; then
+        if [ -n "$VERIFIED_MERGED_RESULT_PR_BASE" ]; then
+          verified_base="$VERIFIED_MERGED_RESULT_PR_BASE"
+        elif [ "$already_satisfied" = "true" ]; then
           verified_base="$INITIAL_BASE_BRANCH"
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
