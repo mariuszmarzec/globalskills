@@ -233,13 +233,26 @@ ProcessRunner.run() {
                         fi
                         idle_tool_status=""
                         if [ -n "$idle_jsonl_file" ] && [ -s "$idle_jsonl_file" ]; then
-                            # OpenCode can spend a long time inside one tool call.
-                            # Its JSONL tool_use event reports that the call is still
-                            # running even when no additional output is emitted. Do
-                            # not classify that bounded, explicit activity as a dead
-                            # agent; the total execution timeout remains in force.
+                            # OpenCode, Codex CLI, and Claude Code can spend a long time inside one tool call.
+                            # Their JSONL event streams identify active tool calls even
+                            # when no additional output is emitted. Do not classify that
+                            # bounded, explicit activity as a dead agent; the total
+                            # execution timeout remains in force.
                             idle_tool_status="$(tail -n 100 "$idle_jsonl_file" 2>/dev/null |
-                                jq -Rr 'try fromjson catch empty | select(.type == "tool_use") | (.part.state.status // .state.status // empty)' 2>/dev/null |
+                                jq -Rr '
+                                    try fromjson catch empty |
+                                    if .type == "tool_use" then
+                                        (.part.state.status // .state.status // empty)
+                                    elif .type == "item.started" and (.item.type | IN("command_execution", "mcp_tool_call", "computer_call", "web_search")) then
+                                        "running"
+                                    elif .type == "item.completed" and (.item.type | IN("command_execution", "mcp_tool_call", "computer_call", "web_search")) then
+                                        "completed"
+                                    elif .type == "assistant" and any(.message.content[]?; .type == "tool_use") then
+                                        "running"
+                                    elif .type == "user" and any(.message.content[]?; .type == "tool_result") then
+                                        "completed"
+                                    else empty end
+                                ' 2>/dev/null |
                                 awk 'NF { value=$0 } END { print value }')"
                         fi
                         case "$idle_tool_status" in
