@@ -144,6 +144,13 @@ If the task is informational, you MUST post a thoughtful answer as a GitHub comm
 6. Do NOT modify `manul.db`.
 7. Do NOT manage Manul task state.
 
+## Completion-marker protocol (mandatory)
+
+The completion marker is a protocol message, not progress narration.
+- Do not end a turn after describing the next action or saying you will make a change. Execute the next concrete step in the current turn, or emit the appropriate failure/user-input marker.
+- Only after all requested work, validation, delivery checks, and the single result comment are complete, make the final assistant output exactly one line: `TASK_DONE` or `TASK_DONE <one-sentence summary>`.
+- Do not emit `TASK_DONE` early, and do not append prose after the completion-marker line.
+
 ## PR Description Freshness (MANDATORY DELIVERY CONTRACT)
 
 A pushed commit is not fully delivered until the GitHub PR description reflects the complete current PR and has been read back from GitHub.
@@ -377,6 +384,8 @@ if assert_file_contains "sibling workspace access is explicitly forbidden" "$WOR
 if assert_file_contains "missing context fallback uses authorized sources" "$WORK/prompt.md" "the assigned workspace, related repositories explicitly checked out INSIDE that workspace"; then :; else :; fi
 if assert_file_contains "missing context must be requested from user" "$WORK/prompt.md" "ask the user for the specific missing input using the structured TASK_NEEDS_USER flow"; then :; else :; fi
 if assert_file_contains "completion forbidden with user decision" "$WORK/prompt.md" 'Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same run'; then :; else :; fi
+if assert_file_contains "generated prompt requires an explicit final completion marker" "$WORK/prompt.md" 'make the final assistant output exactly one line: `TASK_DONE` or `TASK_DONE <one-sentence summary>`'; then :; else :; fi
+if assert_file_contains "production prompt has mandatory completion-marker protocol" "$SCRIPT_DIR/manul-daemon.sh" "Completion-marker protocol (mandatory)"; then :; else :; fi
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
