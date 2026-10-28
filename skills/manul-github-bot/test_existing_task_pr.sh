@@ -230,6 +230,7 @@ grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
 grep -q 'already_satisfied" != "true"' <<<"$evaluator_block"
 grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
+grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
 grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
 echo "PASS: IMPLEMENT evaluator recognizes independently verified merged PRs and retains result URL verification"
 
