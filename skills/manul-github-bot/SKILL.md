@@ -171,10 +171,12 @@ Explicit role    -> ROLE_RUNTIME  -> OpenCode / Codex / Claude Code (OpenClaw fa
 ```
 
 This means a plain `/manul run <task>` uses OpenClaw by default, while
-`/manul run --agent coder <task>` runs the canonical `coder` role through
-OpenCode's native `--agent` option. This is direct CLI routing, not an ACP
-session spawned by OpenClaw. Setting `automation.roleRuntime` to `openclaw`
-fails closed for explicit roles until a native OpenClaw role adapter exists.
+`/manul run --agent coder <task>` routes the canonical `coder` role through
+`automation.roleRuntime`. OpenCode uses its native `--agent` option; Codex and
+Claude Code receive the canonical role instructions as part of the prompt.
+This is direct CLI routing, not an ACP session spawned by OpenClaw. Setting
+`automation.roleRuntime` to `openclaw` fails closed for explicit roles until a
+native OpenClaw role adapter exists.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
@@ -413,8 +415,8 @@ Current automation controls include:
 - `mode`: `bot` (default) or `human`;
 - `commentStyle.human.concise` (default `true`) controls concise human-mode result comments;
 - `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
-- `automation.agentRuntime` (default `openclaw`) selects the runtime for tasks without an explicit role;
-- `automation.roleRuntime` (default `opencode`) selects the runtime for explicitly named canonical roles; `openclaw` fails closed for these roles until a native role adapter exists;
+- `automation.agentRuntime` (default `openclaw`) selects the runtime for tasks without an explicit role; supported values: `openclaw`, `opencode`, `codex`, `claude-code`;
+- `automation.roleRuntime` (default `opencode`) selects the runtime for explicitly named canonical roles; supported values are the same, but `openclaw` fails closed for these roles until a native role adapter exists;
 
 Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed). When `commentStyle.human.concise` is enabled, that result should read like a short teammate reply and stay within the configured visible line limit, without automation-report headings or boilerplate.
 
@@ -579,10 +581,10 @@ Use task recovery only for manual intervention; normal stale recovery belongs to
 ### Explicit role does not execute
 
 Check that the role is present in `agents[]` in `~/.manul/config.json`, then
-inspect `automation.roleRuntime`. The default is OpenCode and explicit roles
-are passed through its native `--agent <role>` option. An unknown role or
-`roleRuntime: "openclaw"` intentionally fails instead of silently running
-OpenClaw's `main` agent.
+inspect `automation.roleRuntime`. The default is OpenCode; OpenCode uses its
+native `--agent <role>` option, while Codex and Claude Code receive the canonical
+role instructions in the prompt. An unknown role or `roleRuntime: "openclaw"`
+intentionally fails instead of silently running OpenClaw's `main` agent.
 
 ### OpenClaw execution failure
 
