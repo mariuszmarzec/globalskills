@@ -44,6 +44,7 @@ BODY=""
 AUTHOR=""
 CREATED=""
 REVIEWER_TYPE="${REVIEWER_TYPE:-mock}"
+REVIEW_COMMENTS_JSON=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --body) BODY="$2"; shift 2 ;;
     --author) AUTHOR="$2"; shift 2 ;;
     --created) CREATED="$2"; shift 2 ;;
+    --review-comments-json) REVIEW_COMMENTS_JSON="$2"; shift 2 ;;
     handle|get-conversation|list-reviews) ACTION="$1"; shift 1 ;;
     *) echo "Unknown option: $1" >&2; exit 3 ;;
   esac
@@ -334,6 +336,18 @@ cmd_handle() {
   # Initialize schema (migrate if needed)
   init_schema || error_exit "Failed to initialize schema" 1
 
+  # Validate the inline comments attached to this single GitHub review.
+  # Polling passes an empty array for reviews without inline comments.
+  local review_comments_json='[]'
+  if [ -n "$REVIEW_COMMENTS_JSON" ]; then
+    if ! jq -e 'type == "array"' <<<"$REVIEW_COMMENTS_JSON" >/dev/null 2>&1; then
+      error_exit "--review-comments-json must be a JSON array" 3
+    fi
+    review_comments_json="$REVIEW_COMMENTS_JSON"
+  fi
+  local inline_review_count
+  inline_review_count="$(jq -r 'length' <<<"$review_comments_json")"
+
   # Get context
   local context
   context="$(get_pr_context "$REPO" "$PR_NUMBER")"
@@ -366,6 +380,13 @@ cmd_handle() {
       error_exit "Unknown review state: $REVIEW_STATE" 3
       ;;
   esac
+
+  # An inline review is a single unit of work regardless of its verdict.
+  # APPROVE/COMMENT reviews with inline comments need grouped handling too.
+  # Approvals/comments without inline comments remain passive.
+  if [ "$inline_review_count" -gt 0 ] && [ "$REVIEW_STATE" != "DISMISS" ]; then
+    should_create_task=true
+  fi
 
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -449,6 +470,30 @@ cmd_handle() {
         review_prompt="$parsed_action"
       fi
     fi
+  fi
+
+  if [ "$inline_review_count" -gt 0 ]; then
+    local inline_review_prompt
+    inline_review_prompt="$(jq -r '
+      map({
+        commentId: (.id | tostring),
+        threadRootId: ((.manul_thread_root_id // .in_reply_to_id // .id) | tostring),
+        path: (.path // "(location unavailable)"),
+        line: (.line // .original_line // ""),
+        body: (.body // ""),
+        diffHunk: (.diff_hunk // ""),
+        url: (.html_url // "")
+      })
+      | to_entries
+      | map(
+          "- Comment ID: \(.value.commentId)\n  Thread root ID: \(.value.threadRootId)\n  File/line: \(.value.path):\(.value.line)\n  URL: \(.value.url)\n  Comment:\n\(.value.body)\n  Diff context:\n\(.value.diffHunk)"
+        )
+      | join("\n\n")
+    ' <<<"$review_comments_json")"
+
+    # Keep the whole review in one task. Reply to each distinct inline thread,
+    # and reserve the task/attempt marker for the canonical result comment.
+    review_prompt+="${review_prompt:+$'\n\n'}All inline comments below were submitted together as one GitHub review. Treat them as one task: analyze every comment, implement applicable changes together, and verify each comment is addressed. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."$'\n\n'"Inline review comments:\n$inline_review_prompt"
   fi
 
   # State machine: handle based on existing review status

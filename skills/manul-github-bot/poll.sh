@@ -1489,7 +1489,7 @@ process_repo_body() {
     fi
   done < <(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" '
     ($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
-    | .[] | select(.created_at >= $base) | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + $trig_re + "([ \\t\\r\\n]|$)")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
+    | .[] | select((.pull_request_review_id // null) == null) | select(.created_at >= $base) | select((.body // "") | test("(^|\\r?\\n)[ \\t]*" + $trig_re + "([ \\t\\r\\n]|$)")) | select((.body // "") | contains($sig) | not) | select((.user.type // "User") != "Bot") | select(.user.login as $u | $allowed | index($u)) |
     (.body | split("\n")) as $lines
     | ([range(0; $lines|length) | select($lines[.] | test("^[ \\t]*" + $trig_re + "([ \\t]|$)"))][0]) as $idx
     | ($lines[$idx] | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "")) as $rest0_raw
@@ -1535,7 +1535,9 @@ process_repo_body() {
       in_reply_to_id: (.in_reply_to_id // null)
     }' 2>>"$LOG" || true)
 
-  # 2b) PR review events (REQUEST_CHANGES -> REVIEW_FIX tasks)
+  # 2b) Submitted PR reviews: one task per review, with all its inline comments.
+  # Individual comment ingestion above excludes review-associated comments so a
+  # multi-comment review cannot fan out into multiple Manul tasks.
   if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
     while IFS= read -r pr_obj; do
       [ -n "$pr_obj" ] || continue
@@ -1556,34 +1558,72 @@ process_repo_body() {
         review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
         [ -n "$review_created" ] || review_created="$now"
 
+        # gh api --paginate emits one JSON array per page. Slurp all pages,
+        # then select every inline comment whose pull_request_review_id matches
+        # this submitted review.
+        review_inline_comments_json="$(printf '%s\n' "$review_comments" | jq -cs --arg rid "$review_id" '[.[][] | select((.pull_request_review_id // "") | tostring == $rid)]' 2>/dev/null)" || review_inline_comments_json='[]'
+        review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
+
+        # Attach each thread's true root comment ID (GitHub reply endpoints
+        # require a root, not a nested reply ID).
+        review_inline_comments_with_roots='[]'
+        while IFS= read -r inline_comment; do
+          [ -n "$inline_comment" ] || continue
+          inline_comment_id="$(jq -r '.id // empty' <<<"$inline_comment")"
+          [ -n "$inline_comment_id" ] || continue
+          inline_thread_root_id="$(get_review_thread_root_id "$review_comments" "$inline_comment_id")"
+          review_inline_comments_with_roots="$(jq -cn --argjson existing "$review_inline_comments_with_roots" --argjson comment "$inline_comment" --arg root "$inline_thread_root_id" '$existing + [($comment + {manul_thread_root_id:$root})]')"
+        done < <(jq -c '.[]' <<<"$review_inline_comments_json" 2>/dev/null)
+        review_inline_comments_json="$review_inline_comments_with_roots"
+
+        case "$review_state" in
+          CHANGES_REQUESTED) review_handler_state="REQUEST_CHANGES" ;;
+          APPROVED) review_handler_state="APPROVE" ;;
+          COMMENTED) review_handler_state="COMMENT" ;;
+          *) review_handler_state="" ;;
+        esac
+
+        # Keep existing REQUEST_CHANGES behavior (including recovery of older
+        # active reviews). For approval/comment reviews, only start work for
+        # newly submitted reviews, avoiding a backfill of historical review
+        # comments on every open PR after this feature is deployed.
+        should_handle_review=false
         if [ "$review_state" = "CHANGES_REQUESTED" ]; then
-          log "processing REQUEST_CHANGES review $review_id on $repo#$pr_num"
+          should_handle_review=true
+        elif [ "$review_inline_count" -gt 0 ] && [ -n "$review_handler_state" ] && [ "$review_state" != "DISMISSED" ]; then
+          if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
+            should_handle_review=true
+          fi
+        fi
+
+        if [ "$should_handle_review" = true ]; then
+          log "processing review $review_id on $repo#$pr_num (state=$review_state, inline_comments=$review_inline_count)"
           existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
           if [ -z "$existing_conv" ]; then
-            local pr_url
             pr_url="$(gh pr view "$pr_num" --repo "$repo" --json url --jq '.url' 2>/dev/null)" || pr_url="https://github.com/$repo/pull/$pr_num"
             [ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr_num"
             new_conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
             sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, '$pr_url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
             log "auto-created conversation $new_conv_id for $repo#$pr_num"
           fi
-         if "$MANUL_DIR/manul-pr-review.sh" handle \
-           --repo "$repo" \
-           --pr-number "$pr_num" \
-           --review-id "$review_id" \
-           --review-state "REQUEST_CHANGES" \
-           --body "$review_body" \
-           --author "$review_author" \
-           --created "$review_created" \
-           --json >>"$LOG" 2>&1; then
-           log "review $review_id on $repo#$pr_num processed successfully"
-         else
-           log "WARN: failed to process review $review_id on $repo#$pr_num"
-         fi
+          if "$MANUL_DIR/manul-pr-review.sh" handle \
+            --repo "$repo" \
+            --pr-number "$pr_num" \
+            --review-id "$review_id" \
+            --review-state "$review_handler_state" \
+            --body "$review_body" \
+            --author "$review_author" \
+            --created "$review_created" \
+            --review-comments-json "$review_inline_comments_json" \
+            --json >>"$LOG" 2>&1; then
+            log "review $review_id on $repo#$pr_num processed successfully"
+          else
+            log "WARN: failed to process review $review_id on $repo#$pr_num"
+          fi
         elif [ "$review_state" = "APPROVED" ]; then
-          log "received APPROVE on $repo#$pr_num (no fix task created)"
+          log "received APPROVE on $repo#$pr_num with no eligible inline review comments (no fix task created)"
         else
-          log "received $review_state review on $repo#$pr_num (no action)"
+          log "received $review_state review on $repo#$pr_num with no eligible inline review comments (no task created)"
         fi
       done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
     done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)

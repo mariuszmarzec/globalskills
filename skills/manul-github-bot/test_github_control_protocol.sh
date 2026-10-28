@@ -395,6 +395,46 @@ test_duplicate_review_ignored() {
   [ "$skipped2" = "true" ] || return 1
 }
 
+# One submitted review with multiple inline comments must produce one durable task.
+test_grouped_inline_review_creates_single_task() {
+  init_db
+
+  local conv_id="conv-grouped-review"
+  local pr_number=801
+  local review_id="76001"
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$DB" "INSERT INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', 'test/repo', $pr_number, 'https://github.com/test/repo/issues/$pr_number', $pr_number, 'OPEN', '$now', '$now');" 2>/dev/null
+
+  local comments_json
+  comments_json="$(jq -nc '[
+    {id:101,pull_request_review_id:76001,path:"src/auth.kt",line:42,body:"Handle timeout failures consistently",diff_hunk:"@@ -40,1 +40,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r101",in_reply_to_id:null,manul_thread_root_id:"101"},
+    {id:102,pull_request_review_id:76001,path:"tests/test_auth.kt",line:15,body:"Add a regression test for this path",diff_hunk:"@@ -10,1 +10,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r102",in_reply_to_id:null,manul_thread_root_id:"102"}
+  ]')"
+
+  local output
+  output="$(review handle --repo "test/repo" --pr-number "$pr_number" --review-id "$review_id" --review-state "COMMENT" --body "" --author "reviewer" --created "$now" --review-comments-json "$comments_json" --json 2>/dev/null)" || return 1
+  [ "$(jq -r '.createdTask // false' <<<"$output")" = "true" ] || return 1
+
+  local task_id prompt task_count
+  task_id="$(jq -r '.newTaskId // empty' <<<"$output")"
+  [ -n "$task_id" ] || return 1
+  prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='$task_id';" 2>/dev/null)" || return 1
+  [[ "$prompt" == *"Handle timeout failures consistently"* ]] || return 1
+  [[ "$prompt" == *"Add a regression test for this path"* ]] || return 1
+  [[ "$prompt" == *"Thread root ID: 101"* ]] || return 1
+  [[ "$prompt" == *"Thread root ID: 102"* ]] || return 1
+  task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_number AND conversationId='$conv_id';" 2>/dev/null)" || return 1
+  [ "$task_count" = "1" ] || return 1
+
+  # Duplicate delivery of the same review must reuse the task.
+  local duplicate_output
+  duplicate_output="$(review handle --repo "test/repo" --pr-number "$pr_number" --review-id "$review_id" --review-state "COMMENT" --body "" --author "reviewer" --created "$now" --review-comments-json "$comments_json" --json 2>/dev/null)" || return 1
+  [ "$(jq -r '.skipped // false' <<<"$duplicate_output")" = "true" ] || return 1
+  task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_number AND conversationId='$conv_id';" 2>/dev/null)" || return 1
+  [ "$task_count" = "1" ] || return 1
+}
+
 # Test 11: Structured events parse correctly
 test_structured_events_parse() {
   local body="<!-- manul:event {\"type\":\"TASK_DONE\",\"timestamp\":\"2026-09-11T00:00:00Z\",\"data\":{\"taskId\":\"t1\",\"status\":\"completed\"}} -->
@@ -1090,6 +1130,7 @@ run_test "Test 7: parentTaskId is preserved" test_parent_task_id_preserved
 run_test "Test 8: APPROVE does not create fix task" test_approve_no_fix_task
 run_test "Test 9: REQUEST_CHANGES creates fix task" test_request_changes_creates_fix
 run_test "Test 10: Duplicate review is ignored" test_duplicate_review_ignored
+run_test "Test 46: Grouped inline review comments create one task" test_grouped_inline_review_creates_single_task
 
 # Event tests
 run_test "Test 11: Structured events parse correctly" test_structured_events_parse

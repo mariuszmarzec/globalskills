@@ -123,9 +123,12 @@ PR review -> /manul review-fix -> REVIEW_FIX task -> same PR branch -> updated P
 
 Review handling:
 
-- `APPROVE` -> record approval, no fix task;
-- `REQUEST_CHANGES` -> create `REVIEW_FIX`;
-- `COMMENT` -> informational review event;
+- `APPROVE` without inline comments -> record approval, no fix task;
+- `REQUEST_CHANGES` -> create one `REVIEW_FIX` task for the submitted review;
+- any newly submitted review (`APPROVE`, `COMMENT`, or `REQUEST_CHANGES`) with inline comments -> create one `REVIEW_FIX` task containing all inline comments with that `pull_request_review_id`;
+- inline comments belonging to a submitted review are not separately queued as individual tasks;
+- comments posted outside a review retain the independent comment-task behavior;
+- the executor replies to each distinct inline thread and posts one canonical task result to the PR conversation;
 - `DISMISS` -> no fix task.
 
 ## Database schema
