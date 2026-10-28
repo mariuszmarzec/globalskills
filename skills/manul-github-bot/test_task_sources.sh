@@ -117,6 +117,10 @@ actual_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE comm
 actual_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "VERIFY action persists through source queueing" "VERIFY" "$actual_action"
 assert_eq "verify prompt persists without command prefix" "Diagnose only and report findings without changing code" "$actual_prompt"
+actual_heartbeat="$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"
+assert_eq "queued source task starts without lease" "" "$actual_lease"
 
 echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"
