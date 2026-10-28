@@ -102,8 +102,10 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
-    echo "ERROR: No agent runtime found (need openclaw, opencode, codex, or claude)" >&2
+if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && \
+   [ ! -x "${OPENCLAW_BIN:-}" ] && [ ! -x "${OPENCODE_BIN:-}" ] && \
+   [ ! -x "${CODEX_BIN:-}" ] && [ ! -x "${CLAUDE_BIN:-}" ]; then
+    echo "ERROR: No agent runtime found (need openclaw, opencode, codex, or claude, or a valid *_BIN override)" >&2
     echo "Install at least one of: openclaw, opencode, codex, claude" >&2
     exit 1
 fi
