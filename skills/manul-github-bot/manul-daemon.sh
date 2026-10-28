@@ -666,9 +666,9 @@ recover_stale_tasks() {
            COALESCE(agentStartedAt,''), COALESCE(preExecutionFailures,0),
            CASE
              WHEN heartbeatAt IS NULL
-               OR heartbeatAt < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
+               OR datetime(heartbeatAt) < datetime('now', '-${HEARTBEAT_TIMEOUT} seconds')
                OR leaseExpiresAt IS NULL
-               OR leaseExpiresAt < datetime('now')
+               OR datetime(leaseExpiresAt) < datetime('now')
              THEN 1 ELSE 0
            END AS lease_stale
     FROM processed_comments
@@ -1521,7 +1521,7 @@ status() {
 # Return the number of queued tasks that are eligible to run now.
 # SQLite is the authoritative scheduler state; poll.sh only provides a wake-up hint.
 eligible_queued_count() {
-  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now'));" 2>/dev/null || echo 0
+  sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now'));" 2>/dev/null || echo 0
 }
 
 sql_escape() {
@@ -3347,7 +3347,7 @@ dispatch_once() {
     # Select the oldest task that is actually eligible now. A retry with a
     # future nextAttemptAt must never monopolize the singleton dispatcher and
     # starve a fresh task that is ready to run.
-    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
+    TASK_INFO="$(sqlite3 "$DB" "SELECT commentId, repository, issueNumber, attempts FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
 
     if [ -z "$TASK_INFO" ]; then
       log "dispatch: queued task was no longer eligible at claim time"
