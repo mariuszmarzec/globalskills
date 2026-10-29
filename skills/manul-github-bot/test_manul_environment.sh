@@ -184,6 +184,30 @@ else
   fail "Bootstrap did not refresh Caracal runtime credentials correctly"
 fi
 
+# Todo's token comes from aicode's inherited exported environment (e.g. .zshrc)
+# and must refresh in the runtime file even when a prior token already exists.
+TODO_RUNTIME="$TMP/todo-token-runtime"
+mkdir -p "$TODO_RUNTIME"
+cat > "$TODO_RUNTIME/.env" <<'EOF'
+OPENCODE_CONFIG=/operator/chosen/opencode.json
+TODO_LOCAL_MCP_TOKEN=old-todo-token
+EOF
+chmod 600 "$TODO_RUNTIME/.env"
+TODO_LOCAL_MCP_TOKEN="new-todo-token"
+export TODO_LOCAL_MCP_TOKEN
+TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
+if (
+  unset TODO_LOCAL_MCP_TOKEN OPENCODE_CONFIG
+  source "$TODO_ENV_FILE"
+  [ "$TODO_LOCAL_MCP_TOKEN" = "new-todo-token" ] &&
+  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+); then
+  ok "Bootstrap refreshes Todo local MCP token while preserving unrelated operator settings"
+else
+  fail "Bootstrap did not refresh the Todo local MCP token correctly"
+fi
+assert_file_mode_600 "$TODO_ENV_FILE"
+
 INVALID="$TMP/invalid"
 mkdir -p "$INVALID"
 printf "OPENCLAW_STATE_DIR='unterminated\n" > "$INVALID/.env"
