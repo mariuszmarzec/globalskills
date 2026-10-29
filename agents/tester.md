@@ -1,7 +1,7 @@
 ---
 description: Designs test cases, writes tests, analyzes missing coverage, edge cases, and regressions. Runs and interprets test results.
 mode: all
-model: litellm/groq-llama-70b
+model: litellm/free-cloud
 steps: 30
 temperature: 0.2
 ---
