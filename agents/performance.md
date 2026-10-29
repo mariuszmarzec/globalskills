@@ -1,7 +1,7 @@
 ---
 description: Analyzes performance: DB queries, concurrency, memory, CPU, caching, and bottlenecks. Recommends or applies targeted improvements. Read-only analysis by default.
 mode: all
-model: litellm/gemini-3.6-flash
+model: litellm/free-cloud
 steps: 40
 temperature: 0
 permission:

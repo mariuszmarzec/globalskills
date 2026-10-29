@@ -1,7 +1,7 @@
 ---
 description: Debugger escalation (EXPERT tier). Finds root causes of the most elusive production bugs, race conditions, and runtime failures. Reports diagnosis and fix.
 mode: all
-model: litellm/big-pickle
+model: litellm/free-cloud
 steps: 80
 temperature: 0.2
 ---

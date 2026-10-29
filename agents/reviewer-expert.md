@@ -1,7 +1,7 @@
 ---
 description: Reviewer escalation (EXPERT tier). Deep review of security-critical, architectural, or high-risk changes. Read-only.
 mode: all
-model: litellm/big-pickle
+model: litellm/free-cloud
 steps: 50
 temperature: 0
 permission:
