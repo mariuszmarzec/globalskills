@@ -58,6 +58,7 @@ if (($stateItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
 }
 $stateFile = Join-Path $stateRoot "bridge.json"
 $logFile = Join-Path $stateRoot "bridge.log"
+$stdoutLog = Join-Path $stateRoot "bridge-stdout.log"
 $errorLog = Join-Path $stateRoot "bridge-error.log"
 $cachedScript = Join-Path $stateRoot "todo-mcp-bridge.ps1"
 
@@ -276,8 +277,8 @@ $argumentList = @(
 $quotedArguments = foreach ($argument in $argumentList) {
     '"' + $argument.Replace('"', '\"') + '"'
 }
-Remove-Item -LiteralPath $logFile, $errorLog -Force -ErrorAction SilentlyContinue
-$process = Start-Process -FilePath $powerShellPath -ArgumentList ($quotedArguments -join " ") -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errorLog -PassThru
+Remove-Item -LiteralPath $logFile, $stdoutLog, $errorLog -Force -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath $powerShellPath -ArgumentList ($quotedArguments -join " ") -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $errorLog -PassThru
 $state = [ordered]@{
     pid = $process.Id
     bindAddress = $BindAddress
