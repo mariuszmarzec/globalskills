@@ -4332,7 +4332,7 @@ PROMPT_APPEND
      if [ "$exec_failure_code" = "PRE_EXECUTION_FAILURE" ]; then
        [ -n "$exec_failure_stage" ] || exec_failure_stage="runtime_preflight"
        log "dispatch: adapter failed before agent startup for task $COMMENT_ID (stage=$exec_failure_stage): $exec_summary"
-       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$exec_summary" "$PR_NUM_FROM_URL" "$current_attempt" "$exec_failure_stage"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$exec_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$exec_failure_stage"
        return 0
      fi
 
