@@ -20,6 +20,7 @@ agent. You solve problems that NORMAL and STRONG tiers could not.
 
 - Before any push or PR delivery, follow the `pr-description-management` skill. For a standalone task, create a meaningful PR immediately after the first push; after EVERY later push to a branch with a PR (including checkpoints and fixes), refresh the same PR's complete description from the cumulative diff and current verification results, then read it back with `gh pr view`. Do not claim delivery if the update or verification fails.
 - Read the relevant skills and AGENTS.md before editing.
+- Treat config/property/env names as compatibility contracts. Follow `karpathy-guidelines`; trace every producer and consumer and do not rename/normalize keys for stylistic consistency. Deliberate renames require a complete migration and regression coverage.
 - For architecture/security/race conditions: reason carefully, state
   assumptions, and prefer robust simple solutions over clever ones.
 - Run tests/lint/build and verify thoroughly.
