@@ -31,16 +31,16 @@ class TodoMcpBridgeTests(unittest.TestCase):
         upstream = socketserver.ThreadingTCPServer(("127.0.0.1", 0), EchoHandler)
         upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
         upstream_thread.start()
-        self.addCleanup(upstream.shutdown)
         self.addCleanup(upstream.server_close)
+        self.addCleanup(upstream.shutdown)
 
         proxy = proxy_module.ThreadingProxyServer(
             ("127.0.0.1", 0), "127.0.0.1", upstream.server_address[1]
         )
         proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
         proxy_thread.start()
-        self.addCleanup(proxy.shutdown)
         self.addCleanup(proxy.server_close)
+        self.addCleanup(proxy.shutdown)
 
         self.assertEqual("127.0.0.1", proxy.server_address[0])
         payload = b"POST /mcp HTTP/1.1\r\nHost: 172.20.0.1:18765\r\nContent-Length: 4\r\n\r\ntest"
