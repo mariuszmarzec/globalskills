@@ -1,7 +1,7 @@
 ---
 description: Diagnoses difficult bugs, failing tests, stack traces, unexpected behavior, concurrency and runtime problems. Finds the root cause before changing code.
 mode: all
-model: litellm/free-cloud
+model: litellm/deepseek-v4-flash-free
 steps: 60
 temperature: 0.2
 ---

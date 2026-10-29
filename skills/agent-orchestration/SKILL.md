@@ -16,38 +16,41 @@ description: Rules for the OpenCode multi-agent orchestration system. Use when r
 Model routing is independent of roles. Any role can run on any tier. Change
 models here (or in the LiteLLM config) without rebuilding the agents.
 
-## Model tiers and currently verified route
+## Model tiers (audit of LiteLLM @ localhost:4000, 2026-08-10)
 
-The previous model inventory and latency ranking are stale. Recent runtime diagnostics found that the configured Zen, Groq, Cerebras, and several other provider routes fail due to quota, expired credentials, retired model IDs, or unavailable services. The user has designated `litellm/free-cloud` as the default and the only currently working route.
+All 19 models in the LiteLLM model_list respond successfully and are **free**
+(no paid model is configured — OpenCode Zen is used only for its free models:
+`big-pickle`, `deepseek-v4-flash-free`). Tiers are based on measured latency,
+context window, cost, and known capability.
 
-Until other provider routes are repaired and independently verified, all tiers use `litellm/free-cloud`. Keep CHEAP / NORMAL / STRONG / EXPERT as workflow-complexity labels; do not route a task to an unverified model just because it historically belonged to a tier.
+| Tier | Default model | Rationale | Alternatives |
+|------|---------------|-----------|--------------|
+| CHEAP | `litellm/groq-llama-8b` | free, 128k ctx, adequate for trivial single-file edits | `litellm/gemini-3.1-flash-lite` (1M ctx), `litellm/deepseek-v4-flash-free` |
+| NORMAL | `litellm/groq-llama-70b` | free, 70B, solid general coding | `litellm/groq-qwen3`, `litellm/cerebras-gpt-oss-120b`, `litellm/gemini-3.5-flash`, `litellm/mistral-large` |
+| STRONG | `litellm/deepseek-v4-flash-free` | free, fast, strong reasoning (Zen free tier) | `litellm/gemini-3.6-flash`, `litellm/mistral-codestral`, `litellm/cerebras-gpt-oss-120b` |
+| EXPERT | `litellm/big-pickle` | free, strongest reasoning (Zen stealth model) | `litellm/deepseek-v4-flash-free` |
 
-| Tier | Default model | Routing policy |
-|------|---------------|----------------|
-| CHEAP | `litellm/free-cloud` | Use the currently designated FreeLLMAPI-backed LiteLLM group. |
-| NORMAL | `litellm/free-cloud` | Use the currently designated FreeLLMAPI-backed LiteLLM group. |
-| STRONG | `litellm/free-cloud` | Use the currently designated FreeLLMAPI-backed LiteLLM group. |
-| EXPERT | `litellm/free-cloud` | Use the currently designated FreeLLMAPI-backed LiteLLM group. |
+Every model is free. Escalate only when the current tier demonstrably fails.
 
 ## Role agents
 
 | Agent | Default tier | Model | Read-only |
 |-------|--------------|-------|-----------|
-| `architect` | EXPERT | `litellm/free-cloud` | edit: ask |
-| `coder-cheap` | CHEAP | `litellm/free-cloud` | no |
-| `coder` | NORMAL | `litellm/free-cloud` | no |
-| `coder-strong` | STRONG | `litellm/free-cloud` | no |
-| `coder-expert` | EXPERT | `litellm/free-cloud` | no |
-| `reviewer` | STRONG | `litellm/free-cloud` | edit: deny |
-| `reviewer-expert` | EXPERT | `litellm/free-cloud` | edit: deny |
-| `reviewer-adversarial` | STRONG (or EXPERT for high‑risk) | `litellm/free-cloud` (or `litellm/free-cloud`) | edit: deny |
-| `debugger` | STRONG | `litellm/free-cloud` | no |
-| `debugger-expert` | EXPERT | `litellm/free-cloud` | no |
-| `researcher` | CHEAP | `litellm/free-cloud` | edit: deny |
-| `tester` | NORMAL | `litellm/free-cloud` | no |
-| `security` | EXPERT | `litellm/free-cloud` | edit: deny |
-| `performance` | STRONG | `litellm/free-cloud` | edit: deny |
-| `refactorer` | NORMAL | `litellm/free-cloud` | no |
+| `architect` | EXPERT | `litellm/big-pickle` | edit: ask |
+| `coder-cheap` | CHEAP | `litellm/groq-llama-8b` | no |
+| `coder` | NORMAL | `litellm/groq-llama-70b` | no |
+| `coder-strong` | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `coder-expert` | EXPERT | `litellm/big-pickle` | no |
+| `reviewer` | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
+| `reviewer-expert` | EXPERT | `litellm/big-pickle` | edit: deny |
+| `reviewer-adversarial` | STRONG (or EXPERT for high‑risk) | `litellm/deepseek-v4-flash-free` (or `litellm/big-pickle`) | edit: deny |
+| `debugger` | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `debugger-expert` | EXPERT | `litellm/big-pickle` | no |
+| `researcher` | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
+| `tester` | NORMAL | `litellm/groq-llama-70b` | no |
+| `security` | EXPERT | `litellm/big-pickle` | edit: deny |
+| `performance` | STRONG | `litellm/gemini-3.6-flash` | edit: deny |
+| `refactorer` | NORMAL | `litellm/groq-qwen3` | no |
 
 ## Complexity classification
 
