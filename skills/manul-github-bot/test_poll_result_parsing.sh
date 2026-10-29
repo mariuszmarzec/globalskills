@@ -41,6 +41,9 @@ log() { :; }
 eval "$(sed -n '/^parse_poll_result() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 eval "$(sed -n '/^eligible_queued_count() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 eval "$(sed -n '/^has_unresolved_manul_tasks() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+eval "$(sed -n '/^is_manul_owned_pr() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+eval "$(sed -n '/^sql_num() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+eval "$(sed -n '/^sql_escape() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -80,7 +83,9 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
   attempts INTEGER NOT NULL,
   nextAttemptAt TEXT,
   repository TEXT DEFAULT 'test/repo',
-  issueNumber INTEGER DEFAULT 1
+  issueNumber INTEGER DEFAULT 1,
+  prNumber INTEGER,
+  prUrl TEXT
 );"
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('a','queued',0,NULL);"
 assert_eq "eligible-attempt-zero" "1" "$(eligible_queued_count)"
@@ -102,6 +107,45 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAtte
 assert_eq "iso-due-retry-eligible" "4" "$(eligible_queued_count)"
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt) VALUES ('iso-future','queued',1,'2099-01-01T00:00:00Z');"
 assert_eq "iso-future-retry-filtered" "4" "$(eligible_queued_count)"
+
+
+echo "=== Poll CI provenance: arbitrary PRs must not be auto-fixed ==="
+if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/93"; then
+  echo "FAIL: arbitrary PR unexpectedly considered Manul-owned" >&2
+  exit 1
+fi
+echo "PASS: arbitrary PR without a verified task deliverable is rejected"
+
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt,repository,issueNumber,prNumber,prUrl) VALUES ('ci_fix:test/repo:93:run-1','completed',1,NULL,'test/repo',93,93,'https://github.com/test/repo/pull/93');"
+if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/93"; then
+  echo "FAIL: synthetic CI task must not establish PR ownership" >&2
+  exit 1
+fi
+echo "PASS: synthetic CI task cannot establish ownership"
+
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,status,attempts,nextAttemptAt,repository,issueNumber,prNumber,prUrl) VALUES ('issue:task-93','completed',1,NULL,'test/repo',12,93,'https://github.com/test/repo/pull/93');"
+if ! is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/93"; then
+  echo "FAIL: verified completed Manul deliverable should be eligible" >&2
+  exit 1
+fi
+echo "PASS: exact verified Manul deliverable is eligible"
+
+if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/94"; then
+  echo "FAIL: mismatched PR URL unexpectedly considered Manul-owned" >&2
+  exit 1
+fi
+echo "PASS: mismatched PR URL is rejected"
+
+echo "=== Poll CI provenance: database errors fail closed ==="
+BROKEN_PROVENANCE_DB="$TEST_DIR/broken-provenance.db"
+sqlite3 "$BROKEN_PROVENANCE_DB" "CREATE TABLE other(value TEXT);"
+DB="$BROKEN_PROVENANCE_DB"
+if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/93"; then
+  echo "FAIL: provenance query error must not authorize CI auto-fix" >&2
+  exit 1
+fi
+DB="$MANUL_DIR/manul.db"
+echo "PASS: provenance query errors fail closed"
 
 echo "=== Poll CI guard: no unresolved tasks returns false and emits nothing ==="
 if has_unresolved_manul_tasks "test/repo" "99"; then
