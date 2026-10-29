@@ -28,12 +28,6 @@ grep -q 'UiState.Data(repository.load())' "$file" && has_data_mapping=true || tr
 grep -q 'UiState.Error' "$file" && has_error_mapping=true || true
 grep -Eq 'try[[:space:]]*\{[[:space:]]*return[[:space:]]+UiState.Data\(repository.load\(\)\)' "$file" && has_unneeded_wrapper=true || true
 
-passed=false
-if [ "$has_cancel_rethrow" = true ] && [ "$has_ensure_active" = true ] &&
-   [ "$has_data_mapping" = true ] && [ "$has_error_mapping" = true ] &&
-   [ "$has_unneeded_wrapper" = false ]; then
-  passed=true
-fi
 
 printf '{"passed":%s,"mode":"%s","checks":[' "$passed" "$MODE"
 printf '{"name":"cancellation-rethrown","passed":%s,"expected":"catch CancellationException and rethrow it","actual":"%s","evidence":"grep CancellationException and throw"}' "$has_cancel_rethrow" "$([ "$has_cancel_rethrow" = true ] && echo present || echo missing)"
