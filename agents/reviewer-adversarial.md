@@ -1,7 +1,7 @@
 ---
 description: Adversarial reviewer. Assumes the implementation is wrong and tries to break it. Read-only.
 mode: all
-model: litellm/deepseek-v4-flash-free
+model: litellm/free-cloud
 steps: 40
 temperature: 0
 permission:
