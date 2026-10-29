@@ -341,7 +341,8 @@ if [ "$_caracal_preflight_rc" != "0" ] ||
             log "Caracal MCP preflight $stream: <empty>"
             return 0
         fi
-        redacted_output="$(python3 - "$file" "${CARACAL_ACCESS_TOKEN:-}" <<'PY'
+        redacted_output="$(python3 - "$file" <<'PY'
+import os
 import re
 import sys
 from pathlib import Path
@@ -352,7 +353,7 @@ except OSError as exc:
     print(f"<unable to read captured output: {exc.__class__.__name__}>")
     raise SystemExit(0)
 
-token = sys.argv[2]
+token = os.environ.get("CARACAL_ACCESS_TOKEN", "")
 if token:
     content = content.replace(token, "[REDACTED]")
 content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
