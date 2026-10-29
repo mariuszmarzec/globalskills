@@ -35,17 +35,17 @@ Before implementing:
 
 - **By default, do not wrap calls to `suspend` functions in `try/catch`.** A `suspend` call should normally be allowed to propagate exceptions to its caller. Add a `try/catch` only when this layer has a clear responsibility to handle or transform that failure.
 - **When a `try/catch` around suspending work is justified, preserve cancellation.** Never swallow `CancellationException` or turn it into an ordinary error/result. Prefer catching `CancellationException` explicitly and rethrowing it before handling other exceptions.
-- When the code is already inside a coroutine scope and the intended policy is to handle ordinary exceptions while cancelling the coroutine on cancellation, use `currentCoroutineContext().ensureActive()` (or the project's equivalent such as `currentCoroutineScope().ensureActive()`, if that is the API available) in the exception path before converting the failure. This ensures a cancellation that races with an ordinary exception is not incorrectly reported as a normal failure.
-- Keep catches narrow: catch the expected exception types where possible. Avoid `catch (Exception)` or `catch (Throwable)` unless the layer intentionally maps any failure and cancellation semantics are handled explicitly.
-- Don't use `ensureActive()` as a reason to catch exceptions when no local error handling is needed. If no translation/recovery is required, remove the `try/catch` entirely.
+- When code is already inside a coroutine and the intended policy is to handle ordinary exceptions while still cancelling when cancellation races with another failure, call `currentCoroutineContext().ensureActive()` (or `currentCoroutineScope().ensureActive()` where that is the available/project-standard API) in the ordinary-exception path before converting the failure. This prevents reporting a cancellation as a normal error if cancellation happened while the operation was failing.
+- Keep catches narrow: catch expected exception types where possible. Avoid `catch (Exception)` or `catch (Throwable)` unless this layer intentionally maps broad failures and cancellation semantics are handled explicitly.
+- **Do not add `ensureActive()` or cancellation boilerplate when you don't need a catch in the first place.** If no local error translation or recovery is required, remove the `try/catch` entirely.
 
-Example — let cancellation and ordinary errors propagate when this layer has no error-mapping responsibility:
+Example — let errors propagate when this layer has no error-mapping responsibility:
 
 ```kotlin
 suspend fun load(): Data = repository.load()
 ```
 
-Example — when converting failures into UI state inside a coroutine:
+Example — convert errors into UI state while preserving coroutine cancellation:
 
 ```kotlin
 import kotlinx.coroutines.CancellationException
@@ -63,7 +63,7 @@ suspend fun loadForUi(): UiState =
     }
 ```
 
-Use the coroutine context API that matches the actual scope and coroutine library version. Do not invent imports or APIs: verify the available API if uncertain.
+Use the coroutine context API that matches the actual scope and coroutine library version. Verify the available API instead of inventing imports or signatures.
 
 ## 4. Surgical Changes
 
