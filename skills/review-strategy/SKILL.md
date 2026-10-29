@@ -270,6 +270,27 @@ Check:
 * versioning,
 * platform-specific behavior.
 
+## Configuration / Property Contract Review
+
+Whenever a diff touches configuration, build setup, environment variables, CI
+fixtures, or values passed between modules/scripts, verify the producer-consumer
+contract rather than reviewing each file independently.
+
+- Compare exact key spelling, case, punctuation, separators, defaults, and
+  missing-value behavior across writers and readers. Treat `prodApiUrl` and
+  `prod.apiUrl` as distinct keys.
+- Trace CI-generated `local.properties`, templates, sample configs, setup
+  scripts, build files, runtime consumers, and tests as relevant.
+- Flag incidental key renames or style-based normalization as a blocker when
+  they break compatibility or leave any producer/consumer out of sync.
+- If a mismatch is being fixed, confirm which side owns the established
+  contract and verify the other side is corrected. Do not accept "make the
+  names consistent" as sufficient rationale.
+- For an intentional contract change, require an explicit migration across all
+  producers/consumers and a regression test or CI assertion where practical.
+- Include exact names and files in any finding. If the contract cannot be
+  determined from evidence, report a verification blocker instead of guessing.
+
 ## Security
 
 For security-relevant changes, check:
