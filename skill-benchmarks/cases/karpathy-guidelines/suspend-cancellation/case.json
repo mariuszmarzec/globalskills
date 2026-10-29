@@ -1,0 +1,7 @@
+{
+  "id": "suspend-cancellation",
+  "skill": "karpathy-guidelines",
+  "fixture": "fixture",
+  "prompt": "prompt.md",
+  "verifier": "verify.sh"
+}
