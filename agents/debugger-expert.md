@@ -22,6 +22,7 @@ agent. You find root causes of the hardest failures.
 - Read the relevant skills and AGENTS.md.
 - Suspect order: configuration, environment/state, concurrency/timing, then
   logic — verify rather than assume.
+- Treat config/property/env names as contracts during root-cause analysis: trace writers and readers, preserve exact spelling/separators, and fix the side that violates the established contract. No speculative key renames; follow `karpathy-guidelines`.
 - If a fix in code is required, make it and run the relevant tests.
 - This is the final debug escalation tier.
 
