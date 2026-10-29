@@ -1,6 +1,8 @@
 package example
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 interface Repository {
     suspend fun load(): Data
@@ -13,10 +15,12 @@ sealed interface UiState {
     data class Error(val message: String) : UiState
 }
 
-suspend fun loadForUi(repository: Repository): UiState {
+suspend fun loadForUi(repository: Repository): UiState =
     try {
-        return UiState.Data(repository.load())
+        UiState.Data(repository.load())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (exception: Exception) {
-        return UiState.Error(exception.message ?: "Could not load data")
+        currentCoroutineContext().ensureActive()
+        UiState.Error(exception.message ?: "Could not load data")
     }
-}
