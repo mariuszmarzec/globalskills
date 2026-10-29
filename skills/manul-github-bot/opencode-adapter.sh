@@ -238,7 +238,7 @@ if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
         log "resolved Caracal MCP from ~/.caracal/env.sh"
     else
         log "required Caracal MCP URL/token is missing or disconnected"
-        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_config","agent_started":false}}\n' "$OPT_TASK_ID"
         exit 78
     fi
 fi
@@ -312,7 +312,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
       )
 ' "$_config_input" >"$OPENCODE_CONFIG"; then
     cleanup_opencode_task_config
-    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
     exit 65
 fi
 chmod 600 "$OPENCODE_CONFIG"
@@ -374,7 +374,7 @@ PY
     log "Caracal MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
     log_caracal_preflight_file stdout "$CARACAL_PREFLIGHT_STDOUT"
     log_caracal_preflight_file stderr "$CARACAL_PREFLIGHT_STDERR"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_preflight","agent_started":false}}\n' "$OPT_TASK_ID"
     exit 78
 fi
 log "Caracal MCP preflight passed"
