@@ -1130,11 +1130,11 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   ' "$config" >/dev/null
   : >"${MOCK_CONFIG_CHECK_FILE:?}"
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\\n' 'caracal-rag connected'
+    printf '%s\n' 'caracal-rag connected'
     exit 0
   fi
-  printf '%s\\n' 'caracal-rag failed'
-  printf 'Authorization: Bearer %s\\n' "${CARACAL_ACCESS_TOKEN:-}" >&2
+  printf '%s\n' 'caracal-rag failed'
+  printf 'Authorization: Bearer %s\n' "${CARACAL_ACCESS_TOKEN:-}" >&2
   exit 1
 fi
 : >"${MOCK_TASK_STARTED_FILE:?}"
