@@ -16,8 +16,6 @@ done
 [ -n "$MODE" ] || { echo "missing --mode" >&2; exit 2; }
 
 file="$WORKSPACE/Example.kt"
-content="$(cat "$file" 2>/dev/null || true)"
-has_suspend_catch=false
 has_cancel_rethrow=false
 has_ensure_active=false
 has_data_mapping=false
@@ -32,14 +30,6 @@ grep -q 'ensureActive()' "$file" && has_ensure_active=true || true
 grep -q 'UiState.Data(repository.load())' "$file" && has_data_mapping=true || true
 grep -q 'UiState.Error' "$file" && has_error_mapping=true || true
 grep -Eq 'try[[:space:]]*\{[[:space:]]*return[[:space:]]+UiState.Data\(repository.load\(\)\)' "$file" && has_unneeded_wrapper=true || true
-
-json_escape() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\n'/\\n}"
-  printf '%s' "$value"
-}
 
 passed=false
 if [ "$has_cancel_rethrow" = true ] && [ "$has_ensure_active" = true ] &&
