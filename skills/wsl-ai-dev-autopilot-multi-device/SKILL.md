@@ -663,8 +663,8 @@ The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.ho
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "litellm/big-pickle",
-  "small_model": "litellm/groq-llama-8b",
+  "model": "litellm/free-cloud",
+  "small_model": "litellm/free-cloud",
   "skills": { 
     "paths": ["~/.globalskills/skills"] 
   },
@@ -861,6 +861,12 @@ The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.ho
           "cost": { "input": 0, "output": 0 },
           "limit": { "context": 256000, "output": 32000 }
         },
+        "free-cloud": {
+          "id": "free-cloud",
+          "name": "FreeLLMAPI Free Cloud Router (via LiteLLM)",
+          "tool_call": true,
+          "reasoning": false
+        },
         "or-free": {
           "id": "or-free",
           "name": "Free Models Router (OpenRouter, free)",
@@ -951,7 +957,7 @@ Create `~/.openclaw/openclaw.json` (JSON5). The provider id is `litellm`, pointi
   },
   agents: {
     defaults: {
-      model: { primary: "litellm/groq-llama-70b" },
+      model: { primary: "litellm/free-cloud" },
     },
   },
 }
@@ -971,10 +977,10 @@ openclaw config validate
 nohup openclaw gateway --force --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
 sleep 8
 openclaw gateway status | grep -i connectivity   # expect: ok
-openclaw models list                              # expect: 23 litellm/ models listed
+openclaw models list                              # expect: free-cloud is listed and selectable
 # IMPORTANT: use a dedicated --session-key. Routing to --agent main hangs while
 # the main session is busy (the turn just queues). A separate session answers instantly:
-openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: LiteLLM connection OK" --model litellm/groq-llama-70b
+openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: LiteLLM connection OK" --model litellm/free-cloud
 # expect reply: LiteLLM connection OK
 ```
 
@@ -1015,8 +1021,8 @@ Verify:
 * LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder).
 * OpenCode shows all three providers (opencode, litellm, ollama).
 * OpenClaw Gateway responds on ws://127.0.0.1:18789, lists 23 `litellm/` models, and answers an agent turn through LiteLLM.
-* Primary routing works (big-pickle via LiteLLM).
-* Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
+* Primary OpenCode agent routing works through `litellm/free-cloud`.
+* The `free-cloud` direct route is verified before task dispatch. Other provider routes and fallback chains remain untrusted until individually probed successfully.
 * Startup script loads all API keys from `~/litellm/.env`.
 * OpenCode agents symlinked and readable (`~/.config/opencode/agents/orchestrator.md`).
 * Shared skills symlinked (`~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
@@ -1028,4 +1034,4 @@ Verify:
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (free). Fallback chain ensures free models are used if Zen is unavailable. Multi-agent orchestration (orchestrator + 14 subagents) is installed and free-only. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw and OpenCode default to `litellm/free-cloud`. Other provider aliases must not be re-enabled as defaults until live probes confirm them. Multi-agent orchestration (orchestrator + 14 subagents) is installed and free-only. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
