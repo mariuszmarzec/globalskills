@@ -24,7 +24,6 @@ has_data_mapping=false
 has_error_mapping=false
 has_unneeded_wrapper=false
 
-grep -Eq 'catch[[:space:]]*\([^)]*CancellationException' "$file" && has_cancel_rethrow=true || true
 if grep -Eq 'catch[[:space:]]*\([^)]*CancellationException' "$file" &&
    grep -Eq 'throw[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$file"; then
   has_cancel_rethrow=true
