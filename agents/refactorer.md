@@ -20,6 +20,7 @@ behavior.
 - Read the relevant skills (e.g. `karpathy-guidelines`,
   `kotlin-code-formatting`) and AGENTS.md before editing.
 - Do not change behavior to make a refactor "easier".
+- Preserve configuration contracts as well as public APIs: never rename/normalize config keys, Gradle properties, environment variables, or CI fixture names for style. Trace producers and consumers and follow `karpathy-guidelines` before changing any boundary.
 - Run the test suite (or relevant subset) before and after and confirm no
   regressions.
 

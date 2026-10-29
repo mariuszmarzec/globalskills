@@ -81,7 +81,42 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
-## 5. Goal-Driven Execution
+## 5. Configuration and Integration Contracts
+
+**Configuration names are compatibility contracts, not style choices.**
+
+This applies to keys and names that cross a boundary, including `local.properties`,
+Gradle properties, environment variables, CI workflow fixtures, BuildKonfig fields,
+JSON/YAML/TOML keys, CLI flags, secrets references, API fields, database columns,
+and names exchanged between scripts or modules.
+
+Before changing one:
+1. Trace the value from every producer/writer (CI, templates, setup scripts,
+   docs, local config examples) to every reader/consumer (build scripts, runtime
+   code, validation, tests, deployment).
+2. Establish the existing contract from actual consumers, valid configs,
+   project documentation, and tests. Do not guess which spelling is "more
+   consistent" or "more idiomatic".
+3. Preserve exact spelling, case, punctuation, separators, defaults, and
+   missing-value behavior. For example, `prodApiUrl` and `prod.apiUrl` are
+   different property names. Never rename or normalize such keys as incidental
+   cleanup, refactoring, or a convenient way to make one file match another.
+4. When a producer and consumer disagree, fix the side that violates the
+   established contract; do not churn a stable contract just to accommodate a
+   broken fixture or script.
+5. A deliberate contract change must be required by the task or justified by
+   verified evidence. Update all producers, consumers, examples, CI fixtures,
+   tests, and migration/backward-compatibility handling together. Add a
+   regression test or CI check for the boundary where practical.
+6. In the change summary, state whether contract names were preserved. If any
+   name changed, list the exact old/new names and show how every producer and
+   consumer was updated.
+
+If the authoritative contract cannot be established, do not make a speculative
+rename. Report the conflict and ask for a decision when it materially affects
+compatibility or behavior.
+
+## 6. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
 
