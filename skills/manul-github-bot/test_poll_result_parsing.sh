@@ -42,6 +42,8 @@ eval "$(sed -n '/^parse_poll_result() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 eval "$(sed -n '/^eligible_queued_count() {/,/^}/p' "$SCRIPT_DIR/manul-daemon.sh")"
 eval "$(sed -n '/^has_unresolved_manul_tasks() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
 eval "$(sed -n '/^is_manul_owned_pr() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+eval "$(sed -n '/^sql_num() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+eval "$(sed -n '/^sql_escape() {/,/^}/p' "$SCRIPT_DIR/poll.sh")"
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
