@@ -23,6 +23,15 @@ bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 ok "Caracal runtime scripts have valid shell syntax"
 
+# Ollama startup must wait for the HTTP API, not just the process or a fixed sleep.
+contains "$AICODE" 'OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"' "aicode supports the configured Ollama API base URL"
+contains "$AICODE" 'ollama_http_ready' "aicode probes Ollama's actual HTTP readiness"
+contains "$AICODE" '/api/tags' "aicode waits for Ollama's HTTP API endpoint"
+contains "$AICODE" 'Waiting for Ollama API' "aicode reports waiting for Ollama readiness"
+contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness wait has a bounded timeout"
+contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
+contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded attempt count"
+
 # The OpenCode CLI must use its native named-server config format. OpenClaw has
 # a different mcp.servers schema and must not be copied into opencode.json.
 contains "$AICODE" '"caracal-rag": {' "aicode registers Caracal in OpenCode"
