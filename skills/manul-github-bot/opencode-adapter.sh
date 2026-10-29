@@ -244,6 +244,39 @@ if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
 fi
 export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
 
+# Read only Todo's token from the runtime env file in a child shell. The daemon
+# can live longer than aicode, so refresh this one value per task without
+# re-sourcing the file into this shell and overwriting Caracal's live settings.
+_TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"
+if [ -f "$_TODO_LOCAL_ENV_FILE" ]; then
+    if bash -n "$_TODO_LOCAL_ENV_FILE" >/dev/null 2>&1; then
+        _todo_local_runtime_token="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s" "${TODO_LOCAL_MCP_TOKEN:-}"' _ "$_TODO_LOCAL_ENV_FILE" 2>/dev/null)" || _todo_local_runtime_token=""
+        if [ -n "$_todo_local_runtime_token" ]; then
+            TODO_LOCAL_MCP_TOKEN="$_todo_local_runtime_token"
+            export TODO_LOCAL_MCP_TOKEN
+        else
+            unset TODO_LOCAL_MCP_TOKEN 2>/dev/null || true
+        fi
+    else
+        log "Todo local MCP token environment file has invalid shell syntax; Todo MCP will be skipped"
+        unset TODO_LOCAL_MCP_TOKEN 2>/dev/null || true
+    fi
+fi
+
+TODO_LOCAL_MCP_AVAILABLE=0
+TODO_LOCAL_MCP_CONNECTED=0
+if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then
+    _todo_local_probe_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
+    if [ "$_todo_local_probe_status" = "401" ]; then
+        TODO_LOCAL_MCP_AVAILABLE=1
+        TODO_LOCAL_MCP_CONNECTED=1
+        log "Todo local MCP bridge is reachable; adding it to the task-scoped OpenCode config"
+    else
+        log "Todo local MCP bridge is unavailable (HTTP ${_todo_local_probe_status:-none}); continuing without this optional MCP"
+    fi
+fi
+export TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+
 if [ -n "$_workspace_real" ]; then
     export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
 fi
@@ -310,6 +343,46 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
           else {}
           end
       )
+    | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
+        .mcp = (
+            (.mcp // {}) | if type == "object" then . else {} end
+            | . + {
+                "todo-local": {
+                    type: "remote",
+                    url: "http://127.0.0.1:8766/mcp",
+                    oauth: false,
+                    enabled: true,
+                    headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
+                }
+              }
+          )
+        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
+        | .agent = (
+            (.agent // {})
+            | if type == "object" then
+                with_entries(
+                  if .key == "chat" then .
+                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
+                  end
+                )
+              else {}
+              end
+          )
+      else
+        .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
+        | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
+        | .agent = (
+            (.agent // {})
+            | if type == "object" then
+                with_entries(
+                  if .key == "chat" then .
+                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
+                  end
+                )
+              else {}
+              end
+          )
+      end
 ' "$_config_input" >"$OPENCODE_CONFIG"; then
     cleanup_opencode_task_config
     printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
@@ -331,14 +404,31 @@ ProcessRunner_TmpStdout="$CARACAL_PREFLIGHT_STDOUT"
 ProcessRunner_TmpStderr="$CARACAL_PREFLIGHT_STDERR"
 _caracal_preflight_result="$(ProcessRunner.run --timeout 45 --cwd "$OPT_WORKSPACE" -- "$OPENCODE_BIN" mcp list)"
 _caracal_preflight_rc="$(printf '%s\n' "$_caracal_preflight_result" | head -n 1 | cut -d'|' -f1)"
-if [ "$_caracal_preflight_rc" != "0" ] ||
-   ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
-    log "required Caracal MCP preflight failed; OpenCode reported the server disconnected or unavailable"
+_mcp_preflight_stage=""
+_mcp_preflight_label=""
+_mcp_preflight_summary=""
+if ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
+    _mcp_preflight_stage="caracal_mcp_preflight"
+    _mcp_preflight_label="Caracal"
+    _mcp_preflight_summary="Caracal MCP did not report a live connected status in OpenCode; task was not started"
+elif [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ] &&
+     ! grep -Eiq 'todo-local[[:space:]].*connected|connected.*todo-local' "$CARACAL_PREFLIGHT_STDOUT"; then
+    _mcp_preflight_stage="todo_local_mcp_preflight"
+    _mcp_preflight_label="Todo local"
+    _mcp_preflight_summary="Todo local MCP was reachable but did not report connected in OpenCode; task was not started"
+elif [ "$_caracal_preflight_rc" != "0" ]; then
+    _mcp_preflight_stage="mcp_preflight"
+    _mcp_preflight_label="OpenCode"
+    _mcp_preflight_summary="OpenCode MCP preflight command failed; task was not started"
+fi
+
+if [ -n "$_mcp_preflight_stage" ]; then
+    log "$_mcp_preflight_label MCP preflight failed; OpenCode reported the server disconnected or unavailable"
 
     log_caracal_preflight_file() {
         local stream="$1" file="$2" redacted_output
         if [ ! -s "$file" ]; then
-            log "Caracal MCP preflight $stream: <empty>"
+            log "$_mcp_preflight_label MCP preflight $stream: <empty>"
             return 0
         fi
         redacted_output="$(python3 - "$file" <<'PY'
@@ -353,9 +443,10 @@ except OSError as exc:
     print(f"<unable to read captured output: {exc.__class__.__name__}>")
     raise SystemExit(0)
 
-token = os.environ.get("CARACAL_ACCESS_TOKEN", "")
-if token:
-    content = content.replace(token, "[REDACTED]")
+for token_name in ("CARACAL_ACCESS_TOKEN", "TODO_LOCAL_MCP_TOKEN"):
+    token = os.environ.get(token_name, "")
+    if token:
+        content = content.replace(token, "[REDACTED]")
 content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
 content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
 content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)[^\s,;"}]+', r"\1[REDACTED]", content)
@@ -368,17 +459,21 @@ if len(lines) > 20:
 PY
 )" || redacted_output="<unable to redact captured output>"
         while IFS= read -r line; do
-            log "Caracal MCP preflight $stream: $line"
+            log "$_mcp_preflight_label MCP preflight $stream: $line"
         done <<<"$redacted_output"
     }
 
-    log "Caracal MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
+    log "$_mcp_preflight_label MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
     log_caracal_preflight_file stdout "$CARACAL_PREFLIGHT_STDOUT"
     log_caracal_preflight_file stderr "$CARACAL_PREFLIGHT_STDERR"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_preflight","agent_started":false}}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"%s","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"%s","agent_started":false}}\n' \
+        "$OPT_TASK_ID" "$_mcp_preflight_summary" "$_mcp_preflight_stage"
     exit 78
 fi
 log "Caracal MCP preflight passed"
+if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
+    log "Todo local MCP preflight passed"
+fi
 
 # Append a truthful capability snapshot to every initial and resumed prompt.
 # It is derived from this invocation's effective OpenCode config (including the
