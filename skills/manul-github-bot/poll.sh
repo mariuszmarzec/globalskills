@@ -1025,12 +1025,38 @@ has_unresolved_manul_tasks() {
     esac
 }
 
-# scan_failing_ci <repo> -> queues synthetic tasks for failing manul PRs
+# is_manul_owned_pr <repo> <prNumber> <prUrl> -> returns 0 only when a completed Manul task
+# has persisted this exact verified PR URL as its deliverable. Source PR numbers,
+# branch names, bot comments, CI history, and non-terminal task rows are not proof.
+# A missing record or any database/query error fails closed.
+is_manul_owned_pr() {
+    local repo="$1" pr="$2" pr_url="$3"
+    local pr_num safe_repo safe_url found
+    pr_num="$(sql_num "$pr")"
+    [ -n "$pr_num" ] || return 1
+    [[ "$pr_url" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/$pr_num/?$ ]] || return 1
+    safe_repo="$(sql_escape "$repo")"
+    safe_url="$(sql_escape "$pr_url")"
+    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(
+      SELECT 1 FROM processed_comments
+      WHERE repository='$safe_repo'
+        AND commentId NOT LIKE 'ci_fix:%'
+        AND status='completed'
+        AND prNumber=$pr_num
+        AND rtrim(prUrl, '/') = rtrim('$safe_url', '/')
+    );" 2>>"$LOG")"; then
+      log "WARN: CI provenance query failed for $repo#$pr; skipping automatic CI fix"
+      return 1
+    fi
+    [ "$found" = "1" ]
+}
+
+# scan_failing_ci <repo> -> queues synthetic tasks only for verified Manul deliverable PRs
 scan_failing_ci() {
     local repo="$1"
     [ "$CI_FIX_ENABLED" = "true" ] || return 0
     local prs_json
-    # Scan all open PRs for failing CI (not just manul PRs)
+    # Scan open PRs, then require verified Manul deliverable provenance before CI auto-fix
     prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}]' 2>>"$LOG" || true)"
     [ -n "$prs_json" ] || return 0
     local pr_count
@@ -1040,7 +1066,7 @@ scan_failing_ci() {
       return 0
     }
     [ "$pr_count" -gt 0 ] || return 0
-    log "scanning $pr_count open manul PR(s) on $repo for failing CI"
+    log "scanning $pr_count open PR(s) on $repo for failing CI provenance"
     local i=0
     while [ $i -lt "$pr_count" ]; do
       local pr
@@ -1049,6 +1075,16 @@ scan_failing_ci() {
       pr_num="$(printf '%s' "$pr" | jq -r '.number')"
       pr_branch="$(printf '%s' "$pr" | jq -r '.head')"
       pr_title="$(printf '%s' "$pr" | jq -r '.title')"
+      local pr_url
+      pr_url="$(printf '%s' "$pr" | jq -r '.html_url // ""')"
+      # Only auto-fix a PR when a completed Manul task persisted this exact
+      # canonical PR URL as its verified deliverable. Never infer ownership
+      # from an arbitrary open PR, branch naming, source issue number, or comments.
+      if ! is_manul_owned_pr "$repo" "$pr_num" "$pr_url"; then
+        log "skipping CI fix for $repo#$pr_num — no verified Manul-owned PR record"
+        i=$((i+1))
+        continue
+      fi
       # Skip build-fix if this PR already has unresolved manul tasks
       if has_unresolved_manul_tasks "$repo" "$pr_num"; then
         log "skipping CI fix for $repo#$pr_num — unresolved manul tasks present"

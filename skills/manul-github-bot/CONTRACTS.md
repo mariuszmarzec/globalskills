@@ -582,3 +582,16 @@ Failure codes must be stable and actionable:
 - `CONTROLLER_ERROR` — execution controller could not construct/return a valid execution result.
 
 A final `completed` state requires the applicable verification checks to pass; a failure classification must not be overwritten by a later generic workspace check.
+
+
+## CI auto-fix ownership boundary
+
+CI auto-fix is permitted only for a PR whose exact canonical URL is persisted
+as the verified deliverable of a completed Manul task (processed_comments.prUrl,
+with the matching repository and PR number). The source issue/PR number,
+branch naming, bot comments, prior CI attempts, or an active task on the same
+PR do not prove that Manul created or delivered that PR. Synthetic ci_fix
+tasks can never establish their own eligibility. Missing provenance or a
+database/query error must fail closed and skip automatic fixes. This prevents
+Manul from taking ownership of CI failures on unrelated PRs.
+
