@@ -1,7 +1,7 @@
 ---
 description: Security review of auth, authorization, validation, injection, secrets, dependency vulnerabilities, and API security. Read-only analysis.
 mode: all
-model: litellm/big-pickle
+model: litellm/free-cloud
 steps: 40
 temperature: 0
 permission:
