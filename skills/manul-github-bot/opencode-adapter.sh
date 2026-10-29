@@ -330,7 +330,7 @@ CARACAL_PREFLIGHT_STDERR="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
 ProcessRunner_TmpStdout="$CARACAL_PREFLIGHT_STDOUT"
 ProcessRunner_TmpStderr="$CARACAL_PREFLIGHT_STDERR"
 _caracal_preflight_result="$(ProcessRunner.run --timeout 45 --cwd "$OPT_WORKSPACE" -- "$OPENCODE_BIN" mcp list)"
-_caracal_preflight_rc="$(printf '%s\\n' "$_caracal_preflight_result" | head -n 1 | cut -d'|' -f1)"
+_caracal_preflight_rc="$(printf '%s\n' "$_caracal_preflight_result" | head -n 1 | cut -d'|' -f1)"
 if [ "$_caracal_preflight_rc" != "0" ] ||
    ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
     log "required Caracal MCP preflight failed; OpenCode reported the server disconnected or unavailable"
@@ -355,10 +355,10 @@ except OSError as exc:
 token = sys.argv[2]
 if token:
     content = content.replace(token, "[REDACTED]")
-content = re.sub(r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s,;]+", r"\\1[REDACTED]", content)
-content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\\s]+", r"\\1[REDACTED]", content)
-content = re.sub(r'(?i)(\\b(?:access_token|token|api[_-]?key|secret|password)\\b\\s*[:=]\\s*)[^\\s,;"}]+', r"\\1[REDACTED]", content)
-content = re.sub(r"(?i)(https?://)[^/@\\s]+:[^/@\\s]+@", r"\\1[REDACTED]@", content)
+content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
+content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
+content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)[^\s,;"}]+', r"\1[REDACTED]", content)
+content = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[REDACTED]@", content)
 lines = content.splitlines()
 for line in lines[:20]:
     print(line[:500])
@@ -374,7 +374,7 @@ PY
     log "Caracal MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
     log_caracal_preflight_file stdout "$CARACAL_PREFLIGHT_STDOUT"
     log_caracal_preflight_file stderr "$CARACAL_PREFLIGHT_STDERR"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
     exit 78
 fi
 log "Caracal MCP preflight passed"
