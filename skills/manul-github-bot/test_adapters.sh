@@ -1159,6 +1159,12 @@ MOCK
   rc=$?
   assert_json_status "$out" "FAILED" "OpenCode refuses a task when Caracal MCP is disconnected"
   [ "$rc" -eq 78 ] && ok "Disconnected Caracal MCP fails with explicit capability error" || fail "Disconnected Caracal rc=$rc"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'PRE_EXECUTION_FAILURE' \
+    && ok "Disconnected MCP is classified as a pre-execution failure" \
+    || fail "Disconnected MCP would consume an agent execution attempt"
+  printf '%s' "$out" | jq -r '.diagnostics.stage // empty' | grep -qx 'caracal_mcp_preflight' \
+    && ok "Disconnected MCP records the preflight stage" \
+    || fail "Disconnected MCP preflight stage missing"
   [ -f "$tmp/config-checked" ] && ok "Task-local OpenCode config preserves existing MCP and injects authenticated Caracal" || fail "Caracal MCP config injection failed"
   [ ! -f "$tmp/task-started" ] && ok "Task execution never starts without a live Caracal connection" || fail "Task started despite disconnected Caracal MCP"
   grep -Fq 'Caracal MCP preflight stdout: caracal-rag failed' "$tmp/disconnected.stderr" \
