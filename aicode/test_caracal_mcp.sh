@@ -207,6 +207,7 @@ echo "All Caracal MCP regression guards passed."
 
 # Todo Desktop runs in Windows; OpenCode receives only the authenticated WSL loopback bridge.
 contains "$AICODE" '. "$HOME/.config/opencode/todo-mcp.env"' "aicode loads the Todo MCP token for normal OpenCode sessions"
+contains "$AICODE" 'if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then' "an exported shell token takes precedence over the optional Todo env file"
 contains "$AICODE" 'ensure_todo_mcp_bridge' "aicode starts the optional Todo bridge before OpenCode"
 contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aicode only enables Todo MCP after the unauthenticated 401 probe"
 contains "$AICODE" 'url: "http://127.0.0.1:8766/mcp"' "OpenCode uses the stable WSL loopback bridge URL"
