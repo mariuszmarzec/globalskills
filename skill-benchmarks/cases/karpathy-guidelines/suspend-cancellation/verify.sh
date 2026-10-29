@@ -27,6 +27,18 @@ grep -q 'ensureActive()' "$file" && has_ensure_active=true || true
 grep -q 'UiState.Data(repository.load())' "$file" && has_data_mapping=true || true
 grep -q 'UiState.Error' "$file" && has_error_mapping=true || true
 grep -Eq 'try[[:space:]]*\{[[:space:]]*return[[:space:]]+UiState.Data\(repository.load\(\)\)' "$file" && has_unneeded_wrapper=true || true
+has_ensure_active=false
+has_data_mapping=false
+has_error_mapping=false
+has_unneeded_wrapper=false
+if grep -Eq 'catch[[:space:]]*\([^)]*CancellationException' "$file" &&
+   grep -Eq 'throw[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$file"; then
+  has_cancel_rethrow=true
+fi
+grep -q 'ensureActive()' "$file" && has_ensure_active=true || true
+grep -q 'UiState.Data(repository.load())' "$file" && has_data_mapping=true || true
+grep -q 'UiState.Error' "$file" && has_error_mapping=true || true
+grep -Eq 'try[[:space:]]*\{[[:space:]]*return[[:space:]]+UiState.Data\(repository.load\(\)\)' "$file" && has_unneeded_wrapper=true || true
 
 passed=false
 if [ "$has_cancel_rethrow" = true ] && [ "$has_ensure_active" = true ] &&
