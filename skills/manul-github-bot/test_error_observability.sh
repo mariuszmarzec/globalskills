@@ -193,6 +193,33 @@ test_cleanup_patterns_unchanged
 test_github_pagination_logged
 test_terminal_failure_feedback_wiring || true
 
+# Test 8: adapter preflight failures use the infrastructure retry budget.
+test_pre_execution_failure_budget_wiring() {
+  local adapter="$SCRIPT_DIR/opencode-adapter.sh"
+  local daemon="$SCRIPT_DIR/manul-daemon.sh"
+  local preflight_line dispatch_line completion_line
+
+  if ! grep -Fq '"failure_code":"PRE_EXECUTION_FAILURE"' "$adapter" ||
+     ! grep -Fq '"stage":"caracal_mcp_preflight","agent_started":false' "$adapter"; then
+    fail "OpenCode Caracal preflight result lacks a structured pre-execution failure code"
+    return
+  fi
+  pass "OpenCode Caracal preflight reports a structured pre-execution failure"
+
+  preflight_line="$(grep -nF 'if [ "$exec_failure_code" = "PRE_EXECUTION_FAILURE" ]; then' "$daemon" | head -n 1 | cut -d: -f1)"
+  dispatch_line="$(grep -nF 'handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN"' "$daemon" | tail -n 1 | cut -d: -f1)"
+  completion_line="$(grep -nF 'evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' "$daemon" | head -n 1 | cut -d: -f1)"
+  if [[ "$preflight_line" =~ ^[0-9]+$ ]] && [[ "$dispatch_line" =~ ^[0-9]+$ ]] &&
+     [[ "$completion_line" =~ ^[0-9]+$ ]] && [ "$preflight_line" -lt "$dispatch_line" ] &&
+     [ "$dispatch_line" -lt "$completion_line" ]; then
+    pass "daemon routes pre-execution failures through infrastructure retry before normal completion evaluation"
+  else
+    fail "daemon could route a pre-execution failure through the normal agent attempt budget"
+  fi
+}
+
+test_pre_execution_failure_budget_wiring
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed"
