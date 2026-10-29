@@ -134,6 +134,17 @@ if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/94"; th
 fi
 echo "PASS: mismatched PR URL is rejected"
 
+echo "=== Poll CI provenance: database errors fail closed ==="
+BROKEN_PROVENANCE_DB="$TEST_DIR/broken-provenance.db"
+sqlite3 "$BROKEN_PROVENANCE_DB" "CREATE TABLE other(value TEXT);"
+DB="$BROKEN_PROVENANCE_DB"
+if is_manul_owned_pr "test/repo" "93" "https://github.com/test/repo/pull/93"; then
+  echo "FAIL: provenance query error must not authorize CI auto-fix" >&2
+  exit 1
+fi
+DB="$MANUL_DIR/manul.db"
+echo "PASS: provenance query errors fail closed"
+
 echo "=== Poll CI guard: no unresolved tasks returns false and emits nothing ==="
 if has_unresolved_manul_tasks "test/repo" "99"; then
   echo "FAIL: no-row unresolved query unexpectedly returned true" >&2
