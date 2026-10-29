@@ -1,7 +1,7 @@
 ---
 description: Coder escalation (STRONG tier). Implements complex or multi-module changes, hard integration work, tricky refactors, and failing-test fixes that the normal coder could not complete.
 mode: all
-model: litellm/deepseek-v4-flash-free
+model: litellm/free-cloud
 steps: 60
 temperature: 0.2
 ---
