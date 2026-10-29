@@ -130,7 +130,7 @@ public static class TodoMcpWindowsBridge
 
             Task requestPump = clientStream.CopyToAsync(upstreamStream);
             Task responsePump = upstreamStream.CopyToAsync(clientStream);
-            Task.WaitAny(requestPump, responsePump);
+            responsePump.GetAwaiter().GetResult();
         }
         catch (Exception error)
         {
