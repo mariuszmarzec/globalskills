@@ -22,6 +22,7 @@ single-file changes as fast and cheaply as possible.
 - Before any push or PR delivery, follow the `pr-description-management` skill. For a standalone task, create a meaningful PR immediately after the first push; after EVERY later push to a branch with a PR (including checkpoints and fixes), refresh the same PR's complete description from the cumulative diff and current verification results, then read it back with `gh pr view`. Do not claim delivery if the update or verification fails.
 - Read the relevant skills and AGENTS.md before editing.
 - Keep the change surgical: no reformatting, renaming, or extra edits.
+- Treat configuration/property/env names as contracts, not style: preserve exact spelling and separators, trace producer/consumer pairs, and never perform incidental key renames. Follow `karpathy-guidelines` before changing such boundaries.
 - Never leave code broken.
 
 ## Output
