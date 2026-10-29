@@ -4272,11 +4272,12 @@ PROMPT_APPEND
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
 # Persist session id for continuation attempts
-      local exec_status exec_summary exec_session_id exec_failure_code
+      local exec_status exec_summary exec_session_id exec_failure_code exec_failure_stage
       exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
       exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
       exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
       exec_failure_code="$(printf '%s' "$executor_output" | jq -r '.failure_code // ""' 2>/dev/null)"
+      exec_failure_stage="$(printf '%s' "$executor_output" | jq -r '.diagnostics.stage // ""' 2>/dev/null)"
      # Retain a runtime session only when the adapter explicitly requests
      # continuation. Completion, ordinary failures, and malformed continuation
      # results clear stale session state while preserving the workspace mapping.
@@ -4323,6 +4324,17 @@ PROMPT_APPEND
          rc="${rc:-1}"
          ;;
      esac
+
+     # Adapter preflight/config failures happen before the LLM task starts.
+     # They must use the bounded infrastructure-failure budget, not consume an
+     # agent execution attempt just because the dispatcher already wrote
+     # agentStartedAt before entering the adapter.
+     if [ "$exec_failure_code" = "PRE_EXECUTION_FAILURE" ]; then
+       [ -n "$exec_failure_stage" ] || exec_failure_stage="runtime_preflight"
+       log "dispatch: adapter failed before agent startup for task $COMMENT_ID (stage=$exec_failure_stage): $exec_summary"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$exec_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$exec_failure_stage"
+       return 0
+     fi
 
      # Call production completion evaluation function
           local delivery_mode="implementation"

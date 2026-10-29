@@ -1134,6 +1134,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     exit 0
   fi
   printf '%s\n' 'caracal-rag failed'
+  printf 'Authorization: Bearer %s\n' "${CARACAL_ACCESS_TOKEN:-}" >&2
   exit 1
 fi
 : >"${MOCK_TASK_STARTED_FILE:?}"
@@ -1158,8 +1159,25 @@ MOCK
   rc=$?
   assert_json_status "$out" "FAILED" "OpenCode refuses a task when Caracal MCP is disconnected"
   [ "$rc" -eq 78 ] && ok "Disconnected Caracal MCP fails with explicit capability error" || fail "Disconnected Caracal rc=$rc"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'PRE_EXECUTION_FAILURE' \
+    && ok "Disconnected MCP is classified as a pre-execution failure" \
+    || fail "Disconnected MCP would consume an agent execution attempt"
+  printf '%s' "$out" | jq -r '.diagnostics.stage // empty' | grep -qx 'caracal_mcp_preflight' \
+    && ok "Disconnected MCP records the preflight stage" \
+    || fail "Disconnected MCP preflight stage missing"
   [ -f "$tmp/config-checked" ] && ok "Task-local OpenCode config preserves existing MCP and injects authenticated Caracal" || fail "Caracal MCP config injection failed"
   [ ! -f "$tmp/task-started" ] && ok "Task execution never starts without a live Caracal connection" || fail "Task started despite disconnected Caracal MCP"
+  grep -Fq 'Caracal MCP preflight stdout: caracal-rag failed' "$tmp/disconnected.stderr" \
+    && ok "Disconnected preflight stdout is retained in durable task diagnostics" \
+    || fail "Disconnected preflight stdout was lost with the temporary config"
+  grep -Fq 'Caracal MCP preflight stderr: Authorization: Bearer [REDACTED]' "$tmp/disconnected.stderr" \
+    && ok "Disconnected preflight stderr is retained with the token redacted" \
+    || fail "Disconnected preflight stderr was lost or not redacted"
+  if grep -Fq 'test-token' "$tmp/disconnected.stderr"; then
+    fail "Caracal preflight diagnostics leaked the bearer token"
+  else
+    ok "Caracal preflight diagnostics do not expose the token"
+  fi
 
   rm -f "$tmp/config-checked" "$tmp/task-started"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \

@@ -238,7 +238,7 @@ if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
         log "resolved Caracal MCP from ~/.caracal/env.sh"
     else
         log "required Caracal MCP URL/token is missing or disconnected"
-        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_config","agent_started":false}}\n' "$OPT_TASK_ID"
         exit 78
     fi
 fi
@@ -312,7 +312,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
       )
 ' "$_config_input" >"$OPENCODE_CONFIG"; then
     cleanup_opencode_task_config
-    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
     exit 65
 fi
 chmod 600 "$OPENCODE_CONFIG"
@@ -320,7 +320,9 @@ export OPENCODE_CONFIG
 log "using task-scoped OpenCode config with required Caracal MCP; global config unchanged"
 
 # A saved URL/token is not proof that Caracal is reachable and authenticated.
-# Check OpenCode's actual MCP registry before running any task tools.
+# Check OpenCode's actual MCP registry before running any task tools. The raw
+# files live in the task-local config directory and are deleted by the EXIT
+# trap, so preserve only a bounded, redacted summary before returning failure.
 CARACAL_PREFLIGHT_STDOUT="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stdout"
 CARACAL_PREFLIGHT_STDERR="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
 : >"$CARACAL_PREFLIGHT_STDOUT"
@@ -332,7 +334,48 @@ _caracal_preflight_rc="$(printf '%s\n' "$_caracal_preflight_result" | head -n 1 
 if [ "$_caracal_preflight_rc" != "0" ] ||
    ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
     log "required Caracal MCP preflight failed; OpenCode reported the server disconnected or unavailable"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+
+    log_caracal_preflight_file() {
+        local stream="$1" file="$2" redacted_output
+        if [ ! -s "$file" ]; then
+            log "Caracal MCP preflight $stream: <empty>"
+            return 0
+        fi
+        redacted_output="$(python3 - "$file" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+try:
+    content = Path(sys.argv[1]).read_text(errors="replace")
+except OSError as exc:
+    print(f"<unable to read captured output: {exc.__class__.__name__}>")
+    raise SystemExit(0)
+
+token = os.environ.get("CARACAL_ACCESS_TOKEN", "")
+if token:
+    content = content.replace(token, "[REDACTED]")
+content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
+content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
+content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)[^\s,;"}]+', r"\1[REDACTED]", content)
+content = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[REDACTED]@", content)
+lines = content.splitlines()
+for line in lines[:20]:
+    print(line[:500])
+if len(lines) > 20:
+    print(f"... {len(lines) - 20} additional lines omitted")
+PY
+)" || redacted_output="<unable to redact captured output>"
+        while IFS= read -r line; do
+            log "Caracal MCP preflight $stream: $line"
+        done <<<"$redacted_output"
+    }
+
+    log "Caracal MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
+    log_caracal_preflight_file stdout "$CARACAL_PREFLIGHT_STDOUT"
+    log_caracal_preflight_file stderr "$CARACAL_PREFLIGHT_STDERR"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Caracal MCP did not report a live connected status in OpenCode; task was not started","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_preflight","agent_started":false}}\n' "$OPT_TASK_ID"
     exit 78
 fi
 log "Caracal MCP preflight passed"
