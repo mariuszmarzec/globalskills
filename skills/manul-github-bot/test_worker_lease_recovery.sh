@@ -376,6 +376,15 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comment
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry has nextAttemptAt"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','-2 seconds') THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='early-retry';")" "pre-agent retry is scheduled"
 
+# 5a.1) An adapter preflight failure after the dispatcher has bumped attempts
+# must roll that bump back and use the separate infrastructure failure counter.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken,agentStartedAt) VALUES ('adapter-preflight','$REPO',801,'https://github.com/$REPO/issues/801','running',3,0,$CURRENT_TEST_PID,'adapter-preflight-token',datetime('now'));"
+handle_pre_execution_failure "adapter-preflight" "adapter-preflight-token" "$REPO" 801 "" "" "Caracal MCP preflight failed before OpenCode task startup." "" 3 "caracal_mcp_preflight"
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure is requeued"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure rolls back the claimed agent attempt"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure consumes infrastructure budget only"
+assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight retry is scheduled"
+
 # 5b) Early workspace failures use the same attempt limit and publish a final
 # failure comment instead of leaving the task running for the watchdog to guess.
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('early-fail','$REPO',81,'https://github.com/$REPO/issues/81','running',3,1,$CURRENT_TEST_PID,'early-fail-token');"
