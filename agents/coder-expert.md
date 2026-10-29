@@ -1,7 +1,7 @@
 ---
 description: Coder escalation (EXPERT tier). Resolves the hardest problems: architecture redesigns, race conditions, complex production bugs, security-critical changes, high-uncertainty tasks.
 mode: all
-model: litellm/free-cloud
+model: litellm/big-pickle
 steps: 80
 temperature: 0.2
 ---

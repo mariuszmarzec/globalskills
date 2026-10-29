@@ -51,21 +51,21 @@ OpenCode agents in `agents/`. Roles define WHAT to do; model tiers define how mu
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|
-| `orchestrator` | primary | EXPERT | `litellm/free-cloud` | no |
-| `architect` | all | EXPERT | `litellm/free-cloud` | edit: ask |
-| `coder-cheap` | all | CHEAP | `litellm/free-cloud` | no |
-| `coder` | all | NORMAL | `litellm/free-cloud` | no |
-| `coder-strong` | all | STRONG | `litellm/free-cloud` | no |
-| `coder-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `reviewer` | all | STRONG | `litellm/free-cloud` | edit: deny |
-| `reviewer-expert` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `debugger` | all | STRONG | `litellm/free-cloud` | no |
-| `debugger-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `researcher` | all | CHEAP | `litellm/free-cloud` | edit: deny |
-| `tester` | all | NORMAL | `litellm/free-cloud` | no |
-| `security` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `performance` | all | STRONG | `litellm/free-cloud` | edit: ask |
-| `refactorer` | all | NORMAL | `litellm/free-cloud` | no |
+| `orchestrator` | primary | EXPERT | `litellm/big-pickle` | no |
+| `architect` | all | EXPERT | `litellm/big-pickle` | edit: ask |
+| `coder-cheap` | all | CHEAP | `litellm/groq-llama-8b` | no |
+| `coder` | all | NORMAL | `litellm/groq-llama-70b` | no |
+| `coder-strong` | all | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `coder-expert` | all | EXPERT | `litellm/big-pickle` | no |
+| `reviewer` | all | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
+| `reviewer-expert` | all | EXPERT | `litellm/big-pickle` | edit: deny |
+| `debugger` | all | STRONG | `litellm/deepseek-v4-flash-free` | no |
+| `debugger-expert` | all | EXPERT | `litellm/big-pickle` | no |
+| `researcher` | all | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
+| `tester` | all | NORMAL | `litellm/groq-llama-70b` | no |
+| `security` | all | EXPERT | `litellm/big-pickle` | edit: deny |
+| `performance` | all | STRONG | `litellm/gemini-3.6-flash` | edit: ask |
+| `refactorer` | all | NORMAL | `litellm/groq-qwen3` | no |
 
 Set `default_agent: "orchestrator"` in `~/.config/opencode/opencode.json` to
 route every new session through the orchestrator.

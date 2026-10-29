@@ -1,7 +1,7 @@
 ---
 description: Coder at CHEAP tier. Fastest/cheapest model for trivial single-file tasks: typo fixes, renames, adding simple fields, small obvious bugs. Escalate to coder if it gets stuck.
 mode: all
-model: litellm/free-cloud
+model: litellm/groq-llama-8b
 steps: 20
 temperature: 0.2
 ---
