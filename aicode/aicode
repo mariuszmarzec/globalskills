@@ -12,7 +12,7 @@ if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     set +a
 fi
 
-if [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then
+if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then
     set -a
     . "$HOME/.config/opencode/todo-mcp.env"
     set +a
