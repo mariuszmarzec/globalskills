@@ -42,12 +42,43 @@ else
     echo "Manul agentRuntime=$AGENT_RUNTIME; skipping OpenClaw Gateway and ACPX setup."
 fi
 
-# Ensure Ollama is running
-if ! pgrep -x "ollama" >/dev/null; then
-    echo "Starting Ollama..."
-    nohup ollama serve >/tmp/ollama.log 2>&1 &
-    sleep 3
+# Ensure Ollama's HTTP API is actually ready before anything that may use
+# local models starts. A process check is insufficient: Ollama can exist while
+# its server is still loading, and an existing but not-yet-ready process must
+# also be awaited.
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+OLLAMA_READY_TIMEOUT="${OLLAMA_READY_TIMEOUT:-45}"
+
+ollama_http_ready() {
+    curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 \
+        "${OLLAMA_BASE_URL%/}/api/tags" >/dev/null 2>&1
+}
+
+if ! ollama_http_ready; then
+    if ! pgrep -x "ollama" >/dev/null; then
+        echo "Starting Ollama..."
+        nohup ollama serve >/tmp/ollama.log 2>&1 &
+    fi
+
+    if ! [[ "$OLLAMA_READY_TIMEOUT" =~ ^[0-9]{1,3}$ ]] ||
+       (( OLLAMA_READY_TIMEOUT < 1 || OLLAMA_READY_TIMEOUT > 300 )); then
+        OLLAMA_READY_TIMEOUT=45
+    fi
+    echo "Waiting for Ollama API at ${OLLAMA_BASE_URL} (timeout ${OLLAMA_READY_TIMEOUT}s)..."
+    ollama_ready=0
+    for ((ollama_second = 0; ollama_second < OLLAMA_READY_TIMEOUT; ollama_second++)); do
+        if ollama_http_ready; then
+            ollama_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$ollama_ready" -ne 1 ]; then
+        echo "ERROR: Ollama API did not become ready at ${OLLAMA_BASE_URL}; see /tmp/ollama.log." >&2
+        exit 1
+    fi
 fi
+echo "Ollama API is ready at ${OLLAMA_BASE_URL}."
 
 # Ensure PostgreSQL is available for LiteLLM UI/auth
 if command -v pg_isready >/dev/null 2>&1; then
@@ -171,9 +202,26 @@ ensure_caracal_mcp() {
         return 1
     fi
 
-    local check_output mcp_host mcp_port mcp_path mcp_url
-    if ! check_output="$("$CARACAL_CLI" check 2>&1)"; then
-        echo "ERROR: Caracal healthcheck failed; MCP was not started." >&2
+    local check_output="" mcp_host mcp_port mcp_path mcp_url check_attempt
+    local check_attempts="${CARACAL_CHECK_ATTEMPTS:-15}"
+    if ! [[ "$check_attempts" =~ ^[0-9]{1,3}$ ]] ||
+       (( check_attempts < 1 || check_attempts > 60 )); then
+        check_attempts=15
+    fi
+    # Embedding providers and local models can take longer than the Ollama
+    # server itself to warm up. Retry the real Caracal embedding probe briefly
+    # before failing, preserving the final diagnostic output.
+    for ((check_attempt = 1; check_attempt <= check_attempts; check_attempt++)); do
+        if check_output="$("$CARACAL_CLI" check 2>&1)"; then
+            break
+        fi
+        if (( check_attempt < check_attempts )); then
+            echo "Caracal embedding healthcheck not ready (attempt $check_attempt/$check_attempts); retrying in 2s..."
+            sleep 2
+        fi
+    done
+    if [ -z "$check_output" ] || ! printf '%s\n' "$check_output" | grep -q 'mcp_host='; then
+        echo "ERROR: Caracal healthcheck failed after $check_attempts attempts; MCP was not started." >&2
         printf '%s\n' "$check_output" | tail -n 8 >&2
         return 1
     fi
