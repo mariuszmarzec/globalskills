@@ -27,7 +27,7 @@ git -C ~/.globalskills pull
 
 ## Todo Desktop MCP bridge for WSL
 
-When OpenCode runs inside WSL but Todo Desktop runs in Windows, aicode can create a narrow bridge to Todo's existing loopback-only MCP endpoint. Configure the token once in ~/.config/opencode/todo-mcp.env:
+When OpenCode runs inside WSL but Todo Desktop runs in Windows, aicode can create a narrow bridge to Todo's existing loopback-only MCP endpoint. Export `TODO_LOCAL_MCP_TOKEN` in your shell (for example, from `~/.zshrc`); alternatively, set it in `~/.config/opencode/todo-mcp.env`. An already-exported token takes precedence:
 
 ```bash
 export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
