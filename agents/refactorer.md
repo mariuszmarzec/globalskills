@@ -1,7 +1,7 @@
 ---
 description: Refactors code to improve structure, remove duplication, simplify, and improve maintainability without changing observable behavior.
 mode: all
-model: litellm/groq-qwen3
+model: litellm/free-cloud
 steps: 40
 temperature: 0.2
 ---
