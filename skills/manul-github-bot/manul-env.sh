@@ -91,6 +91,18 @@ EOF
     fi
   done
 
+  if [ -n "$TODO_LOCAL_MCP_TOKEN" ]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'TODO_LOCAL_MCP_TOKEN=%q\n' "$TODO_LOCAL_MCP_TOKEN" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Todo local MCP token for unattended Manul processes" >&2
+  fi
+
   # Refresh URL and token together in one atomic file replacement. Task runners
   # never observe a mixed old/new credential pair if a launcher is refreshing
   # Caracal while the long-lived daemon is active.
