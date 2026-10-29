@@ -91,7 +91,7 @@ EOF
     fi
   done
 
-  if [ -n "$TODO_LOCAL_MCP_TOKEN" ]; then
+  if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ]; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
     if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/' "$env_file" > "$refreshed_file"; then
       rm -f -- "$refreshed_file"
