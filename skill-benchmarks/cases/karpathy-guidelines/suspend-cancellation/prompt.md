@@ -1,0 +1,1 @@
+Update `Example.kt` to implement `loadForUi`. It must return `UiState.Data(repository.load())` on success and map ordinary exceptions to `UiState.Error`. Keep the exception handling minimal and preserve coroutine cancellation correctly. Do not change unrelated code.
