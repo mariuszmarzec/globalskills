@@ -12,6 +12,12 @@ if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     set +a
 fi
 
+if [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then
+    set -a
+    . "$HOME/.config/opencode/todo-mcp.env"
+    set +a
+fi
+
 if [ -z "${OPENCODE_API_KEY:-}" ]; then
     echo "WARNING: OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable."
 fi
@@ -310,6 +316,61 @@ ensure_caracal_mcp() {
     return 1
 }
 
+ensure_todo_mcp_bridge() {
+    export TODO_LOCAL_MCP_AVAILABLE=0 TODO_LOCAL_MCP_CONNECTED=0
+
+    if [ -z "$TODO_LOCAL_MCP_TOKEN" ]; then
+        echo "Todo MCP token is not configured; skipping the optional Windows bridge."
+        return 0
+    fi
+    if ! command -v powershell.exe >/dev/null 2>&1 || ! command -v wslpath >/dev/null 2>&1 ||
+       ! command -v ip >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+        echo "WARNING: Windows/WSL bridge prerequisites are missing; Todo MCP is disabled for this launch." >&2
+        return 0
+    fi
+
+    local windows_host_ip wsl_client_ip windows_script
+    windows_host_ip="$(ip -4 route show default 2>/dev/null | awk '$1 == "default" { for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit } }')"
+    if ! [[ "$windows_host_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo "WARNING: unable to resolve the WSL default-route Windows host IP; Todo MCP is disabled for this launch." >&2
+        return 0
+    fi
+    wsl_client_ip="$(ip -4 route get "$windows_host_ip" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+    if ! [[ "$wsl_client_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo "WARNING: unable to resolve the current WSL client IP; Todo MCP is disabled for this launch." >&2
+        return 0
+    fi
+    windows_script="$(wslpath -w "$AICODE_SOURCE_DIR/todo-mcp-bridge.ps1" 2>/dev/null || true)"
+    if [ -z "$windows_script" ]; then
+        echo "WARNING: unable to resolve the Windows bridge script path; Todo MCP is disabled for this launch." >&2
+        return 0
+    fi
+
+    echo "Ensuring the Windows Todo MCP bridge is limited to the current WSL address..."
+    if ! powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$windows_script" \
+        -Action Ensure -BindAddress "$windows_host_ip" -AllowedClientAddress "$wsl_client_ip" -ListenPort 18765; then
+        echo "WARNING: Windows Todo MCP bridge could not start; check %LOCALAPPDATA%\GlobalSkills\TodoMcpBridge\bridge-error.log." >&2
+        return 0
+    fi
+
+    if ! python3 "$AICODE_SOURCE_DIR/todo-mcp-local-proxy.py" \
+        --upstream-host "$windows_host_ip" --upstream-port 18765 --listen-port 8766 \
+        --state-dir "$HOME/.cache/globalskills/todo-mcp-bridge"; then
+        echo "WARNING: WSL Todo MCP loopback proxy could not start; see ~/.cache/globalskills/todo-mcp-bridge/bridge.log." >&2
+        return 0
+    fi
+
+    local http_status
+    http_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
+    if [ "$http_status" = "401" ]; then
+        export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
+        echo "Todo MCP bridge verified at http://127.0.0.1:8766/mcp; unauthenticated access is rejected."
+    else
+        echo "WARNING: Todo MCP bridge did not return the expected HTTP 401 challenge (status $http_status). Todo MCP is disabled for this launch; ensure Todo Desktop is running with todo.localMcpServer enabled." >&2
+    fi
+    return 0
+}
+
 ensure_opencode_caracal_config() {
     OPENCODE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
     export OPENCODE_CONFIG
@@ -360,6 +421,46 @@ ensure_opencode_caracal_config() {
               else {}
               end
           )
+        | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
+            .mcp = (
+                (.mcp // {}) | if type == "object" then . else {} end
+                | . + {
+                    "todo-local": {
+                        type: "remote",
+                        url: "http://127.0.0.1:8766/mcp",
+                        oauth: false,
+                        enabled: true,
+                        headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
+                    }
+                  }
+              )
+            | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
+            | .agent = (
+                (.agent // {})
+                | if type == "object" then
+                    with_entries(
+                      if .key == "chat" then .
+                      else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
+                      end
+                    )
+                  else {}
+                  end
+              )
+          else
+            .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
+            | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
+            | .agent = (
+                (.agent // {})
+                | if type == "object" then
+                    with_entries(
+                      if .key == "chat" then .
+                      else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
+                      end
+                    )
+                  else {}
+                  end
+              )
+          end
 JQ
     if ! jq -s -f "$jq_program" "$config_input" > "$tmp"; then
         rm -f -- "$jq_program"
@@ -397,6 +498,14 @@ JQ
         return 1
     fi
     echo "OpenCode reports caracal-rag connected."
+    if [ "$TODO_LOCAL_MCP_CONNECTED" = "1" ] &&
+       ! printf '%s\n' "$mcp_output" | grep -Eiq 'todo-local[[:space:]].*connected|connected.*todo-local'; then
+        echo "ERROR: the verified Todo MCP bridge is not connected in OpenCode; no OpenCode session will start." >&2
+        return 1
+    fi
+    if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
+        echo "OpenCode reports todo-local connected."
+    fi
 }
 
 configure_openclaw_opencode_acp() {
@@ -525,6 +634,7 @@ fi
 if ! ensure_caracal_mcp; then
     exit 1
 fi
+ensure_todo_mcp_bridge
 if ! ensure_opencode_caracal_config; then
     exit 1
 fi
