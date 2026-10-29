@@ -23,6 +23,7 @@ code on the first guess.
 
 - Read the relevant skills and AGENTS.md.
 - Do not make speculative changes. Each edit must follow a verified hypothesis.
+- For configuration failures, compare exact producer/consumer names (including dots, underscores, case, and camel case) across scripts, CI fixtures, config files, and readers. Do not patch around a mismatch by renaming the established contract; follow `karpathy-guidelines`.
 - If the root cause points to a scope beyond a single fix (architectural),
   report it explicitly instead of patching over it.
 
