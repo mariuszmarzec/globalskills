@@ -223,46 +223,55 @@ todo_task_fingerprint_raw() {
 # payload digest verify. A changed result or any user-owned subtask remains in
 # the structural fingerprint and makes the source stale.
 todo_task_strip_verified_report_result() {
-  local task_json="$1" root_id parsed candidate_json candidate_source expected_version
+  local task_json="$1" root_id parsed candidate_record candidate_json candidate_source expected_version
+  local verified_count=0 verified_candidate=""
   root_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$root_id" =~ ^[0-9]+$ ]] || { printf '%s\n' "$task_json"; return 0; }
   parsed="$(python3 -c '
-import hashlib, json, re, sys
+import json, re, sys
 root_id = int(sys.argv[1])
 root = json.load(sys.stdin)
-matches = []
-for child in root.get("subTasks") or []:
+candidates = []
+subtasks = root.get("subTasks") or []
+for index, child in enumerate(subtasks):
     description = child.get("description")
     if not isinstance(description, str) or not description.startswith("<!-- MANUL_REPORT_RESULT:v1;"):
         continue
-    marker, separator, payload = description.partition("\n")
+    marker, separator, payload = description.partition("\\n")
     match = re.fullmatch(r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});sha256=([0-9a-f]{64}) -->", marker)
     if not separator or not match or int(match.group(1)) != root_id:
         continue
     if child.get("parentTaskId") != root_id or child.get("subTasks"):
         continue
+    import hashlib
     if hashlib.sha256(payload.encode("utf-8")).hexdigest() != match.group(3):
         continue
-    matches.append((child, match.group(2)))
-if len(matches) == 1:
-    child, source_id = matches[0]
-    root["subTasks"] = [item for item in (root.get("subTasks") or []) if item.get("id") != child.get("id")]
-    print(json.dumps({"task": root, "sourceId": source_id}, separators=(",", ":")))
-else:
-    print(json.dumps({"task": root, "sourceId": ""}, separators=(",", ":")))
+    candidate = dict(root)
+    candidate["subTasks"] = [item for position, item in enumerate(subtasks) if position != index]
+    candidates.append({"task": candidate, "sourceId": match.group(2)})
+print(json.dumps(candidates, separators=(",", ":")))
 ' "$root_id" <<<"$task_json")" || { printf '%s\n' "$task_json"; return 0; }
-  candidate_json="$(jq -c '.task' <<<"$parsed")"
-  candidate_source="$(jq -r '.sourceId // empty' <<<"$parsed")"
-  [ -n "$candidate_source" ] || { printf '%s\n' "$task_json"; return 0; }
-  expected_version="$(todo_task_fingerprint_raw "$candidate_json")" || { printf '%s\n' "$task_json"; return 0; }
-  if [ "$candidate_source" = "${root_id}@${expected_version}" ]; then
-    printf '%s\n' "$candidate_json"
+
+  # Test each individually valid output record against the source tree that
+  # remains when only that record is removed. This keeps historical Manul
+  # reports in the user's task tree while excluding exactly the record bound
+  # to the current source version. Ambiguous matches fail closed.
+  while IFS= read -r candidate_record; do
+    candidate_json="$(jq -c '.task' <<<"$candidate_record")"
+    candidate_source="$(jq -r '.sourceId // empty' <<<"$candidate_record")"
+    expected_version="$(todo_task_fingerprint_raw "$candidate_json")" || continue
+    if [ "$candidate_source" = "${root_id}@${expected_version}" ]; then
+      verified_count=$((verified_count + 1))
+      verified_candidate="$candidate_json"
+    fi
+  done < <(jq -c '.[]' <<<"$parsed")
+
+  if [ "$verified_count" -eq 1 ]; then
+    printf '%s\n' "$verified_candidate"
   else
     printf '%s\n' "$task_json"
   fi
-}
-
-todo_task_fingerprint() {
+}todo_task_fingerprint() {
   local stable_task
   stable_task="$(todo_task_strip_verified_report_result "$1")" || return 1
   todo_task_fingerprint_raw "$stable_task"
