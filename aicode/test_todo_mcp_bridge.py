@@ -4,6 +4,7 @@ import queue
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -65,8 +66,12 @@ class TodoMcpBridgeTests(unittest.TestCase):
     def test_local_proxy_returns_explicit_503_when_reverse_pool_is_empty(self):
         pool = proxy_module.ReverseChannelPool("172.24.0.1", max_channels=1)
         proxy = self.make_proxy(pool)
-        with socket.create_connection(proxy.server_address, timeout=2) as client:
-            response = client.recv(4096)
+        # Exercise the handler's pool-exhaustion response without waiting for
+        # the production six-second channel-acquisition deadline. The timeout
+        # itself is covered by ReverseChannelPool's bounded-acquire behavior.
+        with patch.object(pool, "acquire", side_effect=queue.Empty):
+            with socket.create_connection(proxy.server_address, timeout=2) as client:
+                response = client.recv(4096)
         self.assertTrue(response.startswith(b"HTTP/1.1 503 Service Unavailable"))
         self.assertIn(b"Todo MCP reverse bridge unavailable", response)
 
