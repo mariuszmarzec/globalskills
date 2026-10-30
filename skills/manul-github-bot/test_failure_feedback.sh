@@ -203,7 +203,7 @@ test_task_started_claim_accounting() {
   body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:11:00Z","data":{"taskId":"started-definite-failure","conversationId":"conv-definite","status":"started","attempt":2}} -->
 
 — manul 🐈'
-  GH_FAIL_POST=1
+  export GH_FAIL_POST=1
   rc=0
   publish_task_started_for_claim "started-definite-failure" "claim-definite" "test/repo" 89 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_POST
