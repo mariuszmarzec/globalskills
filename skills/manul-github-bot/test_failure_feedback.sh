@@ -160,28 +160,27 @@ count_task_started() {
   ' "$GH_COMMENTS_JSONL"
 }
 
-# Exercise the production dispatcher wrapper and verify that an ambiguous
-# accepted POST does not roll back the current claim/agent attempt.
-PRE_EXECUTION_FAILURE_CALLS=0
-handle_pre_execution_failure() {
-  local task_id="$1" claim_token="$2"
-  PRE_EXECUTION_FAILURE_CALLS=$((PRE_EXECUTION_FAILURE_CALLS + 1))
-  sqlite3 "$DB" "UPDATE processed_comments
-    SET status='queued',
-        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
-        preExecutionFailures=COALESCE(preExecutionFailures,0)+1,
-        claimToken=NULL
-    WHERE commentId='$(printf '%s' "$task_id" | sed "s/'/''/g")'
-      AND status='running'
-      AND claimToken='$(printf '%s' "$claim_token" | sed "s/'/''/g")';"
-}
+# Exercise the production pre-agent recovery function with only its
+# external side effects stubbed. The SQLite claim/attempt transition itself
+# remains the production implementation under test.
+CONFIG="$MANUL_DIR/config.json"
+RETRY_DELAY_SECONDS=1
+sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+manul_redact_failure_details() { printf '%s' "$1"; }
+ensure_recovery_tracking_columns() { return 0; }
+stop_heartbeat() { :; }
+workspace_release() { :; }
+release_task_repo_lock() { :; }
+release_task_lock() { :; }
+set_activity() { :; }
+post_task_failure_feedback() { :; }
+eval "$(sed -n '/^handle_pre_execution_failure() {/,/^}/p' "$DAEMON")"
 
 test_task_started_claim_accounting() {
   local rc status attempts infra_failures body
   echo "=== production TASK_STARTED dispatcher claim accounting ==="
 
   sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken) VALUES ('started-ambiguous-claim','test/repo',88,'https://github.com/test/repo/issues/88','IMPLEMENT','running',2,'claim-ambiguous');"
-  PRE_EXECUTION_FAILURE_CALLS=0
   : >"$GH_COMMENTS_JSONL"
   body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:10:00Z","data":{"taskId":"started-ambiguous-claim","conversationId":"conv-ambiguous","status":"started","attempt":2}} -->
 
@@ -190,7 +189,6 @@ test_task_started_claim_accounting() {
   rc=0
   publish_task_started_for_claim "started-ambiguous-claim" "claim-ambiguous" "test/repo" 88 "" "" "$body" "" 2 || rc=$?
   assert_eq 0 "$rc" "ambiguous accepted TASK_STARTED is reconciled before dispatcher recovery"
-  assert_eq 0 "$PRE_EXECUTION_FAILURE_CALLS" "confirmed ambiguous start does not trigger pre-execution rollback"
   status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='started-ambiguous-claim';")"
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='started-ambiguous-claim';")"
   assert_eq running "$status" "confirmed ambiguous start keeps the claimed task running"
@@ -198,7 +196,6 @@ test_task_started_claim_accounting() {
   assert_eq 1 "$(count_task_started started-ambiguous-claim 2)" "accepted ambiguous start exists exactly once"
 
   sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken) VALUES ('started-definite-failure','test/repo',89,'https://github.com/test/repo/issues/89','IMPLEMENT','running',2,'claim-definite');"
-  PRE_EXECUTION_FAILURE_CALLS=0
   : >"$GH_COMMENTS_JSONL"
   body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:11:00Z","data":{"taskId":"started-definite-failure","conversationId":"conv-definite","status":"started","attempt":2}} -->
 
@@ -208,16 +205,18 @@ test_task_started_claim_accounting() {
   publish_task_started_for_claim "started-definite-failure" "claim-definite" "test/repo" 89 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_POST
   assert_eq 1 "$rc" "definite start failure hands control back to dispatcher without launching the agent"
-  assert_eq 1 "$PRE_EXECUTION_FAILURE_CALLS" "definite start failure triggers one pre-execution rollback"
   status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='started-definite-failure';")"
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='started-definite-failure';")"
   infra_failures="$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='started-definite-failure';")"
-  assert_eq queued "$status" "definite start failure requeues before agent startup"
-  assert_eq 1 "$attempts" "pre-agent failure does not consume an agent attempt"
-  assert_eq 1 "$infra_failures" "pre-agent failure increments the separate infrastructure counter"
+  assert_eq queued "$status" "production recovery requeues after definite start failure"
+  assert_eq 1 "$attempts" "production recovery rolls back the unstarted attempt"
+  assert_eq 1 "$infra_failures" "production recovery increments preExecutionFailures"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'<NULL>') FROM processed_comments WHERE commentId='started-definite-failure';")" "production recovery clears agentStartedAt"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(claimToken,'<NULL>') FROM processed_comments WHERE commentId='started-definite-failure';")" "production recovery releases the claim token"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(heartbeatAt,'<NULL>') FROM processed_comments WHERE commentId='started-definite-failure';")" "production recovery clears the heartbeat"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(leaseExpiresAt,'<NULL>') FROM processed_comments WHERE commentId='started-definite-failure';")" "production recovery clears the lease"
 
   sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken) VALUES ('started-lookup-failure','test/repo',90,'https://github.com/test/repo/issues/90','IMPLEMENT','running',2,'claim-lookup');"
-  PRE_EXECUTION_FAILURE_CALLS=0
   : >"$GH_COMMENTS_JSONL"
   body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:12:00Z","data":{"taskId":"started-lookup-failure","conversationId":"conv-lookup","status":"started","attempt":2}} -->
 
@@ -227,13 +226,14 @@ test_task_started_claim_accounting() {
   publish_task_started_for_claim "started-lookup-failure" "claim-lookup" "test/repo" 90 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_API
   assert_eq 1 "$rc" "failed idempotency lookup stops dispatch after bounded pre-execution recovery"
-  assert_eq 1 "$PRE_EXECUTION_FAILURE_CALLS" "failed idempotency lookup triggers one pre-execution rollback"
   status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='started-lookup-failure';")"
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='started-lookup-failure';")"
   infra_failures="$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='started-lookup-failure';")"
-  assert_eq queued "$status" "lookup failure requeues without starting the agent"
-  assert_eq 1 "$attempts" "lookup failure does not consume an agent attempt"
-  assert_eq 1 "$infra_failures" "lookup failure increments the separate infrastructure counter"
+  assert_eq queued "$status" "production recovery requeues after failed idempotency lookup"
+  assert_eq 1 "$attempts" "lookup failure preserves the agent attempt budget"
+  assert_eq 1 "$infra_failures" "lookup failure increments preExecutionFailures"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'<NULL>') FROM processed_comments WHERE commentId='started-lookup-failure';")" "lookup recovery clears agentStartedAt"
+  assert_eq '<NULL>' "$(sqlite3 "$DB" "SELECT COALESCE(claimToken,'<NULL>') FROM processed_comments WHERE commentId='started-lookup-failure';")" "lookup recovery releases the claim token"
 }
 test_task_started_claim_accounting
 
