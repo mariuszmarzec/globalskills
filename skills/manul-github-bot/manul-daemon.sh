@@ -3640,6 +3640,27 @@ dispatch_once() {
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
     refresh_heartbeat "$COMMENT_ID"
 
+    # Mark the transition to actual agent execution BEFORE posting the
+    # in-progress comment that embeds the TASK_STARTED event marker. This
+    # ordering is critical: recovery uses agentStartedAt to distinguish a
+    # genuine agent attempt from a pre-execution infrastructure failure.
+    # If the worker crashes between setting this marker and posting the
+    # comment, recovery will correctly classify the lost execution as an
+    # agent-attempt failure (deducting from the max-attempts budget) rather
+    # than a recoverable pre-execution failure (which would roll back the
+    # attempt bump and reuse the same attempt number, causing a duplicate
+    # TASK_STARTED comment on retry).
+    # Pre-agent failures after this point are handled by adapters that
+    # explicitly report PRE_EXECUTION_FAILURE, which resets agentStartedAt.
+    local agent_start_changed
+    agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
+    if [ "$agent_start_changed" != "1" ]; then
+      log "ERROR: could not record agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before posting the lifecycle comment." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
+      return 0
+    fi
+
     # 4. Post "in progress" comment BEFORE invoking the LLM
     # Gather task metadata for an informative status comment
     local TRIGGERER="$AUTHOR"
@@ -4307,17 +4328,7 @@ PROMPT_APPEND
      # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
      # executor or any descendants inherit it: their lifetime may outlive the
      # worker and would keep the dispatcher lock held across a restart.
-      # Mark the transition to actual agent execution. Pre-agent failures use a
-      # separate infrastructure retry budget; a host/runtime loss after this point
-      # consumes a genuine agent attempt.
-      local agent_start_changed
-      agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
-      if [ "$agent_start_changed" != "1" ]; then
-        log "ERROR: could not record agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
-        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before invoking the runtime." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
-        return 0
-      fi
-     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
+      setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0
      wait "$executor_launcher_pid" || rc=$?
