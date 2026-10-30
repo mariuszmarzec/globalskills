@@ -49,7 +49,7 @@ GlobalSkills does not change Todo's listener, disable DNS-rebinding protection, 
 
 Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
 
-- `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
+- `todo_local_mcp` discovers Todo Desktop's local MCP endpoint (`127.0.0.1:8765` on native hosts, or the WSL relay at `127.0.0.1:8766` when needed). It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
 
 Todo tasks are not assigned to the Todo app repository by default. Manul
