@@ -45,6 +45,17 @@ case "$tool" in
 esac
 PYTHON
 chmod +x "$BIN/python3"
+cat > "$BIN/curl" <<'CURL'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  http://127.0.0.1:8765/mcp) printf '401'; exit 0 ;;
+  http://127.0.0.1:8766/mcp) printf '000'; exit 7 ;;
+  *) printf '000'; exit 7 ;;
+esac
+CURL
+chmod +x "$BIN/curl"
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
 export FITEO_PAT="remote-test-token"
@@ -250,7 +261,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 ]
 JSON
 
-LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
+LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
 REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
 
 echo "=== Repository routing ==="
@@ -306,7 +317,7 @@ local_task="$(printf '%s\n' "$local_tasks" | jq -c '.')"
 assert_contains "local root source type is normalized" "$local_task" '"taskSourceType":"todo_local_mcp"'
 assert_eq "local Todo adapter assigns repository from description, not a static default" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_task")"
 assert_eq "local source persists repository-resolution provenance" "catalog_alias" "$(jq -r '.metadata.repositoryResolution.method' <<<"$local_task")"
-assert_contains "local task uses local bridge URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8766/mcp'
+assert_contains "legacy WSL URL is migrated to native loopback on macOS/Linux" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
 local_prompt="$(jq -r '.prompt' <<<"$local_task")"
 assert_contains "local prompt preserves first subtask before nested and sibling steps" "$local_prompt" '1. [TODO] First step'
 assert_contains "nested step immediately follows its parent in the supplied tree order" "$local_prompt" '2. [TODO] Nested step'
