@@ -268,8 +268,12 @@ if [ "$LIST_MODE" = true ]; then
     while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
       source_name="$(task_source_label "$task_source_type")"
       source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
+      repo_reference="$repo"
+      if [ "$issue" != "0" ]; then
+        repo_reference="$repo#$issue"
+      fi
       printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
-        "$tid" "$repo#$issue" "$source_name" "$source_record_id" "$status" "$attempts" "$created"
+        "$tid" "$repo_reference" "$source_name" "$source_record_id" "$status" "$attempts" "$created"
     done <<< "$RESULTS"
   fi
 else
