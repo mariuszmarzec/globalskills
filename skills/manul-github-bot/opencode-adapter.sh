@@ -17,6 +17,7 @@ set -u
 MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$MANUL_SCRIPT_DIR/manul-paths.sh"
 source "$MANUL_SCRIPT_DIR/process-runner.sh"
+source "$MANUL_SCRIPT_DIR/todo-local-mcp-url.sh"
 
 OPT_TASK_ID=""
 OPT_PROMPT=""
@@ -265,17 +266,19 @@ fi
 
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
+unset TODO_LOCAL_MCP_URL
 if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then
-    _todo_local_probe_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
-    if [ "$_todo_local_probe_status" = "401" ]; then
+    _todo_local_resolved_url="$(todo_local_mcp_resolve_url "${TODO_LOCAL_MCP_URL:-}")" || _todo_local_resolved_url=""
+    if [ -n "$_todo_local_resolved_url" ]; then
+        TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
         TODO_LOCAL_MCP_AVAILABLE=1
         TODO_LOCAL_MCP_CONNECTED=1
-        log "Todo local MCP bridge is reachable; adding it to the task-scoped OpenCode config"
+        log "Todo local MCP is reachable at $TODO_LOCAL_MCP_URL; adding it to the task-scoped OpenCode config"
     else
-        log "Todo local MCP bridge is unavailable (HTTP ${_todo_local_probe_status:-none}); continuing without this optional MCP"
+        log "Todo local MCP is unavailable on the current host; continuing without this optional MCP"
     fi
 fi
-export TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 
 if [ -n "$_workspace_real" ]; then
     export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
@@ -349,7 +352,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
             | . + {
                 "todo-local": {
                     type: "remote",
-                    url: "http://127.0.0.1:8766/mcp",
+                    url: "{env:TODO_LOCAL_MCP_URL}",
                     oauth: false,
                     enabled: true,
                     headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
