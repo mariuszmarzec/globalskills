@@ -42,7 +42,11 @@ function Get-ManagedConnectorProcesses([string]$TargetRelayAddress, [int]$Target
     $portPattern = '["]?-RelayPort["]?\s+["]?' + [regex]::Escape([string]$TargetRelayPort) + '["]?'
     $actionPattern = '["]?-Action["]?\s+["]?Connect["]?'
     $results = @()
-    foreach ($processInfo in (Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)) {
+    $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    if ($processes.Count -eq 0) {
+        throw "Unable to enumerate Windows processes; refusing to start a duplicate Todo MCP connector."
+    }
+    foreach ($processInfo in $processes) {
         if ($processInfo.Name -notmatch '^(powershell|pwsh)\.exe
 
 $stateRoot = Get-BridgeStateDirectory
