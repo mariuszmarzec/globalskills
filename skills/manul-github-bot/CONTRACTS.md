@@ -476,8 +476,32 @@ trigger or task-selection rule:
 - `github_issues` selects issue roots containing the configured `/manul`
   trigger;
 - `jira_tasks` selects issues returned by its configured JQL;
-- future sources such as Todo may use their own predicates, for example a
-  user-sharing filter for `manul@local.ai`.
+- `todo_local_mcp` selects active unscheduled root tasks in Todo Desktop
+  whose description contains a line beginning with `/manul`;
+- `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
+  contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
+
+The two Todo providers are separate adapters with different MCP tool names and
+credentials. Local uses the existing loopback bridge and `TODO_LOCAL_MCP_TOKEN`;
+remote uses Fiteo's HTTPS `/mcp` endpoint and a PAT from an environment variable.
+Tokens never appear in normalized task JSON or configuration values.
+
+A Todo root is queued once with its complete subtask tree. Descendants are ordered
+implementation steps, not separate queue entries. The adapter preserves the
+provider-returned order and traverses nested subtasks in pre-order. The source ID
+includes a structural fingerprint (task IDs, descriptions, permissions, priority,
+scheduler and child order); it deliberately excludes progress flags and modified
+timestamps so a partial completion can be retried. The root must remain active and
+the current source tree must still match before execution and completion.
+
+After repository delivery verification, the local adapter marks the root and all
+descendants done in one local operation. The remote adapter updates descendants
+individually before the root, using Fiteo's inherited ancestor-share permission
+rules. The root remains active if a child update fails, allowing a safe retry.
+Todo tasks do not post GitHub lifecycle or result comments; their delivery receipt
+is the verified repository PR (when code changed) followed by successful source
+completion. The common GitHub comment-marker contract does not apply to these
+external sources.
 
 The task-source identity is the root work item. A pull request, review
 comment, or CI check is never a task-source root. Those artifacts may be linked
