@@ -21,6 +21,9 @@ assert_rc() { [[ "$2" == "$3" ]] && ok "$1" || fail "$1 (expected rc=$2, got rc=
 cat > "$BIN/python3" <<'PYTHON'
 #!/usr/bin/env bash
 set -uo pipefail
+if [[ " $* " != *" --tool "* ]]; then
+  exec "$REAL_PYTHON_BIN" "$@"
+fi
 tool=""
 arguments="{}"
 while [ "$#" -gt 0 ]; do
@@ -34,8 +37,61 @@ case "$tool" in
   list_tasks|todo_list_tasks)
     cat "$TODO_MCP_FIXTURE"
     ;;
-  mark_tasks_done|todo_mark_tasks|todo_update_task)
+  create_task|todo_create_task)
     printf '%s\t%s\n' "$tool" "$arguments" >> "$TODO_MCP_CALL_LOG"
+    if [ "${TODO_MCP_FAIL_CREATE:-0}" = "1" ]; then
+      echo "injected create failure" >&2
+      exit 2
+    fi
+    if [ "$tool" = "create_task" ]; then
+      description="$(jq -r '.description' <<<"$arguments")"
+      parent_id="$(jq -r '.parentTaskId' <<<"$arguments")"
+    else
+      description="$(jq -r '.task.description' <<<"$arguments")"
+      parent_id="$(jq -r '.task.parentTaskId' <<<"$arguments")"
+    fi
+    task_id="$(jq '[.. | objects | .id? // empty] | max + 1' "$TODO_MCP_FIXTURE")"
+    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" '
+      map(if .id == $parentId then
+        .subTasks = ((.subTasks // []) + [{
+          id:$id, description:$description, parentTaskId:$parentId,
+          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:[]
+        }])
+      else . end)
+    ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
+    mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
+    jq -cn --argjson id "$task_id" --arg description "$description" '{id:$id,description:$description}'
+    ;;
+  mark_tasks_done|todo_mark_tasks)
+    printf '%s\t%s\n' "$tool" "$arguments" >> "$TODO_MCP_CALL_LOG"
+    if [ "${TODO_MCP_FAIL_MARK:-0}" = "1" ]; then
+      echo "injected mark failure" >&2
+      exit 2
+    fi
+    ids="$(jq -c '.taskIds // []' <<<"$arguments")"
+    jq --argjson ids "$ids" '
+      def mark:
+        if (.id as $id | ($ids | index($id)) != null) then .isToDo=false else . end
+        | .subTasks |= map(mark);
+      map(mark)
+    ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
+    mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
+    printf '{"success":true}\n'
+    ;;
+  todo_update_task)
+    printf '%s\t%s\n' "$tool" "$arguments" >> "$TODO_MCP_CALL_LOG"
+    if [ "${TODO_MCP_FAIL_MARK:-0}" = "1" ]; then
+      echo "injected mark failure" >&2
+      exit 2
+    fi
+    task_id="$(jq -r '.id' <<<"$arguments")"
+    jq --argjson taskId "$task_id" '
+      def mark:
+        if .id == $taskId then .isToDo=false else . end
+        | .subTasks |= map(mark);
+      map(mark)
+    ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
+    mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
     printf '{"success":true}\n'
     ;;
   *)
@@ -45,6 +101,7 @@ case "$tool" in
 esac
 PYTHON
 chmod +x "$BIN/python3"
+export REAL_PYTHON_BIN="$PYTHON_BIN"
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
 export FITEO_PAT="remote-test-token"
@@ -306,7 +363,14 @@ local_task="$(printf '%s\n' "$local_tasks" | jq -c '.')"
 assert_contains "local root source type is normalized" "$local_task" '"taskSourceType":"todo_local_mcp"'
 assert_eq "local Todo adapter assigns repository from description, not a static default" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_task")"
 assert_eq "local source persists repository-resolution provenance" "catalog_alias" "$(jq -r '.metadata.repositoryResolution.method' <<<"$local_task")"
-assert_contains "local task uses local bridge URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8766/mcp'
+assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8766/mcp'
+assert_contains "local Todo accepts localhost on another port" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://localhost:9876/mcp"}')" 'http://localhost:9876/mcp'
+assert_contains "local Todo accepts IPv6 loopback" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://[::1]:8766/mcp"}')" 'http://[::1]:8766/mcp'
+if todo_source_local_config '{"type":"todo_local_mcp","url":"http://todo.example.test:8766/mcp"}' >/dev/null 2>&1; then
+  fail "local Todo rejects non-loopback MCP hosts"
+else
+  ok "local Todo rejects non-loopback MCP hosts"
+fi
 local_prompt="$(jq -r '.prompt' <<<"$local_task")"
 assert_contains "local prompt preserves first subtask before nested and sibling steps" "$local_prompt" '1. [TODO] First step'
 assert_contains "nested step immediately follows its parent in the supplied tree order" "$local_prompt" '2. [TODO] Nested step'
@@ -386,6 +450,155 @@ assert_eq "remote completion marks the root last for retry safety" "21" "$last_r
 assert_eq "remote completion starts with the last ordered sibling" "26" "$first_remote_id"
 remote_order="$(cut -f2- "$TODO_MCP_CALL_LOG" | jq -cs '[.[].id]')"
 assert_eq "remote completion reverses the original ordered tree" "[26,23,22,21]" "$remote_order"
+
+echo "=== Report-only Todo delivery ==="
+cat > "$TEST_DIR/local-report.json" <<'JSON'
+[
+  {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+]
+JSON
+LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
+local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
+assert_eq "local report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$local_report_task")"
+assert_eq "local report-only task carries no repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_report_task")"
+local_report_id="$(jq -r '.taskSourceId' <<<"$local_report_task")"
+assert_eq "local report source is current before execution" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id"; echo $?)"
+: > "$TODO_MCP_CALL_LOG"
+export TODO_MCP_FAIL_MARK=1
+local_report_rc=0
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content." >/dev/null || local_report_rc=$?
+assert_rc "failed completion mutation leaves the report task retryable" "2" "$local_report_rc"
+partial_local_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "partial local write leaves root task active" "true" "$partial_local_root_status"
+partial_local_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "partial local write keeps one result subtask" "1" "$partial_local_child_count"
+partial_local_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "partial local write leaves result subtask pending" "true" "$partial_local_child_status"
+unset TODO_MCP_FAIL_MARK
+local_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content.")"
+assert_eq "local report receipt preserves the exact answer" "Local report answer with exact content." "$(jq -r '.answer' <<<"$local_report_receipt")"
+local_report_result_id="$(jq -r '.resultTaskId' <<<"$local_report_receipt")"
+jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-child-status"
+IFS= read -r local_report_child_status < "$TEST_DIR/local-report-child-status"
+assert_eq "local result child is marked completed after read-back" "false" "$local_report_child_status"
+jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-child-parent"
+IFS= read -r local_report_child_parent < "$TEST_DIR/local-report-child-parent"
+assert_eq "local result retains parent relationship" "501" "$local_report_child_parent"
+local_report_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "local result output leaves root active until tree completion" "true" "$local_report_root_status"
+local_verified_source_rc=0
+todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_verified_source_rc=$?
+assert_eq "verified local report child does not invalidate structural source identity" "0" "$local_verified_source_rc"
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "A regenerated retry answer must not create a duplicate child." > "$TEST_DIR/local-retry-receipt.json"
+jq -r .resultTaskId "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-result-id"
+IFS= read -r local_retry_result_id < "$TEST_DIR/local-retry-result-id"
+assert_eq "local report retry reuses the existing child" "$local_report_result_id" "$local_retry_result_id"
+jq -r .answer "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-answer"
+IFS= read -r local_retry_answer < "$TEST_DIR/local-retry-answer"
+assert_eq "local report retry returns the exact previously persisted answer" "Local report answer with exact content." "$local_retry_answer"
+grep -Fc "create_task" "$TODO_MCP_CALL_LOG" > "$TEST_DIR/local-create-count"
+IFS= read -r local_create_count < "$TEST_DIR/local-create-count"
+assert_eq "local report creates only one output child across retry" "1" "$local_create_count"
+jq --arg desc "/manul report User changed source after delivery" '.[0].description = $desc' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-edited.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-report-edited.json"
+local_report_reval_rc=0
+todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_report_reval_rc=$?
+assert_rc "user edits remain visible to source fingerprint after output child is excluded" "1" "$local_report_reval_rc"
+
+# A new /manul report version must retain the previous result as history
+# while excluding only the output child bound to the newly polled source version.
+jq '.[0].description = "/manul report Updated request after initial report"' "$TEST_DIR/local-report.json" > "$TEST_DIR/local-report-second-version.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-report-second-version.json"
+local_second_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
+local_second_report_id="$(jq -r '.taskSourceId' <<<"$local_second_report_task")"
+assert_not_contains "second report version receives a new source identity" "$local_second_report_id" "$local_report_id"
+local_second_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id" "Second report answer.")"
+assert_eq "second report version persists its exact answer" "Second report answer." "$(jq -r '.answer' <<<"$local_second_report_receipt")"
+jq -r .[0].subTasks[].description "$TODO_MCP_FIXTURE" > "$TEST_DIR/historical-report-descriptions"
+grep -Fc "Local report answer with exact content." "$TEST_DIR/historical-report-descriptions" > "$TEST_DIR/historical-report-count" || true
+IFS= read -r historical_report_count < "$TEST_DIR/historical-report-count"
+assert_eq "previous report remains in the source tree as history" "1" "$historical_report_count"
+assert_eq "second report is excluded without hiding the historical output" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id"; echo $?)"
+
+cat > "$TEST_DIR/local-report-create-failure.json" <<'JSON'
+[
+  {"id":502,"description":"/manul report Create failure fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/local-report-create-failure.json"
+local_create_failure_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
+local_create_failure_id="$(jq -r '.taskSourceId' <<<"$local_create_failure_task")"
+export TODO_MCP_FAIL_CREATE=1
+local_create_failure_rc=0
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_create_failure_id" "Must not be lost." >/dev/null || local_create_failure_rc=$?
+unset TODO_MCP_FAIL_CREATE
+assert_rc "local result creation failure is surfaced" "2" "$local_create_failure_rc"
+local_create_failure_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "local result creation failure leaves root active" "true" "$local_create_failure_root_status"
+local_create_failure_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "local result creation failure writes no child" "0" "$local_create_failure_child_count"
+
+cat > "$TEST_DIR/remote-report.json" <<'JSON'
+[
+  {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_PAT"}'
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
+remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
+assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
+remote_report_id="$(jq -r '.taskSourceId' <<<"$remote_report_task")"
+: > "$TODO_MCP_CALL_LOG"
+export TODO_MCP_FAIL_MARK=1
+remote_report_rc=0
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "Remote Fiteo report answer." >/dev/null || remote_report_rc=$?
+assert_rc "remote partial completion failure remains retryable" "2" "$remote_report_rc"
+remote_partial_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote partial write leaves root active" "true" "$remote_partial_root_status"
+remote_partial_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "remote partial write keeps exactly one result child" "1" "$remote_partial_child_count"
+remote_pending_status="$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_eq "remote result child stays pending when completion update fails" "true" "$remote_pending_status"
+unset TODO_MCP_FAIL_MARK
+remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
+assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
+remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
+remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
+assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$remote_create_call_count"
+remote_update_call_count=$(grep -c todo_update_task "$TODO_MCP_CALL_LOG")
+assert_eq "remote report retries Fiteo completion update" "2" "$remote_update_call_count"
+remote_report_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote result child is completed after verified retry read-back" "false" "$remote_report_child_status"
+remote_root_todo="$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")"
+assert_eq "remote root remains active until the task tree completion step" "true" "$remote_root_todo"
+assert_eq "remote output result does not invalidate source identity" "0" "$(todo_task_still_current "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id"; echo $?)"
+
+# The common completion operation must still mark the report child and all
+# original descendants first, then the source root last.
+task_source_todo_remote_complete "$REMOTE_REPORT_SOURCE" "$remote_report_id"
+remote_report_root_status="$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")"
+assert_eq "remote report tree completion marks the root last" "false" "$remote_report_root_status"
+
+cat > "$TEST_DIR/remote-report-create-failure.json" <<'JSON'
+[
+  {"id":602,"ownerId":4,"description":"/manul report Remote create failure fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-report-create-failure.json"
+task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE" > "$TEST_DIR/remote-create-failure-task.json"
+jq -r .taskSourceId "$TEST_DIR/remote-create-failure-task.json" > "$TEST_DIR/remote-create-failure-id"
+IFS= read -r remote_create_failure_id < "$TEST_DIR/remote-create-failure-id"
+export TODO_MCP_FAIL_CREATE=1
+remote_create_failure_rc=0
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_create_failure_id" "Must remain active." >/dev/null || remote_create_failure_rc=$?
+unset TODO_MCP_FAIL_CREATE
+assert_rc "remote result creation failure is surfaced" "2" "$remote_create_failure_rc"
+remote_create_failure_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote result creation failure leaves root active" "true" "$remote_create_failure_root_status"
+remote_create_failure_child_count=$(jq -r ".[0].subTasks | length" "$TODO_MCP_FIXTURE")
+assert_eq "remote result creation failure writes no child" "0" "$remote_create_failure_child_count"
+
 
 echo
 if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then

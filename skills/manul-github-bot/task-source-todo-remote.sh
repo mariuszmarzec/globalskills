@@ -33,10 +33,18 @@ task_source_todo_remote_poll() {
     todo_task_is_active "$shared_task_json" || continue
     todo_task_has_remote_share "$shared_task_json" "$manul_user_id" || continue
     task_id="$(jq -r '.id // "unknown"' <<<"$shared_task_json")"
-    resolution="$(todo_task_resolve_repository "$source_json" "$shared_task_json")" || {
-      echo "task-source: remote Todo task $task_id was not queued because its repository could not be resolved" >&2
-      continue
-    }
+    if todo_task_is_report_only "$shared_task_json"; then
+      if [ "$(jq -r '.allowReportOnly // false' <<<"$source_json")" != "true" ]; then
+        echo "task-source: remote Todo report-only task $task_id is disabled by allowReportOnly" >&2
+        continue
+      fi
+      resolution='{"reportOnly":true}'
+    else
+      resolution="$(todo_task_resolve_repository "$source_json" "$shared_task_json")" || {
+        echo "task-source: remote Todo task $task_id was not queued because its repository could not be resolved" >&2
+        continue
+      }
+    fi
     normalized="$(todo_task_to_source_json "$shared_task_json" todo_remote_mcp "$resolution")" || continue
     printf '%s\n' "$normalized"
   done < <(

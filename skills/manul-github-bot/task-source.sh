@@ -150,3 +150,22 @@ task_source_complete() {
       return 2 ;;
   esac
 }
+
+# Persist and verify a report-only Todo result without changing root status.
+task_source_report_deliver() {
+  local config="$1" type="$2" source_id="$3" answer="$4" source_json
+  task_source_is_todo_type "$type" || return 2
+  source_json="$(task_source_config_by_type "$config" "$type")" || return 2
+  case "$type" in
+    todo_local_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
+      source_json="$(todo_source_local_config "$source_json")" || return $?
+      todo_task_report_deliver "$source_json" "$type" "$source_id" "$answer" ;;
+    todo_remote_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
+      source_json="$(todo_source_remote_config "$source_json")" || return $?
+      todo_task_report_deliver "$source_json" "$type" "$source_id" "$answer" ;;
+    *)
+      return 2 ;;
+  esac
+}

@@ -27,7 +27,10 @@ git -C ~/.globalskills pull
 
 ## Todo Desktop MCP bridge for WSL
 
-When OpenCode runs inside WSL but Todo Desktop runs in Windows, aicode can create a narrow bridge to Todo's existing loopback-only MCP endpoint. Export `TODO_LOCAL_MCP_TOKEN` in your shell (for example, from `~/.zshrc`); alternatively, set it in `~/.config/opencode/todo-mcp.env`. An already-exported token takes precedence:
+When OpenCode runs inside WSL but Todo Desktop runs in Windows, aicode can bridge
+to Todo's existing loopback-only MCP endpoint. Export TODO_LOCAL_MCP_TOKEN in
+your shell (for example, from ~/.zshrc); alternatively, set it in
+~/.config/opencode/todo-mcp.env. An already-exported token takes precedence:
 
 ```bash
 export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
@@ -35,15 +38,32 @@ export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
 
 On the next aicode launch:
 
-- The Windows helper listens only on the current WSL-facing Windows host address and accepts connections only from the current WSL IPv4 address.
-- If Windows observes a different source IP than the route resolver predicted, `aicode` reads the bridge's rejected-client diagnostic and automatically updates the allowlist only when that exact IP is currently assigned to the WSL instance. It never broadens access to an entire private subnet.
-- The Windows helper forwards only HTTP GET/POST/DELETE requests to /mcp, rewrites Host/Origin headers for Todo's DNS-rebinding protection, and forwards to 127.0.0.1:8765.
-- The WSL proxy listens only on 127.0.0.1:8766; OpenCode and Manul use http://127.0.0.1:8766/mcp.
-- The launcher sends an unauthenticated probe and enables the OpenCode MCP entry only after the server rejects it with HTTP 401. Todo still validates the Bearer token on every MCP request.
-- The current token is refreshed in ~/.manul/.env so unattended Manul tasks can use the same MCP entry.
-- Manul's OpenCode adapter reloads the token from ~/.manul/.env for each task, probes the bridge, and adds `todo-local` to the task-scoped config only when the bridge is reachable. It verifies `todo-local connected` before starting the task when that optional MCP was enabled; unrelated tasks continue when Todo Desktop is unavailable.
+- The WSL relay listens on 127.0.0.1:8766 for OpenCode and Manul, and on the
+  current WSL interface address at port 18766 for reverse channels.
+- The reverse listener accepts channels only from the current Windows WSL
+  gateway address. It does not bind to 0.0.0.0.
+- The Windows helper initiates a small pool of outbound TCP connections to WSL.
+  Each channel carries one HTTP request to Todo Desktop's existing
+  127.0.0.1:8765 MCP endpoint; Windows does not open an inbound bridge port.
+- The Windows helper forwards only HTTP GET/POST/DELETE requests to /mcp and
+  rewrites Host/Origin headers for Todo's DNS-rebinding protection.
+- The launcher sends an unauthenticated probe and enables the OpenCode MCP entry
+  only after Todo rejects it with HTTP 401. Todo still validates the Bearer
+  token on every MCP request.
+- The current token is refreshed in ~/.manul/.env so unattended Manul tasks
+  can use the same MCP entry.
+- Manul's OpenCode adapter reloads the token from ~/.manul/.env for each task,
+  probes the bridge, and adds todo-local to the task-scoped config only when
+  the bridge is reachable. It verifies todo-local connected before starting
+  the task when that optional MCP was enabled; unrelated tasks continue when
+  Todo Desktop is unavailable.
 
-The bridge does not change Todo's listener, disable DNS-rebinding protection, add Windows Firewall rules, or listen on LAN interfaces. Todo Desktop must be running with todo.localMcpServer enabled. Bridge logs are under %LOCALAPPDATA%/GlobalSkills/TodoMcpBridge in Windows and ~/.cache/globalskills/todo-mcp-bridge/bridge.log in WSL. The local relay is recreated when the WSL host address or bridge code changes.
+The bridge does not change Todo's listener, disable DNS-rebinding protection,
+add Windows Firewall rules, or listen on Windows LAN interfaces. Todo Desktop
+must be running with todo.localMcpServer enabled. Windows bridge logs are
+under %LOCALAPPDATA%/GlobalSkills/TodoMcpBridge; the WSL log is
+~/.cache/globalskills/todo-mcp-bridge/bridge.log. The relay is recreated when
+the WSL address or bridge code changes.
 
 ## Todo task sources for Manul
 
@@ -51,6 +71,20 @@ Manul has two independent Todo source adapters; enable them individually in `~/.
 
 - `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
+
+Set `allowReportOnly: true` on either Todo source to opt in to informational
+tasks using a description line such as:
+
+```text
+/manul report Summarize the current state of the project and list the risks
+```
+
+Report-only tasks do not need a repository URL or project alias and never create
+a checkout, branch, or PR. Manul saves the answer as a completed child task under
+the Todo root, reads it back to verify the exact content, and only then completes
+the original task tree. A partial create/update is safely reused on retry rather
+than producing duplicate result children. The default remains disabled in the
+example configuration.
 
 Todo tasks are not assigned to the Todo app repository by default. Manul
 resolves their target from an explicit GitHub repository URL or a unique

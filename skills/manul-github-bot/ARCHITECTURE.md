@@ -99,6 +99,15 @@ Task sources
 
 A pull request is never a root task source. A GitHub Issue or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
 
+Todo sources have two explicit execution variants. Repository-backed tasks use
+the configured project catalog and the normal checkout/branch/PR path.
+`/manul report` tasks (opted in per source with `allowReportOnly: true`) bypass
+repository locks and workspace-pool allocation, execute in a disposable scratch
+directory, and persist the final answer as a child Todo task. The adapter verifies
+that child by reading the task tree back before the daemon stores its local
+receipt and marks the root last. The source fingerprint excludes only that one
+valid, source-version-bound result child, so unrelated user edits remain visible.
+
 The legacy `.repositories` configuration remains the default GitHub Issues source when `.taskSources` is absent.
 ## Task execution plane
 

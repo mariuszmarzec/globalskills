@@ -418,6 +418,51 @@ for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
 done
 $GUARD_OK && ok "Self-healing guard references all three CLI entrypoints"
 
+# A status command is often piped to head. Repair output must not share that
+# pipe, or head can SIGPIPE the repair process before it deploys all links.
+if echo "$GUARD_BLOCK" | grep -qF '>"$repair_log" 2>&1'; then
+  ok "Runtime repair output is isolated from caller stdout"
+else
+  fail "Runtime repair output can still be interrupted by caller pipelines"
+fi
+
+if command -v zsh >/dev/null 2>&1; then
+  PIPE_ROOT="$(mktemp -d /tmp/manul-pipeline-repair-XXXXXX)"
+  PIPE_CANON="$PIPE_ROOT/canonical"
+  PIPE_RUN="$PIPE_ROOT/runtime"
+  PIPE_MARKER="$PIPE_ROOT/repair-finished"
+  mkdir -p "$PIPE_CANON"
+  cat >"$PIPE_CANON/repair-manul-runtime.sh" <<'REPAIR'
+#!/usr/bin/env bash
+set -euo pipefail
+# Produce enough output for head to close the pipe before repair completes.
+seq 1 100000
+mkdir -p "$MANUL_RUNTIME_DIR"
+touch "$MANUL_RUNTIME_DIR/manul-daemon.sh" \
+      "$MANUL_RUNTIME_DIR/manul-status.sh" \
+      "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" \
+      "$MANUL_TEST_REPAIR_MARKER"
+REPAIR
+  chmod +x "$PIPE_CANON/repair-manul-runtime.sh"
+
+  set +e
+  env MANUL_CANONICAL_DIR="$PIPE_CANON" \
+      MANUL_RUNTIME_DIR="$PIPE_RUN" \
+      MANUL_TEST_REPAIR_MARKER="$PIPE_MARKER" \
+      zsh -c 'source "$1"; manul-ensure-runtime' _ "$MANUL_SHELL_FILE" | head -n 1 >/dev/null
+  PIPE_ZSH_RC=${PIPESTATUS[0]}
+  set -e
+
+  if [ "$PIPE_ZSH_RC" -eq 0 ] && [ -f "$PIPE_MARKER" ]; then
+    ok "Piped CLI call cannot interrupt an in-progress runtime repair"
+  else
+    fail "Piped CLI call interrupted runtime repair (zsh rc=$PIPE_ZSH_RC)"
+  fi
+  rm -rf "$PIPE_ROOT"
+else
+  echo "SKIP: zsh unavailable; runtime-repair pipeline integration test skipped"
+fi
+
 # 2c) Lifecycle CLI accepts both long flags and readable subcommands.
 if grep -qF -- '--start) action="start"' "$MANUL_SHELL_FILE"    && grep -qF -- '--stop) action="stop"' "$MANUL_SHELL_FILE"    && grep -qF -- '--restart) action="restart"' "$MANUL_SHELL_FILE"    && grep -qF -- '--status) action="status"' "$MANUL_SHELL_FILE"; then
   ok "manul supports --start/--stop/--restart/--status"
@@ -482,6 +527,24 @@ if [ "$RC_STATUS" -eq 0 ]; then
   ok "manul-status --list runs successfully"
 else
   fail "manul-status --list failed (rc=$RC_STATUS)"
+fi
+
+# Status must refuse an empty SQLite path without opening it for writing.
+EMPTY_DB="$CLI_ROOT/empty.db"
+: >"$EMPTY_DB"
+EMPTY_DB_BEFORE="$(stat -c '%s' "$EMPTY_DB")"
+set +e
+EMPTY_STATUS_OUT="$(DB="$EMPTY_DB" MANUL_DIR="$RUN" "$RUN/manul-status.sh" --list 2>&1)"
+EMPTY_STATUS_RC=$?
+set -e
+EMPTY_DB_AFTER="$(stat -c '%s' "$EMPTY_DB")"
+if [ "$EMPTY_STATUS_RC" -ne 0 ] && \
+   [ "$EMPTY_DB_BEFORE" = "$EMPTY_DB_AFTER" ] && \
+   echo "$EMPTY_STATUS_OUT" | grep -q "not found or empty"; then
+  ok "manul-status refuses an empty DB without initializing or modifying it"
+else
+  fail "manul-status did not safely reject the empty DB (rc=$EMPTY_STATUS_RC size=$EMPTY_DB_AFTER)"
+  echo "$EMPTY_STATUS_OUT"
 fi
 
 # 6) manul-comments-remove --help shows usage and never touches GitHub
