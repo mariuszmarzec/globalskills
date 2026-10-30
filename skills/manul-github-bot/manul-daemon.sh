@@ -1862,7 +1862,7 @@ mark_terminal_lifecycle_comment_posted() {
   local safe_task_id safe_event comment_id_sql
   safe_task_id="$(sql_escape "$task_id")"
   safe_event="$(sql_escape "$event_type")"
-  if [[ "$comment_id" =~ ^[0-9]+$ ]]; then comment_id_sql="'$comment_id"; else comment_id_sql="NULL"; fi
+  if [[ "$comment_id" =~ ^[0-9]+$ ]]; then comment_id_sql="'$comment_id'"; else comment_id_sql="NULL"; fi
   sqlite3 "$DB" "
     UPDATE manul_terminal_lifecycle_outbox
     SET postedAt=datetime('now'), postedCommentId=$comment_id_sql,
