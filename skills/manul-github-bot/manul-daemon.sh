@@ -1729,6 +1729,113 @@ post_lifecycle_comment() {
   post_github_comment "$@"
 }
 
+# Return the id of an existing TASK_STARTED comment for this task/attempt.
+# A successful lookup with no match returns an empty string. API or parsing
+# errors return 2 so the caller fails closed instead of publishing blindly.
+find_task_started_comment_id() {
+  local repo="$1" issue="$2" task_id="$3" attempt="$4" reply_to="${5:-}"
+  local endpoint comments_json existing_id
+
+  if ! [[ "$attempt" =~ ^[0-9]+$ ]]; then
+    log "ERROR: invalid TASK_STARTED attempt for $task_id: $attempt"
+    return 2
+  fi
+
+  if [ -n "$reply_to" ]; then
+    endpoint="repos/$repo/pulls/$issue/comments"
+  else
+    endpoint="repos/$repo/issues/$issue/comments"
+  fi
+
+  comments_json="$(gh api "$endpoint" --paginate 2>>"$LOG")" || {
+    log "WARN: unable to check existing TASK_STARTED comments for $task_id attempt $attempt"
+    return 2
+  }
+
+  existing_id="$(printf '%s\n' "$comments_json" | jq -rs \
+    --arg task_id "$task_id" \
+    --argjson attempt "$attempt" \
+    --arg reply_to "$reply_to" '
+      def lifecycle_event:
+        (.body // "") as $body
+        | ($body | split("<!-- manul:event ")) as $parts
+        | if ($parts | length) < 2 then null
+          else (try ($parts[1] | split(" -->")[0] | fromjson) catch null)
+          end;
+
+      (add // [])
+      | map(
+          . as $comment
+          | ($comment | lifecycle_event) as $event
+          | select(
+              $event != null
+              and $event.type == "TASK_STARTED"
+              and $event.data.taskId == $task_id
+              and $event.data.attempt == $attempt
+              and (($reply_to == "") or (($comment.in_reply_to_id // "") | tostring) == $reply_to)
+              and (($comment.body // "") | contains("— manul 🐈"))
+            )
+          | $comment.id
+        )
+      | .[0] // empty
+    ' 2>>"$LOG")" || {
+      log "WARN: unable to parse existing TASK_STARTED comments for $task_id attempt $attempt"
+      return 2
+    }
+
+  printf '%s' "$existing_id"
+  return 0
+}
+
+# Publish TASK_STARTED once per task execution attempt. The post-confirmation
+# lookup handles the ambiguous case where GitHub accepts a comment but gh
+# returns a transport/response error. A later retry reuses the existing event
+# rather than publishing a second visible comment for the same attempt.
+post_task_started_comment() {
+  local repo="$1" issue="$2" task_id="$3" attempt="$4" body="$5" reply_to="${6:-}"
+  local existing_id post_rc
+
+  # External-source and human modes intentionally suppress GitHub lifecycle
+  # comments, so there is nothing to deduplicate in those modes.
+  if [[ "$issue" =~ ^0+$ ]] || [ "$MANUL_MODE" = "human" ]; then
+    post_lifecycle_comment "$repo" "$issue" "$body" "$reply_to"
+    return $?
+  fi
+
+  if existing_id="$(find_task_started_comment_id "$repo" "$issue" "$task_id" "$attempt" "$reply_to")"; then
+    if [ -n "$existing_id" ]; then
+      log "INFO: TASK_STARTED already published for $task_id attempt $attempt (comment=$existing_id); suppressing duplicate"
+      lc_log "TASK_STARTED_DEDUP" "task=$task_id attempt=$attempt comment=$existing_id"
+      return 0
+    fi
+  else
+    log "WARN: TASK_STARTED lookup failed for $task_id attempt $attempt; not publishing without an idempotency check"
+    return 2
+  fi
+
+  post_rc=0
+  post_lifecycle_comment "$repo" "$issue" "$body" "$reply_to" || post_rc=$?
+  if [ "$post_rc" -eq 0 ]; then
+    return 0
+  fi
+
+  # gh may report a transport error after GitHub has committed the comment.
+  # Read back the exact task/attempt marker before classifying this as a
+  # pre-execution publication failure.
+  if existing_id="$(find_task_started_comment_id "$repo" "$issue" "$task_id" "$attempt" "$reply_to")"; then
+    if [ -n "$existing_id" ]; then
+      log "INFO: GitHub accepted TASK_STARTED for $task_id attempt $attempt despite the client error (comment=$existing_id)"
+      lc_log "TASK_STARTED_POST_CONFIRMED" "task=$task_id attempt=$attempt comment=$existing_id client_rc=$post_rc"
+      return 0
+    fi
+  else
+    log "WARN: could not verify ambiguous TASK_STARTED post for $task_id attempt $attempt"
+    return 2
+  fi
+
+  return 1
+}
+
 # Publish terminal failures through the shared feedback handler so all failure
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
 post_task_failure_feedback() {
@@ -3683,10 +3790,20 @@ dispatch_once() {
 **Triggered by:** $TRIGGERER
 **Source:** $SOURCE_LINK"
 
-    if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
-      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
+    local start_post_rc=0
+    post_task_started_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$current_attempt" "$IN_PROGRESS_BODY" "$REPLY_TO" || start_post_rc=$?
+    if [ "$start_post_rc" -ne 0 ]; then
+      local start_post_reason start_post_stage
+      if [ "$start_post_rc" -eq 2 ]; then
+        start_post_reason="Could not verify whether the TASK_STARTED lifecycle comment already exists; refusing to publish a possibly duplicate start event."
+        start_post_stage="in_progress_comment_idempotency_check"
+      else
+        start_post_reason="Could not publish the in-progress lifecycle comment before starting the agent."
+        start_post_stage="in_progress_comment"
+      fi
+      log "dispatch: TASK_STARTED publication did not complete for $COMMENT_ID (rc=$start_post_rc); releasing the claim as a pre-agent infrastructure failure"
+      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=task_started_publication_failed rc=$start_post_rc"
+      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$start_post_reason" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$start_post_stage"
       return 0
     fi
 
