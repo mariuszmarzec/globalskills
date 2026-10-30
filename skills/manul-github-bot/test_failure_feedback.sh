@@ -294,11 +294,15 @@ if ! insert_task "early-failure" 71 failed 3; then
 fi
 echo "CHECKPOINT: early-failure fixture inserted"
 sensitive_error='workspace lookup failed: password=hunter2 access_token=verysecretvalue Authorization: Bearer BearerSecretValue12345 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'
-if ! MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
+if ! MANUL_DIR="$MANUL_DIR" DB="$DB" bash -x "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
   --repo test/repo --issue 71 --comment-id early-failure --task-id early-failure \
-  --stage workspace_path_validation --error "$sensitive_error" >/dev/null; then
+  --stage workspace_path_validation --error "$sensitive_error" >/dev/null 2>"$TEST_DIR/early-failure-cli.trace"; then
   echo "FAIL: terminal failure feedback CLI failed" >&2
+  echo "--- terminal feedback trace ---" >&2
+  tail -n 160 "$TEST_DIR/early-failure-cli.trace" >&2 || true
+  echo "--- GitHub mock calls ---" >&2
   cat "$GH_CALL_LOG" >&2
+  echo "--- GitHub mock comments ---" >&2
   cat "$GH_COMMENTS_JSONL" >&2
   exit 1
 fi
