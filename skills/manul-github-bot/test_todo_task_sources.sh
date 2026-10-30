@@ -252,7 +252,7 @@ export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 task_source_todo_local_complete "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")"
 local_call="$(cat "$TODO_MCP_CALL_LOG")"
 assert_contains "local completion uses local bulk mark tool" "$local_call" 'mark_tasks_done'
-assert_contains "local completion includes root and all descendants" "$local_call" '"taskIds":[1,10,11,12]'
+assert_contains "local completion includes root and all descendants" "$local_call" '"taskIds":[12,11,10,1]'
 
 echo "=== Remote Fiteo source ==="
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
