@@ -255,7 +255,6 @@ todo_task_mark_done() {
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
   task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
-  todo_task_is_active "$task_json" || return 1
   case "$source_type" in
     todo_local_mcp)
       todo_task_has_local_trigger "$task_json" || return 1 ;;
