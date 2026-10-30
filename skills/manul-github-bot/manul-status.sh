@@ -296,20 +296,20 @@ if [ "$LIST_MODE" = true ]; then
       [ ${#created} -le "$created_width" ] || created_width=${#created}
     done <<< "$RESULTS"
 
-    printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\\n" \\
-      "$task_id_width" "$header_task_id" \\
-      "$repo_issue_width" "$header_repo_issue" \\
-      "$source_width" "$header_source" \\
-      "$source_id_width" "$header_source_id" \\
-      "$status_width" "$header_status" \\
+    printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
+      "$task_id_width" "$header_task_id" \
+      "$repo_issue_width" "$header_repo_issue" \
+      "$source_width" "$header_source" \
+      "$source_id_width" "$header_source_id" \
+      "$status_width" "$header_status" \
       "$attempts_width" "$header_attempts" "$header_created"
-    printf "%s  %s  %s  %s  %s  %s  %s\\n" \\
-      "$(printf '%*s' "$task_id_width" '' | tr ' ' '-')" \\
-      "$(printf '%*s' "$repo_issue_width" '' | tr ' ' '-')" \\
-      "$(printf '%*s' "$source_width" '' | tr ' ' '-')" \\
-      "$(printf '%*s' "$source_id_width" '' | tr ' ' '-')" \\
-      "$(printf '%*s' "$status_width" '' | tr ' ' '-')" \\
-      "$(printf '%*s' "$attempts_width" '' | tr ' ' '-')" \\
+    printf "%s  %s  %s  %s  %s  %s  %s\n" \
+      "$(printf '%*s' "$task_id_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$repo_issue_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$source_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$source_id_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$status_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$attempts_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$created_width" '' | tr ' ' '-')"
 
     while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
@@ -319,12 +319,12 @@ if [ "$LIST_MODE" = true ]; then
       if [ "$issue" != "0" ]; then
         repo_reference="$repo#$issue"
       fi
-      printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\\n" \\
-        "$task_id_width" "$tid" \\
-        "$repo_issue_width" "$repo_reference" \\
-        "$source_width" "$source_name" \\
-        "$source_id_width" "$source_record_id" \\
-        "$status_width" "$status" \\
+      printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
+        "$task_id_width" "$tid" \
+        "$repo_issue_width" "$repo_reference" \
+        "$source_width" "$source_name" \
+        "$source_id_width" "$source_record_id" \
+        "$status_width" "$status" \
         "$attempts_width" "$attempts" "$created"
     done <<< "$RESULTS"
   fi

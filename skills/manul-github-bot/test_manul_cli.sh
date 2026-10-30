@@ -424,10 +424,10 @@ test_status() {
       ('$LONG_TASK_ID','$LONG_REPO',42,'stale',3,'$LONG_CREATED','github_issues','$LONG_SOURCE_ID');
   "
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
-  if printf '%s\\n' "$OUTPUT" | awk \\
-    -v task_id="$LONG_TASK_ID" \\
-    -v repo_ref="$LONG_REPO#42" \\
-    -v source_id="$LONG_SOURCE_ID" \\
+  if printf '%s\n' "$OUTPUT" | awk \
+    -v task_id="$LONG_TASK_ID" \
+    -v repo_ref="$LONG_REPO#42" \
+    -v source_id="$LONG_SOURCE_ID" \
     -v created="$LONG_CREATED" '
       NR == 1 {
         task_col = index($0, "TASK_ID")
