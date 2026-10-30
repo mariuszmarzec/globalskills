@@ -490,9 +490,14 @@ A Todo root is queued once with its complete subtask tree. Descendants are order
 implementation steps, not separate queue entries. The adapter preserves the
 provider-returned order and traverses nested subtasks in pre-order. The source ID
 includes a structural fingerprint (task IDs, descriptions, permissions, priority,
-scheduler and child order); it deliberately excludes progress flags and modified
-timestamps so a partial completion can be retried. The root must remain active and
-the current source tree must still match before execution and completion.
+scheduler and tree topology); it deliberately excludes progress flags and modified
+timestamps. Sibling arrays in the fingerprint are canonicalized by priority and ID
+because Fiteo sorts visible tasks by status, priority and modified time, so marking a
+step done can reorder the returned tree without changing the plan. The initial prompt
+still uses the exact provider-returned order. A priority, description, permission or
+topology change invalidates the source; status/time-only progress does not. The root
+must remain active and the current source tree must still match before execution and
+completion.
 
 After repository delivery verification, the local adapter marks the root and all
 descendants done in one local operation. The remote adapter updates descendants
