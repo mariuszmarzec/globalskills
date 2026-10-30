@@ -222,7 +222,7 @@ test_task_started_claim_accounting() {
   body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:12:00Z","data":{"taskId":"started-lookup-failure","conversationId":"conv-lookup","status":"started","attempt":2}} -->
 
 — manul 🐈'
-  GH_FAIL_API=1
+  export GH_FAIL_API=1
   rc=0
   publish_task_started_for_claim "started-lookup-failure" "claim-lookup" "test/repo" 90 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_API
