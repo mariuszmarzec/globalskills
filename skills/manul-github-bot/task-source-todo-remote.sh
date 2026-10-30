@@ -2,7 +2,7 @@
 # Independent source adapter for the remote Fiteo backend MCP endpoint.
 set -uo pipefail
 
-TODO_REMOTE_SOURCE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
+TODO_REMOTE_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_REMOTE_SOURCE_DIR/todo-task-source-utils.sh"
 
 todo_source_remote_config() {
