@@ -2,7 +2,7 @@
 # Regression tests for the separate Todo Desktop and Fiteo MCP source adapters.
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 TEST_DIR="$(mktemp -d /tmp/manul-todo-sources-XXXXXX)"
 BIN="$TEST_DIR/bin"
 mkdir -p "$BIN"
