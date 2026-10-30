@@ -91,6 +91,7 @@ SCRIPTS=(
     "task-source-todo-local.sh"
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
+    "todo-local-mcp-url.sh"
     "todo-mcp-client.py"
     "start-manul-automation.sh"
     "task-recovery.sh"
