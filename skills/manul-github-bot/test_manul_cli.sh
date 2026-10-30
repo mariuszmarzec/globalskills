@@ -388,7 +388,16 @@ test_status() {
   else
     fail "Empty list returns empty array" "[]" "$OUTPUT"
   fi
-  
+
+  # Re-seed provider-backed tasks after the empty-list assertion.
+  sqlite3 "$DB" "
+    INSERT INTO processed_comments
+      (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)
+    VALUES
+      ('todo-local-text-status','owner/todo',0,'queued',0,datetime('now'),'todo_local_mcp','420@0123456789abcdef'),
+      ('todo-remote-text-status','owner/fiteo',0,'queued',0,datetime('now'),'todo_remote_mcp','421@fedcba9876543210');
+  "
+
   # Test 6: Text list includes source type and provider task ID.
   log "Text list source columns"
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
