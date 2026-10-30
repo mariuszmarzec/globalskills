@@ -271,7 +271,6 @@ printf 'retry-safe delivery\n' >"$WORKDIR/retry-safe.txt"
 git -C "$WORKDIR" add retry-safe.txt
 git -C "$WORKDIR" commit -qm "Add retry-safe delivery"
 git -C "$WORKDIR" push -q --set-upstream origin "$RETRY_BRANCH"
-git -C "$WORKDIR" checkout -q main
 printf '0\n' >"$PR_CREATE_COUNT_FILE"
 printf '[]\n' >"$FAKE_GH_PR_LIST"
 printf '{"autoCreatePr":true,"automation":{"maxAttemptsBeforeFail":3}}\n' >"$TMP/auto-create-config.json"
