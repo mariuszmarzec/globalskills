@@ -19,6 +19,10 @@ CREATE TABLE processed_comments (
 INSERT INTO processed_comments VALUES ('task-retry', 'running', 'claim-1', 'old-session');
 INSERT INTO processed_comments VALUES ('task-cont', 'running', 'claim-2', 'old-session');
 INSERT INTO processed_comments VALUES ('task-no-session', 'running', 'claim-3', 'old-session');
+INSERT INTO processed_comments VALUES ('task-completed', 'running', 'claim-6', 'old-session');
+INSERT INTO processed_comments VALUES ('task-timeout', 'running', 'claim-7', 'old-session');
+INSERT INTO processed_comments VALUES ('task-blocked', 'running', 'claim-8', 'old-session');
+INSERT INTO processed_comments VALUES ('task-interrupted', 'running', 'claim-9', 'old-session');
 INSERT INTO processed_comments VALUES ('task-stale-claim', 'running', 'current-claim', 'current-session');
 INSERT INTO processed_comments VALUES ('task''quoted', 'running', 'claim-5', 'old-session');
 SQL
@@ -46,6 +50,16 @@ if manul_record_execution_session_state "$DB" task-no-session claim-3 NEEDS_CONT
 else
   fail "blank continuation cleanup update failed"
 fi
+
+
+for status_case in "task-completed|claim-6|COMPLETED" "task-timeout|claim-7|TIMEOUT" "task-blocked|claim-8|BLOCKED" "task-interrupted|claim-9|INTERRUPTED"; do
+  IFS='|' read -r task_id claim status <<<"$status_case"
+  if manul_record_execution_session_state "$DB" "$task_id" "$claim" "$status" "unused-session"; then
+    [ "$(session_for "$task_id")" = "<NULL>" ] && ok "$status clears the old runtime session" || fail "$status retained a stale runtime session"
+  else
+    fail "$status session cleanup update failed"
+  fi
+done
 
 if manul_record_execution_session_state "$DB" task-stale-claim stale-claim FAILED ""; then
   fail "stale claim unexpectedly updated the current session"
