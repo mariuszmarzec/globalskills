@@ -70,6 +70,57 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertTrue(response.startswith(b"HTTP/1.1 503 Service Unavailable"))
         self.assertIn(b"Todo MCP reverse bridge unavailable", response)
 
+    def test_local_proxy_closes_http_client_after_todo_closes_reverse_channel(self):
+        pool = proxy_module.ReverseChannelPool("172.24.0.1", max_channels=1)
+        local_channel, remote_channel = socket.socketpair()
+        pool.channels.put(local_channel)
+
+        def respond_after_request_body():
+            with remote_channel:
+                request = bytearray()
+                while True:
+                    chunk = remote_channel.recv(4096)
+                    if not chunk:
+                        return
+                    request.extend(chunk)
+                    if b"\\r\\n\\r\\n" not in request:
+                        continue
+                    header, body = bytes(request).split(b"\\r\\n\\r\\n", 1)
+                    content_length = 0
+                    for line in header.split(b"\\r\\n")[1:]:
+                        if line.lower().startswith(b"content-length:"):
+                            content_length = int(line.split(b":", 1)[1].strip())
+                    if len(body) >= content_length:
+                        remote_channel.sendall(
+                            b"HTTP/1.1 401 Unauthorized\\r\\n"
+                            b"Content-Length: 0\\r\\n"
+                            b"Connection: close\\r\\n\\r\\n"
+                        )
+                        return
+
+        responder = threading.Thread(target=respond_after_request_body, daemon=True)
+        responder.start()
+        self.addCleanup(responder.join, 1)
+
+        proxy = self.make_proxy(pool)
+        request = (
+            b"POST /mcp HTTP/1.1\\r\\n"
+            b"Host: 127.0.0.1:8766\\r\\n"
+            b"Content-Length: 4\\r\\n\\r\\n"
+            b"test"
+        )
+        with socket.create_connection(proxy.server_address, timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(request)
+            received = bytearray()
+            while True:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                received.extend(chunk)
+
+        self.assertTrue(received.startswith(b"HTTP/1.1 401 Unauthorized"))
+
     def test_reverse_pool_discards_channels_closed_before_assignment(self):
         pool = proxy_module.ReverseChannelPool("172.24.0.1", max_channels=1)
         local_channel, remote_channel = socket.socketpair()
@@ -95,6 +146,7 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn('output.Add("Host: 127.0.0.1:8765")', source)
         self.assertIn("Only HTTP GET/POST/DELETE requests to /mcp are allowed.", source)
         self.assertIn("responsePump.GetAwaiter().GetResult()", source)
+        self.assertIn("if source is reverse_channel:", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("Task.WhenAny(requestPump, responsePump)", source)
         self.assertIn("Action\\s+(Connect|Serve)", source)
         self.assertNotIn("TcpListener", source)
