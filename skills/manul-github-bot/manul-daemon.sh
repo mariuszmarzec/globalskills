@@ -2883,7 +2883,7 @@ $question
 
 Reply with:
 
-\`/manul continue <your answer>\`
+`/manul continue <your answer>`
 
 This will resume the same task and conversation."
   else
@@ -2895,7 +2895,7 @@ $question
 
 Reply with:
 
-\`/manul continue <your answer>\`
+`/manul continue <your answer>`
 
 The answer will resume this same task and conversation.
 
@@ -3892,7 +3892,7 @@ PROMPT_EOF
 
 This task originates from a Todo task tree, not a GitHub issue or comment.
 - Do NOT post a GitHub issue comment, PR conversation comment, PR review comment, or a Manul result-marker comment. The source URL is a Todo MCP identifier, not a GitHub URL.
-- Do NOT call \`gh issue comment\` or GitHub comment APIs for this task.
+- Do NOT call `gh issue comment` or GitHub comment APIs for this task.
 - The task root and its ordered subtask tree are supplied above. Treat the subtasks as the implementation plan: execute pending steps in the exact order shown; keep nested children immediately after their parent; [DONE] steps are context and must not be repeated.
 - Preserve the order from Todo; do not sort or parallelize steps by priority, title, or perceived complexity.
 - Make repository changes using the normal Manul branch/commit/push/PR workflow. A real PR and its updated description remain required whenever repository files change. Include the Todo task ID in the branch name, PR title, and PR body so the work can be traced to the source task.
