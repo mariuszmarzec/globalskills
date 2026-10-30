@@ -306,6 +306,12 @@ def as_permission_object:
   else {}
   end;
 
+def strip_todo_permission_rules:
+  if type == "object" then
+    with_entries(select(.key | startswith("todo-local_") | not))
+  else .
+  end;
+
 def strip_todo_legacy_tools:
   if type == "object" then
     del(
@@ -415,7 +421,7 @@ def todo_mcp_permission_rules($read_enabled):
       end
     | .tools = ((.tools // {}) | strip_todo_legacy_tools)
     | .permission = (
-        (.permission // {}) | as_permission_object
+        (.permission // {}) | as_permission_object | strip_todo_permission_rules
         | . + todo_mcp_permission_rules((env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1")
       )
     | .agent = (
@@ -425,7 +431,7 @@ def todo_mcp_permission_rules($read_enabled):
               .key as $agent_name
               | .value.tools = ((.value.tools // {}) | strip_todo_legacy_tools)
               | .value.permission = (
-                  (.value.permission // {}) | as_permission_object
+                  (.value.permission // {}) | as_permission_object | strip_todo_permission_rules
                   | . + todo_mcp_permission_rules(
                       (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" and $agent_name != "chat"
                     )
