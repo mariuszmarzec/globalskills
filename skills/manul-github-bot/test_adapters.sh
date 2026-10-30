@@ -1195,7 +1195,7 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# 10c. Todo local MCP is injected only when the Windows bridge is reachable
+# 10c. Todo local MCP follows the current host platform endpoint
 # ---------------------------------------------------------------------------
 test_opencode_todo_local_mcp() {
   local tmp
@@ -1224,7 +1224,13 @@ ENV
   chmod 600 "$home/.manul/.env"
   cat >"$tmp/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
-status="${MOCK_TODO_PROBE_STATUS:-401}"
+url=""
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  http://127.0.0.1:8765/mcp) status="${MOCK_TODO_DIRECT_STATUS:-${MOCK_TODO_PROBE_STATUS:-401}}" ;;
+  http://127.0.0.1:8766/mcp) status="${MOCK_TODO_BRIDGE_STATUS:-${MOCK_TODO_PROBE_STATUS:-000}}" ;;
+  *) status=000 ;;
+esac
 printf '%s' "$status"
 [ "$status" = "401" ] && exit 0
 exit 7
@@ -1247,7 +1253,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and (
       if $expected == "1" then
         .mcp["todo-local"].type == "remote"
-        and .mcp["todo-local"].url == "http://127.0.0.1:8766/mcp"
+        and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
         and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
         and .mcp["todo-local"].enabled == true
         and .tools["todo-local_*"] == true
@@ -1287,7 +1293,7 @@ MOCK
   # inherited stale value from when the daemon originally started.
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
-    TODO_LOCAL_MCP_TOKEN="stale-inherited-token" MOCK_TODO_PROBE_STATUS=401 \
+    TODO_LOCAL_MCP_TOKEN="stale-inherited-token" MOCK_TODO_DIRECT_STATUS=401 MOCK_TODO_BRIDGE_STATUS=000 \
     MOCK_TODO_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/connected-config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/connected-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -1299,6 +1305,23 @@ MOCK
   [ "$rc" -eq 0 ] && ok "Connected Todo local MCP permits task execution" || fail "Todo connected rc=$rc"
   [ -f "$tmp/connected-config-checked" ] && ok "Task-scoped config injects Todo local with the runtime token placeholder" || fail "Todo local config injection failed"
   [ -f "$tmp/connected-task-started" ] && ok "Task starts after Todo local preflight passes" || fail "Task did not start after Todo local preflight passed"
+
+  # When the agent runs inside WSL and Todo Desktop is on Windows, direct
+  # loopback is unavailable but the local relay must be selected.
+  rm -f "$tmp/connected-config-checked" "$tmp/connected-task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
+    WSL_DISTRO_NAME=Ubuntu MOCK_TODO_DIRECT_STATUS=000 MOCK_TODO_BRIDGE_STATUS=401 \
+    MOCK_TODO_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/wsl-config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/wsl-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-todo-wsl --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/wsl.stdout" --stderr-file "$tmp/wsl.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode uses the WSL relay when direct loopback is unavailable"
+  [ "$rc" -eq 0 ] && ok "WSL relay permits task execution" || fail "WSL relay rc=$rc"
+  [ -f "$tmp/wsl-config-checked" ] && ok "WSL task config injects Todo MCP after relay challenge" || fail "WSL Todo config injection failed"
 
   rm -f "$tmp/connected-config-checked" "$tmp/connected-task-started"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
@@ -1329,7 +1352,7 @@ MOCK
   rm -f "$tmp/disconnected-config-checked" "$tmp/disconnected-task-started"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
-    MOCK_TODO_PROBE_STATUS=000 MOCK_CONFIG_CHECK_FILE="$tmp/unavailable-config-checked" \
+    MOCK_TODO_DIRECT_STATUS=000 MOCK_TODO_BRIDGE_STATUS=000 MOCK_CONFIG_CHECK_FILE="$tmp/unavailable-config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/unavailable-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-todo-unavailable --prompt "$tmp/prompt" --workspace "$workspace" \
