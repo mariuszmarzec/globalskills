@@ -52,6 +52,7 @@ CREATE TABLE processed_comments (
   agent TEXT,
   prompt TEXT NOT NULL,
   context TEXT,
+  resultSummary TEXT,
   status TEXT NOT NULL DEFAULT 'queued',
   attempts INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT,

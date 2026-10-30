@@ -99,23 +99,37 @@ public static class TodoMcpWindowsBridge
 
         TcpListener listener = new TcpListener(bind, port);
         listener.Start(64);
-        Log(logPath, "Listening on the WSL-facing host interface; source IP allowlist is enabled.");
+        Log(logPath, "Listening on the WSL-facing host interface; expected WSL source IP " + allowed + ".");
         while (true)
         {
             TcpClient client = listener.AcceptTcpClient();
-            Task.Run(() => HandleClient(client, allowed, logPath));
+            Task.Run(() => HandleClient(client, bind, allowed, logPath));
         }
     }
 
-    private static void HandleClient(TcpClient client, IPAddress allowed, string logPath)
+    private static void HandleClient(TcpClient client, IPAddress bind, IPAddress allowed, string logPath)
     {
         TcpClient upstream = null;
         try
         {
             IPEndPoint remote = client.Client.RemoteEndPoint as IPEndPoint;
-            if (remote == null || !remote.Address.Equals(allowed))
+            if (remote == null)
             {
-                Log(logPath, "Rejected a connection not originating from the current WSL IPv4 address.");
+                Log(logPath, "Rejected a connection with no IPv4 remote endpoint.");
+                client.Close();
+                return;
+            }
+            if (remote.Address.Equals(bind) || IPAddress.IsLoopback(remote.Address))
+            {
+                // Ensure() performs a local TCP readiness probe from Windows.
+                // It must not be confused with a rejected WSL client connection.
+                Log(logPath, "Ignored local Windows readiness probe from " + remote.Address + ".");
+                client.Close();
+                return;
+            }
+            if (!remote.Address.Equals(allowed))
+            {
+                Log(logPath, "Rejected connection from " + remote.Address + "; expected WSL source " + allowed + ".");
                 client.Close();
                 return;
             }

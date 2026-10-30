@@ -213,5 +213,7 @@ contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aico
 contains "$AICODE" 'url: "http://127.0.0.1:8766/mcp"' "OpenCode uses the stable WSL loopback bridge URL"
 contains "$AICODE" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'remote.Address.Equals(allowed)' "Windows bridge restricts connections to the current WSL source IP"
+contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'Rejected connection from ' "Windows bridge diagnostics include the observed client and expected WSL source IP"
+contains "$AICODE" 'synchronizing the bridge allowlist and retrying' "aicode can repair a stale WSL source allowlist after verifying the source IP is locally assigned"
 
 python3 "$ROOT/aicode/test_todo_mcp_bridge.py"
