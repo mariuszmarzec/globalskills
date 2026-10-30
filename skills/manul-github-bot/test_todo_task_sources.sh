@@ -7,6 +7,7 @@ TEST_DIR="$(mktemp -d /tmp/manul-todo-sources-XXXXXX)"
 BIN="$TEST_DIR/bin"
 mkdir -p "$BIN"
 trap 'rm -rf "$TEST_DIR"' EXIT
+PYTHON_BIN="$(command -v python3)"
 
 PASS=0
 FAIL=0
@@ -289,5 +290,11 @@ assert_eq "remote completion marks the root last for retry safety" "21" "$last_r
 assert_eq "remote completion starts at deepest descendant" "23" "$first_remote_id"
 
 echo
+if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then
+  ok "Streamable HTTP MCP client tests passed"
+else
+  fail "Streamable HTTP MCP client tests failed"
+fi
+
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
