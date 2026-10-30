@@ -50,7 +50,7 @@ task_source_configured_sources() {
     trigger="$(jq -r '.trigger // "/manul"' "$config")"
     allowed_users="$(jq -c '.allowedUsers // []' "$config")"
     repository_allowlist="$(jq -c '.repositoryAllowlist // [] | if type == "array" then map(select(type == "string")) | unique else [] end' "$config")"
-    repository_allowlist_enforced="$(jq -r '(.repositoryAllowlist // []) | if type == "array" then length > 0 else false end' "$config")"
+    repository_allowlist_enforced="$(jq -r 'has("repositoryAllowlist") and (.repositoryAllowlist | type == "array")' "$config")"
     jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" --argjson repositoryAllowlist "$repository_allowlist" --argjson repositoryAllowlistEnforced "$repository_allowlist_enforced" '
       .taskSources[]
       | select((.enabled != false))
