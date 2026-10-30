@@ -175,6 +175,19 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
             "priority": 7,
             "scheduler": null,
             "shares": []
+          },
+          {
+            "id": 26,
+            "ownerId": 4,
+            "description": "Previously completed sibling",
+            "addedTime": "2026-10-01T10:02:30",
+            "modifiedTime": "2026-10-01T10:02:30",
+            "parentTaskId": 22,
+            "subTasks": [],
+            "isToDo": false,
+            "priority": 9,
+            "scheduler": null,
+            "shares": []
           }
         ],
         "isToDo": true,
@@ -247,6 +260,16 @@ rc=0
 task_source_todo_local_revalidate "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")" || rc=$?
 assert_rc "local revalidation rejects a changed task tree" "1" "$rc"
 
+# Completing a previously-active child changes Fiteo's isToDo-first sort and
+# modifiedTime tie-breaker. This provider reorder must not invalidate the tree.
+jq '.[0].subTasks[0].isToDo = false
+    | .[0].subTasks[0].modifiedTime = "2026-10-02T10:00:00"
+    | .[0].subTasks |= reverse' "$TEST_DIR/local.json" > "$TEST_DIR/local-progress-reordered.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-progress-reordered.json"
+assert_eq "local revalidation accepts provider reordering caused by completed steps" "0" "$(
+  task_source_todo_local_revalidate "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")"; echo $?
+)"
+
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 : > "$TODO_MCP_CALL_LOG"
 task_source_todo_local_complete "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")"
@@ -276,7 +299,9 @@ assert_eq "remote revalidation accepts unchanged tree" "0" "$(
 # A completed child and changed modifiedTime must not invalidate a retry while
 # the root remains active; the structural fingerprint deliberately ignores
 # progress flags/timestamps but still detects topology/content changes.
-jq '.[0].subTasks[0].isToDo = false | .[0].subTasks[0].modifiedTime = "2026-10-02T10:00:00"' \
+jq '.[0].subTasks[0].subTasks[0].isToDo = false
+    | .[0].subTasks[0].subTasks[0].modifiedTime = "2026-10-02T10:00:00"
+    | .[0].subTasks[0].subTasks |= reverse' \
   "$TEST_DIR/remote.json" > "$TEST_DIR/remote-progress.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-progress.json"
 assert_eq "partial subtask completion does not invalidate source identity" "0" "$(
@@ -287,13 +312,15 @@ export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 : > "$TODO_MCP_CALL_LOG"
 task_source_todo_remote_complete "$REMOTE_SOURCE" "$remote_id"
 remote_calls="$(cat "$TODO_MCP_CALL_LOG")"
-assert_eq "remote marks each descendant and root individually" "3" "$(printf '%s\n' "$remote_calls" | wc -l | tr -d ' ')"
+assert_eq "remote marks each descendant and root individually" "4" "$(printf '%s\n' "$remote_calls" | wc -l | tr -d ' ')"
 assert_contains "remote completion uses Fiteo partial update tool" "$remote_calls" 'todo_update_task'
 assert_contains "remote completion updates nested child before its parent" "$remote_calls" '"id":23'
 first_remote_id="$(head -1 "$TODO_MCP_CALL_LOG" | cut -f2- | jq -r '.id')"
 last_remote_id="$(tail -1 "$TODO_MCP_CALL_LOG" | cut -f2- | jq -r '.id')"
 assert_eq "remote completion marks the root last for retry safety" "21" "$last_remote_id"
-assert_eq "remote completion starts at deepest descendant" "23" "$first_remote_id"
+assert_eq "remote completion starts with the last ordered sibling" "26" "$first_remote_id"
+remote_order="$(cut -f2- "$TODO_MCP_CALL_LOG" | jq -s '[.[].id] | tostring')"
+assert_eq "remote completion reverses the original ordered tree" "[26,23,22,21]" "$remote_order"
 
 echo
 if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then
