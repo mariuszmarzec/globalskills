@@ -2366,10 +2366,21 @@ verify_result_comment() {
   local result_endpoint
   local result_filter
   local result_scope
+  local result_reply_to_id=""
   if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    result_reply_to_id="$(printf '%s' "$comment_url" | sed -nE 's/.*#discussion_r([0-9]+).*/\1/p')"
+    if [ -z "$result_reply_to_id" ] && [[ "$comment_id" =~ ^review:([0-9]+)$ ]]; then
+      result_reply_to_id="${BASH_REMATCH[1]}"
+    fi
+    if ! [[ "$result_reply_to_id" =~ ^[0-9]+$ ]]; then
+      log "ERROR: verify_result_comment: review task $comment_id has no numeric source-thread ID — fail-closed"
+      lc_log "RESULT_VERIFY_ERROR" "task=$comment_id reason=missing_review_thread_id"
+      rm -rf "$tmpdir"
+      return 1
+    fi
     result_endpoint="repos/$repo/pulls/$url_issue_num/comments"
-    result_filter='.[] | .body // "" | gsub("\n"; "\\n")'
-    result_scope="review-thread"
+    result_filter=".[] | select((.in_reply_to_id // \"\") | tostring == \"$result_reply_to_id\") | .body // \"\" | gsub(\"\\n\"; \"\\\\n\")"
+    result_scope="review-thread:$result_reply_to_id"
   else
     result_endpoint="repos/$repo/issues/$url_issue_num/comments"
     result_filter='.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; "\\n")'
@@ -2442,8 +2453,14 @@ verify_nonempty_result_comment() {
   [ -n "$url_issue_num" ] || return 1
   marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    local result_reply_to_id
+    result_reply_to_id="$(printf '%s' "$comment_url" | sed -nE 's/.*#discussion_r([0-9]+).*/\1/p')"
+    if [ -z "$result_reply_to_id" ] && [[ "$comment_id" =~ ^review:([0-9]+)$ ]]; then
+      result_reply_to_id="${BASH_REMATCH[1]}"
+    fi
+    [[ "$result_reply_to_id" =~ ^[0-9]+$ ]] || return 1
     endpoint="repos/$repo/pulls/$url_issue_num/comments"
-    result_filter='.[] | .body // "" | gsub("\n"; " ")'
+    result_filter=".[] | select((.in_reply_to_id // \"\") | tostring == \"$result_reply_to_id\") | .body // \"\" | gsub(\"\\n\"; \" \")"
   else
     endpoint="repos/$repo/issues/$url_issue_num/comments"
     result_filter='.[] | select(.in_reply_to_id == null) | .body // "" | gsub("\n"; " ")'
