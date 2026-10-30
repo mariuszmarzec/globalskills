@@ -237,7 +237,7 @@ for index, child in enumerate(subtasks):
     description = child.get("description")
     if not isinstance(description, str) or not description.startswith("<!-- MANUL_REPORT_RESULT:v1;"):
         continue
-    marker, separator, payload = description.partition("\\n")
+    marker, separator, payload = description.partition("\n")
     match = re.fullmatch(r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});sha256=([0-9a-f]{64}) -->", marker)
     if not separator or not match or int(match.group(1)) != root_id:
         continue
