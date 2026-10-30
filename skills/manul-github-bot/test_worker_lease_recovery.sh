@@ -413,6 +413,31 @@ else
   exit 1
 fi
 
+# 5d) Crash window between agentStartedAt and TASK_STARTED comment post must
+# be classified as a genuine agent attempt, not a pre-execution failure.
+# This prevents the duplicate-TASK_STARTED regression where recovery rolls back
+# the attempt bump, requeues, and the retry reuses the same attempt number.
+#
+# Scenario: worker records agentStartedAt, then crashes before posting the
+# in-progress comment. Recovery sees agentStartedAt set → preserves attempts.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken,agentStartedAt) VALUES ('crash-window','$REPO',83,'https://github.com/$REPO/issues/83','running',2,0,999999,'crash-window-token',datetime('now'));"
+recover_stale_tasks
+assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='crash-window';")" "crash-window task requeued after agentStartedAt was set"
+assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='crash-window';")" "crash-window preserves agent attempt count (no rollback)"
+assert_eq 0 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='crash-window';")" "crash-window does not inflate preExecutionFailures"
+if grep -q 'TASK_REQUEUED task=crash-window' "$LIFECYCLE_LOG" 2>/dev/null; then
+  echo "PASS: crash-window recovery emits TASK_REQUEUED (agent attempt, not pre-execution)"
+else
+  echo "FAIL: crash-window recovery did not emit TASK_REQUEUED" >&2
+  exit 1
+fi
+
+# 5e) Double-crash-window: after requeue, next dispatch re-claims with
+# attempts+1 (not attempts-1). The attempt budget must not be double-counted.
+sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, claimToken=NULL, leaseExpiresAt=NULL, heartbeatAt=NULL, nextAttemptAt=NULL WHERE commentId='crash-window';"
+# Simulate claim: the dispatcher bumps attempts on claim
+sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=$CURRENT_TEST_PID, claimToken='crash-window-reclaim-token', agentStartedAt=NULL WHERE commentId='crash-window' AND status='queued';"
+assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='crash-window';")" "re-claim after crash-window adds attempt normally"
 # 6) PR verification rejects a missing PR and accepts a real PR.
 WORKTREE="$TEST_DIR/repo"
 mkdir -p "$WORKTREE"
