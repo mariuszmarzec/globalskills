@@ -2,7 +2,7 @@
 # Helpers shared by the independent local and remote Todo MCP source adapters.
 # This is transport/normalization support, not a combined Todo adapter.
 
-TODO_TASK_SOURCE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
+TODO_TASK_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 todo_mcp_source_url() {
   jq -r '.url // empty' <<<"$1"
@@ -51,13 +51,13 @@ todo_mcp_source_list_tasks() {
 
 todo_task_id_from_source_id() {
   local source_id="$1"
-  printf '%s' "\${source_id%%@*}"
+  printf '%s' "${source_id%%@*}"
 }
 
 todo_task_version_from_source_id() {
   local source_id="$1"
   [[ "$source_id" == *@* ]] || return 1
-  printf '%s' "\${source_id#*@}"
+  printf '%s' "${source_id#*@}"
 }
 
 todo_task_find_root() {
@@ -136,7 +136,7 @@ todo_task_prompt() {
     if [ -n "$prompt_text" ]; then
       printf '%s\n' "$prompt_text"
     else
-      printf '%s\n' "\${description:-Complete the Todo task.}"
+      printf '%s\n' "${description:-Complete the Todo task.}"
     fi
     if [ -n "$steps_markdown" ]; then
       printf '\n## Ordered subtask steps\n\n%s\n' "$steps_markdown"
@@ -152,10 +152,10 @@ todo_task_to_source_json() {
   task_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
   fingerprint="$(todo_task_fingerprint "$task_json")"
-  source_id="\${task_id}@\${fingerprint}"
+  source_id="${task_id}@${fingerprint}"
   case "$source_type" in
-    todo_local_mcp) source_url="todo-local://task/\${source_id}" ;;
-    todo_remote_mcp) source_url="fiteo-todo://task/\${source_id}" ;;
+    todo_local_mcp) source_url="todo-local://task/${source_id}" ;;
+    todo_remote_mcp) source_url="fiteo-todo://task/${source_id}" ;;
     *) return 2 ;;
   esac
   title="$(jq -r '.description // "Todo task"' <<<"$task_json")"
