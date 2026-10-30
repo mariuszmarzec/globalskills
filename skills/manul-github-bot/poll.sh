@@ -251,6 +251,20 @@ generate_conversation_id() {
   esac
 }
 
+# Select only newly authored review threads from one submitted review.
+# Replies remain persisted in conversation history but must not create new tasks.
+filter_actionable_review_comments() {
+  local comments_json="$1"
+  local review_id="$2"
+
+  printf '%s\n' "$comments_json" |
+    jq -cs --arg rid "$review_id" '
+      [.[][]
+       | select((.pull_request_review_id // "") | tostring == $rid)
+       | select((.in_reply_to_id // null) == null)
+      ]'
+}
+
 # Return the root review-comment id for a PR review thread.
 #
 # GitHub inline review replies contain `in_reply_to_id`.
@@ -1593,10 +1607,9 @@ process_repo_body() {
         review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
         [ -n "$review_created" ] || review_created="$now"
 
-        # gh api --paginate emits one JSON array per page. Slurp all pages,
-        # then select every inline comment whose pull_request_review_id matches
-        # this submitted review.
-        review_inline_comments_json="$(printf '%s\n' "$review_comments" | jq -cs --arg rid "$review_id" '[.[][] | select((.pull_request_review_id // "") | tostring == $rid)]' 2>/dev/null)" || review_inline_comments_json='[]'
+        # Keep only new root comments from this review. Replies are persisted
+        # separately as conversation context and must not spawn REVIEW_FIX tasks.
+        review_inline_comments_json="$(filter_actionable_review_comments "$review_comments" "$review_id" 2>/dev/null)" || review_inline_comments_json='[]'
         review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
 
         # Attach each thread's true root comment ID (GitHub reply endpoints
