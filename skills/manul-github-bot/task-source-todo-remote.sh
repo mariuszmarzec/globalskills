@@ -6,9 +6,13 @@ TODO_REMOTE_SOURCE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_REMOTE_SOURCE_DIR/todo-task-source-utils.sh"
 
 todo_source_remote_config() {
-  jq -c '
-    .tokenEnv = (.tokenEnv // "FITEO_PAT")
-  ' <<<"$1"
+  local source_json="$1" url
+  url="$(jq -r '.url // empty' <<<"$source_json")"
+  [[ "$url" == https://* ]] || {
+    echo "task-source: remote Fiteo MCP requires an HTTPS URL" >&2
+    return 2
+  }
+  jq -c '.tokenEnv = (.tokenEnv // "FITEO_PAT")' <<<"$source_json"
 }
 
 task_source_todo_remote_poll() {
