@@ -94,6 +94,8 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("upstream.Connect(IPAddress.Loopback, 8765)", source)
         self.assertIn('output.Add("Host: 127.0.0.1:8765")', source)
         self.assertIn("Only HTTP GET/POST/DELETE requests to /mcp are allowed.", source)
+        self.assertIn("responsePump.GetAwaiter().GetResult()", source)
+        self.assertNotIn("Task.WhenAny(requestPump, responsePump)", source)
         self.assertIn("Action\\s+(Connect|Serve)", source)
         self.assertNotIn("TcpListener", source)
         self.assertNotIn("New-NetFirewallRule", source)
