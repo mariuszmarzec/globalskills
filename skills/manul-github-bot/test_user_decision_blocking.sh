@@ -67,8 +67,7 @@ CREATE TABLE processed_comments (
   workspaceId TEXT,
   action TEXT DEFAULT 'IMPLEMENT',
   prNumber INTEGER,
-  prUrl TEXT,
-  resultSummary TEXT
+  prUrl TEXT
 );
 CREATE TABLE conversations (
   conversationId TEXT PRIMARY KEY,
