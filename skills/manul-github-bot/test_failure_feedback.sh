@@ -251,7 +251,7 @@ test_task_started_review_thread_idempotency() {
   grep -Fq 'repos/test/repo/pulls/85/comments --input -' "$GH_CALL_LOG" \
     && echo "PASS: review-thread publication uses the PR comments endpoint and request body" \
     || { echo "FAIL: review-thread publication did not use the PR comments endpoint" >&2; exit 1; }
-  jq -e --arg task "issue:started-other-thread" --argjson reply "$target_reply" \
+  jq -s -e --arg task "issue:started-other-thread" --argjson reply "$target_reply" \
     'any(.[]; .in_reply_to_id == $reply and ((.body // "") | contains($task)))' "$GH_COMMENTS_JSONL" >/dev/null \
     || { echo "FAIL: posted review reply has the wrong in_reply_to_id" >&2; exit 1; }
   echo "PASS: newly posted review reply is attached to the requested thread"
