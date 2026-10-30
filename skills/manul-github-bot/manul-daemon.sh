@@ -3154,7 +3154,7 @@ evaluate_task_completion() {
 else
          local verified_base
          verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
-         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+         if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
            SUCCESS="false"
            FAILURE_CODE="VERIFICATION_FAILED"
            FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
@@ -3200,7 +3200,11 @@ else
       local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
-        if verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+          already_satisfied="true"
+          log "dispatch: Todo task $TASK_SOURCE_ID completed without repository changes"
+          lc_log "TODO_TASK_NO_REPO_CHANGE" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+        elif verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
           already_satisfied="true"
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
@@ -3241,7 +3245,7 @@ else
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
         fi
-        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
@@ -3257,10 +3261,9 @@ else
     fi
   fi
 
-  # The task result comment is required delivery evidence, not merely a
-  # correlation hint. A missing/invalid marker must fail closed for repository
-  # changes and no-op tasks alike. Do not let TASK_DONE override missing evidence.
-  if [ "$SUCCESS" = "true" ]; then
+  # GitHub-rooted tasks require a deterministic result-comment receipt.
+  # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
+  if [ "$SUCCESS" = "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
     if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
       SUCCESS="false"
       FAILURE_CODE="DELIVERY_COMMENT_MISSING"
@@ -3269,6 +3272,21 @@ else
       lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt action=fail"
     else
       log "dispatch: task $COMMENT_ID attempt $current_attempt result comment marker verified"
+    fi
+  fi
+
+  # Mark the root Todo task and its complete ordered subtask tree done only
+  # after implementation delivery has been independently verified above.
+  if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+    if task_source_complete "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID"; then
+      log "dispatch: Todo task tree $TASK_SOURCE_ID marked done"
+      lc_log "TODO_SOURCE_COMPLETED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    else
+      SUCCESS="false"
+      FAILURE_CODE="TODO_SOURCE_UPDATE_FAILED"
+      FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
+      log "ERROR: Todo source completion failed for task $TASK_SOURCE_ID"
+      lc_log "TODO_SOURCE_COMPLETION_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
     fi
   fi
 
