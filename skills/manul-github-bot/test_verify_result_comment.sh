@@ -311,8 +311,8 @@ CREATE TABLE conversations (
 );
 INSERT INTO conversations(conversationId,status,activePrNumber,activePrUrl,updatedAt)
 VALUES ('conv-pending','ACTIVE',77,'https://github.com/owner/repo/pull/77','2026-10-30T00:00:00Z');
-INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,conversationId)
-VALUES ('issue:pending-close','owner/repo',601,'https://github.com/owner/repo/issues/601','IMPLEMENT','completed',1,'conv-pending');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,action,status,attempts,conversationId)
+VALUES ('issue:pending-close','owner/repo',601,'https://github.com/owner/repo/issues/601','test prompt','IMPLEMENT','completed',1,'conv-pending');
 SQL
     ensure_terminal_lifecycle_outbox
     sqlite3 "$TEMP_DB" "
