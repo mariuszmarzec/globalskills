@@ -36,6 +36,7 @@ export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
 On the next aicode launch:
 
 - The Windows helper listens only on the current WSL-facing Windows host address and accepts connections only from the current WSL IPv4 address.
+- If Windows observes a different source IP than the route resolver predicted, `aicode` reads the bridge's rejected-client diagnostic and automatically updates the allowlist only when that exact IP is currently assigned to the WSL instance. It never broadens access to an entire private subnet.
 - The Windows helper forwards only HTTP GET/POST/DELETE requests to /mcp, rewrites Host/Origin headers for Todo's DNS-rebinding protection, and forwards to 127.0.0.1:8765.
 - The WSL proxy listens only on 127.0.0.1:8766; OpenCode and Manul use http://127.0.0.1:8766/mcp.
 - The launcher sends an unauthenticated probe and enables the OpenCode MCP entry only after the server rejects it with HTTP 401. Todo still validates the Bearer token on every MCP request.
