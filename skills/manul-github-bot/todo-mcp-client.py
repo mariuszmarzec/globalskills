@@ -69,6 +69,7 @@ class StreamableHttpClient:
         self.session_id: str | None = None
         self.request_id = 0
         self.initialized = False
+        self.protocol_version = PROTOCOL_VERSION
 
     def post(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         headers = {
@@ -79,7 +80,7 @@ class StreamableHttpClient:
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         if self.initialized:
-            headers["MCP-Protocol-Version"] = PROTOCOL_VERSION
+            headers["MCP-Protocol-Version"] = self.protocol_version
         request = urllib.request.Request(
             self.url,
             data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
@@ -132,7 +133,7 @@ class StreamableHttpClient:
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         if name not in ALLOWED_TOOLS:
             raise McpClientError("Tool is not in the Manul Todo MCP allow-list")
-        self.request(
+        initialized = self.request(
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -143,6 +144,10 @@ class StreamableHttpClient:
                 },
             },
         )
+        negotiated_version = initialized.get("protocolVersion")
+        if not isinstance(negotiated_version, str) or not negotiated_version:
+            raise McpClientError("MCP initialize response did not negotiate a protocol version")
+        self.protocol_version = negotiated_version
         self.initialized = True
         self.notify_initialized()
         result = self.request(
