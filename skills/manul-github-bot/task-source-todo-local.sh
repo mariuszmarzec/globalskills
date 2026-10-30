@@ -46,6 +46,6 @@ task_source_todo_local_revalidate() {
 
 task_source_todo_local_complete() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_local_config "$source_json")"
+  source_json="$(todo_source_local_config "$source_json")" || return $?
   todo_task_mark_done "$source_json" todo_local_mcp "$source_id"
 }
