@@ -77,7 +77,9 @@ class TodoMcpBridgeTests(unittest.TestCase):
 
     def test_aicode_only_enables_todo_after_authenticated_endpoint_challenge(self):
         source = AICODE.read_text(encoding="utf-8")
+        self.assertIn('http://127.0.0.1:8765/mcp', source)
         self.assertIn('http://127.0.0.1:8766/mcp', source)
+        self.assertIn('todo_local_mcp_is_wsl', source)
         self.assertIn('if [ "$http_status" = "401" ]; then', source)
         self.assertIn("observed_client_ip", source)
         self.assertIn('ip -o -4 addr show', source)
@@ -85,7 +87,7 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn('refusing to expand the allowlist', source)
         self.assertIn('bridge.log', source)
         self.assertIn('TODO_LOCAL_MCP_AVAILABLE=1', source)
-        self.assertIn('url: "http://127.0.0.1:8766/mcp"', source)
+        self.assertIn('url: "{env:TODO_LOCAL_MCP_URL}"', source)
         self.assertIn('Bearer {env:TODO_LOCAL_MCP_TOKEN}', source)
 
 
