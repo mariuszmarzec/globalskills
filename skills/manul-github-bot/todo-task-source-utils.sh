@@ -48,8 +48,8 @@ todo_task_resolve_repository() {
 
   description="$(jq -r '.description // ""' <<<"$task_json")"
   explicit_matches="$(
-    grep -Eo 'https?://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
-      | sed -E 's#^https?://github\\.com/##; s#\\.git$##' \
+    grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
+      | sed -E 's#^https?://github\.com/##; s#\.git$##' \
       | sort -u || true
   )"
   candidate_count="$(printf '%s\n' "$explicit_matches" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
