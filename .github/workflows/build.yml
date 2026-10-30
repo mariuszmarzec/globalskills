@@ -48,6 +48,7 @@ env:
     skills/manul-github-bot/test_opencode_marker_recovery.sh
     skills/manul-github-bot/test_agent_modes.sh
     skills/manul-github-bot/test_agent_session_state.sh
+    skills/manul-github-bot/test_agent_execution_controller.sh
     skills/manul-github-bot/test_agent_execution_smoke.sh
     skills/manul-github-bot/test_manul_environment.sh
     skills/manul-github-bot/test_openclaw_binary_override.sh
@@ -69,7 +70,6 @@ env:
     skills/manul-github-bot/test_user_decision_blocking.sh
     skills/manul-github-bot/test_feedback_routing.sh
     skills/manul-github-bot/test_human_mode.sh
-    skills/manul-github-bot/test_github_control_integration.sh
 
 jobs:
   verify:
