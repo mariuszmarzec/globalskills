@@ -3644,6 +3644,144 @@ run_test "threading: reply to same thread gets same conversationId" test_reply_t
 run_test "threading: PR top-level comment gets PR conversationId" test_pr_top_level_comment_gets_pr_conversation_id
 run_test "threading: conversation persistence not dependent on createdAt>=now" test_conversation_persistence_not_dependent_on_createdAt_now
 
+# ===================== Lifecycle Marker Ordering Regression Tests =====================
+
+# Test: TASK_DONE/TASK_FAILED lifecycle event markers are assembled BEFORE
+# the result comment is posted. This prevents the phantom-post scenario where
+# the GitHub comment lacks the deterministic event marker.
+test_lifecycle_marker_assembled_before_post() {
+  # Verify source-order in manul-daemon.sh: the lifecycle_event_marker assembly
+  # must appear before the post_github_comment call that posts FINAL_COMMENT.
+  local marker_line post_line
+  marker_line="$(grep -n 'lifecycle_event_marker=' "$SCRIPT_DIR/manul-daemon.sh" | head -1 | cut -d: -f1)"
+  post_line="$(grep -n 'post_github_comment.*FINAL_COMMENT' "$SCRIPT_DIR/manul-daemon.sh" | head -1 | cut -d: -f1)"
+  if [ -z "$marker_line" ] || [ -z "$post_line" ]; then
+    echo "ERROR: could not locate marker assembly (line=$marker_line) or post call (line=$post_line)"
+    return 1
+  fi
+  if [ "$marker_line" -ge "$post_line" ]; then
+    echo "ERROR: lifecycle_event_marker assembled at line $marker_line but post_github_comment is at line $post_line — marker not prepended before posting"
+    return 1
+  fi
+  return 0
+}
+
+run_test "lifecycle ordering: TASK_DONE/TASK_FAILED markers assembled before post" test_lifecycle_marker_assembled_before_post
+
+# ===================== TASK_STARTED Idempotency Regression Tests =====================
+
+# Isolate the idempotency helpers for unit testing against a temp SQLite DB.
+TEST_IDEMPOTENCY_DB=""
+TEST_LOG=""
+
+setup_started_idempotency_test() {
+  TEST_IDEMPOTENCY_DB="$(mktemp /tmp/manul-started-idempotency-test-XXXXXX.db)"
+  TEST_LOG="$(mktemp /tmp/manul-started-idempotency-test-XXXXXX.log)"
+  sqlite3 "$TEST_IDEMPOTENCY_DB" "
+    CREATE TABLE processed_comments (
+      commentId TEXT PRIMARY KEY,
+      repository TEXT NOT NULL,
+      issueNumber INTEGER NOT NULL,
+      commentUrl TEXT NOT NULL,
+      author TEXT,
+      agent TEXT,
+      prompt TEXT NOT NULL,
+      context TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      createdAt TEXT,
+      processedAt TEXT,
+      taskStartedCommentId TEXT
+    );
+  " 2>/dev/null
+}
+
+teardown_started_idempotency_test() {
+  rm -f "$TEST_IDEMPOTENCY_DB" "$TEST_LOG"
+}
+
+# Define stubs needed by the sourced functions, then source them.
+_setup_started_helpers() {
+  sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+  log() { echo "$*" >>"$TEST_LOG"; }
+  lc_log() { echo "$*" >>"$TEST_LOG"; }
+  local helper_src
+  helper_src="$(sed -n '/^ensure_started_comment_tracking_columns/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+  helper_src="$helper_src
+$(sed -n '/^started_comment_already_published/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+  helper_src="$helper_src
+$(sed -n '/^record_started_comment_id/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+  eval "$helper_src"
+}
+
+test_started_comment_not_published_by_default() {
+  setup_started_idempotency_test
+  trap 'teardown_started_idempotency_test' RETURN
+  export DB="$TEST_IDEMPOTENCY_DB" LOG="$TEST_LOG"
+  _setup_started_helpers
+  started_comment_already_published 'task-1' 1
+  if [ "$?" -ne 1 ]; then
+    echo "ERROR: expected started_comment_already_published to return 1 (not published), got $?"
+    return 1
+  fi
+  return 0
+}
+
+test_started_comment_marked_published_after_record() {
+  setup_started_idempotency_test
+  trap 'teardown_started_idempotency_test' RETURN
+  export DB="$TEST_IDEMPOTENCY_DB" LOG="$TEST_LOG"
+  sqlite3 "$TEST_IDEMPOTENCY_DB" \
+    "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status, attempts, createdAt) VALUES ('task-2', 'repo/repo', 1, 'https://example.com/2', 'prompt', 'queued', 1, '2026-01-01T00:00:00Z');"
+  # Assert column exists and receipt is not recorded initially
+  local col_exists
+  col_exists="$(sqlite3 "$TEST_IDEMPOTENCY_DB" "PRAGMA table_info(processed_comments);" | grep -c '|taskStartedCommentId|' || true)"
+  if [ "$col_exists" -eq 0 ]; then
+    echo "ERROR: taskStartedCommentId column missing from processed_comments"
+    return 1
+  fi
+  _setup_started_helpers
+  ensure_started_comment_tracking_columns
+  local before
+  started_comment_already_published 'task-2' 1 && before=0 || before=1
+  if [ "$before" != "1" ]; then
+    echo "ERROR: expected not-published before record, got $before"
+    return 1
+  fi
+  # Record the receipt (simulating a successful TASK_STARTED post)
+  record_started_comment_id 'task-2' 1 'mock-comment-id'
+  local after
+  started_comment_already_published 'task-2' 1 && after=0 || after=1
+  if [ "$after" != "0" ]; then
+    echo "ERROR: expected published after record, got $after"
+    return 1
+  fi
+  return 0
+}
+
+test_started_comment_idempotent_across_attempt_rollback() {
+  # Simulates the idempotency invariant: after a successful TASK_STARTED post
+  # and receipt, a retry with the SAME attempt number must be suppressed.
+  setup_started_idempotency_test
+  trap 'teardown_started_idempotency_test' RETURN
+  export DB="$TEST_IDEMPOTENCY_DB" LOG="$TEST_LOG"
+  # Insert with attempts=1 AND an existing receipt (simulating a prior successful post)
+  sqlite3 "$TEST_IDEMPOTENCY_DB" \
+    "INSERT INTO processed_comments(commentId, repository, issueNumber, commentUrl, prompt, status, attempts, createdAt, taskStartedCommentId) VALUES ('task-retry', 'repo/repo', 1, 'https://example.com/4', 'prompt', 'running', 1, '2026-01-01T00:00:00Z', 'gh-comment-99');"
+  _setup_started_helpers
+  local already_published
+  started_comment_already_published 'task-retry' 1 && already_published=0 || already_published=1
+  if [ "$already_published" != "0" ]; then
+    echo "ERROR: expected already-published=true for task with receipt, got $already_published"
+    return 1
+  fi
+  return 0
+}
+
+run_test "lifecycle idempotency: start not published by default" test_started_comment_not_published_by_default
+run_test "lifecycle idempotency: start marked published after record" test_started_comment_marked_published_after_record
+run_test "lifecycle idempotency: start idempotent across attempt rollback" test_started_comment_idempotent_across_attempt_rollback
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"
 echo "═══════════════════════════════════════════════════════════════"

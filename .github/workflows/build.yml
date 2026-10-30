@@ -69,6 +69,7 @@ env:
     skills/manul-github-bot/test_user_decision_blocking.sh
     skills/manul-github-bot/test_feedback_routing.sh
     skills/manul-github-bot/test_human_mode.sh
+    skills/manul-github-bot/test_github_control_integration.sh
 
 jobs:
   verify:

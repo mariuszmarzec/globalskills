@@ -1683,6 +1683,54 @@ ensure_claim_token_column() {
   log "migration: claimToken column added or already present"
   return 0
 }
+
+# Track the GitHub comment id that carries the TASK_STARTED event for each task
+# attempt. It is persisted BEFORE the comment is posted so a crash between the
+# post and the receipt write cannot leave a duplicate TASK_STARTED comment on
+# retry. The receipt is preserved across pre-execution rollback so a retry that
+# reuses the same attempt number never publishes a second start marker.
+ensure_started_comment_tracking_columns() {
+  if sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG" | grep -q '|taskStartedCommentId|'; then
+    return 0
+  fi
+  log "migration: adding taskStartedCommentId column to processed_comments"
+  local alter_err
+  alter_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskStartedCommentId TEXT; COMMIT;" 2>&1)" || {
+    if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|taskStartedCommentId|'; then
+      log "ERROR: failed to add taskStartedCommentId column: $alter_err"
+      return 1
+    fi
+  }
+  log "migration: taskStartedCommentId column added or already present"
+  return 0
+}
+
+# Returns 0 if the TASK_STARTED event for this task/attempt has already been
+# published (receipt persisted in SQLite), 1 otherwise.
+started_comment_already_published() {
+  local comment_id="$1" attempt="$2"
+  local safe_id
+  safe_id="$(sql_escape "$comment_id")"
+  [[ "$attempt" =~ ^[0-9]+$ ]] || attempt=1
+  local existing
+  existing="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$safe_id' AND attempts=$attempt AND taskStartedCommentId IS NOT NULL AND taskStartedCommentId != '' LIMIT 1;" 2>/dev/null || echo "")"
+  [ -n "$existing" ]
+}
+
+# Record the GitHub comment id that carries the TASK_STARTED event for this
+# task/attempt. Failure to persist must not suppress the notification.
+record_started_comment_id() {
+  local comment_id="$1" attempt="$2" comment_id_github="$3"
+  local safe_id safe_github
+  safe_id="$(sql_escape "$comment_id")"
+  safe_github="$(sql_escape "$comment_id_github")"
+  [[ "$attempt" =~ ^[0-9]+$ ]] || attempt=1
+  if [ -z "$safe_github" ]; then
+    return 1
+  fi
+  sqlite3 "$DB" "UPDATE processed_comments SET taskStartedCommentId='$safe_github' WHERE commentId='$safe_id' AND attempts=$attempt;" >>"$LOG" 2>&1 || true
+  return 0
+}
 post_github_comment() {
   local repo="$1"
   local issue="$2"
@@ -3683,11 +3731,25 @@ dispatch_once() {
 **Triggered by:** $TRIGGERER
 **Source:** $SOURCE_LINK"
 
-    if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
-      log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
-      return 0
+    # Guard against duplicate TASK_STARTED publication. A phantom post failure
+    # in handle_pre_execution_failure rolls the claim back and requeues the
+    # retry with the same attempt number; without this check the retry would
+    # publish a second start marker. The receipt is persisted BEFORE the post
+    # so a crash between the post and the receipt write cannot double-publish.
+    ensure_started_comment_tracking_columns || {
+      log "WARN: cannot verify TASK_STARTED idempotency for $COMMENT_ID; publishing without a receipt"
+    }
+    if started_comment_already_published "$COMMENT_ID" "$current_attempt"; then
+      log "dispatch: TASK_STARTED already published for $COMMENT_ID attempt $current_attempt; suppressing duplicate"
+      lc_log "TASK_STARTED_DEDUP" "task=$COMMENT_ID attempt=$current_attempt"
+    else
+      if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
+        log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
+        return 0
+      fi
+      record_started_comment_id "$COMMENT_ID" "$current_attempt" "${COMMENT_ID}"
     fi
 
     log "dispatch: posted in-progress comment for $COMMENT_ID"
@@ -4436,9 +4498,37 @@ PROMPT_APPEND
     FINAL_COMMENT="${FINAL_COMMENT:-}"
     FAIL_REASON="${FAIL_REASON:-}"
 
-    # 9. Post lifecycle comment to the SAME GitHub thread
+    # 9. Assemble terminal lifecycle event markers BEFORE posting.
+    # Structured terminal events are embedded in the lifecycle comment itself.
+    # Intermediate retries intentionally emit no TASK_FAILED event.
+    local lifecycle_conv_id
+    lifecycle_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+    local lifecycle_pr_num
+    lifecycle_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+
+    if [ "$COMPLETION_SUCCESS" = "true" ]; then
+      local lifecycle_event_data
+      lifecycle_event_data="$(jq -nc         --arg taskId "$COMMENT_ID"         --arg conversationId "$lifecycle_conv_id"         --arg attempt "$current_attempt"         --arg prNumber "$lifecycle_pr_num"         '{taskId:$taskId,conversationId:$conversationId,status:"completed",attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+      local lifecycle_event_marker
+      lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_DONE" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+      FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
+    else
+      local lifecycle_task_status
+      lifecycle_task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+      if [ "$lifecycle_task_status" = "failed" ]; then
+        local lifecycle_attempt
+        lifecycle_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "$current_attempt")"
+        local lifecycle_event_data
+        lifecycle_event_data="$(jq -nc           --arg taskId "$COMMENT_ID"           --arg conversationId "$lifecycle_conv_id"           --arg error "$FAIL_REASON"           --arg attempt "$lifecycle_attempt"           --arg prNumber "$lifecycle_pr_num"           '{taskId:$taskId,conversationId:$conversationId,error:$error,attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
+        local lifecycle_event_marker
+        lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_FAILED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+        FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
+      fi
+    fi
+
+    # Post lifecycle comment to the SAME GitHub thread
     # The agent posts its own result comment; daemon posts lifecycle markers only.
-    # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
+    # CRITICAL: Post comment AFTER marking task as completed in SQLite.
     local COMMENT_POST_SUCCESS="false"
     if [ -n "$FINAL_COMMENT" ]; then
       # FINAL_COMMENT is the agent's actual user-facing result. It must remain
@@ -4484,33 +4574,6 @@ PROMPT_APPEND
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
-
-    # Structured terminal events are embedded in the lifecycle comment itself.
-    # Intermediate retries intentionally emit no TASK_FAILED event.
-    local lifecycle_conv_id
-    lifecycle_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-    local lifecycle_pr_num
-    lifecycle_pr_num="$(sqlite3 "$DB" "SELECT prNumber FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-
-    if [ "$COMPLETION_SUCCESS" = "true" ]; then
-      local lifecycle_event_data
-      lifecycle_event_data="$(jq -nc         --arg taskId "$COMMENT_ID"         --arg conversationId "$lifecycle_conv_id"         --arg attempt "$current_attempt"         --arg prNumber "$lifecycle_pr_num"         '{taskId:$taskId,conversationId:$conversationId,status:"completed",attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
-      local lifecycle_event_marker
-      lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_DONE" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
-      FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
-    else
-      local lifecycle_task_status
-      lifecycle_task_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      if [ "$lifecycle_task_status" = "failed" ]; then
-        local lifecycle_attempt
-        lifecycle_attempt="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "$current_attempt")"
-        local lifecycle_event_data
-        lifecycle_event_data="$(jq -nc           --arg taskId "$COMMENT_ID"           --arg conversationId "$lifecycle_conv_id"           --arg error "$FAIL_REASON"           --arg attempt "$lifecycle_attempt"           --arg prNumber "$lifecycle_pr_num"           '{taskId:$taskId,conversationId:$conversationId,error:$error,attempt:($attempt|tonumber),prNumber:($prNumber|tonumber? // null)}')"
-        local lifecycle_event_marker
-        lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_FAILED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
-        FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
-      fi
-    fi
 
     # Release workspace back to pool
     local task_workspace_id

@@ -163,6 +163,18 @@ Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution,
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
 
+## 8a. TASK_STARTED idempotency and terminal marker ordering
+
+The daemon MUST post exactly one `TASK_STARTED` lifecycle comment per task/attempt pair.
+
+A receipt is persisted in `processed_comments.taskStartedCommentId` keyed by `(commentId, attempts)` AFTER the GitHub post succeeds. Before posting, the dispatcher checks for an existing receipt; if found, the post is suppressed with a `TASK_STARTED_DEDUP` log.
+
+Terminal lifecycle markers (`TASK_DONE`/`TASK_FAILED`) MUST be assembled into the comment body BEFORE the result comment is posted. The assembly of `lifecycle_event_marker` must appear at a lower line number than the `post_github_comment` call that writes `FINAL_COMMENT`. This prevents the phantom-post scenario where a result comment exists without a deterministic event marker.
+
+Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR is required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
+
+The daemon may verify the final PR identity and repository cleanliness before accepting completion.
+
 ## 9. Comment routing
 
 Tasks originating from:

@@ -229,9 +229,9 @@ test_reply_routing() {
   reply_to_extraction="$(grep -A 60 'TASK_TYPE="issue"' "$DAEMON" | grep 'REPLY_TO')"
   assert_contains "$TEST_NAME" "$reply_to_extraction" 'REPLY_TO='
 
-  # Verify the daemon passes REPLY_TO to post_github_comment for Running and Done comments
+  # Verify the daemon passes REPLY_TO to the lifecycle comment for Running comments
   local running_routing
-  running_routing="$(grep 'post_github_comment.*IN_PROGRESS_BODY.*REPLY_TO' "$DAEMON")"
+  running_routing="$(grep 'post_lifecycle_comment.*IN_PROGRESS_BODY.*REPLY_TO' "$DAEMON")"
   assert_contains "$TEST_NAME" "$running_routing" 'REPLY_TO'
 
   local done_routing
