@@ -34,11 +34,23 @@ manul-ensure-runtime() {
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ]; then
-        if ! "$MANUL_REPAIR"; then
+        # Keep repair output off this function's stdout. CLI callers commonly
+        # pipe status through head/grep; a closed stdout pipe must not SIGPIPE
+        # the installer halfway through deployment.
+        local repair_log
+        repair_log="$(mktemp "${TMPDIR:-/tmp}/manul-runtime-repair.XXXXXX")" || {
+            echo "ERROR: could not create a temporary Manul repair log" >&2
+            return 1
+        }
+
+        if ! "$MANUL_REPAIR" >"$repair_log" 2>&1; then
             echo "ERROR: failed to repair Manul runtime without risking task state" >&2
+            echo "Repair log retained at: $repair_log" >&2
             echo "Run the installer explicitly for a first-time initialization." >&2
             return 1
         fi
+
+        rm -f "$repair_log"
     fi
 }
 
