@@ -1962,6 +1962,19 @@ retry_pending_terminal_lifecycle_comments() {
   done < <(printf '%s' "$rows" | jq -c '.[]')
 }
 
+# Queue a terminal event and publish it when it has a GitHub destination.
+# External-source tasks use issue number 0 as a sentinel: their result is
+# delivered by the source adapter, so there is no GitHub comment/outbox row.
+deliver_terminal_lifecycle_comment() {
+  local repo="$1" issue_num="$2" task_id="$3" attempt="$4" event_type="$5" body="$6" reply_to="${7:-}"
+  queue_terminal_lifecycle_comment "$repo" "$issue_num" "$task_id" "$attempt" "$event_type" "$body" "$reply_to" || return 1
+  if [[ "$issue_num" =~ ^0+$ ]]; then
+    return 0
+  fi
+  publish_terminal_lifecycle_comment "$task_id" "$attempt" "$event_type"
+}
+
+
 
 # Lifecycle/status/error comments are bot-only. Human mode remains silent
 # about orchestration state on GitHub; the agent result comment is verified
@@ -4826,8 +4839,7 @@ PROMPT_APPEND
       if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
         local terminal_event_type="TASK_DONE"
         [ "$task_final_status" = "failed" ] && terminal_event_type="TASK_FAILED"
-        if queue_terminal_lifecycle_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$lifecycle_attempt" "$terminal_event_type" "$FINAL_COMMENT" "$REPLY_TO" &&
-           publish_terminal_lifecycle_comment "$COMMENT_ID" "$lifecycle_attempt" "$terminal_event_type"; then
+        if deliver_terminal_lifecycle_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$lifecycle_attempt" "$terminal_event_type" "$FINAL_COMMENT" "$REPLY_TO"; then
           COMMENT_POST_SUCCESS="true"
         else
           log "ERROR: terminal result comment queued for retry for $COMMENT_ID (event=$terminal_event_type attempt=$lifecycle_attempt)"
