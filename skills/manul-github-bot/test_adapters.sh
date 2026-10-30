@@ -580,12 +580,12 @@ MOCK
   chmod +x "$tmp/bin/opencode"
   printf '%s\n' 'Do the task' >"$tmp/prompt"
 
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_COUNT_FILE="$tmp/count" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-false-step-limit --prompt "$$tmp/prompt" --workspace "$$tmp" --attempt 1 --timeout 30 --session-id "" --stdout-file "$$tmp/stdout" --stderr-file "$$tmp/stderr" 2>/dev/null)"
-  rc="$$?"
-  assert_json_status "$$out" "FAILED" "Text/tool payload mentioning a step limit is not a runtime step-limit event"
-  [ "$$rc" -eq 1 ] && ok "False-positive step-limit text remains a failure" || fail "False-positive step-limit rc=$$rc"
-  [ "$(cat "$$tmp/count")" = "1" ] && ok "False-positive step-limit text does not trigger a same-session continuation" || fail "False-positive step-limit text triggered another invocation"
-  printf '%s' "$$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE' && ok "False-positive step-limit text is classified as a normal runtime failure" || fail "False-positive step-limit failure code was not RUNTIME_FAILURE"
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_COUNT_FILE="$tmp/count" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-false-step-limit --prompt "$tmp/prompt" --workspace "$tmp" --attempt 1 --timeout 30 --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc="$?"
+  assert_json_status "$out" "FAILED" "Text/tool payload mentioning a step limit is not a runtime step-limit event"
+  [ "$rc" -eq 1 ] && ok "False-positive step-limit text remains a failure" || fail "False-positive step-limit rc=$rc"
+  [ "$(cat "$tmp/count")" = "1" ] && ok "False-positive step-limit text does not trigger a same-session continuation" || fail "False-positive step-limit text triggered another invocation"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE' && ok "False-positive step-limit text is classified as a normal runtime failure" || fail "False-positive step-limit failure code was not RUNTIME_FAILURE"
 }
 
 test_opencode_stop_without_marker() {
