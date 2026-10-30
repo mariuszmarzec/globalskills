@@ -3885,6 +3885,24 @@ The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, 
 For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_BEGIN/END, do NOT post a normal result comment; the daemon will post the question and resume the same task after the user replies.
 PROMPT_EOF
 
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      cat >> "$TASK_PROMPT_FILE" <<'TODO_SOURCE_PROMPT'
+
+## Todo Source Delivery Override — takes precedence over the generic GitHub comment instructions above
+
+This task originates from a Todo task tree, not a GitHub issue or comment.
+- Do NOT post a GitHub issue comment, PR conversation comment, PR review comment, or a Manul result-marker comment. The source URL is a Todo MCP identifier, not a GitHub URL.
+- Do NOT call \`gh issue comment\` or GitHub comment APIs for this task.
+- The task root and its ordered subtask tree are supplied above. Treat the subtasks as the implementation plan: execute pending steps in the exact order shown; keep nested children immediately after their parent; [DONE] steps are context and must not be repeated.
+- Preserve the order from Todo; do not sort or parallelize steps by priority, title, or perceived complexity.
+- Make repository changes using the normal Manul branch/commit/push/PR workflow. A real PR and its updated description remain required whenever repository files change. Include the Todo task ID in the branch name, PR title, and PR body so the work can be traced to the source task.
+- A task that is informational or genuinely requires no repository change may finish without a PR, but must still give a concrete result in the final agent response.
+- Do NOT change Todo task completion state yourself. After delivery verification, Manul will re-read the source tree and mark the root and every descendant subtask done through the same MCP source adapter. Do not mark a step done early.
+- Finish with the existing TASK_DONE / TASK_FAILED / TASK_NEEDS_USER protocol. Do not emit a GitHub result comment as part of that protocol.
+
+TODO_SOURCE_PROMPT
+    fi
+
     # Repository Management: Ensure target repository exists and is authoritative
     local REPO_DIR
     local ensure_repo_rc=0
