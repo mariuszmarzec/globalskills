@@ -287,7 +287,7 @@ todo_task_prompt() {
 
 todo_task_to_source_json() {
   local task_json="$1" source_type="$2" resolution_json="${3:-}"
-  local repository task_id fingerprint source_id source_url title body prompt ids created updated
+  local repository task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context
   [ -n "$resolution_json" ] || resolution_json='{}'
   repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
   [ -n "$repository" ] || return 1
