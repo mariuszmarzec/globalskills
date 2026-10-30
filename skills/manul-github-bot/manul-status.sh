@@ -206,6 +206,8 @@ if [ "$LIST_MODE" = true ]; then
 
   RESULTS="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
+           attempts, $PRE_EXECUTION_FAILURES_SQL AS preExecutionFailures,
+           $AGENT_STARTED_AT_SQL AS agentStartedAt,
            createdAt, processedAt, workerPid, workspaceId, nextAttemptAt,
            $SOURCE_TYPE_SQL AS taskSourceType, $SOURCE_ID_SQL AS taskSourceId
     FROM processed_comments $WHERE_CLAUSE
@@ -368,12 +370,10 @@ else
   
   RESULT="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
+           parentTaskId, agent, attempts,
            $PRE_EXECUTION_FAILURES_SQL AS preExecutionFailures,
            $AGENT_STARTED_AT_SQL AS agentStartedAt,
-           parentTaskId, agent, attempts,, processedAt,
-           attempts, $PRE_EXECUTION_FAILURES_SQL AS preExecutionFailures,
-           $AGENT_STARTED_AT_SQL AS agentStartedAt,
-           workerPid, workspaceId, nextAttemptAt, prompt
+           createdAt, processedAt, workerPid, workspaceId, nextAttemptAt, prompt
     FROM processed_comments
     WHERE commentId='$ESCAPED_TASK_ID';
   " 2>/dev/null)" || {
