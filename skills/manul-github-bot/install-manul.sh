@@ -144,6 +144,12 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
 
+# The Todo MCP task-source adapters use the Python standard library client.
+# Keep Python optional for installations that do not enable either Todo source.
+if jq -e 'any(.taskSources[]?; (.enabled != false) and (.type == "todo_local_mcp" or .type == "todo_remote_mcp"))' "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
+    command -v python3 >/dev/null 2>&1 || fail "An enabled Todo MCP task source requires python3"
+fi
+
 # 4b. Persist provider-specific environment needed by unattended processes.
 #     Only an explicit allowlist is copied from the installer environment.
 #     Existing ~/.manul/.env content is preserved.
