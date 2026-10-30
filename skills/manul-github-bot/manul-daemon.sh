@@ -2839,20 +2839,34 @@ verify_result_comment_pr_url() {
   local result_endpoint
   local result_comment_get_endpoint
   local result_comment_patch_endpoint
+  local result_reply_to_id=""
+  local result_body_filter
+  local marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    result_reply_to_id="$(printf '%s' "$comment_url" | sed -nE 's/.*#discussion_r([0-9]+).*/\1/p')"
+    if [ -z "$result_reply_to_id" ] && [[ "$comment_id" =~ ^review:([0-9]+)$ ]]; then
+      result_reply_to_id="${BASH_REMATCH[1]}"
+    fi
+    if ! [[ "$result_reply_to_id" =~ ^[0-9]+$ ]]; then
+      log "ERROR: verify_result_comment_pr_url: review task $comment_id has no numeric source-thread ID"
+      lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=$comment_id reason=missing_review_thread_id"
+      return 1
+    fi
     result_endpoint="repos/$repo/pulls/$target_issue/comments"
+    result_body_filter=".[] | select((.in_reply_to_id // \"\") | tostring == \"$result_reply_to_id\") | select((.body // \"\") | contains(\"$marker\")) | .body // \"\""
     # Individual review-comment GET/PATCH endpoints are not nested under the PR number.
     result_comment_get_endpoint="repos/$repo/pulls/comments"
     result_comment_patch_endpoint="repos/$repo/pulls/comments"
   else
     result_endpoint="repos/$repo/issues/$target_issue/comments"
+    result_body_filter=".[] | select(.in_reply_to_id == null) | select((.body // \"\") | contains(\"$marker\")) | .body // \"\""
     result_comment_get_endpoint="repos/$repo/issues/comments"
     result_comment_patch_endpoint="repos/$repo/issues/comments"
   fi
 
   local bodies
-  bodies="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint" --paginate --jq '.[].body // ""' 2>>"$LOG")" || {
-    log "ERROR: verify_result_comment_pr_url: failed to fetch result comments from $result_endpoint"
+  bodies="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint" --paginate --jq "$result_body_filter" 2>>"$LOG")" || {
+    log "ERROR: verify_result_comment_pr_url: failed to fetch the task result comment from $result_endpoint"
     lc_log "PR_RESULT_LINK_VERIFY_ERROR" "task=${comment_id} repo=$repo reason=comment_api_failure endpoint=$result_endpoint"
     return 1
   }
@@ -2868,9 +2882,12 @@ verify_result_comment_pr_url() {
   # discard completed work for that presentation-only defect. Locate the exact
   # result comment by deterministic task/attempt marker and append the verified
   # canonical PR URL to it. The daemon then re-checks the comment before success.
-  local marker="<!-- manul-task:${comment_id}:attempt:${attempt} -->"
   local target_comment_id=""
-  target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint"     --paginate 2>>"$LOG" |     jq -r --arg marker "$marker" '.[] | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
+  if [ -n "$result_reply_to_id" ]; then
+    target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint" --paginate 2>>"$LOG" | jq -r --arg marker "$marker" --arg reply "$result_reply_to_id" '.[] | select((.in_reply_to_id // "") | tostring == $reply) | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
+  else
+    target_comment_id="$(timeout "$GH_API_TIMEOUT" gh api "$result_endpoint" --paginate 2>>"$LOG" | jq -r --arg marker "$marker" '.[] | select(.in_reply_to_id == null) | select(.body != null and (.body | contains($marker))) | .id' 2>>"$LOG" | head -1 || true)"
+  fi
 
   if [ -n "$target_comment_id" ]; then
     local repaired_body
