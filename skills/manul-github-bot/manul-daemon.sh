@@ -2884,7 +2884,7 @@ $question
 
 Reply with:
 
-`/manul continue <your answer>`
+\`/manul continue <your answer>\`
 
 This will resume the same task and conversation."
   else
@@ -2896,7 +2896,7 @@ $question
 
 Reply with:
 
-`/manul continue <your answer>`
+\`/manul continue <your answer>\`
 
 The answer will resume this same task and conversation.
 
