@@ -495,6 +495,18 @@ local_report_reval_rc=0
 todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_report_reval_rc=$?
 assert_rc "user edits remain visible to source fingerprint after output child is excluded" "1" "$local_report_reval_rc"
 
+# A new /manul report version must retain the previous result as history
+# while excluding only the output child bound to the newly polled source version.
+jq '.[0].description = "/manul report Updated request after initial report"' "$TEST_DIR/local-report.json" > "$TEST_DIR/local-report-second-version.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-report-second-version.json"
+local_second_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
+local_second_report_id="$(jq -r '.taskSourceId' <<<"$local_second_report_task")"
+assert_not_contains "second report version receives a new source identity" "$local_second_report_id" "$local_report_id"
+local_second_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id" "Second report answer.")"
+assert_eq "second report version persists its exact answer" "Second report answer." "$(jq -r '.answer' <<<"$local_second_report_receipt")"
+assert_eq "previous report remains in the source tree as history" "1" "$(jq -r '.[0].subTasks | map(select((.description // "") | contains("Local report answer with exact content."))) | length' "$TODO_MCP_FIXTURE")"
+assert_eq "second report is excluded without hiding the historical output" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id"; echo $?)"
+
 cat > "$TEST_DIR/local-report-create-failure.json" <<'JSON'
 [
   {"id":502,"description":"/manul report Create failure fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
