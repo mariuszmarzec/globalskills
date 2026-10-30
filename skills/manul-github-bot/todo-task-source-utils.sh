@@ -68,7 +68,22 @@ todo_task_find_root() {
 }
 
 todo_task_fingerprint() {
-  jq -cS . <<<"$1" | sha256sum | awk '{print substr($1, 1, 16)}'
+  # Progress flags and modified timestamps change when Manul completes steps.
+  # Exclude them so a partial completion can be retried idempotently; retain
+  # descriptions, ids, permissions, priority, scheduler and exact tree order.
+  jq -cS '
+    def stable:
+      {
+        id,
+        description,
+        parentTaskId,
+        priority,
+        scheduler,
+        shares:((.shares // []) | sort_by(.userId, .permission)),
+        subTasks:([.subTasks[]? | stable])
+      };
+    stable
+  ' <<<"$1" | sha256sum | awk '{print substr($1, 1, 16)}'
 }
 
 todo_task_ids_json() {
@@ -235,13 +250,11 @@ todo_task_mark_done() {
   todo_task_is_active "$task_json" || return 1
   case "$source_type" in
     todo_local_mcp)
-      todo_task_has_local_trigger "$task_json" || return 1
-      tool="mark_tasks_done" ;;
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
     todo_remote_mcp)
       local manul_user_id
       manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
-      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1
-      tool="todo_mark_tasks" ;;
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
     *)
       return 2 ;;
   esac
@@ -250,8 +263,18 @@ todo_task_mark_done() {
   ids_json="$(todo_task_ids_json "$task_json")"
   if [ "$source_type" = "todo_local_mcp" ]; then
     arguments="$(jq -cn --argjson taskIds "$ids_json" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
   else
-    arguments="$(jq -cn --argjson taskIds "$ids_json" '{isToDo:false,taskIds:$taskIds}')"
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
   fi
-  todo_mcp_source_call "$source_json" "$tool" "$arguments" >/dev/null
 }
