@@ -49,8 +49,7 @@
       "name": "mariuszmarzec/todo",
       "aliases": [
         "todo desktop",
-        "todo app",
-        "todo"
+        "todo app"
       ],
       "description": "Todo task-management application and local desktop MCP server.",
       "skills": []
