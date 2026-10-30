@@ -159,10 +159,10 @@ EOF
         echo "  Ignoring invalid Todo MCP token environment variable name" >&2
         continue
       fi
-      value="\${!mcp_token_variable:-}"
-      if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?\${mcp_token_variable}=" "$env_file"; then
+      value="${!mcp_token_variable:-}"
+      if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${mcp_token_variable}=" "$env_file"; then
         printf "%s=%q\n" "$mcp_token_variable" "$value" >> "$env_file"
-        echo "  Captured \${mcp_token_variable} for unattended Manul Todo MCP access" >&2
+        echo "  Captured ${mcp_token_variable} for unattended Manul Todo MCP access" >&2
       fi
     done < <(
       jq -r '
