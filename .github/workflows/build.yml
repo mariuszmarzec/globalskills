@@ -97,7 +97,7 @@ jobs:
                   continue
               result = subprocess.run(
                   ["bash", "-n"],
-                  input="\\n".join(lines[:end]) + "\\n",
+                  input="\n".join(lines[:end]) + "\n",
                   text=True,
                   capture_output=True,
               )
