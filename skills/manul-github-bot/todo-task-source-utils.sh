@@ -33,7 +33,7 @@ todo_task_repository_catalog_path() {
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json matches_json match_json entry_json allowlist_json canonical_repository skills_json
+  local catalog_json matches_json match_json entry_json allowlist_json canonical_repository skills_json allowlist_enforced
 
   catalog_file="$(todo_task_repository_catalog_path)"
   [ -r "$catalog_file" ] || {
@@ -121,7 +121,8 @@ todo_task_resolve_repository() {
   canonical_repository="$(jq -r '.name' <<<"$entry_json")"
 
   allowlist_json="$(todo_mcp_source_repository_allowlist "$source_json")" || return 2
-  if [ "$(jq -r 'length' <<<"$allowlist_json")" -gt 0 ] &&
+  allowlist_enforced="$(jq -r '.repositoryAllowlistEnforced // (.repositoryAllowlist | type == "array")' <<<"$source_json")"
+  if [ "$allowlist_enforced" = "true" ] &&
       ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$allowlist_json" >/dev/null 2>&1; then
     echo "repository $canonical_repository is excluded by this Todo source allowlist" >&2
     return 1
