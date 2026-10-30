@@ -282,6 +282,12 @@ todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":95,"description":"/manul Upd
 assert_rc "source allowlist rejects an otherwise known project" "1" "$resolution_rc"
 assert_contains "allowlist rejection identifies the denied repository" "$(cat "$TEST_DIR/allowlist.log")" "owner/remote"
 
+empty_source='{"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+resolution_rc=0
+todo_task_resolve_repository "$empty_source" '{"id":98,"description":"/manul Update local project"}' 2>"$TEST_DIR/empty-allowlist.log" >/dev/null || resolution_rc=$?
+assert_rc "explicit empty repository allowlist denies all catalog targets" "1" "$resolution_rc"
+assert_contains "empty allowlist rejection is explicit" "$(cat "$TEST_DIR/empty-allowlist.log")" "excluded by this Todo source allowlist"
+
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul Fetch weather for Krakow"}' 2>"$TEST_DIR/unmatched.log" >/dev/null || resolution_rc=$?
 assert_rc "task without a project reference remains unresolved" "1" "$resolution_rc"
