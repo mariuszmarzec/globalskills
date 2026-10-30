@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(mktemp -d)"
+export TEST_DIR
 trap 'rm -rf "$TEST_DIR"' EXIT
 
 export MANUL_DIR="$TEST_DIR/manul"
@@ -307,6 +308,9 @@ if ! MANUL_DIR="$MANUL_DIR" DB="$DB" bash -x "$SCRIPT_DIR/manul-result-feedback.
   exit 1
 fi
 echo "CHECKPOINT: early-failure feedback published"
+grep -Fq 'CALL:issue comment 71 --repo test/repo --body ' "$GH_CALL_LOG" \
+  && echo "PASS: terminal TASK_FAILED comment uses the exported GitHub mock" \
+  || { echo "FAIL: terminal TASK_FAILED comment bypassed the GitHub mock" >&2; exit 1; }
 assert_eq 1 "$(count_for_task early-failure)" "early workspace failure comment published once"
 body="$(jq -s -r '[.[] | select((.body // "") | contains("\"taskId\":\"early-failure\""))][0].body' "$GH_COMMENTS_JSONL")"
 grep -q '\*\*Task:\*\* early-failure' <<< "$body" || { echo "FAIL: comment missing task id" >&2; exit 1; }
