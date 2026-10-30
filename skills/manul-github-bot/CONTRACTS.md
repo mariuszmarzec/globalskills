@@ -658,7 +658,7 @@ Failure codes must be stable and actionable:
 - `AGENT_STEP_NO_PROGRESS_TIMEOUT` — an OpenCode `step_start` remained unfinished past the bounded active-step budget.
 - `AGENT_TOOL_NO_PROGRESS_TIMEOUT` — an explicitly active OpenCode tool call failed to complete within its bounded budget.
 - `TASK_NEEDS_USER` — structured user decision is required.
-- `NEEDS_CONTINUATION` — runtime can continue an existing session.
+- `NEEDS_CONTINUATION` — adapter explicitly identified a bounded, resumable runtime condition and returned a session ID. A `TIMEOUT` plus a non-empty session ID is not sufficient; overall, idle, step-idle and tool-idle watchdog timeouts remain timeouts and clear the continuation pointer.
 - `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion; the dirty workspace is preserved for diagnosis and must not be treated as delivered.
 - `DELIVERY_NOT_PUSHED` — committed work is not present on the remote/PR head.
 - `DELIVERY_COMMENT_MISSING` — the required task/attempt result marker could not be verified; a completion marker from the agent is not a substitute for delivery evidence.
