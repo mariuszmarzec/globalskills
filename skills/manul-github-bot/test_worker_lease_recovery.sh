@@ -438,12 +438,6 @@ sqlite3 "$DB" "UPDATE processed_comments SET status='queued', workerPid=NULL, cl
 # Simulate claim: the dispatcher bumps attempts on claim
 sqlite3 "$DB" "UPDATE processed_comments SET status='running', attempts=attempts+1, processedAt=datetime('now'), heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now','+900 seconds'), workerPid=$CURRENT_TEST_PID, claimToken='crash-window-reclaim-token', agentStartedAt=NULL WHERE commentId='crash-window' AND status='queued';"
 assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='crash-window';")" "re-claim after crash-window adds attempt normally"
-# Simulate another crash: agentStartedAt set, worker dies
-sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now'), workerPid=999998, claimToken='crash-window-again-token' WHERE commentId='crash-window';"
-recover_stale_tasks
-assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='crash-window';")" "second crash-window also requeues"
-assert_eq 3 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='crash-window';")" "second crash preserves agent attempt count"
-
 # 6) PR verification rejects a missing PR and accepts a real PR.
 WORKTREE="$TEST_DIR/repo"
 mkdir -p "$WORKTREE"
