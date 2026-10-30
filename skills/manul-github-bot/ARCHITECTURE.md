@@ -84,7 +84,8 @@ Configured sources live in `.taskSources[]`; disabled entries are ignored and en
 Task sources
   +--> GitHub Issues
   +--> Jira Tasks
-  +--> Todo (future)
+  +--> TodoLocalMCPAdapter (Todo Desktop)
+  +--> TodoRemoteMCPAdapter (Fiteo backend)
           |
           v
    provider-specific filter

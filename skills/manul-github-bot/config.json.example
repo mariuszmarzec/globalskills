@@ -55,6 +55,21 @@
       "passwordEnv": "MANUL_JIRA_PASSWORD",
       "jql": "project is not EMPTY",
       "searchPath": "/rest/api/2/search"
+    },
+    {
+      "type": "todo_local_mcp",
+      "enabled": false,
+      "url": "http://127.0.0.1:8766/mcp",
+      "tokenEnv": "TODO_LOCAL_MCP_TOKEN",
+      "repository": "mariuszmarzec/todo"
+    },
+    {
+      "type": "todo_remote_mcp",
+      "enabled": false,
+      "url": "https://your-fiteo-host/mcp",
+      "tokenEnv": "FITEO_PAT",
+      "manulUserId": 123,
+      "repository": "mariuszmarzec/todo"
     }
   ],
   "repositories": [

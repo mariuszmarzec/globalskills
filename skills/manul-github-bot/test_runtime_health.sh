@@ -142,7 +142,7 @@ PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
 PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 mkdir -p "$PERM_CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
@@ -246,7 +246,7 @@ fi
 # task-source adapters (added in 9415b99), every poll cycle dies with
 # `task_source_configured_sources: command not found` and the generic
 # provider path silently degrades to legacy GitHub Issues only.
-for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh; do
+for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh todo-mcp-client.py; do
   if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
        | grep -q "\"$_ts\""; then
     ok "Installer declares $_ts"
@@ -254,6 +254,9 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
     fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
   fi
 done
+grep -q 'enabled Todo MCP task source requires python3' "$SCRIPT_DIR/install-manul.sh" \
+  && ok "Installer requires python3 only when a Todo MCP source is enabled" \
+  || fail "Installer does not validate python3 for enabled Todo MCP sources"
 
 # Runtime session-state helper must be deployed alongside the execution controller.
 if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
@@ -279,7 +282,7 @@ CANON="$SELFHEAL_ROOT/canonical"
 RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
@@ -371,7 +374,7 @@ CLI_ROOT="$(mktemp -d /tmp/manul-cli-XXXXXX)"
 CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # Deploy a real runtime so the CLI can actually run

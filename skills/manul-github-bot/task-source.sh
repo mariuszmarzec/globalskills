@@ -7,10 +7,10 @@
 set -uo pipefail
 TASK_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-task_source_types() { printf '%s\n' github_issues jira_tasks; }
+task_source_types() { printf '%s\n' github_issues jira_tasks todo_local_mcp todo_remote_mcp; }
 
 task_source_type_is_supported() {
-  case "$1" in github_issues|jira_tasks) return 0 ;; *) return 1 ;; esac
+  case "$1" in github_issues|jira_tasks|todo_local_mcp|todo_remote_mcp) return 0 ;; *) return 1 ;; esac
 }
 
 task_source_enabled() { jq -e '(.enabled != false)' <<<"$1" >/dev/null 2>&1; }
@@ -26,6 +26,12 @@ task_source_poll() {
     jira_tasks)
       source "$TASK_SOURCE_DIR/task-source-jira-tasks.sh"
       task_source_jira_tasks_poll "$source_json" ;;
+    todo_local_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
+      task_source_todo_local_poll "$source_json" ;;
+    todo_remote_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
+      task_source_todo_remote_poll "$source_json" ;;
     *)
       echo "task-source: unsupported provider type: $type" >&2
       return 2 ;;
@@ -72,4 +78,54 @@ task_source_identity() {
     | if ($t // "") == "" or ($i // "") == "" then empty
       else ($t + ":" + $i)
       end' <<<"$1"
+}
+
+
+task_source_is_todo_type() {
+  case "$1" in todo_local_mcp|todo_remote_mcp) return 0 ;; *) return 1 ;; esac
+}
+
+task_source_config_by_type() {
+  local config="$1" type="$2"
+  [ -f "$config" ] || return 1
+  jq -ce --arg type "$type" '
+    [.taskSources[]? | select(.type == $type and (.enabled != false))]
+    | first // empty
+  ' "$config" 2>/dev/null
+}
+
+# Revalidation is claim-scoped and deliberately distinguishes stale source
+# state (1) from unavailable MCP/config/network (2), matching GitHub providers.
+task_source_revalidate() {
+  local config="$1" type="$2" source_id="$3" source_json
+  task_source_is_todo_type "$type" || return 2
+  source_json="$(task_source_config_by_type "$config" "$type")" || return 2
+  case "$type" in
+    todo_local_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
+      task_source_todo_local_revalidate "$source_json" "$source_id" ;;
+    todo_remote_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
+      task_source_todo_remote_revalidate "$source_json" "$source_id" ;;
+    *)
+      return 2 ;;
+  esac
+}
+
+# Completion is an explicit provider side effect. It marks the root task and
+# its ordered subtask tree done only after Manul has verified repository delivery.
+task_source_complete() {
+  local config="$1" type="$2" source_id="$3" source_json
+  task_source_is_todo_type "$type" || return 2
+  source_json="$(task_source_config_by_type "$config" "$type")" || return 2
+  case "$type" in
+    todo_local_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
+      task_source_todo_local_complete "$source_json" "$source_id" ;;
+    todo_remote_mcp)
+      source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
+      task_source_todo_remote_complete "$source_json" "$source_id" ;;
+    *)
+      return 2 ;;
+  esac
 }

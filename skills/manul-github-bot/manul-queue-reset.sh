@@ -122,7 +122,7 @@ has_table() {
 
 SOURCE_PREDICATE="0"
 if has_column processed_comments taskSourceType && has_column processed_comments taskSourceId; then
-  SOURCE_PREDICATE="(taskSourceType IN ('github_issues','jira_tasks') AND COALESCE(taskSourceId,'') <> '')"
+  SOURCE_PREDICATE="(taskSourceType IN ('github_issues','jira_tasks','todo_local_mcp','todo_remote_mcp') AND COALESCE(taskSourceId,'') <> '')"
 fi
 
 # Only include GitHub comment IDs that poll.sh can rediscover. Never delete

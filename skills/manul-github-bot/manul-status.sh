@@ -110,6 +110,37 @@ fi
 sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
+
+db_has_column() {
+  local column="$1"
+  sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null |
+    awk -F'|' -v column="$column" '$2 == column { found=1 } END { exit !found }'
+}
+
+task_source_label() {
+  case "$1" in
+    github_issues) printf 'GitHub' ;;
+    jira_tasks) printf 'Jira' ;;
+    todo_local_mcp) printf 'Todo Local' ;;
+    todo_remote_mcp) printf 'Todo Remote' ;;
+    "") printf 'CLI / Manual' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+task_source_record_id() {
+  local source_type="$1" source_id="$2"
+  case "$source_type" in
+    todo_local_mcp|todo_remote_mcp)
+      # The stored identity is "<root task id>@<structural fingerprint>".
+      # The CLI shows the stable provider task ID, not the internal fingerprint.
+      printf '%s' "$source_id" | cut -d'@' -f1
+      ;;
+    *)
+      printf '%s' "$source_id"
+      ;;
+  esac
+}
 load_task_retention() {
   local list_days history_days
   list_days="$(jq -r '.retention.listDays // empty' "$MANUL_DIR/config.json" 2>/dev/null || true)"
@@ -149,9 +180,21 @@ if [ "$LIST_MODE" = true ]; then
     WHERE_CLAUSE="WHERE (status IN ('queued', 'running', 'blocked_user') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
   fi
 
+  # Source columns were added with task-source support. Keep status readable
+  # against an older DB that has not yet gone through the normal migration.
+  SOURCE_TYPE_SQL="''"
+  SOURCE_ID_SQL="''"
+  if db_has_column taskSourceType; then
+    SOURCE_TYPE_SQL="COALESCE(taskSourceType,'')"
+  fi
+  if db_has_column taskSourceId; then
+    SOURCE_ID_SQL="COALESCE(taskSourceId,'')"
+  fi
+
   RESULTS="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
-           attempts, createdAt, processedAt, workerPid, workspaceId, nextAttemptAt
+           attempts, createdAt, processedAt, workerPid, workspaceId, nextAttemptAt,
+           $SOURCE_TYPE_SQL AS taskSourceType, $SOURCE_ID_SQL AS taskSourceId
     FROM processed_comments $WHERE_CLAUSE
     ORDER BY createdAt DESC
     LIMIT 100;
@@ -172,28 +215,65 @@ if [ "$LIST_MODE" = true ]; then
   if [ "$OUTPUT_FORMAT" = "json" ]; then
     echo "["
     FIRST=true
-    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next; do
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
       if [ "$FIRST" = true ]; then
         FIRST=false
       else
-        echo ","
+        printf ',\n'
       fi
-      # Convert null values
-      [ -z "$started" ] && started="null" || started="\"$started\""
-      [ -z "$worker" ] && worker="null" || worker="$worker"
-      [ -z "$ws" ] && ws="null" || ws="\"$ws\""
-      [ -z "$next" ] && next="null" || next="\"$next\""
-      
-      printf '  {"taskId": "%s", "repo": "%s", "issue": %s, "status": "%s", "conversationId": "%s", "attempts": %s, "createdAt": "%s", "startedAt": %s, "workerId": %s, "workspaceId": %s, "nextAttemptAt": %s}' \
-        "$tid" "$repo" "$issue" "$status" "$conv" "$attempts" "$created" "$started" "$worker" "$ws" "$next"
+
+      source_name="$(task_source_label "$task_source_type")"
+      source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
+      json_object="$(jq -cn \
+        --arg taskId "$tid" \
+        --arg repo "$repo" \
+        --arg issue "$issue" \
+        --arg status "$status" \
+        --arg conversationId "$conv" \
+        --arg attempts "$attempts" \
+        --arg createdAt "$created" \
+        --arg startedAt "$started" \
+        --arg workerId "$worker" \
+        --arg workspaceId "$ws" \
+        --arg nextAttemptAt "$next" \
+        --arg taskSourceType "$task_source_type" \
+        --arg taskSourceId "$task_source_id" \
+        --arg source "$source_name" \
+        --arg sourceId "$source_record_id" \
+        '{
+          taskId: $taskId,
+          repo: $repo,
+          issue: ($issue | tonumber),
+          status: $status,
+          conversationId: $conversationId,
+          attempts: ($attempts | tonumber),
+          createdAt: $createdAt,
+          startedAt: (if $startedAt == "" then null else $startedAt end),
+          workerId: (if $workerId == "" then null else ($workerId | tonumber) end),
+          workspaceId: (if $workspaceId == "" then null else $workspaceId end),
+          nextAttemptAt: (if $nextAttemptAt == "" then null else $nextAttemptAt end),
+          source: $source,
+          sourceId: (if $sourceId == "" then null else $sourceId end),
+          taskSourceType: (if $taskSourceType == "" then null else $taskSourceType end),
+          taskSourceId: (if $taskSourceId == "" then null else $taskSourceId end)
+        }')"
+      printf '  %s' "$json_object"
     done <<< "$RESULTS"
-    echo ""
-    echo "]"
+    printf '\n]\n'
   else
-    printf "%-40s %-20s %-8s %-10s %s\n" "TASK_ID" "REPO#ISSUE" "STATUS" "ATTEMPTS" "CREATED"
-    printf "%-40s %-20s %-8s %-10s %s\n" "-------" "----------" "------" "--------" "-------"
-    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next; do
-      printf "%-40s %-20s %-8s %-10s %s\n" "$tid" "${repo}#${issue}" "$status" "$attempts" "$created"
+    printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
+      "TASK_ID" "REPO#ISSUE" "SOURCE" "SOURCE_ID" "STATUS" "ATTEMPTS" "CREATED"
+    printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
+      "-------" "----------" "------" "---------" "------" "--------" "-------"
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
+      source_name="$(task_source_label "$task_source_type")"
+      source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
+      repo_reference="$repo"
+      if [ "$issue" != "0" ]; then
+        repo_reference="$repo#$issue"
+      fi
+      printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
+        "$tid" "$repo_reference" "$source_name" "$source_record_id" "$status" "$attempts" "$created"
     done <<< "$RESULTS"
   fi
 else

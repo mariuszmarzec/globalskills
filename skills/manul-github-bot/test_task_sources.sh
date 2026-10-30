@@ -14,6 +14,13 @@ assert_contains(){ [[ "$2" == *"$3"* ]] && ok "$1" || fail "$1"; }
 assert_not_contains(){ [[ "$2" != *"$3"* ]] && ok "$1" || fail "$1"; }
 assert_eq(){ [[ "$2" == "$3" ]] && ok "$1" || fail "$1 (expected $2, got $3)"; }
 source "$SCRIPT_DIR/task-source.sh"
+for todo_type in todo_local_mcp todo_remote_mcp; do
+  if task_source_type_is_supported "$todo_type"; then
+    ok "$todo_type is registered as an independent task source"
+  else
+    fail "$todo_type is missing from the task-source registry"
+  fi
+done
 
 cat >"$WORK/config.json" <<'JSON'
 {"repositories":["legacy/repo"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/issues"]},{"type":"jira_tasks","enabled":false,"baseUrl":"http://jira.local","repository":"owner/jira-repo"}]}

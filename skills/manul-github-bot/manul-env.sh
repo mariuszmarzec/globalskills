@@ -148,6 +148,34 @@ EOF
     )
   fi
 
+  # MCP source tokens are captured only when their environment-variable names
+  # are explicitly configured by an enabled Todo source. Values are never
+  # copied to logs or repository configuration.
+  local mcp_token_variable
+  if [ -f "$runtime_dir/config.json" ]; then
+    while IFS= read -r mcp_token_variable; do
+      [ -n "$mcp_token_variable" ] || continue
+      if [[ ! "$mcp_token_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "  Ignoring invalid Todo MCP token environment variable name" >&2
+        continue
+      fi
+      value="${!mcp_token_variable:-}"
+      if [ -n "$value" ] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${mcp_token_variable}=" "$env_file"; then
+        printf "%s=%q\n" "$mcp_token_variable" "$value" >> "$env_file"
+        echo "  Captured ${mcp_token_variable} for unattended Manul Todo MCP access" >&2
+      fi
+    done < <(
+      jq -r '
+        .taskSources[]?
+        | select((.enabled != false))
+        | if .type == "todo_local_mcp" then (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
+          elif .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_PAT")
+          else empty
+          end
+      ' "$runtime_dir/config.json" 2>/dev/null | sort -u
+    )
+  fi
+
   chmod 600 "$env_file" || return 1
 
   if ! bash -n "$env_file" >/dev/null 2>&1; then

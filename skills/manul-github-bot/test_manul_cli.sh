@@ -96,7 +96,9 @@ init_db() {
     resultJson TEXT,
     workerPid INTEGER,
     nextAttemptAt TEXT,
-    baseId TEXT
+    baseId TEXT,
+    taskSourceType TEXT,
+    taskSourceId TEXT
   );"
   sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS submission_claims (
     baseId TEXT PRIMARY KEY,
@@ -303,7 +305,16 @@ test_status() {
     --repo owner/repo --issue 1 --prompt "Status test 1" > /dev/null 2>&1
   MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
     --repo owner/repo --issue 2 --prompt "Status test 2" > /dev/null 2>&1
-  
+
+  # Provider-backed tasks carry an explicit source type and source identity.
+  sqlite3 "$DB" "
+    INSERT INTO processed_comments
+      (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)
+    VALUES
+      ('todo-local-status','owner/todo',0,'queued',0,datetime('now'),'todo_local_mcp','420@0123456789abcdef'),
+      ('todo-remote-status','owner/fiteo',0,'queued',0,datetime('now'),'todo_remote_mcp','421@fedcba9876543210');
+  "
+
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --json 2>&1)
   if [ $? -eq 0 ] && printf '%s' "$OUTPUT" | jq -e 'type == "array"' > /dev/null 2>&1; then
     COUNT=$(printf '%s' "$OUTPUT" | jq 'length')
@@ -315,7 +326,24 @@ test_status() {
   else
     fail "List returns JSON array" "JSON array" "$OUTPUT"
   fi
-  
+
+  if printf '%s' "$OUTPUT" | jq -e '
+    any(.[]; .taskId == "todo-local-status"
+      and .source == "Todo Local"
+      and .sourceId == "420"
+      and .taskSourceType == "todo_local_mcp"
+      and .taskSourceId == "420@0123456789abcdef")
+    and any(.[]; .taskId == "todo-remote-status"
+      and .source == "Todo Remote"
+      and .sourceId == "421"
+      and .taskSourceType == "todo_remote_mcp"
+      and .taskSourceId == "421@fedcba9876543210")
+  ' >/dev/null 2>&1; then
+    pass "List JSON exposes local and remote Todo source names and record IDs"
+  else
+    fail "List JSON exposes local and remote Todo source names and record IDs" "Todo Local/420 and Todo Remote/421" "$OUTPUT"
+  fi
+
   # Test 2: Filter by status
   log "Filter by status"
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --status queued --json 2>&1)
@@ -360,8 +388,31 @@ test_status() {
   else
     fail "Empty list returns empty array" "[]" "$OUTPUT"
   fi
-  
-  # Test 6: Text format
+
+  # Re-seed provider-backed tasks after the empty-list assertion.
+  sqlite3 "$DB" "
+    INSERT INTO processed_comments
+      (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)
+    VALUES
+      ('todo-local-text-status','owner/todo',0,'queued',0,datetime('now'),'todo_local_mcp','420@0123456789abcdef'),
+      ('todo-remote-text-status','owner/fiteo',0,'queued',0,datetime('now'),'todo_remote_mcp','421@fedcba9876543210');
+  "
+
+  # Test 6: Text list includes source type and provider task ID.
+  log "Text list source columns"
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  if printf '%s' "$OUTPUT" | grep -q "Todo Local" \
+    && printf '%s' "$OUTPUT" | grep -q "Todo Remote" \
+    && printf '%s' "$OUTPUT" | grep -qE '(^|[[:space:]])420([[:space:]]|$)' \
+    && printf '%s' "$OUTPUT" | grep -qE '(^|[[:space:]])421([[:space:]]|$)' \
+    && printf '%s' "$OUTPUT" | grep -q "owner/todo" \
+    && ! printf '%s' "$OUTPUT" | grep -q "owner/todo#0"; then
+    pass "Text list shows Todo Local/Remote and their provider task IDs"
+  else
+    fail "Text list shows Todo Local/Remote and their provider task IDs" "Todo Local 420 and Todo Remote 421" "$OUTPUT"
+  fi
+
+  # Test 7: Text format output for a single task
   log "Text format output"
   MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
     --repo owner/repo --issue 100 --prompt "Text test" > /dev/null 2>&1
@@ -412,7 +463,20 @@ test_result() {
     fail "Result shows success=false for failed task" "success=false" "$OUTPUT"
   fi
   
-  # Test 3: Non-existent task
+  # Test 3: Blocked Todo task exposes the stored user question.
+  log "Result for blocked Todo task"
+  MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
+    --repo owner/todo --issue 0 --prompt "Todo blocker result test" > /dev/null 2>&1
+  TASK_ID_BLOCKED="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE prompt='Todo blocker result test' ORDER BY createdAt DESC LIMIT 1;")"
+  sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', processedAt='now', resultSummary='Which API should be used for this step?' WHERE commentId='$TASK_ID_BLOCKED';"
+  OUTPUT="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result.sh" "$TASK_ID_BLOCKED" --json 2>&1)"
+  if printf '%s' "$OUTPUT" | jq -e '.status == "blocked_user" and .success == false and .error == "Which API should be used for this step?"' >/dev/null 2>&1; then
+    pass "Blocked Todo task exposes the saved question"
+  else
+    fail "Blocked Todo task exposes the saved question" "status=blocked_user and saved error" "$OUTPUT"
+  fi
+
+  # Test 4: Non-existent task
   log "Result for non-existent task"
   set +e
   MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result.sh" "nonexistent" --json > /dev/null 2>&1

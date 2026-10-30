@@ -213,8 +213,14 @@ Current provider types:
 
 - `github_issues` — default, backed by GitHub repositories.
 - `jira_tasks` — Jira REST provider, disabled by default.
+- `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
+- `todo_remote_mcp` — separate Fiteo backend MCP source. It selects active root tasks explicitly shared with the configured `manulUserId` using `EDITOR_AND_VIEWER` permission.
 
-See `task-source.sh` and `task-source-jira-tasks.sh` for the provider contract.
+The local adapter uses the existing WSL loopback bridge at `http://127.0.0.1:8766/mcp` and `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and a PAT supplied through a configured environment variable (default `FITEO_PAT`). Neither token belongs in `config.json`.
+
+A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
+
+See `task-source.sh`, `task-source-todo-local.sh`, `task-source-todo-remote.sh`, and `todo-task-source-utils.sh` for the separate provider contracts. The local/remote source examples are disabled by default in `config.json.example`.
 ## GitHub task workflow
 
 ### Issue task

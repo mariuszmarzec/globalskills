@@ -59,6 +59,7 @@ source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
 source "$DAEMON_SCRIPT_DIR/agent-session-state.sh"
+source "$DAEMON_SCRIPT_DIR/task-source.sh"
 
 CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
@@ -1718,6 +1719,10 @@ post_github_comment() {
 # about orchestration state on GitHub; the agent result comment is verified
 # separately via the deterministic task/attempt marker.
 post_lifecycle_comment() {
+  if [[ "${2:-}" =~ ^0+$ ]]; then
+    lc_log "EXTERNAL_SOURCE_LIFECYCLE_SUPPRESSED" "issue=0"
+    return 0
+  fi
   if [ "$MANUL_MODE" = "human" ]; then
     return 0
   fi
@@ -1728,6 +1733,10 @@ post_lifecycle_comment() {
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
 post_task_failure_feedback() {
   local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}" stage="${6:-task_execution}"
+  if [[ "$issue_num" =~ ^0+$ ]]; then
+    lc_log "EXTERNAL_SOURCE_FAILURE_FEEDBACK_SUPPRESSED" "task=$comment_id stage=$stage"
+    return 0
+  fi
   error="$(manul_redact_failure_details "$error")"
   local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error" --stage "$stage")
 
@@ -2802,11 +2811,12 @@ revalidate_pr_review_comment() {
 # This is not a failure and is not retryable. A later /manul continue resumes
 # this exact task.
 mark_task_blocked_user() {
-  local comment_id="$1" safe_comment_id="$2" claim_token="$3"
-  local safe_claim_token
+  local comment_id="$1" safe_comment_id="$2" claim_token="$3" question="${4:-}"
+  local safe_claim_token safe_question
   safe_claim_token="$(sql_escape "$claim_token")"
+  safe_question="$(sql_escape "$question")"
   local result changes
-  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', resultSummary=CASE WHEN '$safe_question' <> '' THEN '$safe_question' ELSE resultSummary END, processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
   changes="$(printf '%s\n' "$result" | tail -1)"
   if [ "$changes" = "1" ]; then
     log "mark_task_blocked_user: task $comment_id is waiting for user input"
@@ -2874,7 +2884,7 @@ $question
 
 Reply with:
 
-\`/manul continue <your answer>\`
+`/manul continue <your answer>`
 
 This will resume the same task and conversation."
   else
@@ -2886,7 +2896,7 @@ $question
 
 Reply with:
 
-\`/manul continue <your answer>\`
+`/manul continue <your answer>`
 
 The answer will resume this same task and conversation.
 
@@ -2964,6 +2974,7 @@ evaluate_task_completion() {
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
   local DELIVERY_MODE="${19:-implementation}"
+  local TASK_SOURCE_TYPE="${20:-}"
   # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
   local VERIFIED_MERGED_RESULT_PR_BASE=""
 
@@ -3004,7 +3015,7 @@ evaluate_task_completion() {
     if extract_user_decision_request "$STDOUT_FILE"; then
       NEEDS_USER_INPUT="true"
       log "dispatch: task $COMMENT_ID requested user input"
-      lc_log "TASK_NEEDS_USER" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+      lc_log "TASK_NEEDS_USER" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM source=$TASK_SOURCE_TYPE"
       return 0
     fi
     log "WARN: task $COMMENT_ID emitted a malformed user-decision block; treating as failure"
@@ -3145,7 +3156,7 @@ evaluate_task_completion() {
 else
          local verified_base
          verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
-         if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+         if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
            SUCCESS="false"
            FAILURE_CODE="VERIFICATION_FAILED"
            FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
@@ -3191,7 +3202,11 @@ else
       local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
-        if verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
+        if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+          already_satisfied="true"
+          log "dispatch: Todo task $TASK_SOURCE_ID completed without repository changes"
+          lc_log "TODO_TASK_NO_REPO_CHANGE" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+        elif verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
           already_satisfied="true"
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
@@ -3232,7 +3247,7 @@ else
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
         fi
-        if ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
@@ -3248,10 +3263,9 @@ else
     fi
   fi
 
-  # The task result comment is required delivery evidence, not merely a
-  # correlation hint. A missing/invalid marker must fail closed for repository
-  # changes and no-op tasks alike. Do not let TASK_DONE override missing evidence.
-  if [ "$SUCCESS" = "true" ]; then
+  # GitHub-rooted tasks require a deterministic result-comment receipt.
+  # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
+  if [ "$SUCCESS" = "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
     if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
       SUCCESS="false"
       FAILURE_CODE="DELIVERY_COMMENT_MISSING"
@@ -3260,6 +3274,21 @@ else
       lc_log "RESULT_COMMENT_INVALID" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt action=fail"
     else
       log "dispatch: task $COMMENT_ID attempt $current_attempt result comment marker verified"
+    fi
+  fi
+
+  # Mark the root Todo task and its complete ordered subtask tree done only
+  # after implementation delivery has been independently verified above.
+  if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+    if task_source_complete "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID"; then
+      log "dispatch: Todo task tree $TASK_SOURCE_ID marked done"
+      lc_log "TODO_SOURCE_COMPLETED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    else
+      SUCCESS="false"
+      FAILURE_CODE="TODO_SOURCE_UPDATE_FAILED"
+      FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
+      log "ERROR: Todo source completion failed for task $TASK_SOURCE_ID"
+      lc_log "TODO_SOURCE_COMPLETION_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
     fi
   fi
 
@@ -3561,6 +3590,9 @@ dispatch_once() {
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
+    local TASK_SOURCE_TYPE TASK_SOURCE_ID
+    TASK_SOURCE_TYPE="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    TASK_SOURCE_ID="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     local TASK_AUTO_ACCEPT
     TASK_AUTO_ACCEPT="$(sqlite3 "$DB" "SELECT autoAccept FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     case "$TASK_AUTO_ACCEPT" in 1|true|TRUE) TASK_AUTO_ACCEPT=1 ;; *) TASK_AUTO_ACCEPT=0 ;; esac
@@ -3582,7 +3614,11 @@ dispatch_once() {
 
     # 3.5 Pre-flight source revalidation — terminal if source no longer valid
     local reval_rc=0
-    revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      task_source_revalidate "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" || reval_rc=$?
+    else
+      revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
+    fi
     if [ "$reval_rc" -eq 1 ]; then
       log "dispatch: source stale for task $COMMENT_ID, marking terminal"
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
@@ -3850,6 +3886,25 @@ Example informational task response:
 The daemon handles lifecycle comments (🔄 working, ✅ completed, ❌ failed, ❓ needs user).
 For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_BEGIN/END, do NOT post a normal result comment; the daemon will post the question and resume the same task after the user replies.
 PROMPT_EOF
+
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      cat >> "$TASK_PROMPT_FILE" <<'TODO_SOURCE_PROMPT'
+
+## Todo Source Delivery Override — takes precedence over the generic GitHub comment instructions above
+
+This task originates from a Todo task tree, not a GitHub issue or comment.
+- Do NOT post a GitHub issue comment, PR conversation comment, PR review comment, or a Manul result-marker comment. The source URL is a Todo MCP identifier, not a GitHub URL.
+- Do NOT call `gh issue comment` or GitHub comment APIs for this task.
+- The task root and its ordered subtask tree are supplied above. Treat the subtasks as the implementation plan: execute pending steps in the exact order shown; keep nested children immediately after their parent; [DONE] steps are context and must not be repeated.
+- Preserve the order from Todo; do not sort or parallelize steps by priority, title, or perceived complexity.
+- Make repository changes using the normal Manul branch/commit/push/PR workflow. A real PR and its updated description remain required whenever repository files change. Include the Todo task ID in the branch name, PR title, and PR body so the work can be traced to the source task.
+- A task that is informational or genuinely requires no repository change may finish without a PR, but must still give a concrete result in the final agent response.
+- Do NOT change Todo task completion state yourself. After delivery verification, Manul will re-read the source tree and mark the root and every descendant subtask done through the same MCP source adapter. Do not mark a step done early.
+- Do NOT emit a TASK_NEEDS_USER block: Todo sources have no GitHub conversation or /manul continue reply channel. Resolve routine ambiguity autonomously. If a material decision truly requires the user, stop and emit TASK_FAILED: with the exact missing input, what you checked, and the available choices; leave the Todo task open. The user can update the Todo description/subtasks with that input, producing a new structural source version.
+- Finish with the existing TASK_DONE / TASK_FAILED protocol. Do not emit a GitHub result comment as part of that protocol.
+
+TODO_SOURCE_PROMPT
+    fi
 
     # Repository Management: Ensure target repository exists and is authoritative
     local REPO_DIR
@@ -4339,17 +4394,20 @@ PROMPT_APPEND
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
     # explicit /manul continue response.
-    if [ "${NEEDS_USER_INPUT:-false}" = "true" ]; then
-      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"; then
-        if [ -n "${WORKSPACE_ID:-}" ]; then
+    if [ "\${NEEDS_USER_INPUT:-false}" = "true" ]; then
+      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$USER_QUESTION"; then
+        if [ -n "\${WORKSPACE_ID:-}" ]; then
           workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
         fi
-        if ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
+        if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+          log "Todo task $TASK_SOURCE_ID blocked for user input; question saved in resultSummary. Edit the Todo task to create a new source version."
+          lc_log "TODO_SOURCE_BLOCKED_USER" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+        elif ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
           log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
         fi
         stop_heartbeat "$COMMENT_ID"
