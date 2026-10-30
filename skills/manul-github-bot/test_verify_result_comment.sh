@@ -86,6 +86,7 @@ eval "$(sed -n '/^mark_terminal_lifecycle_comment_posted() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^schedule_terminal_lifecycle_retry() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^publish_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^retry_pending_terminal_lifecycle_comments() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^deliver_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^complete_task_with_verification() {/,/^}/p' "$DAEMON")"
@@ -292,6 +293,22 @@ test_terminal_lifecycle_outbox() {
     assert_rc "retry result remains marker-free" "This attempt will retry." "$body"
 }
 test_terminal_lifecycle_outbox
+
+test_external_source_terminal_lifecycle_suppression() {
+    local body rc rows
+    echo "=== external source terminal lifecycle suppression ==="
+    setup_db
+    body="$(build_terminal_lifecycle_comment "todo:external-1" "conv-external" 1 "" completed "" "External task completed.")"
+    : > "$POST_CAPTURE_FILE"
+    rc=0
+    deliver_terminal_lifecycle_comment "owner/repo" 0 "todo:external-1" 1 TASK_DONE "$body" "" || rc=$?
+    assert_rc "external-source terminal delivery is intentionally suppressed" 0 "$rc"
+    rows="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM manul_terminal_lifecycle_outbox WHERE taskId='todo:external-1';")"
+    assert_rc "suppressed external-source event does not create a retryable outbox row" 0 "$rows"
+    [ ! -s "$POST_CAPTURE_FILE" ] && ok "external-source suppression does not call the GitHub comment publisher" || fail "external-source suppression attempted a GitHub post"
+}
+test_external_source_terminal_lifecycle_suppression
+
 
 
 # ─── Fake gh executable ────────────────────────────────────────────────────────
