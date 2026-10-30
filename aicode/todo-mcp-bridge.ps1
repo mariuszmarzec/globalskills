@@ -1,10 +1,11 @@
 param(
-    [ValidateSet("Ensure", "Serve")]
+    [ValidateSet("Ensure", "Connect")]
     [string]$Action = "Ensure",
-    [string]$BindAddress,
-    [string]$AllowedClientAddress,
+    [string]$RelayAddress,
     [ValidateRange(1, 65535)]
-    [int]$ListenPort = 18765,
+    [int]$RelayPort = 18766,
+    [ValidateRange(1, 16)]
+    [int]$ChannelCount = 4,
     [string]$StateDirectory,
     [string]$SourceHash
 )
@@ -45,7 +46,7 @@ function Test-ManagedBridgeProcess([int]$ProcessId, [string]$ScriptPath) {
         return $false
     }
     return $processInfo.CommandLine.IndexOf($ScriptPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $processInfo.CommandLine -match '(?i)-Action\s+Serve'
+        $processInfo.CommandLine -match '(?i)-Action\s+(Connect|Serve)'
 }
 
 $stateRoot = Get-BridgeStateDirectory
@@ -62,9 +63,9 @@ $stdoutLog = Join-Path $stateRoot "bridge-stdout.log"
 $errorLog = Join-Path $stateRoot "bridge-error.log"
 $cachedScript = Join-Path $stateRoot "todo-mcp-bridge.ps1"
 
-if ($Action -eq "Serve") {
-    if (-not (Test-IPv4Address $BindAddress) -or -not (Test-IPv4Address $AllowedClientAddress)) {
-        throw "The bridge requires concrete private IPv4 bind/client addresses."
+if ($Action -eq "Connect") {
+    if (-not (Test-IPv4Address $RelayAddress)) {
+        throw "The reverse relay address must be a concrete private IPv4 address."
     }
 
     Add-Type -TypeDefinition @'
@@ -74,6 +75,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 public static class TodoMcpWindowsBridge
@@ -88,72 +90,70 @@ public static class TodoMcpWindowsBridge
         }
     }
 
-    public static void Run(string bindAddress, string allowedClientAddress, int port, string logPath)
+    public static void Run(string relayAddress, int relayPort, int channelCount, string logPath)
     {
-        IPAddress bind = IPAddress.Parse(bindAddress);
-        IPAddress allowed = IPAddress.Parse(allowedClientAddress);
-        if (bind.AddressFamily != AddressFamily.InterNetwork ||
-            allowed.AddressFamily != AddressFamily.InterNetwork ||
-            IPAddress.IsLoopback(bind) || bind.Equals(IPAddress.Any))
-            throw new InvalidOperationException("The bridge must bind one concrete Windows host IPv4 address.");
+        IPAddress relay = IPAddress.Parse(relayAddress);
+        List<Task> workers = new List<Task>();
+        for (int i = 0; i < channelCount; i++)
+        {
+            int channelNumber = i + 1;
+            workers.Add(Task.Run(() => MaintainChannel(relay, relayPort, channelNumber, logPath)));
+        }
+        Task.WaitAll(workers.ToArray());
+    }
 
-        TcpListener listener = new TcpListener(bind, port);
-        listener.Start(64);
-        Log(logPath, "Listening on the WSL-facing host interface; expected WSL source IP " + allowed + ".");
+    private static void MaintainChannel(IPAddress relay, int relayPort, int channelNumber, string logPath)
+    {
         while (true)
         {
-            TcpClient client = listener.AcceptTcpClient();
-            Task.Run(() => HandleClient(client, bind, allowed, logPath));
+            using (TcpClient channel = new TcpClient(AddressFamily.InterNetwork))
+            {
+                try
+                {
+                    IAsyncResult pending = channel.BeginConnect(relay, relayPort, null, null);
+                    if (!pending.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)))
+                        throw new TimeoutException("Reverse relay connection timed out.");
+                    channel.EndConnect(pending);
+                    Log(logPath, "Connected reverse channel " + channelNumber + " to WSL relay.");
+                    HandleChannel(channel, logPath);
+                }
+                catch (Exception error)
+                {
+                    Log(logPath, "Reverse channel " + channelNumber + " failed: " + error.GetType().Name);
+                }
+            }
+            Thread.Sleep(750);
         }
     }
 
-    private static void HandleClient(TcpClient client, IPAddress bind, IPAddress allowed, string logPath)
+    private static void HandleChannel(TcpClient channel, string logPath)
     {
         TcpClient upstream = null;
         try
         {
-            IPEndPoint remote = client.Client.RemoteEndPoint as IPEndPoint;
-            if (remote == null)
-            {
-                Log(logPath, "Rejected a connection with no IPv4 remote endpoint.");
-                client.Close();
-                return;
-            }
-            if (remote.Address.Equals(bind) || IPAddress.IsLoopback(remote.Address))
-            {
-                // Ensure() performs a local TCP readiness probe from Windows.
-                // It must not be confused with a rejected WSL client connection.
-                Log(logPath, "Ignored local Windows readiness probe from " + remote.Address + ".");
-                client.Close();
-                return;
-            }
-            if (!remote.Address.Equals(allowed))
-            {
-                Log(logPath, "Rejected connection from " + remote.Address + "; expected WSL source " + allowed + ".");
-                client.Close();
-                return;
-            }
+            NetworkStream channelStream = channel.GetStream();
+            byte[] requestHeader = ReadRequestHeader(channelStream);
 
             upstream = new TcpClient(AddressFamily.InterNetwork);
             upstream.Connect(IPAddress.Loopback, 8765);
-            NetworkStream clientStream = client.GetStream();
             NetworkStream upstreamStream = upstream.GetStream();
-            byte[] requestHeader = ReadRequestHeader(clientStream);
             byte[] rewrittenHeader = RewriteRequestHeader(requestHeader);
             upstreamStream.Write(rewrittenHeader, 0, rewrittenHeader.Length);
 
-            Task requestPump = clientStream.CopyToAsync(upstreamStream);
-            Task responsePump = upstreamStream.CopyToAsync(clientStream);
-            responsePump.GetAwaiter().GetResult();
+            Task requestPump = channelStream.CopyToAsync(upstreamStream);
+            Task responsePump = upstreamStream.CopyToAsync(channelStream);
+            Task completed = Task.WhenAny(requestPump, responsePump).GetAwaiter().GetResult();
+            completed.GetAwaiter().GetResult();
+            if (completed == requestPump)
+                responsePump.GetAwaiter().GetResult();
         }
         catch (Exception error)
         {
-            Log(logPath, "Bridge request failed: " + error.GetType().Name);
+            Log(logPath, "Reverse channel request failed: " + error.GetType().Name);
         }
         finally
         {
             try { if (upstream != null) upstream.Close(); } catch { }
-            try { client.Close(); } catch { }
         }
     }
 
@@ -165,7 +165,7 @@ public static class TodoMcpWindowsBridge
             {
                 int next = stream.ReadByte();
                 if (next < 0)
-                    throw new IOException("Client closed before sending HTTP headers.");
+                    throw new IOException("Reverse channel closed before HTTP headers arrived.");
                 buffer.WriteByte((byte)next);
                 if (buffer.Length >= 4)
                 {
@@ -227,14 +227,13 @@ public static class TodoMcpWindowsBridge
 }
 '@
 
-    [TodoMcpWindowsBridge]::Run($BindAddress, $AllowedClientAddress, $ListenPort, $logFile)
+    [TodoMcpWindowsBridge]::Run($RelayAddress, $RelayPort, $ChannelCount, $logFile)
     exit 0
 }
 
-if (-not (Test-IPv4Address $BindAddress) -or -not (Test-IPv4Address $AllowedClientAddress)) {
-    throw "The bridge requires concrete private IPv4 bind/client addresses."
+if (-not (Test-IPv4Address $RelayAddress)) {
+    throw "The reverse relay address must be a concrete private IPv4 address."
 }
-
 if (-not $SourceHash) {
     $SourceHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
 }
@@ -244,14 +243,14 @@ if (Test-Path -LiteralPath $stateFile) {
     try { $existing = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json } catch { $existing = $null }
 }
 if ($existing -and (Test-ManagedBridgeProcess ([int]$existing.pid) $cachedScript)) {
-    $same = $existing.bindAddress -eq $BindAddress -and
-        $existing.allowedClientAddress -eq $AllowedClientAddress -and
-        [int]$existing.listenPort -eq $ListenPort -and
+    $same = $existing.relayAddress -eq $RelayAddress -and
+        [int]$existing.relayPort -eq $RelayPort -and
+        [int]$existing.channelCount -eq $ChannelCount -and
         $existing.sourceHash -eq $SourceHash
     if ($same) {
         $process = Get-Process -Id ([int]$existing.pid) -ErrorAction SilentlyContinue
         if ($process) {
-            Write-Output ("Todo MCP Windows bridge already running on {0}:{1}." -f $BindAddress, $ListenPort)
+            Write-Output ("Todo MCP Windows reverse bridge already connecting to {0}:{1}." -f $RelayAddress, $RelayPort)
             exit 0
         }
     }
@@ -266,25 +265,25 @@ elseif (Test-Path -LiteralPath $stateFile) {
     Remove-Item -LiteralPath $stateFile -Force
 }
 
-$listenerProbe = $null
+$relayProbe = $null
 try {
-    $listenerProbe = New-Object System.Net.Sockets.TcpClient
-    $listenerProbe.Connect($BindAddress, $ListenPort)
-    $listenerProbe.Close()
-    throw "Port $ListenPort is occupied by a listener not managed by this bridge."
+    $relayProbe = New-Object System.Net.Sockets.TcpClient
+    $relayProbe.Connect($RelayAddress, $RelayPort)
+    $relayProbe.Close()
 }
 catch [System.Net.Sockets.SocketException] {
-    if ($listenerProbe) { $listenerProbe.Close() }
+    if ($relayProbe) { $relayProbe.Close() }
+    throw ("WSL reverse relay {0}:{1} is not reachable from Windows." -f $RelayAddress, $RelayPort)
 }
 
 $powerShellPath = Join-Path $PSHOME "powershell.exe"
 $argumentList = @(
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-File", $cachedScript,
-    "-Action", "Serve",
-    "-BindAddress", $BindAddress,
-    "-AllowedClientAddress", $AllowedClientAddress,
-    "-ListenPort", [string]$ListenPort,
+    "-Action", "Connect",
+    "-RelayAddress", $RelayAddress,
+    "-RelayPort", [string]$RelayPort,
+    "-ChannelCount", [string]$ChannelCount,
     "-StateDirectory", $stateRoot,
     "-SourceHash", $SourceHash
 )
@@ -295,27 +294,21 @@ Remove-Item -LiteralPath $logFile, $stdoutLog, $errorLog -Force -ErrorAction Sil
 $process = Start-Process -FilePath $powerShellPath -ArgumentList ($quotedArguments -join " ") -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $errorLog -PassThru
 $state = [ordered]@{
     pid = $process.Id
-    bindAddress = $BindAddress
-    allowedClientAddress = $AllowedClientAddress
-    listenPort = $ListenPort
+    relayAddress = $RelayAddress
+    relayPort = $RelayPort
+    channelCount = $ChannelCount
     sourceHash = $SourceHash
 }
 $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $stateFile -Encoding ASCII
 for ($attempt = 0; $attempt -lt 40; $attempt++) {
     if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
-        throw "Todo MCP Windows bridge exited during startup; inspect $errorLog."
+        throw "Todo MCP Windows reverse bridge exited during startup; inspect $errorLog."
     }
-    $probe = $null
-    try {
-        $probe = New-Object System.Net.Sockets.TcpClient
-        $probe.Connect($BindAddress, $ListenPort)
-        $probe.Close()
-        Write-Output ("Todo MCP Windows bridge listening on {0}:{1} for WSL source {2}." -f $BindAddress, $ListenPort, $AllowedClientAddress)
+    if ((Test-Path -LiteralPath $logFile) -and
+        (Select-String -LiteralPath $logFile -Pattern "Connected reverse channel" -Quiet)) {
+        Write-Output ("Todo MCP Windows reverse bridge connected to WSL {0}:{1} with {2} channels." -f $RelayAddress, $RelayPort, $ChannelCount)
         exit 0
     }
-    catch [System.Net.Sockets.SocketException] {
-        if ($probe) { $probe.Close() }
-        Start-Sleep -Milliseconds 125
-    }
+    Start-Sleep -Milliseconds 125
 }
-throw "Todo MCP Windows bridge did not become ready; inspect $errorLog."
+throw "Todo MCP Windows reverse bridge did not connect to WSL; inspect $logFile and $errorLog."
