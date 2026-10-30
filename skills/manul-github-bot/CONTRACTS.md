@@ -163,6 +163,38 @@ Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution,
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
 
+## 8a. Lifecycle event publication and idempotency
+
+Lifecycle events are machine-readable comments, not evidence that an agent completed
+work. They are keyed by the exact task ID and execution attempt.
+
+For `TASK_STARTED`:
+- the daemon publishes at most one signed start comment for a task/attempt;
+- before posting, it reads the correct issue-comment or PR-review-comment endpoint
+  and matches the event type, task ID, attempt, Manul signature, and (for review
+  tasks) the exact `in_reply_to_id` thread;
+- an existing match suppresses publication; a failed read-before-write check is
+  fail-closed and must not publish blindly;
+- when the publish client reports an error, the daemon reads the same endpoint
+  again and treats the operation as successful only when the exact signed event
+  is found. A retry must not create another visible comment.
+
+For terminal `TASK_DONE` and `TASK_FAILED` events:
+- the marker is assembled into the exact user-facing result body before posting;
+- the daemon persists the full body and routing metadata in a SQLite outbox keyed
+  by task ID, attempt, and event type before calling GitHub;
+- publication is serialized per event and reconciled by reading the matching
+  task/attempt marker before every post and after an ambiguous post error;
+- a confirmed existing marker records the outbox receipt without posting again;
+- definite or ambiguous publication failures remain pending for retry. The
+  terminal task state is not rolled back, and retries reuse the persisted body;
+- intermediate retry states do not emit terminal events.
+
+Neither `TASK_STARTED` nor a queued/published terminal comment can bypass the
+result-comment, repository-delivery, or explicit `TASK_DONE` verification
+contracts above. A start event, partial GitHub activity, or a terminal database
+state without a verified result is never sufficient evidence of successful work.
+
 ## 9. Comment routing
 
 Tasks originating from:
