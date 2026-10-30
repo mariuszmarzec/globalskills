@@ -1003,8 +1003,11 @@ MOCK_EOF
 
 test_daemon_lifecycle_task_done_emitted() {
   local daemon_file="$SCRIPT_DIR/manul-daemon.sh"
-  # TASK_DONE remains a machine-readable event, embedded in the lifecycle comment.
-  grep -q 'lifecycle_event_marker' "$daemon_file" &&
+  # TASK_DONE is assembled into the actual terminal result body before it is
+  # queued and published. The behavioral body assertion lives in
+  # test_verify_result_comment.sh.
+  grep -q '^build_terminal_lifecycle_comment()' "$daemon_file" &&
+    grep -q 'build_terminal_lifecycle_comment "$COMMENT_ID"' "$daemon_file" &&
     grep -q 'TASK_DONE' "$daemon_file" &&
     ! grep -q 'manul-result-feedback.sh" post-done' "$daemon_file"
 }
