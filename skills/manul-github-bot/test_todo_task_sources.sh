@@ -579,8 +579,9 @@ cat > "$TEST_DIR/remote-report-create-failure.json" <<'JSON'
 ]
 JSON
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report-create-failure.json"
-remote_create_failure_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
-remote_create_failure_id="$(jq -r '.taskSourceId' <<<"$remote_create_failure_task")"
+task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE" > "$TEST_DIR/remote-create-failure-task.json"
+jq -r .taskSourceId "$TEST_DIR/remote-create-failure-task.json" > "$TEST_DIR/remote-create-failure-id"
+IFS= read -r remote_create_failure_id < "$TEST_DIR/remote-create-failure-id"
 export TODO_MCP_FAIL_CREATE=1
 remote_create_failure_rc=0
 todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_create_failure_id" "Must remain active." >/dev/null || remote_create_failure_rc=$?
