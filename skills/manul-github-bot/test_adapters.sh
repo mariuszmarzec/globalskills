@@ -1256,13 +1256,27 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
         and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
         and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
         and .mcp["todo-local"].enabled == true
-        and .tools["todo-local_*"] == true
-        and .agent.coder.tools["todo-local_*"] == true
-        and .agent.chat.tools["todo-local_*"] == null
+        and .tools["todo-local_*"] == null
+        and .tools["todo-local_ping"] == true
+        and .tools["todo-local_list_tasks"] == true
+        and .tools["todo-local_list_scheduled_tasks"] == true
+        and .tools["todo-local_get_task"] == true
+        and .tools["todo-local_list_shareable_users"] == true
+        and .tools["todo-local_create_task"] == false
+        and .tools["todo-local_update_task"] == false
+        and .tools["todo-local_mark_tasks_done"] == false
+        and .tools["todo-local_remove_task"] == false
+        and .agent.coder.tools["todo-local_*"] == null
+        and .agent.coder.tools["todo-local_list_tasks"] == true
+        and .agent.coder.tools["todo-local_create_task"] == false
+        and .agent.chat.tools["todo-local_list_tasks"] == false
+        and .agent.chat.tools["todo-local_create_task"] == false
       else
         .mcp["todo-local"] == null
         and .tools["todo-local_*"] == null
+        and .tools["todo-local_list_tasks"] == false
         and .agent.coder.tools["todo-local_*"] == null
+        and .agent.coder.tools["todo-local_list_tasks"] == false
       end
     )
   ' "$config" >/dev/null
