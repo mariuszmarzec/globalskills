@@ -43,6 +43,15 @@ On the next aicode launch:
 
 The bridge does not change Todo's listener, disable DNS-rebinding protection, add Windows Firewall rules, or listen on LAN interfaces. Todo Desktop must be running with todo.localMcpServer enabled. Bridge logs are under %LOCALAPPDATA%/GlobalSkills/TodoMcpBridge in Windows and ~/.cache/globalskills/todo-mcp-bridge/bridge.log in WSL. The local relay is recreated when the WSL host address or bridge code changes.
 
+## Todo task sources for Manul
+
+Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
+
+- `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
+- `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
+
+Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. MCP credentials are persisted only in the mode-600 `~/.manul/.env` for unattended runs; never put token values in the config or repository.
+
 ## Skills
 
 | Skill | Description |
