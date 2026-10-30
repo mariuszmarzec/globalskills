@@ -2145,8 +2145,13 @@ publish_task_started_for_claim() {
     fi
     log "dispatch: TASK_STARTED publication did not complete for $comment_id (rc=$start_post_rc); releasing the claim as a pre-agent infrastructure failure"
     lc_log "TASK_ERROR" "task=$comment_id reason=task_started_publication_failed rc=$start_post_rc"
-    handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "$workspace_id" "$reply_to" "$start_post_reason" "$pr_number" "$attempt" "$start_post_stage"
-    return 0
+    if ! handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "$workspace_id" "$reply_to" "$start_post_reason" "$pr_number" "$attempt" "$start_post_stage"; then
+      log "ERROR: pre-agent recovery did not complete after TASK_STARTED publication failure for $comment_id; dispatch must stop and leave watchdog/recovery to reconcile the claim"
+      return 2
+    fi
+    # Tell dispatch_once to stop this attempt. Returning success here would
+    # continue prompt creation and launch an agent after the claim was requeued.
+    return 1
   fi
 
   log "dispatch: posted in-progress comment for $comment_id"
@@ -4146,7 +4151,11 @@ dispatch_once() {
 **Triggered by:** $TRIGGERER
 **Source:** $SOURCE_LINK"
 
-    publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"
+    if ! publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"; then
+      # The wrapper has either requeued the claim as a pre-agent failure or
+      # left it for watchdog recovery. Never continue to prompt/runtime launch.
+      return 0
+    fi
 
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
