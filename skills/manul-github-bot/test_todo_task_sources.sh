@@ -319,7 +319,7 @@ first_remote_id="$(head -1 "$TODO_MCP_CALL_LOG" | cut -f2- | jq -r '.id')"
 last_remote_id="$(tail -1 "$TODO_MCP_CALL_LOG" | cut -f2- | jq -r '.id')"
 assert_eq "remote completion marks the root last for retry safety" "21" "$last_remote_id"
 assert_eq "remote completion starts with the last ordered sibling" "26" "$first_remote_id"
-remote_order="$(cut -f2- "$TODO_MCP_CALL_LOG" | jq -s '[.[].id] | tostring')"
+remote_order="$(cut -f2- "$TODO_MCP_CALL_LOG" | jq -s '[.[].id]')"
 assert_eq "remote completion reverses the original ordered tree" "[26,23,22,21]" "$remote_order"
 
 echo
