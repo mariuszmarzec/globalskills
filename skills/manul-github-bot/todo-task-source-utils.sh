@@ -355,7 +355,9 @@ todo_task_to_source_json() {
       },
       execution:{kind:"repository"}
     }'
-}todo_task_is_active() {
+}
+
+todo_task_is_active() {
   jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
 }
 
