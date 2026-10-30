@@ -270,7 +270,30 @@ git -C "$WORKDIR" checkout -qb "$RETRY_BRANCH" main
 printf 'retry-safe delivery\n' >"$WORKDIR/retry-safe.txt"
 git -C "$WORKDIR" add retry-safe.txt
 git -C "$WORKDIR" commit -qm "Add retry-safe delivery"
-git -C "$WORKDIR" push -q --set-upstream origin "$RETRY_BRANCH"
+# Simulate an ambiguous git push: the remote accepts the branch, but the
+# client reports a transport failure. Retry should observe the remote head and
+# must not push or create the same PR again.
+REAL_GIT="$(command -v git)"
+PUSH_BIN="$TMP/push-bin"
+mkdir -p "$PUSH_BIN"
+export REAL_GIT
+export PUSH_COUNT_FILE="$TMP/push-count"
+cat >"$PUSH_BIN/git" <<'GITMOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-C" ] && [ "${3:-}" = "push" ]; then
+  count="$(cat "$PUSH_COUNT_FILE" 2>/dev/null || echo 0)"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$PUSH_COUNT_FILE"
+  "$REAL_GIT" "$@"
+  git_rc=$?
+  [ "$git_rc" -eq 0 ] || exit "$git_rc"
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+GITMOCK
+chmod +x "$PUSH_BIN/git"
+PATH="$PUSH_BIN:$PATH"
+printf '0\n' >"$PUSH_COUNT_FILE"
 printf '0\n' >"$PR_CREATE_COUNT_FILE"
 printf '[]\n' >"$FAKE_GH_PR_LIST"
 printf '{"autoCreatePr":true,"automation":{"maxAttemptsBeforeFail":3}}\n' >"$TMP/auto-create-config.json"
@@ -280,11 +303,14 @@ first_rc=0
 verify_required_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" || first_rc=$?
 [ "$first_rc" -eq 1 ] || { echo "FAIL: expected first ambiguous PR creation attempt to report failure (rc=$first_rc)" >&2; exit 1; }
 [ "$(cat "$PR_CREATE_COUNT_FILE")" = "1" ] || { echo "FAIL: expected one PR create request after ambiguous acceptance" >&2; exit 1; }
+[ "$(cat "$PUSH_COUNT_FILE")" = "1" ] || { echo "FAIL: expected one accepted-but-client-error branch push" >&2; exit 1; }
+[ -n "$("$REAL_GIT" -C "$WORKDIR" ls-remote --heads origin "$RETRY_BRANCH" | awk 'NR==1 {print $1}')" ] || { echo "FAIL: ambiguous push did not leave the branch on origin" >&2; exit 1; }
 second_rc=0
 verify_required_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" || second_rc=$?
 [ "$second_rc" -eq 0 ] || { echo "FAIL: retry did not discover the PR accepted by GitHub (rc=$second_rc)" >&2; exit 1; }
 [ "$(cat "$PR_CREATE_COUNT_FILE")" = "1" ] || { echo "FAIL: retry issued a duplicate PR create request" >&2; exit 1; }
+[ "$(cat "$PUSH_COUNT_FILE")" = "1" ] || { echo "FAIL: retry re-pushed a branch already accepted by origin" >&2; exit 1; }
 jq -e 'length == 1 and .[0].headRefName == "feature/task-pr-ambiguous-create"' "$FAKE_GH_PR_LIST" >/dev/null
-echo "PASS: ambiguous PR creation retry reuses the accepted PR without duplicating it"
+echo "PASS: retry after accepted-but-client-error push/PR reuses remote branch and existing PR without duplicates"
 
 echo "All existing-task PR regression tests passed."
