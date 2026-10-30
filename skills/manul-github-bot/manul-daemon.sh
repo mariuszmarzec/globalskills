@@ -2054,7 +2054,7 @@ find_task_started_comment_id() {
 # rather than publishing a second visible comment for the same attempt.
 post_task_started_comment() {
   local repo="$1" issue="$2" task_id="$3" attempt="$4" body="$5" reply_to="${6:-}"
-  local existing_id post_rc
+  local existing_id post_rc lock_dir lock_file lock_key lock_fd
 
   # External-source and human modes intentionally suppress GitHub lifecycle
   # comments, so there is nothing to deduplicate in those modes.
@@ -2063,20 +2063,43 @@ post_task_started_comment() {
     return $?
   fi
 
+  if ! [[ "$attempt" =~ ^[0-9]+$ ]]; then
+    log "ERROR: invalid TASK_STARTED attempt for $task_id: $attempt"
+    return 2
+  fi
+  # Serialize publication for this task/attempt even if multiple consumers
+  # reach this helper concurrently. The global dispatcher lock is an additional
+  # protection, not the only idempotency boundary.
+  lock_dir="$MANUL_DIR/state/locks"
+  mkdir -p "$lock_dir" 2>>"$LOG" || return 2
+  lock_key="$(printf '%s\0%s' "$task_id" "$attempt" | sha256sum | cut -c1-24)"
+  lock_file="$lock_dir/task-started-$lock_key.lock"
+  exec {lock_fd}>"$lock_file" || return 2
+  if ! flock "$lock_fd"; then
+    exec {lock_fd}>&-
+    return 2
+  fi
+
   if existing_id="$(find_task_started_comment_id "$repo" "$issue" "$task_id" "$attempt" "$reply_to")"; then
     if [ -n "$existing_id" ]; then
       log "INFO: TASK_STARTED already published for $task_id attempt $attempt (comment=$existing_id); suppressing duplicate"
       lc_log "TASK_STARTED_DEDUP" "task=$task_id attempt=$attempt comment=$existing_id"
+      flock -u "$lock_fd" || true
+      exec {lock_fd}>&-
       return 0
     fi
   else
-    log "WARN: TASK_STARTED lookup failed for $task_id attempt $attempt; not publishing without an idempotency check"
+    log "WARN: TASK_STARTED lookup failed for task $task_id attempt $attempt; not publishing without an idempotency check"
+    flock -u "$lock_fd" || true
+    exec {lock_fd}>&-
     return 2
   fi
 
   post_rc=0
   post_lifecycle_comment "$repo" "$issue" "$body" "$reply_to" || post_rc=$?
   if [ "$post_rc" -eq 0 ]; then
+    flock -u "$lock_fd" || true
+    exec {lock_fd}>&-
     return 0
   fi
 
@@ -2087,13 +2110,19 @@ post_task_started_comment() {
     if [ -n "$existing_id" ]; then
       log "INFO: GitHub accepted TASK_STARTED for $task_id attempt $attempt despite the client error (comment=$existing_id)"
       lc_log "TASK_STARTED_POST_CONFIRMED" "task=$task_id attempt=$attempt comment=$existing_id client_rc=$post_rc"
+      flock -u "$lock_fd" || true
+      exec {lock_fd}>&-
       return 0
     fi
   else
-    log "WARN: could not verify ambiguous TASK_STARTED post for $task_id attempt $attempt"
+    log "WARN: could not verify ambiguous TASK_STARTED post for task $task_id attempt $attempt"
+    flock -u "$lock_fd" || true
+    exec {lock_fd}>&-
     return 2
   fi
 
+  flock -u "$lock_fd" || true
+  exec {lock_fd}>&-
   return 1
 }
 
