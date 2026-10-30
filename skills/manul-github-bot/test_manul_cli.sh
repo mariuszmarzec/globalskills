@@ -412,7 +412,20 @@ test_result() {
     fail "Result shows success=false for failed task" "success=false" "$OUTPUT"
   fi
   
-  # Test 3: Non-existent task
+  # Test 3: Blocked Todo task exposes the stored user question.
+  log "Result for blocked Todo task"
+  MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \
+    --repo owner/todo --issue 0 --prompt "Todo blocker result test" > /dev/null 2>&1
+  TASK_ID_BLOCKED="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE prompt='Todo blocker result test' ORDER BY createdAt DESC LIMIT 1;")"
+  sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', processedAt='now', resultSummary='Which API should be used for this step?' WHERE commentId='$TASK_ID_BLOCKED';"
+  OUTPUT="$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result.sh" "$TASK_ID_BLOCKED" --json 2>&1)"
+  if printf '%s' "$OUTPUT" | jq -e '.status == "blocked_user" and .success == false and .error == "Which API should be used for this step?"' >/dev/null 2>&1; then
+    pass "Blocked Todo task exposes the saved question"
+  else
+    fail "Blocked Todo task exposes the saved question" "status=blocked_user and saved error" "$OUTPUT"
+  fi
+
+  # Test 4: Non-existent task
   log "Result for non-existent task"
   set +e
   MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-result.sh" "nonexistent" --json > /dev/null 2>&1
