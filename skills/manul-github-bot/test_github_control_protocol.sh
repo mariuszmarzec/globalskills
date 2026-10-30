@@ -409,7 +409,8 @@ test_grouped_inline_review_creates_single_task() {
   local comments_json
   comments_json="$(jq -nc '[
     {id:101,pull_request_review_id:76001,path:"src/auth.kt",line:42,body:"Handle timeout failures consistently",diff_hunk:"@@ -40,1 +40,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r101",in_reply_to_id:null,manul_thread_root_id:"101"},
-    {id:102,pull_request_review_id:76001,path:"tests/test_auth.kt",line:15,body:"Add a regression test for this path",diff_hunk:"@@ -10,1 +10,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r102",in_reply_to_id:null,manul_thread_root_id:"102"}
+    {id:102,pull_request_review_id:76001,path:"tests/test_auth.kt",line:15,body:"Add a regression test for this path",diff_hunk:"@@ -10,1 +10,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r102",in_reply_to_id:null,manul_thread_root_id:"102"},
+    {id:103,pull_request_review_id:76001,path:"src/auth.kt",line:43,body:"Thanks, fixed this thread",diff_hunk:"@@ -40,1 +40,2 @@",html_url:"https://github.com/test/repo/pull/801#discussion_r103",in_reply_to_id:101,manul_thread_root_id:"101"}
   ]')"
 
   local output
@@ -424,6 +425,7 @@ test_grouped_inline_review_creates_single_task() {
   [[ "$prompt" == *"Add a regression test for this path"* ]] || return 1
   [[ "$prompt" == *"Thread root ID: 101"* ]] || return 1
   [[ "$prompt" == *"Thread root ID: 102"* ]] || return 1
+  [[ "$prompt" != *"Thanks, fixed this thread"* ]] || return 1
   task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_number AND conversationId='$conv_id';" 2>/dev/null)" || return 1
   [ "$task_count" = "1" ] || return 1
 
@@ -433,6 +435,54 @@ test_grouped_inline_review_creates_single_task() {
   [ "$(jq -r '.skipped // false' <<<"$duplicate_output")" = "true" ] || return 1
   task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_number AND conversationId='$conv_id';" 2>/dev/null)" || return 1
   [ "$task_count" = "1" ] || return 1
+}
+
+# A review reply is conversation context, not new feedback for a REVIEW_FIX task.
+test_reply_only_reviews_do_not_create_fix_tasks() {
+  init_db
+
+  local conv_id="conv-reply-only-review"
+  local pr_number=802
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$DB" "INSERT INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', 'test/repo', $pr_number, 'https://github.com/test/repo/issues/$pr_number', $pr_number, 'OPEN', '$now', '$now');" 2>/dev/null
+
+  local reply_comments_json
+  reply_comments_json="$(jq -nc '[
+    {id:201,pull_request_review_id:86001,path:"src/auth.kt",line:42,body:"Thanks, fixed",diff_hunk:"@@ -40,1 +40,2 @@",html_url:"https://github.com/test/repo/pull/802#discussion_r201",in_reply_to_id:100,manul_thread_root_id:"100"}
+  ]')"
+
+  local comment_output changes_output task_count
+  comment_output="$(review handle --repo "test/repo" --pr-number "$pr_number" --review-id "reply-comment" --review-state "COMMENT" --body "" --author "reviewer" --created "$now" --review-comments-json "$reply_comments_json" --json 2>/dev/null)" || return 1
+  [ "$(jq -r '.createdTask // false' <<<"$comment_output")" = "false" ] || return 1
+
+  # CHANGES_REQUESTED with no review body and only replies is also non-actionable.
+  changes_output="$(review handle --repo "test/repo" --pr-number "$pr_number" --review-id "reply-changes" --review-state "REQUEST_CHANGES" --body "" --author "reviewer" --created "$now" --review-comments-json "$reply_comments_json" --json 2>/dev/null)" || return 1
+  [ "$(jq -r '.createdTask // false' <<<"$changes_output")" = "false" ] || return 1
+
+  task_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE action='REVIEW_FIX' AND prNumber=$pr_number AND conversationId='$conv_id';" 2>/dev/null)" || return 1
+  [ "$task_count" = "0" ] || return 1
+}
+
+# The poller must discard replies before dispatching a submitted-review task.
+test_poll_review_submission_ignores_replies() {
+  source <(sed -n '/^filter_actionable_review_comments()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+
+  local page_one page_two comments_json actionable reply_only
+  page_one='[{"id":101,"pull_request_review_id":76001,"in_reply_to_id":null,"body":"New finding"}]'
+  page_two='[
+    {"id":102,"pull_request_review_id":76001,"in_reply_to_id":101,"body":"Reply to existing thread"},
+    {"id":104,"pull_request_review_id":76001,"in_reply_to_id":null,"body":"Second new finding"},
+    {"id":103,"pull_request_review_id":76002,"in_reply_to_id":101,"body":"Reply-only review"}
+  ]'
+  comments_json="$(printf '%s\n%s' "$page_one" "$page_two")"
+
+  actionable="$(filter_actionable_review_comments "$comments_json" 76001)" || return 1
+  [ "$(jq -r 'length' <<<"$actionable")" = "2" ] || return 1
+  [ "$(jq -r '.[].id' <<<"$actionable" | paste -sd ',' -)" = "101,104" ] || return 1
+
+  reply_only="$(filter_actionable_review_comments "$comments_json" 76002)" || return 1
+  [ "$(jq -r 'length' <<<"$reply_only")" = "0" ] || return 1
 }
 
 # Test 11: Structured events parse correctly
@@ -1131,6 +1181,8 @@ run_test "Test 8: APPROVE does not create fix task" test_approve_no_fix_task
 run_test "Test 9: REQUEST_CHANGES creates fix task" test_request_changes_creates_fix
 run_test "Test 10: Duplicate review is ignored" test_duplicate_review_ignored
 run_test "Test 46: Grouped inline review comments create one task" test_grouped_inline_review_creates_single_task
+run_test "Test 47: Reply-only reviews do not create fix tasks" test_reply_only_reviews_do_not_create_fix_tasks
+run_test "Test 48: Poll ignores replies when grouping inline review comments" test_poll_review_submission_ignores_replies
 
 # Event tests
 run_test "Test 11: Structured events parse correctly" test_structured_events_parse
