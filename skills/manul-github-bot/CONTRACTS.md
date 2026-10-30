@@ -201,6 +201,19 @@ result-comment, repository-delivery, or explicit `TASK_DONE` verification
 contracts above. A start event, partial GitHub activity, or a terminal database
 state without a verified result is never sufficient evidence of successful work.
 
+
+## 8b. Issue #110 incident diagnosis and evidence boundary
+
+The #110 audit established these code-level failure modes:
+
+- **Duplicate TASK_STARTED:** publication was previously treated as acknowledged only when the POST client returned success. There was no exact task/attempt read-before-write or read-back after a non-zero POST. A transport error after GitHub accepted the comment could therefore enter pre-execution recovery and reuse the same attempt without knowing whether the marker already existed. Review-thread tasks also require lookup and deduplication in the exact in_reply_to_id thread.
+- **Missing terminal lifecycle evidence:** the result body could be posted before its TASK_DONE/TASK_FAILED marker was appended. A failed POST was only logged, with no durable body/routing record for retry; task state and conversation closure could advance while the corresponding GitHub marker was still absent.
+- **OpenCode continuation misclassification:** step-limit detection over the whole JSONL stream could match ordinary task text or tool payloads. Independently, the controller converted any TIMEOUT carrying a session ID into NEEDS_CONTINUATION, including overall and watchdog timeouts that the adapter reports as TIMEOUT. Only an explicit structured step-limit continuation is resumable.
+- **Attempt diagnostics:** preExecutionFailures and agentStartedAt were already delivered on the base by merged PR #114; they are not reimplemented here. Pre-agent rollback must clear agentStartedAt and the claim/lease metadata while returning the claim-time attempt bump and charging the separate infrastructure counter.
+
+The regression suite uses deterministic GitHub and runtime fakes to prove the corrected behavior at the publication, controller, adapter, session-state and dispatcher boundaries. The historical issue comments do not preserve every raw OpenCode JSONL stream or GitHub transport response for each old attempt; therefore this audit establishes the reproducible code-level causes and verifies the repaired failure semantics, but does not claim to reconstruct the exact network event sequence for every historical duplicate.
+
+
 ## 9. Comment routing
 
 Tasks originating from:
