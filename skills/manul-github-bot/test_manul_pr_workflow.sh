@@ -229,14 +229,16 @@ test_reply_routing() {
   reply_to_extraction="$(grep -A 60 'TASK_TYPE="issue"' "$DAEMON" | grep 'REPLY_TO')"
   assert_contains "$TEST_NAME" "$reply_to_extraction" 'REPLY_TO='
 
-  # Verify the daemon passes REPLY_TO to the lifecycle comment for Running comments
+  # TASK_STARTED is routed through the publication/recovery wrapper.
   local running_routing
-  running_routing="$(grep 'post_lifecycle_comment.*IN_PROGRESS_BODY.*REPLY_TO' "$DAEMON")"
-  assert_contains "$TEST_NAME" "$running_routing" 'REPLY_TO'
+  running_routing="$(grep 'publish_task_started_for_claim.*REPLY_TO.*IN_PROGRESS_BODY' "$DAEMON")"
+  assert_contains "$TEST_NAME (start wrapper preserves source thread)" "$running_routing" 'REPLY_TO'
+  assert_contains "$TEST_NAME (start wrapper receives exact body)" "$running_routing" 'IN_PROGRESS_BODY'
 
+  # Terminal results are routed through the durable outbox with the same review reply target.
   local done_routing
-  done_routing="$(grep 'post_github_comment.*FINAL_COMMENT.*REPLY_TO' "$DAEMON" | head -1)"
-  assert_contains "$TEST_NAME" "$done_routing" 'REPLY_TO'
+  done_routing="$(grep 'deliver_terminal_lifecycle_comment.*FINAL_COMMENT.*REPLY_TO' "$DAEMON" | head -1)"
+  assert_contains "$TEST_NAME (terminal outbox preserves source thread)" "$done_routing" 'REPLY_TO'
 
   # Verify review comment commentId format is correct
   local review_comment
@@ -520,15 +522,20 @@ test_lifecycle_event_embedding() {
   TEST_NAME="lifecycle_event_embedding"
   echo "=== Test 14a: Lifecycle event embedding ==="
 
-  local daemon_body
-  daemon_body="$(sed -n '/^run_once()/,/^loop()/p' "$DAEMON")"
+  local daemon_body terminal_builder
+  daemon_body="$(sed -n '/^dispatch_once()/,/^run_once()/p' "$DAEMON")"
+  terminal_builder="$(sed -n '/^build_terminal_lifecycle_comment()/,/^ensure_terminal_lifecycle_outbox()/p' "$DAEMON")"
 
-  # TASK_STARTED must be part of the working comment flow.
+  # TASK_STARTED must be published through the idempotent pre-check/read-back
+  # wrapper, which owns pre-agent recovery when delivery cannot be confirmed.
   assert_contains "$TEST_NAME (TASK_STARTED embedded)" "$daemon_body" 'start_event_marker'
+  assert_contains "$TEST_NAME (TASK_STARTED recovery wrapper)" "$daemon_body" 'publish_task_started_for_claim'
   assert_not_contains "$TEST_NAME (no daemon post-started call)" "$daemon_body" 'manul-result-feedback.sh" post-started'
 
-  # Terminal events must be represented in the lifecycle comment flow.
-  assert_contains "$TEST_NAME (TASK_DONE embedded)" "$daemon_body" 'lifecycle_event_marker'
+  # Terminal events are built into the exact body and delivered via the durable outbox.
+  assert_contains "$TEST_NAME (terminal event builder)" "$terminal_builder" 'TASK_DONE'
+  assert_contains "$TEST_NAME (terminal failure event builder)" "$terminal_builder" 'TASK_FAILED'
+  assert_contains "$TEST_NAME (terminal outbox delivery)" "$daemon_body" 'deliver_terminal_lifecycle_comment'
   assert_not_contains "$TEST_NAME (no daemon post-done call)" "$daemon_body" 'manul-result-feedback.sh" post-done'
   assert_not_contains "$TEST_NAME (no daemon post-failed call)" "$daemon_body" 'manul-result-feedback.sh" post-failed'
 
