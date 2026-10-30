@@ -84,6 +84,30 @@ jobs:
       - name: Run benchmark framework unit tests
         run: python3 -m unittest discover -s skill-benchmarks/tests -v
 
+      - name: Diagnose Todo source shell parse boundaries
+        run: |
+          python3 - <<'PY_DIAG'
+          from pathlib import Path
+          import subprocess
+
+          path = Path("skills/manul-github-bot/test_todo_task_sources.sh")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          for end, line in enumerate(lines, 1):
+              if end < 440 or line.strip():
+                  continue
+              result = subprocess.run(
+                  ["bash", "-n"],
+                  input="\\n".join(lines[:end]) + "\\n",
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode:
+                  print(f"First invalid prefix ends at line {end}: {result.stderr.strip()}")
+                  break
+          else:
+              print("All tested command boundaries parse")
+          PY_DIAG
+
       - name: Validate shell syntax
         shell: bash
         run: |
