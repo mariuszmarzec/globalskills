@@ -286,7 +286,7 @@ todo_task_prompt() {
 }
 
 todo_task_to_source_json() {
-  local task_json="$1" source_type="$2" resolution_json="${4:-}"
+  local task_json="$1" source_type="$2" resolution_json="${3:-}"
   local repository task_id fingerprint source_id source_url title body prompt ids created updated
   [ -n "$resolution_json" ] || resolution_json='{}'
   repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
@@ -303,7 +303,26 @@ todo_task_to_source_json() {
   title="$(jq -r '.description // "Todo task"' <<<"$task_json")"
   body="$title"
   prompt="$(todo_task_prompt "$task_json")"
-  prompt+=
+  prompt+="
+
+## Repository routing
+
+Target repository: $repository
+Resolution method: $(jq -r '.method // "unknown"' <<<"$resolution_json")"
+  matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+  if [ -n "$matched_alias" ]; then
+    prompt+="
+Matched project alias: $matched_alias"
+  fi
+  project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+  if [ -n "$project_skill_context" ]; then
+    prompt+="
+
+## Relevant project skills (included below)
+
+$project_skill_context"
+  fi
+  ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
   updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
   jq -cn \
