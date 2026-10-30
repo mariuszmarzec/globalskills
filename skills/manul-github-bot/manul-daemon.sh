@@ -3898,7 +3898,8 @@ This task originates from a Todo task tree, not a GitHub issue or comment.
 - Make repository changes using the normal Manul branch/commit/push/PR workflow. A real PR and its updated description remain required whenever repository files change. Include the Todo task ID in the branch name, PR title, and PR body so the work can be traced to the source task.
 - A task that is informational or genuinely requires no repository change may finish without a PR, but must still give a concrete result in the final agent response.
 - Do NOT change Todo task completion state yourself. After delivery verification, Manul will re-read the source tree and mark the root and every descendant subtask done through the same MCP source adapter. Do not mark a step done early.
-- Finish with the existing TASK_DONE / TASK_FAILED / TASK_NEEDS_USER protocol. Do not emit a GitHub result comment as part of that protocol.
+- Do NOT emit a TASK_NEEDS_USER block: Todo sources have no GitHub conversation or /manul continue reply channel. Resolve routine ambiguity autonomously. If a material decision truly requires the user, stop and emit TASK_FAILED: with the exact missing input, what you checked, and the available choices; leave the Todo task open. The user can update the Todo description/subtasks with that input, producing a new structural source version.
+- Finish with the existing TASK_DONE / TASK_FAILED protocol. Do not emit a GitHub result comment as part of that protocol.
 
 TODO_SOURCE_PROMPT
     fi
