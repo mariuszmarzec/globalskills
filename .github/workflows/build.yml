@@ -98,6 +98,9 @@ jobs:
             echo "bash -n $script"
             bash -n "$script"
           done
+      - name: Run Todo MCP client unit tests
+        run: python3 skills/manul-github-bot/test_todo_mcp_client.py
+
       - name: Run configured Manul tests
         env:
           REQUESTED_TESTS: ${{ inputs.tests }}
