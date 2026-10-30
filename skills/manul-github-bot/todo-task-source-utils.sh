@@ -121,7 +121,7 @@ todo_task_resolve_repository() {
   canonical_repository="$(jq -r '.name' <<<"$entry_json")"
 
   allowlist_json="$(todo_mcp_source_repository_allowlist "$source_json")" || return 2
-  allowlist_enforced="$(jq -r '.repositoryAllowlistEnforced // (.repositoryAllowlist | type == "array")' <<<"$source_json")"
+  allowlist_enforced="$(jq -r 'if has("repositoryAllowlistEnforced") then .repositoryAllowlistEnforced else (.repositoryAllowlist | type == "array") end' <<<"$source_json")"
   if [ "$allowlist_enforced" = "true" ] &&
       ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$allowlist_json" >/dev/null 2>&1; then
     echo "repository $canonical_repository is excluded by this Todo source allowlist" >&2
