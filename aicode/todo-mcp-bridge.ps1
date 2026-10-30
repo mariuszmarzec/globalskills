@@ -248,7 +248,7 @@ if ($Action -eq "Connect") {
             return Encoding.ASCII.GetBytes(String.Join("\r\n", output.ToArray()));
         }
     }
-    '@
+'@
     
         [TodoMcpWindowsBridge]::Run($RelayAddress, $RelayPort, $ChannelCount, $logFile)
         exit 0
