@@ -1257,26 +1257,30 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
         and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
         and .mcp["todo-local"].enabled == true
         and .tools["todo-local_*"] == null
-        and .tools["todo-local_ping"] == true
-        and .tools["todo-local_list_tasks"] == true
-        and .tools["todo-local_list_scheduled_tasks"] == true
-        and .tools["todo-local_get_task"] == true
-        and .tools["todo-local_list_shareable_users"] == true
-        and .tools["todo-local_create_task"] == false
-        and .tools["todo-local_update_task"] == false
-        and .tools["todo-local_mark_tasks_done"] == false
-        and .tools["todo-local_remove_task"] == false
+        and .permission["todo-local_*"] == "deny"
+        and .permission["todo-local_ping"] == "allow"
+        and .permission["todo-local_list_tasks"] == "allow"
+        and .permission["todo-local_list_scheduled_tasks"] == "allow"
+        and .permission["todo-local_get_task"] == "allow"
+        and .permission["todo-local_list_shareable_users"] == "allow"
+        and .permission["todo-local_create_task"] == "deny"
+        and .permission["todo-local_update_task"] == "deny"
+        and .permission["todo-local_mark_tasks_done"] == "deny"
+        and .permission["todo-local_remove_task"] == "deny"
         and .agent.coder.tools["todo-local_*"] == null
-        and .agent.coder.tools["todo-local_list_tasks"] == true
-        and .agent.coder.tools["todo-local_create_task"] == false
-        and .agent.chat.tools["todo-local_list_tasks"] == false
-        and .agent.chat.tools["todo-local_create_task"] == false
+        and .agent.coder.permission["todo-local_*"] == "deny"
+        and .agent.coder.permission["todo-local_list_tasks"] == "allow"
+        and .agent.coder.permission["todo-local_create_task"] == "deny"
+        and .agent.chat.permission["todo-local_list_tasks"] == "deny"
+        and .agent.chat.permission["todo-local_create_task"] == "deny"
       else
         .mcp["todo-local"] == null
         and .tools["todo-local_*"] == null
-        and .tools["todo-local_list_tasks"] == false
+        and .permission["todo-local_*"] == "deny"
+        and .permission["todo-local_list_tasks"] == "deny"
         and .agent.coder.tools["todo-local_*"] == null
-        and .agent.coder.tools["todo-local_list_tasks"] == false
+        and .agent.coder.permission["todo-local_*"] == "deny"
+        and .agent.coder.permission["todo-local_list_tasks"] == "deny"
       end
     )
   ' "$config" >/dev/null
