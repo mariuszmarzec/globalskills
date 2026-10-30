@@ -179,6 +179,12 @@ For `TASK_STARTED`:
   again and treats the operation as successful only when the exact signed event
   is found. A retry must not create another visible comment.
 
+Result-comment verification for inline PR review tasks is scoped to the exact source
+review thread (`in_reply_to_id` from the source `discussion_r` URL). Marker
+verification, non-empty-result verification, canonical PR URL verification and
+stale-marker repair must all use that same thread. A marker or PR URL in another
+review thread is not delivery evidence.
+
 For terminal `TASK_DONE` and `TASK_FAILED` events:
 - the marker is assembled into the exact user-facing result body before posting;
 - the daemon persists the full body and routing metadata in a SQLite outbox keyed
