@@ -404,7 +404,9 @@ test_status() {
   if printf '%s' "$OUTPUT" | grep -q "Todo Local" \
     && printf '%s' "$OUTPUT" | grep -q "Todo Remote" \
     && printf '%s' "$OUTPUT" | grep -qE '(^|[[:space:]])420([[:space:]]|$)' \
-    && printf '%s' "$OUTPUT" | grep -qE '(^|[[:space:]])421([[:space:]]|$)'; then
+    && printf '%s' "$OUTPUT" | grep -qE '(^|[[:space:]])421([[:space:]]|$)' \
+    && printf '%s' "$OUTPUT" | grep -q "owner/todo" \
+    && ! printf '%s' "$OUTPUT" | grep -q "owner/todo#0"; then
     pass "Text list shows Todo Local/Remote and their provider task IDs"
   else
     fail "Text list shows Todo Local/Remote and their provider task IDs" "Todo Local 420 and Todo Remote 421" "$OUTPUT"
