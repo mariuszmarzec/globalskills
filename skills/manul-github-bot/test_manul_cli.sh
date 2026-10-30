@@ -344,6 +344,52 @@ test_status() {
     fail "List JSON exposes local and remote Todo source names and record IDs" "Todo Local/420 and Todo Remote/421" "$OUTPUT"
   fi
 
+  if printf '%s' "$OUTPUT" | jq -e 'all(.[]; has("preExecutionFailures") and .preExecutionFailures == 0 and .agentStartedAt == null)' >/dev/null 2>&1; then
+    pass "List JSON defaults recovery diagnostics on a legacy DB without the columns"
+  else
+    fail "List JSON defaults recovery diagnostics on a legacy DB without the columns" "preExecutionFailures=0 and agentStartedAt=null" "$OUTPUT"
+  fi
+
+  # Add the recovery columns and populate one task to verify list and single-task
+  # output carries real values after migration.
+  sqlite3 "$DB" "
+    ALTER TABLE processed_comments ADD COLUMN preExecutionFailures INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE processed_comments ADD COLUMN agentStartedAt TEXT;
+    UPDATE processed_comments
+    SET preExecutionFailures=3, agentStartedAt='2026-10-30T14:00:00Z'
+    WHERE commentId='todo-local-status';
+  "
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --json 2>&1)
+  if printf '%s' "$OUTPUT" | jq -e 'any(.[]; .taskId == "todo-local-status" and .preExecutionFailures == 3 and .agentStartedAt == "2026-10-30T14:00:00Z")' >/dev/null 2>&1; then
+    pass "List JSON exposes pre-execution failures and agent start timestamp"
+  else
+    fail "List JSON exposes pre-execution failures and agent start timestamp" "preExecutionFailures=3 and agentStartedAt timestamp" "$OUTPUT"
+  fi
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" todo-local-status --json 2>&1)
+  if printf '%s' "$OUTPUT" | jq -e '.preExecutionFailures == 3 and .agentStartedAt == "2026-10-30T14:00:00Z"' >/dev/null 2>&1; then
+    pass "Single-task JSON exposes recovery diagnostics"
+  else
+    fail "Single-task JSON exposes recovery diagnostics" "preExecutionFailures=3 and agentStartedAt timestamp" "$OUTPUT"
+  fi
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  if printf '%s' "$OUTPUT" | grep -q "PRE-EXEC" \
+    && printf '%s' "$OUTPUT" | grep -q "AGENT-STARTED" \
+    && printf '%s' "$OUTPUT" | grep -q "2026-10-30T14:00:00Z"; then
+    pass "Text list displays both recovery diagnostics"
+  else
+    fail "Text list displays both recovery diagnostics" "PRE-EXEC, AGENT-STARTED and timestamp" "$OUTPUT"
+  fi
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" todo-local-status 2>&1)
+  if printf '%s' "$OUTPUT" | grep -q "preExecutionFailures: 3" \
+    && printf '%s' "$OUTPUT" | grep -q "agentStartedAt: 2026-10-30T14:00:00Z"; then
+    pass "Single-task text displays both recovery diagnostics"
+  else
+    fail "Single-task text displays both recovery diagnostics" "both diagnostic fields" "$OUTPUT"
+  fi
+
   # Test 2: Filter by status
   log "Filter by status"
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --status queued --json 2>&1)
