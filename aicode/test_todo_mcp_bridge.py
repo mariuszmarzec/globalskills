@@ -68,6 +68,7 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("remote.Address.Equals(allowed)", source)
         self.assertIn("Rejected connection from " + '" + remote.Address + "; expected WSL source " + allowed + "."', source)
         self.assertIn("Ignored local Windows readiness probe", source)
+        self.assertIn("IPAddress.IsLoopback(remote.Address)", source)
         self.assertIn("upstream.Connect(IPAddress.Loopback, 8765)", source)
         self.assertIn("Host: 127.0.0.1:8765", source)
         self.assertIn("Only HTTP GET/POST/DELETE requests to /mcp are allowed.", source)
