@@ -2811,11 +2811,12 @@ revalidate_pr_review_comment() {
 # This is not a failure and is not retryable. A later /manul continue resumes
 # this exact task.
 mark_task_blocked_user() {
-  local comment_id="$1" safe_comment_id="$2" claim_token="$3"
-  local safe_claim_token
+  local comment_id="$1" safe_comment_id="$2" claim_token="$3" question="${4:-}"
+  local safe_claim_token safe_question
   safe_claim_token="$(sql_escape "$claim_token")"
+  safe_question="$(sql_escape "$question")"
   local result changes
-  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "UPDATE processed_comments SET status='blocked_user', resultSummary=CASE WHEN '$safe_question' <> '' THEN '$safe_question' ELSE resultSummary END, processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>/dev/null)"
   changes="$(printf '%s\n' "$result" | tail -1)"
   if [ "$changes" = "1" ]; then
     log "mark_task_blocked_user: task $comment_id is waiting for user input"
@@ -2973,6 +2974,7 @@ evaluate_task_completion() {
   local EXECUTION_FAILURE_CODE="${16:-}"
   local PR_HEAD_BRANCH="${17:-}"
   local DELIVERY_MODE="${19:-implementation}"
+  local TASK_SOURCE_TYPE="${20:-}"
   # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
   local VERIFIED_MERGED_RESULT_PR_BASE=""
 
@@ -3013,7 +3015,7 @@ evaluate_task_completion() {
     if extract_user_decision_request "$STDOUT_FILE"; then
       NEEDS_USER_INPUT="true"
       log "dispatch: task $COMMENT_ID requested user input"
-      lc_log "TASK_NEEDS_USER" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
+      lc_log "TASK_NEEDS_USER" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM source=$TASK_SOURCE_TYPE"
       return 0
     fi
     log "WARN: task $COMMENT_ID emitted a malformed user-decision block; treating as failure"
@@ -4392,17 +4394,20 @@ PROMPT_APPEND
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
     # explicit /manul continue response.
-    if [ "${NEEDS_USER_INPUT:-false}" = "true" ]; then
-      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"; then
-        if [ -n "${WORKSPACE_ID:-}" ]; then
+    if [ "\${NEEDS_USER_INPUT:-false}" = "true" ]; then
+      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$USER_QUESTION"; then
+        if [ -n "\${WORKSPACE_ID:-}" ]; then
           workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
         fi
-        if ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
+        if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+          log "Todo task $TASK_SOURCE_ID blocked for user input; question saved in resultSummary. Edit the Todo task to create a new source version."
+          lc_log "TODO_SOURCE_BLOCKED_USER" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+        elif ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
           log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
         fi
         stop_heartbeat "$COMMENT_ID"
