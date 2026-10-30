@@ -78,6 +78,15 @@ eval "$(sed -n '/^get_daemon_pid() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^repair_result_comment_marker() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_result_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^build_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^ensure_terminal_lifecycle_outbox() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^queue_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^find_terminal_lifecycle_comment_id() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^mark_terminal_lifecycle_comment_posted() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^schedule_terminal_lifecycle_retry() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^publish_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^retry_pending_terminal_lifecycle_comments() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^deliver_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^complete_task_with_verification() {/,/^}/p' "$DAEMON")"
@@ -100,6 +109,42 @@ GH_API_TIMEOUT="30"
 
 # Write a fake daemon PID so get_daemon_pid returns 0 (no real daemon running)
 echo "0" > "$PID_FILE"
+
+# Terminal event markers must be assembled into the exact comment body
+# before the dispatcher calls post_github_comment.
+test_terminal_lifecycle_comment() {
+    local done_body failed_body retry_body payload
+    done_body="$(build_terminal_lifecycle_comment "issue:123" "conv-123" "2" "45" "completed" "" "Implementation is complete.")"
+    payload="$(printf '%s\n' "$done_body" | sed -n '1s/^<!-- manul:event //; 1s/ -->$//p')"
+    if printf '%s' "$payload" | jq -e '.type == "TASK_DONE" and .data.taskId == "issue:123" and .data.conversationId == "conv-123" and .data.attempt == 2 and .data.prNumber == 45' >/dev/null; then
+        ok "completed result includes a valid TASK_DONE marker"
+    else
+        fail "completed result includes a valid TASK_DONE marker"
+    fi
+    if [[ "$done_body" == *"Implementation is complete."* ]]; then
+        ok "TASK_DONE marker preserves the human-readable result"
+    else
+        fail "TASK_DONE marker preserves the human-readable result"
+    fi
+
+    failed_body="$(build_terminal_lifecycle_comment "issue:124" "conv-124" "3" "" "failed" "provider said \"no\" " "Execution failed.")"
+    payload="$(printf '%s\n' "$failed_body" | sed -n '1s/^<!-- manul:event //; 1s/ -->$//p')"
+    if printf '%s' "$payload" | jq -e '.type == "TASK_FAILED" and .data.taskId == "issue:124" and .data.error == "provider said \"no\" " and .data.attempt == 3 and .data.prNumber == null' >/dev/null; then
+        ok "failed result includes a valid TASK_FAILED marker with escaped error"
+    else
+        fail "failed result includes a valid TASK_FAILED marker with escaped error"
+    fi
+
+    retry_body="$(build_terminal_lifecycle_comment "issue:125" "conv-125" "1" "" "queued" "transient" "Will retry.")"
+    if [ "$retry_body" = "Will retry." ]; then
+        ok "retryable task result does not emit a terminal event"
+    else
+        fail "retryable task result does not emit a terminal event"
+    fi
+
+    # Exact body delivery is asserted by the terminal outbox tests below.
+}
+test_terminal_lifecycle_comment
 
 # ─── Setup temp SQLite DB with full schema ─────────────────────────────────────
 setup_db() {
@@ -139,6 +184,132 @@ insert_task() {
             ('$comment_id', '$repo', $issue, '$escaped_url', 'test prompt', 'queued', 0, '2026-09-10T00:00:00Z');
     " 2>/dev/null
 }
+
+FAKE_LIFECYCLE_COMMENTS="$WORK/lifecycle-comments.jsonl"
+POST_CAPTURE_FILE="$WORK/terminal-post-body.txt"
+: > "$FAKE_LIFECYCLE_COMMENTS"
+FAKE_POST_MODE="success"
+FAKE_FIND_FAIL="0"
+
+post_github_comment() {
+    local repo="$1" issue="$2" body="$3" reply_to="${4:-}"
+    printf '%s' "$body" > "$POST_CAPTURE_FILE"
+    if [ "$FAKE_POST_MODE" = "definite_failure" ]; then return 1; fi
+    local comment_id
+    comment_id="$(jq -s 'length + 700' "$FAKE_LIFECYCLE_COMMENTS")"
+    jq -nc --arg body "$body" --argjson id "$comment_id" --arg reply "$reply_to" \
+        '{id:$id,body:$body,in_reply_to_id:(if $reply == "" then null else ($reply|tonumber) end)}' >> "$FAKE_LIFECYCLE_COMMENTS"
+    [ "$FAKE_POST_MODE" != "accepted_error" ]
+}
+find_terminal_lifecycle_comment_id() {
+    local repo="$1" issue="$2" task_id="$3" attempt="$4" event_type="$5" reply_to="${6:-}"
+    [ "$FAKE_FIND_FAIL" = "0" ] || return 2
+    jq -sr --arg task "$task_id" --argjson attempt "$attempt" --arg type "$event_type" --arg reply "$reply_to" '
+      def event:
+        (.body // "") as $body | ($body | split("<!-- manul:event ")) as $parts
+        | if ($parts|length) < 2 then null else (try ($parts[1] | split(" -->")[0] | fromjson) catch null) end;
+      map(. as $comment | ($comment | event) as $event
+          | select($event.type == $type and $event.data.taskId == $task and $event.data.attempt == $attempt
+              and (($reply == "") or (($comment.in_reply_to_id // "")|tostring) == $reply))
+          | $comment.id)
+      | .[0] // empty
+    ' "$FAKE_LIFECYCLE_COMMENTS"
+}
+count_terminal_comments() {
+    local task="$1" attempt="$2" type="$3"
+    jq -s --arg task "$task" --argjson attempt "$attempt" --arg type "$type" '
+      [ .[] | select(((.body // "") | contains($task))
+        and ((.body // "") | contains("\"type\":\"" + $type + "\""))
+        and ((.body // "") | contains("\"attempt\":" + ($attempt|tostring)))) ] | length
+    ' "$FAKE_LIFECYCLE_COMMENTS"
+}
+test_terminal_lifecycle_outbox() {
+    local body payload rc posted_at task_status initial_body
+    echo "=== TASK_DONE exact terminal publication body ==="
+    setup_db
+    insert_task "issue:outbox-done" "owner/repo" 501 "https://github.com/owner/repo/issues/501#issuecomment-done"
+    body="$(build_terminal_lifecycle_comment "issue:outbox-done" "conv-done" 2 77 completed "" "Implementation is complete.")"
+    queue_terminal_lifecycle_comment "owner/repo" 501 "issue:outbox-done" 2 TASK_DONE "$body" ""
+    publish_terminal_lifecycle_comment "issue:outbox-done" 2 TASK_DONE
+    payload="$(sed -n '1s/^<!-- manul:event //; 1s/ -->$//p' "$POST_CAPTURE_FILE")"
+    if printf '%s' "$payload" | jq -e '.type == "TASK_DONE" and .data.taskId == "issue:outbox-done" and .data.attempt == 2 and .data.prNumber == 77' >/dev/null; then
+      ok "captured post body contains the exact TASK_DONE marker"
+    else
+      fail "captured post body contains the exact TASK_DONE marker"
+    fi
+    grep -Fq "Implementation is complete." "$POST_CAPTURE_FILE" && ok "captured post body preserves the result text" || fail "captured post body preserves the result text"
+    [ "$(count_terminal_comments "issue:outbox-done" 2 TASK_DONE)" = "1" ] && ok "TASK_DONE posted once" || fail "TASK_DONE posted once"
+    publish_terminal_lifecycle_comment "issue:outbox-done" 2 TASK_DONE
+    [ "$(count_terminal_comments "issue:outbox-done" 2 TASK_DONE)" = "1" ] && ok "repeat publication is idempotent" || fail "repeat publication is idempotent"
+
+    echo "=== accepted-but-client-error read-back ==="
+    FAKE_POST_MODE="accepted_error"
+    body="$(build_terminal_lifecycle_comment "issue:outbox-ambiguous" "conv-ambiguous" 3 "" failed "provider said \"no\"" "Execution failed.")"
+    queue_terminal_lifecycle_comment "owner/repo" 502 "issue:outbox-ambiguous" 3 TASK_FAILED "$body" ""
+    rc=0
+    publish_terminal_lifecycle_comment "issue:outbox-ambiguous" 3 TASK_FAILED || rc=$?
+    assert_rc "accepted post with client error is confirmed from read-back" 0 "$rc"
+    [ "$(count_terminal_comments "issue:outbox-ambiguous" 3 TASK_FAILED)" = "1" ] && ok "ambiguous accepted event exists once" || fail "ambiguous accepted event exists once"
+    posted_at="$(sqlite3 "$TEMP_DB" "SELECT postedAt FROM manul_terminal_lifecycle_outbox WHERE taskId='issue:outbox-ambiguous';")"
+    [ -n "$posted_at" ] && ok "ambiguous acceptance writes durable receipt" || fail "ambiguous acceptance writes durable receipt"
+    FAKE_POST_MODE="success"
+    publish_terminal_lifecycle_comment "issue:outbox-ambiguous" 3 TASK_FAILED
+    [ "$(count_terminal_comments "issue:outbox-ambiguous" 3 TASK_FAILED)" = "1" ] && ok "retry after ambiguous response is duplicate-safe" || fail "retry after ambiguous response is duplicate-safe"
+
+    echo "=== definite failure remains pending and retryable ==="
+    insert_task "issue:outbox-definite" "owner/repo" 503 "https://github.com/owner/repo/issues/503#issuecomment-definite"
+    sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='failed',attempts=4 WHERE commentId='issue:outbox-definite';"
+    body="$(build_terminal_lifecycle_comment "issue:outbox-definite" "conv-definite" 4 "" failed "provider unavailable" "Execution failed after retry budget.")"
+    queue_terminal_lifecycle_comment "owner/repo" 503 "issue:outbox-definite" 4 TASK_FAILED "$body" ""
+    FAKE_POST_MODE="definite_failure"
+    rc=0
+    publish_terminal_lifecycle_comment "issue:outbox-definite" 4 TASK_FAILED || rc=$?
+    assert_rc "definite post failure remains pending" 1 "$rc"
+    posted_at="$(sqlite3 "$TEMP_DB" "SELECT coalesce(postedAt,'') FROM manul_terminal_lifecycle_outbox WHERE taskId='issue:outbox-definite';")"
+    assert_rc "failed publication stores no posted receipt" "" "$posted_at"
+    task_status="$(sqlite3 "$TEMP_DB" "SELECT status FROM processed_comments WHERE commentId='issue:outbox-definite';")"
+    assert_rc "GitHub comment failure preserves terminal task state" failed "$task_status"
+    initial_body="$(cat "$POST_CAPTURE_FILE")"
+    FAKE_POST_MODE="success"
+    sqlite3 "$TEMP_DB" "UPDATE manul_terminal_lifecycle_outbox SET nextAttemptAt=datetime('now','-1 second') WHERE taskId='issue:outbox-definite';"
+    retry_pending_terminal_lifecycle_comments
+    posted_at="$(sqlite3 "$TEMP_DB" "SELECT coalesce(postedAt,'') FROM manul_terminal_lifecycle_outbox WHERE taskId='issue:outbox-definite';")"
+    [ -n "$posted_at" ] && ok "dispatcher retry publishes pending terminal event" || fail "dispatcher retry publishes pending terminal event"
+    [ "$(count_terminal_comments "issue:outbox-definite" 4 TASK_FAILED)" = "1" ] && ok "retry publishes one TASK_FAILED marker" || fail "retry publishes one TASK_FAILED marker"
+    cmp -s "$POST_CAPTURE_FILE" <(printf '%s' "$initial_body") && ok "retry uses the exact persisted result body" || fail "retry uses the exact persisted result body"
+
+    echo "=== read failure fails closed ==="
+    FAKE_FIND_FAIL="1"
+    body="$(build_terminal_lifecycle_comment "issue:outbox-lookup" "conv-lookup" 1 "" failed "lookup failed" "A terminal result.")"
+    queue_terminal_lifecycle_comment "owner/repo" 504 "issue:outbox-lookup" 1 TASK_FAILED "$body" ""
+    rc=0
+    publish_terminal_lifecycle_comment "issue:outbox-lookup" 1 TASK_FAILED || rc=$?
+    assert_rc "read-before-write failure is fail-closed" 2 "$rc"
+    assert_rc "read failure does not publish blindly" 0 "$(count_terminal_comments "issue:outbox-lookup" 1 TASK_FAILED)"
+    FAKE_FIND_FAIL="0"
+
+    echo "=== intermediate retry remains marker-free ==="
+    body="$(build_terminal_lifecycle_comment "issue:outbox-retry" "conv-retry" 1 "" queued "transient error" "This attempt will retry.")"
+    assert_rc "retry result remains marker-free" "This attempt will retry." "$body"
+}
+test_terminal_lifecycle_outbox
+
+test_external_source_terminal_lifecycle_suppression() {
+    local body rc rows
+    echo "=== external source terminal lifecycle suppression ==="
+    setup_db
+    body="$(build_terminal_lifecycle_comment "todo:external-1" "conv-external" 1 "" completed "" "External task completed.")"
+    : > "$POST_CAPTURE_FILE"
+    rc=0
+    deliver_terminal_lifecycle_comment "owner/repo" 0 "todo:external-1" 1 TASK_DONE "$body" "" || rc=$?
+    assert_rc "external-source terminal delivery is intentionally suppressed" 0 "$rc"
+    rows="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM manul_terminal_lifecycle_outbox WHERE taskId='todo:external-1';")"
+    assert_rc "suppressed external-source event does not create a retryable outbox row" 0 "$rows"
+    [ ! -s "$POST_CAPTURE_FILE" ] && ok "external-source suppression does not call the GitHub comment publisher" || fail "external-source suppression attempted a GitHub post"
+}
+test_external_source_terminal_lifecycle_suppression
+
+
 
 # ─── Fake gh executable ────────────────────────────────────────────────────────
 # Handles: gh api "repos/owner/repo/issues/1/comments" --paginate --jq '...'
@@ -304,6 +475,20 @@ echo "Test: Found inline PR review comment with marker ..."
 verify_result_comment "$REPO" 42 "review:result-2b" "review:result-2b" 1 >/dev/null 2>&1
 rc=$?
 assert_rc "Found: inline PR review comment with marker" 0 "$rc"
+
+# ── Test 2c: A matching marker in a different review thread must be rejected ───
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 202, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 999,
+   "body": "<!-- manul-task:review:result-2c:attempt:1 -->\nWrong review thread.\n\n— manul 🐈"}
+]
+EOF
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2c" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2c" "review:result-2c" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Rejected: result marker exists only in a different review thread" 1 "$rc"
 
 # ── Test 3: No comments with marker ────────────────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
