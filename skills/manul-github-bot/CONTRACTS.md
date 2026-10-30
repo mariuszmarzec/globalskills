@@ -481,6 +481,13 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
+For both Todo providers, report-only selection is an explicit opt-in: the source
+must set `allowReportOnly: true`, and the Todo description must contain a line
+beginning with `/manul report`. Such a task normalizes to
+`execution.kind=report_only` and does not require repository metadata. The
+common poller accepts this execution kind only for the two Todo source types;
+all other unsupported execution kinds fail closed.
+
 Todo providers do not select a configured default repository. For each
 active root, the adapter resolves the execution target from the task description:
 an explicit GitHub repository URL takes precedence; otherwise the longest
@@ -517,14 +524,29 @@ topology change invalidates the source; status/time-only progress does not. The 
 must remain active and the current source tree must still match before execution and
 completion.
 
-After repository delivery verification, the local adapter marks the root and all
-descendants done in one local operation. The remote adapter updates descendants
-individually before the root, using Fiteo's inherited ancestor-share permission
-rules. The root remains active if a child update fails, allowing a safe retry.
-Todo tasks do not post GitHub lifecycle or result comments; their delivery receipt
-is the verified repository PR (when code changed) followed by successful source
-completion. The common GitHub comment-marker contract does not apply to these
-external sources.
+For repository-backed Todo tasks, completion follows repository delivery
+verification (including a verified PR when code changed). For report-only Todo
+tasks, the agent's non-empty final answer is instead written as a child task under
+the source root. The adapter reads the tree back and verifies the unique child,
+parent relationship, exact answer, and completed flag. Its marker binds the child
+to the original source fingerprint and an answer SHA-256 digest; only one valid,
+source-version-bound result child is omitted from subsequent source fingerprints.
+A modified/ambiguous output child is not ignored.
+ 
+The daemon persists the verified result receipt in its own task row before
+completion. A lost create response or later partial failure is retry-safe: a
+matching child is located and reused, never duplicated. If result persistence,
+read-back, or local receipt storage fails, the source root remains active.
+ 
+After delivery verification, the local adapter marks the root and all descendants
+done in one local operation. The remote adapter updates descendants individually
+before the root, using Fiteo's inherited ancestor-share permission rules. For
+report-only tasks the generated result is included with the original descendants;
+the root remains active if any child update fails, allowing a safe retry. Todo
+tasks do not post GitHub lifecycle or result comments. Repository-backed Todo
+tasks use a verified repository PR when code changed; report-only tasks use the
+verified Todo child as their delivery. The common GitHub comment-marker contract
+does not apply to these external sources.
 
 The task-source identity is the root work item. A pull request, review
 comment, or CI check is never a task-source root. Those artifacts may be linked

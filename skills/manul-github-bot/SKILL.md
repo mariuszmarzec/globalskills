@@ -216,6 +216,19 @@ Current provider types:
 - `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
 - `todo_remote_mcp` — separate Fiteo backend MCP source. It selects active root tasks explicitly shared with the configured `manulUserId` using `EDITOR_AND_VIEWER` permission.
 
+For either Todo provider, an operator may set `allowReportOnly: true` to enable
+the explicit `/manul report <question>` trigger. A report-only source does not
+need a project alias or repository URL: the daemon skips repository locks,
+checkouts, branches, PRs, and the GitHub result-comment protocol, then runs the
+agent in a disposable task-scoped scratch directory. The complete answer is
+saved as a child of the source Todo item, read back and verified, and recorded
+as a local delivery receipt before the Todo tree is completed. The generated
+child is identified by a source-version-bound marker and is the only child
+excluded from the source fingerprint; edits to the original task or its other
+subtasks still invalidate the queued source. Partial writes are retried by
+reusing the exact child instead of creating duplicates. The root is marked done
+last, after the result and all original descendants.
+
 Todo sources do not have a fixed project repository. Manul resolves each
 Todo root independently using the curated catalog at
 `skills/globalskills-repository/project-repositories.json`: an explicit

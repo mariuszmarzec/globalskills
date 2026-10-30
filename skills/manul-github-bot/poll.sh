@@ -1187,22 +1187,31 @@ queue_normalized_source_task() {
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0
   [ "$state" = "OPEN" ] || return 0
 
-  # Discovery for non-repository sources is intentionally staged before the
-  # execution boundary is ready. Do not inject NULL issueNumber rows into the
-  # legacy GitHub-oriented queue schema or pretend a Todo task has a repo.
-  if [ "$execution_kind" != "repository" ]; then
-    log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); execution adapter not enabled yet"
-    return 0
-  fi
-
   local task_id="source:${source_type}:${source_id}" repo source_context
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
   local issue_number
   issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
+
+  if [ "$execution_kind" = "report_only" ]; then
+    case "$source_type" in
+      todo_local_mcp|todo_remote_mcp) ;;
+      *)
+        log "WARN: non-Todo source $source_type cannot request report-only execution"
+        return 0 ;;
+    esac
+    # The legacy queue schema requires a non-empty repository column. Use a
+    # reserved sentinel; the report-only dispatcher must never lock, clone,
+    # enter or otherwise treat this value as a GitHub repository.
+    repo="todo-report-only"
+    issue_number=0
+  elif [ "$execution_kind" != "repository" ]; then
+    log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); unsupported execution kind"
+    return 0
+  fi
   issue_number="$(sql_num "$issue_number")"
   issue_number="${issue_number:-0}"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
-  if [ -z "$repo" ]; then
+  if [ "$execution_kind" = "repository" ] && [ -z "$repo" ]; then
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
