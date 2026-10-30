@@ -6,10 +6,17 @@ TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
 
 todo_source_local_config() {
-  jq -c '
+  local source_json="$1" url
+  source_json="$(jq -c '
     .url = (.url // "http://127.0.0.1:8766/mcp")
     | .tokenEnv = (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
-  ' <<<"$1"
+  ' <<<"$source_json")" || return 2
+  url="$(jq -r '.url // empty' <<<"$source_json")"
+  [[ "$url" == http://127.0.0.1:8766/mcp ]] || {
+    echo "task-source: local Todo MCP must use the existing WSL loopback bridge URL" >&2
+    return 2
+  }
+  printf '%s\n' "$source_json"
 }
 
 task_source_todo_local_poll() {
