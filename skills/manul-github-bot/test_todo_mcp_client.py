@@ -117,10 +117,11 @@ class TodoMcpClientTests(unittest.TestCase):
         self.assertEqual("Bearer fixture-token", initialize_headers["Authorization"])
         self.assertNotIn("Mcp-Session-Id", initialize_headers)
         self.assertNotIn("MCP-Protocol-Version", initialize_headers)
-        for _, headers in FakeMcpHandler.requests[1:]:
-            self.assertEqual("Bearer fixture-token", headers["Authorization"])
-            self.assertEqual("fixture-session", headers["Mcp-Session-Id"])
-            self.assertEqual(CLIENT.PROTOCOL_VERSION, headers["MCP-Protocol-Version"])
+        for _, raw_headers in FakeMcpHandler.requests[1:]:
+            headers = {name.lower(): value for name, value in raw_headers.items()}
+            self.assertEqual("Bearer fixture-token", headers["authorization"])
+            self.assertEqual("fixture-session", headers["mcp-session-id"])
+            self.assertEqual(CLIENT.PROTOCOL_VERSION, headers["mcp-protocol-version"])
         self.assertEqual("todo_list_tasks", FakeMcpHandler.requests[-1][0]["params"]["name"])
 
     def test_tool_allowlist_rejects_arbitrary_operations(self):
