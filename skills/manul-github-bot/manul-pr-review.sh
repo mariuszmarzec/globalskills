@@ -345,6 +345,10 @@ cmd_handle() {
     fi
     review_comments_json="$REVIEW_COMMENTS_JSON"
   fi
+
+  # Replies belong to existing review threads. Keep them in conversation history,
+  # but only root-level inline comments are new feedback that can trigger a task.
+  review_comments_json="$(jq -c '[.[] | select((.in_reply_to_id // null) == null)]' <<<"$review_comments_json")"
   local inline_review_count
   inline_review_count="$(jq -r 'length' <<<"$review_comments_json")"
 
@@ -366,7 +370,7 @@ cmd_handle() {
       ;;
     REQUEST_CHANGES)
       action="REQUEST_CHANGES"
-      should_create_task=true
+      should_create_task=false
       ;;
     COMMENT)
       action="COMMENT"
@@ -381,10 +385,12 @@ cmd_handle() {
       ;;
   esac
 
-  # An inline review is a single unit of work regardless of its verdict.
-  # APPROVE/COMMENT reviews with inline comments need grouped handling too.
-  # Approvals/comments without inline comments remain passive.
+  # Any root-level inline feedback is actionable regardless of the review verdict.
+  # A body-only REQUEST_CHANGES review is also actionable. Reply-only reviews are
+  # passive unless their review body contains separate, explicit feedback.
   if [ "$inline_review_count" -gt 0 ] && [ "$REVIEW_STATE" != "DISMISS" ]; then
+    should_create_task=true
+  elif [ "$action" = "REQUEST_CHANGES" ] && [ -n "$(printf '%s' "$BODY" | tr -d '[:space:]')" ]; then
     should_create_task=true
   fi
 
