@@ -500,8 +500,10 @@ static repository. The route already stored with a queued task is reused across
 retries; changing the catalog does not silently retarget existing queue rows.
 
 The two Todo providers are separate adapters with different MCP tool names and
-credentials. Local uses the existing loopback bridge and `TODO_LOCAL_MCP_TOKEN`;
-remote uses Fiteo's HTTPS `/mcp` endpoint and a PAT from an environment variable.
+credentials. Local discovers Todo Desktop's direct loopback endpoint on native
+hosts and uses the WSL-only loopback relay when required; it uses
+`TODO_LOCAL_MCP_TOKEN`. Remote uses Fiteo's HTTPS `/mcp` endpoint and a PAT
+from an environment variable.
 Tokens never appear in normalized task JSON or configuration values.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
