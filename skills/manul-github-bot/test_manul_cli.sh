@@ -350,6 +350,15 @@ test_status() {
     fail "List JSON defaults recovery diagnostics on a legacy DB without the columns" "preExecutionFailures=0 and agentStartedAt=null" "$OUTPUT"
   fi
 
+  # A queued row on the legacy schema has no agent start timestamp. Single-task
+  # JSON must still expose the field explicitly as null.
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" todo-local-status --json 2>&1)
+  if printf '%s' "$OUTPUT" | jq -e 'has("agentStartedAt") and .agentStartedAt == null' >/dev/null 2>&1; then
+    pass "Single-task JSON exposes null agentStartedAt for a legacy queued task"
+  else
+    fail "Single-task JSON exposes null agentStartedAt for a legacy queued task" "agentStartedAt=null" "$OUTPUT"
+  fi
+
   # Add the recovery columns and populate one task to verify list and single-task
   # output carries real values after migration.
   sqlite3 "$DB" "

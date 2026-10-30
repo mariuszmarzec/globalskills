@@ -403,7 +403,11 @@ else
     [ -n "$parent" ] && JSON+=", \"parentTaskId\": \"$parent\""
     JSON+=", \"attempts\": ${attempts:-0}"
     JSON+=", \"preExecutionFailures\": ${pre_execution_failures:-0}"
-    [ -n "$agent_started_at" ] && JSON+=", \"agentStartedAt\": \"$agent_started_at\""
+    if [ -n "$agent_started_at" ]; then
+      JSON+=", \"agentStartedAt\": \"$agent_started_at\""
+    else
+      JSON+=", \"agentStartedAt\": null"
+    fi
     JSON+=", \"createdAt\": \"$created\""
     
     # Optional fields
