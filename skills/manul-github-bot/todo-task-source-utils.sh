@@ -271,7 +271,9 @@ print(json.dumps(candidates, separators=(",", ":")))
   else
     printf '%s\n' "$task_json"
   fi
-}todo_task_fingerprint() {
+}
+
+todo_task_fingerprint() {
   local stable_task
   stable_task="$(todo_task_strip_verified_report_result "$1")" || return 1
   todo_task_fingerprint_raw "$stable_task"
