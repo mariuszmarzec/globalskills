@@ -207,7 +207,7 @@ test_task_started_claim_accounting() {
   rc=0
   publish_task_started_for_claim "started-definite-failure" "claim-definite" "test/repo" 89 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_POST
-  assert_eq 0 "$rc" "definite start failure follows bounded pre-execution recovery"
+  assert_eq 1 "$rc" "definite start failure hands control back to dispatcher without launching the agent"
   assert_eq 1 "$PRE_EXECUTION_FAILURE_CALLS" "definite start failure triggers one pre-execution rollback"
   status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='started-definite-failure';")"
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='started-definite-failure';")"
@@ -226,7 +226,7 @@ test_task_started_claim_accounting() {
   rc=0
   publish_task_started_for_claim "started-lookup-failure" "claim-lookup" "test/repo" 90 "" "" "$body" "" 2 || rc=$?
   unset GH_FAIL_API
-  assert_eq 0 "$rc" "failed idempotency lookup follows bounded pre-execution recovery"
+  assert_eq 1 "$rc" "failed idempotency lookup stops dispatch after bounded pre-execution recovery"
   assert_eq 1 "$PRE_EXECUTION_FAILURE_CALLS" "failed idempotency lookup triggers one pre-execution rollback"
   status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='started-lookup-failure';")"
   attempts="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='started-lookup-failure';")"
@@ -236,6 +236,22 @@ test_task_started_claim_accounting() {
   assert_eq 1 "$infra_failures" "lookup failure increments the separate infrastructure counter"
 }
 test_task_started_claim_accounting
+
+test_dispatch_stops_after_unconfirmed_task_started() {
+  local dispatch_body
+  dispatch_body="$(sed -n '/^dispatch_once()/,/^run_once()/p' "$DAEMON")"
+  assert_contains "dispatcher aborts after TASK_STARTED publication failure" "$dispatch_body" "if ! publish_task_started_for_claim"
+  assert_contains "dispatcher returns before prompt creation when TASK_STARTED is unconfirmed" "$dispatch_body" "return 0"
+  local call_line prompt_line
+  call_line="$(printf '%s\n' "$dispatch_body" | grep -n "if ! publish_task_started_for_claim" | head -1 | cut -d: -f1)"
+  prompt_line="$(printf '%s\n' "$dispatch_body" | grep -n 'Create per-task prompt' | head -1 | cut -d: -f1)"
+  [ -n "$call_line" ] && [ -n "$prompt_line" ] && [ "$prompt_line" -gt "$call_line" ] || {
+    echo "FAIL: TASK_STARTED guard is missing or appears after prompt creation" >&2
+    return 1
+  }
+  ok "TASK_STARTED failure guard is before prompt/runtime setup"
+}
+test_dispatch_stops_after_unconfirmed_task_started
 
 test_task_started_idempotency() {
   local body1 body2 body3 rc
