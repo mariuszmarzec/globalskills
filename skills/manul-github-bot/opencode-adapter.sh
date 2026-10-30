@@ -300,6 +300,26 @@ else
     _config_input="/dev/null"
 fi
 if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
+def todo_mcp_tool_rules($read_enabled):
+  {
+    "todo-local_ping": $read_enabled,
+    "todo-local_list_tasks": $read_enabled,
+    "todo-local_list_scheduled_tasks": $read_enabled,
+    "todo-local_get_task": $read_enabled,
+    "todo-local_list_shareable_users": $read_enabled,
+    "todo-local_create_task": false,
+    "todo-local_create_tasks": false,
+    "todo-local_create_task_tree": false,
+    "todo-local_update_task": false,
+    "todo-local_mark_tasks_done": false,
+    "todo-local_mark_tasks_to_do": false,
+    "todo-local_reorder_tasks": false,
+    "todo-local_schedule_tasks": false,
+    "todo-local_copy_task": false,
+    "todo-local_remove_task": false,
+    "todo-local_leave_shared_task": false
+  };
+
     (.[0] // {})
     | .permission.external_directory = (
         if ($workspaceBase | length) > 0 then
@@ -359,33 +379,30 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
                 }
               }
           )
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-                  end
-                )
-              else {}
-              end
-          )
       else
         .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-                  end
-                )
-              else {}
-              end
-          )
       end
+    | .tools = (
+        (.tools // {}) | if type == "object" then . else {} end
+        | del(."todo-local_*")
+        | . + todo_mcp_tool_rules((env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1")
+      )
+    | .agent = (
+        (.agent // {})
+        | if type == "object" then
+            with_entries(
+              .key as $agent_name
+              | .value.tools = (
+                  (.value.tools // {}) | if type == "object" then . else {} end
+                  | del(."todo-local_*")
+                  | . + todo_mcp_tool_rules(
+                      (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" and $agent_name != "chat"
+                    )
+                )
+            )
+          else {}
+          end
+      )
 ' "$_config_input" >"$OPENCODE_CONFIG"; then
     cleanup_opencode_task_config
     printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
