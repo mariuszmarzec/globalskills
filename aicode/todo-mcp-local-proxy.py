@@ -197,6 +197,11 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                             target.shutdown(socket.SHUT_WR)
                         except OSError:
                             pass
+                        if source is reverse_channel:
+                            # Todo's Connection: close response completes this
+                            # one-request channel; do not wait for the local
+                            # HTTP client to half-close its request socket.
+                            return
                         continue
                     try:
                         target.sendall(data)
