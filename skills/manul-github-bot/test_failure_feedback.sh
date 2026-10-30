@@ -188,7 +188,7 @@ test_task_started_idempotency() {
 
   # If the list-comments API is unavailable, never post blindly: a prior
   # ambiguous success may already have created the marker.
-  GH_FAIL_API=1
+  export GH_FAIL_API=1
   rc=0
   post_task_started_comment "test/repo" 84 "issue:started-api-error" 5 "$body3" "" || rc=$?
   assert_eq 2 "$rc" "failed idempotency lookup is fail-closed"
