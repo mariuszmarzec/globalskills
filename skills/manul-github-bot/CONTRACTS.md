@@ -481,6 +481,24 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
+Todo providers do not select a configured default repository. For each
+active root, the adapter resolves the execution target from the task description:
+an explicit GitHub repository URL takes precedence; otherwise the longest
+whole-phrase alias in the curated project catalog
+(`skills/globalskills-repository/project-repositories.json`) must identify
+exactly one canonical `owner/repo`. The resolved `repository`, method,
+matched alias and mapped skill names are stored in normalized metadata as
+`repositoryResolution`. Full contents of the mapped skills are included in
+the task prompt; workers must not inspect global skill paths.
+
+The catalog is the maximum set of repositories Todo routing can choose.
+Operator-level `repositoryAllowlist` and a per-source override can only narrow
+that set. A missing match, multiple equally-specific project matches, an
+uncatalogued explicit URL, or an allowlist rejection is fail-closed: log the
+source task ID and skip it without creating a queue entry or falling back to a
+static repository. The route already stored with a queued task is reused across
+retries; changing the catalog does not silently retarget existing queue rows.
+
 The two Todo providers are separate adapters with different MCP tool names and
 credentials. Local uses the existing loopback bridge and `TODO_LOCAL_MCP_TOKEN`;
 remote uses Fiteo's HTTPS `/mcp` endpoint and a PAT from an environment variable.

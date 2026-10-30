@@ -51,6 +51,15 @@ Manul has two independent Todo source adapters; enable them individually in `~/.
 - `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
 
+Todo tasks are not assigned to the Todo app repository by default. Manul
+resolves their target from an explicit GitHub repository URL or a unique
+whole-phrase alias in
+`skills/globalskills-repository/project-repositories.json`, then enforces
+the operator's `repositoryAllowlist`. Relevant mapped skill contents are
+included in the task context. Unknown, ambiguous, or disallowed targets are
+not queued; there is no static repository fallback. Keep the project catalog
+and aliases current as repositories/projects are added.
+
 Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. MCP credentials are persisted only in the mode-600 `~/.manul/.env` for unattended runs; never put token values in the config or repository.
 
 ## Skills

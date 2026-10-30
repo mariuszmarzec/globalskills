@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "name": "mariuszmarzec/globalskills",
+      "aliases": [
+        "globalskills",
+        "global skills repository",
+        "manul bot"
+      ],
+      "description": "Global skills, OpenCode agents, and Manul automation.",
+      "skills": [
+        "globalskills-repository"
+      ]
+    },
+    {
+      "name": "mariuszmarzec/interview-subjects",
+      "aliases": [
+        "interview subjects",
+        "interview-subjects"
+      ],
+      "description": "Technical interview study materials.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/fiteo",
+      "aliases": [
+        "fiteo backend",
+        "backend fiteo",
+        "fiteo server"
+      ],
+      "description": "Ktor Kotlin Multiplatform backend API.",
+      "skills": [
+        "fiteo-backend-api",
+        "fiteo-access"
+      ]
+    },
+    {
+      "name": "mariuszmarzec/caracal-rag",
+      "aliases": [
+        "caracal rag",
+        "caracal-rag",
+        "caracal"
+      ],
+      "description": "RAG service for searching and answering questions over API documentation.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/todo",
+      "aliases": [
+        "todo desktop",
+        "todo app"
+      ],
+      "description": "Todo task-management application and local desktop MCP server.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/shoppingListGenerator",
+      "aliases": [
+        "shopping list generator",
+        "shoppinglistgenerator"
+      ],
+      "description": "Shopping-list generation project.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/cheatDay",
+      "aliases": [
+        "cheat day app",
+        "cheat day",
+        "cheatday"
+      ],
+      "description": "Diet and workout gamification application.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/fiteoApp",
+      "aliases": [
+        "fiteo app",
+        "fiteo android app",
+        "fiteo mobile app"
+      ],
+      "description": "Fiteo Android/mobile client application.",
+      "skills": []
+    },
+    {
+      "name": "mariuszmarzec/QuickMVI",
+      "aliases": [
+        "quickmvi",
+        "quick mvi"
+      ],
+      "description": "Kotlin Multiplatform MVI store library.",
+      "skills": [
+        "quickmvi-usage-testing"
+      ]
+    }
+  ]
+}

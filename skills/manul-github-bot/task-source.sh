@@ -46,15 +46,36 @@ task_source_configured_sources() {
   # Explicit taskSources are independent provider configurations. Only
   # GitHub-specific defaults are inherited from the top-level configuration.
   if jq -e '(.taskSources // []) | length > 0' "$config" >/dev/null 2>&1; then
-    local trigger allowed_users
+    local trigger allowed_users repository_allowlist repository_allowlist_enforced
     trigger="$(jq -r '.trigger // "/manul"' "$config")"
     allowed_users="$(jq -c '.allowedUsers // []' "$config")"
-    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" '
+    repository_allowlist="$(jq -c '.repositoryAllowlist // [] | if type == "array" then map(select(type == "string")) | unique else [] end' "$config")"
+    repository_allowlist_enforced="$(jq -r 'has("repositoryAllowlist")' "$config")"
+    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" --argjson repositoryAllowlist "$repository_allowlist" --argjson repositoryAllowlistEnforced "$repository_allowlist_enforced" '
       .taskSources[]
       | select((.enabled != false))
       | if .type == "github_issues"
         then .trigger = (.trigger // $trigger)
            | .allowedUsers = (.allowedUsers // $allowedUsers)
+        elif (.type == "todo_local_mcp" or .type == "todo_remote_mcp")
+        then . as $source
+           | .repositoryAllowlist = (
+               if ($source | has("repositoryAllowlist")) then
+                 if ($source.repositoryAllowlist | type) != "array" then []
+                 elif $repositoryAllowlistEnforced then
+                   $source.repositoryAllowlist
+                   | map(select(type == "string"))
+                   | map(select(. as $candidate | any($repositoryAllowlist[]; ascii_downcase == ($candidate | ascii_downcase))))
+                   | unique
+                 else
+                   $source.repositoryAllowlist | map(select(type == "string")) | unique
+                 end
+               else $repositoryAllowlist
+               end
+             )
+           | .repositoryAllowlistEnforced = (
+               $repositoryAllowlistEnforced or ($source | has("repositoryAllowlist"))
+             )
         else .
         end
     ' "$config"

@@ -20,24 +20,20 @@ todo_source_local_config() {
 }
 
 task_source_todo_local_poll() {
-  local source_json repository tasks_json task_json normalized
+  local source_json tasks_json task_json normalized resolution task_id
   source_json="$(todo_source_local_config "$1")"
-  repository="$(todo_mcp_source_repository "$source_json")"
-  [ -n "$repository" ] || {
-    echo "task-source: todo_local_mcp requires repository (owner/name)" >&2
-    return 2
-  }
-  [[ "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
-    echo "task-source: todo_local_mcp repository must use owner/name format" >&2
-    return 2
-  }
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)" || return $?
   while IFS= read -r task_json; do
     [ -n "$task_json" ] || continue
     todo_task_is_active "$task_json" || continue
     todo_task_has_local_trigger "$task_json" || continue
-    normalized="$(todo_task_to_source_json "$task_json" todo_local_mcp "$repository")" || continue
+    task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
+    resolution="$(todo_task_resolve_repository "$source_json" "$task_json")" || {
+      echo "task-source: local Todo task $task_id was not queued because its repository could not be resolved" >&2
+      continue
+    }
+    normalized="$(todo_task_to_source_json "$task_json" todo_local_mcp "$resolution")" || continue
     printf '%s\n' "$normalized"
   done < <(
     jq -c '.[] | select(.parentTaskId == null) | select(.isToDo == true) | select(.scheduler == null)' <<<"$tasks_json"

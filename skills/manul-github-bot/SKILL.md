@@ -216,6 +216,18 @@ Current provider types:
 - `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
 - `todo_remote_mcp` — separate Fiteo backend MCP source. It selects active root tasks explicitly shared with the configured `manulUserId` using `EDITOR_AND_VIEWER` permission.
 
+Todo sources do not have a fixed project repository. Manul resolves each
+Todo root independently using the curated catalog at
+`skills/globalskills-repository/project-repositories.json`: an explicit
+GitHub repository URL in the task takes precedence; otherwise the longest
+whole-phrase project alias must identify exactly one catalog entry. Relevant
+project skills listed by that entry are included as task context rather than
+being opened by the worker from a global path. The resolved canonical
+`owner/repo` and routing provenance are persisted with the queued task.
+Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
+sources may target. Unknown, ambiguous, and disallowed targets are logged and
+not queued; Manul must never fall back to a hardcoded Todo repository.
+
 The local adapter uses the existing WSL loopback bridge at `http://127.0.0.1:8766/mcp` and `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and a PAT supplied through a configured environment variable (default `FITEO_PAT`). Neither token belongs in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.

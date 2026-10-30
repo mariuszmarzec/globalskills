@@ -16,6 +16,142 @@ todo_mcp_source_repository() {
   jq -r '.repository // empty' <<<"$1"
 }
 
+todo_mcp_source_repository_allowlist() {
+  jq -c '
+    .repositoryAllowlist
+    | if type == "array" then map(select(type == "string")) | unique else [] end
+  ' <<<"$1"
+}
+
+todo_task_repository_catalog_path() {
+  printf '%s\n' "${TODO_TASK_REPOSITORY_CATALOG:-$TODO_TASK_SOURCE_DIR/../globalskills-repository/project-repositories.json}"
+}
+
+# Resolve a task target only from the curated project catalog. Explicit GitHub
+# URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
+# source-level repositoryAllowlist can narrow the catalog, but never widen it.
+todo_task_resolve_repository() {
+  local source_json="$1" task_json="$2"
+  local catalog_file description explicit_matches candidate_count repository method matched_alias
+  local catalog_json matches_json match_json entry_json allowlist_json canonical_repository skills_json allowlist_enforced
+
+  catalog_file="$(todo_task_repository_catalog_path)"
+  [ -r "$catalog_file" ] || {
+    echo "repository catalog is unavailable: $catalog_file" >&2
+    return 2
+  }
+  catalog_json="$(cat "$catalog_file")" || return 2
+  jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1 || {
+    echo "repository catalog has no repositories array" >&2
+    return 2
+  }
+
+  description="$(jq -r '.description // ""' <<<"$task_json")"
+  explicit_matches="$(
+    grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
+      | sed -E 's#^https?://github\.com/##; s#\.git$##' \
+      | sort -u || true
+  )"
+  candidate_count="$(printf '%s\n' "$explicit_matches" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+
+  if [ "$candidate_count" -gt 1 ]; then
+    echo "Todo task mentions multiple GitHub repositories; routing is ambiguous" >&2
+    return 1
+  fi
+
+  if [ "$candidate_count" -eq 1 ]; then
+    repository="$explicit_matches"
+    method="explicit_github_url"
+    matched_alias=""
+  else
+    matches_json="$(jq -c --arg description "$description" '
+      def norm:
+        ascii_downcase
+        | gsub("[^a-z0-9]+"; " ")
+        | gsub("^ +| +$"; "");
+      ($description | norm) as $task_text
+      | [
+          .repositories[] as $repo
+          | ($repo.aliases // [])[] as $alias
+          | ($alias | norm) as $normalized_alias
+          | select($normalized_alias != "")
+          | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
+          | {
+              repository: $repo.name,
+              alias: $alias,
+              length: ($normalized_alias | length)
+            }
+        ]
+      | if length == 0 then []
+        else (map(.length) | max) as $max_length
+        | map(select(.length == $max_length))
+        | unique_by(.repository)
+        end
+    ' <<<"$catalog_json")" || return 2
+    candidate_count="$(jq -r 'length' <<<"$matches_json")"
+    if [ "$candidate_count" -eq 0 ]; then
+      echo "no project alias matched the Todo task description" >&2
+      return 1
+    fi
+    if [ "$candidate_count" -gt 1 ]; then
+      local candidates
+      candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$matches_json")"
+      echo "Todo task matches multiple projects ($candidates); routing is ambiguous" >&2
+      return 1
+    fi
+    match_json="$(jq -c '.[0]' <<<"$matches_json")"
+    repository="$(jq -r '.repository' <<<"$match_json")"
+    matched_alias="$(jq -r '.alias' <<<"$match_json")"
+    method="catalog_alias"
+  fi
+
+  [[ "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
+    echo "resolved repository has an invalid owner/name value" >&2
+    return 2
+  }
+
+  entry_json="$(jq -c --arg repo "$repository" '
+    [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
+    | first // empty
+  ' <<<"$catalog_json")" || return 2
+  [ -n "$entry_json" ] || {
+    echo "repository $repository is not in the curated project catalog" >&2
+    return 1
+  }
+  canonical_repository="$(jq -r '.name' <<<"$entry_json")"
+
+  allowlist_json="$(todo_mcp_source_repository_allowlist "$source_json")" || return 2
+  allowlist_enforced="$(jq -r 'if has("repositoryAllowlistEnforced") then .repositoryAllowlistEnforced else (.repositoryAllowlist | type == "array") end' <<<"$source_json")"
+  if [ "$allowlist_enforced" = "true" ] &&
+      ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$allowlist_json" >/dev/null 2>&1; then
+    echo "repository $canonical_repository is excluded by this Todo source allowlist" >&2
+    return 1
+  fi
+
+  skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")"
+  jq -cn \
+    --arg repository "$canonical_repository" \
+    --arg method "$method" \
+    --arg matchedAlias "$matched_alias" \
+    --argjson skills "$skills_json" \
+    '{repository:$repository,method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+}
+
+todo_task_resolved_skill_context() {
+  local resolution_json="$1" skill skill_file
+  while IFS= read -r skill; do
+    [[ "$skill" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
+    skill_file="$TODO_TASK_SOURCE_DIR/../$skill/SKILL.md"
+    [ -r "$skill_file" ] || {
+      echo "project skill context is unavailable: $skill" >&2
+      continue
+    }
+    printf '\n## Project skill context: %s\n\n' "$skill"
+    cat "$skill_file"
+    printf '\n'
+  done < <(jq -r '.skills[]? // empty' <<<"$resolution_json")
+}
+
 todo_mcp_source_call() {
   local source_json="$1" tool="$2" arguments="$3"
   local url token_env
@@ -151,8 +287,11 @@ todo_task_prompt() {
 }
 
 todo_task_to_source_json() {
-  local task_json="$1" source_type="$2" repository="$3"
-  local task_id fingerprint source_id source_url title body prompt ids created updated
+  local task_json="$1" source_type="$2" resolution_json="${3:-}"
+  local repository task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method
+  [ -n "$resolution_json" ] || resolution_json='{}'
+  repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
+  [ -n "$repository" ] || return 1
   task_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
   fingerprint="$(todo_task_fingerprint "$task_json")"
@@ -165,6 +304,21 @@ todo_task_to_source_json() {
   title="$(jq -r '.description // "Todo task"' <<<"$task_json")"
   body="$title"
   prompt="$(todo_task_prompt "$task_json")"
+  resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
+  prompt+=$'\n\n## Repository routing\n\nTarget repository: '
+  prompt+="$repository"
+  prompt+=$'\nResolution method: '
+  prompt+="$resolution_method"
+  matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+  if [ -n "$matched_alias" ]; then
+    prompt+=$'\nMatched project alias: '
+    prompt+="$matched_alias"
+  fi
+  project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+  if [ -n "$project_skill_context" ]; then
+    prompt+=$'\n\n## Relevant project skills (included below)\n\n'
+    prompt+="$project_skill_context"
+  fi
   ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
   updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
@@ -178,6 +332,7 @@ todo_task_to_source_json() {
     --arg created "$created" \
     --arg updated "$updated" \
     --arg repository "$repository" \
+    --argjson resolution "$resolution_json" \
     --argjson taskId "$task_id" \
     --argjson stepIds "$ids" \
     '{
@@ -193,6 +348,7 @@ todo_task_to_source_json() {
       state:"OPEN",
       metadata:{
         repository:$repository,
+        repositoryResolution:$resolution,
         issueNumber:0,
         todoTaskId:$taskId,
         stepIds:$stepIds
