@@ -46,15 +46,18 @@ task_source_configured_sources() {
   # Explicit taskSources are independent provider configurations. Only
   # GitHub-specific defaults are inherited from the top-level configuration.
   if jq -e '(.taskSources // []) | length > 0' "$config" >/dev/null 2>&1; then
-    local trigger allowed_users
+    local trigger allowed_users repository_allowlist
     trigger="$(jq -r '.trigger // "/manul"' "$config")"
     allowed_users="$(jq -c '.allowedUsers // []' "$config")"
-    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" '
+    repository_allowlist="$(jq -c '.repositoryAllowlist // [] | if type == "array" then map(select(type == "string")) | unique else [] end' "$config")"
+    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" --argjson repositoryAllowlist "$repository_allowlist" '
       .taskSources[]
       | select((.enabled != false))
       | if .type == "github_issues"
         then .trigger = (.trigger // $trigger)
            | .allowedUsers = (.allowedUsers // $allowedUsers)
+        elif (.type == "todo_local_mcp" or .type == "todo_remote_mcp")
+        then .repositoryAllowlist = (.repositoryAllowlist // $repositoryAllowlist)
         else .
         end
     ' "$config"
