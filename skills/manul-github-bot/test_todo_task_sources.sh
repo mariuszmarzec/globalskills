@@ -457,7 +457,7 @@ cat > "$TEST_DIR/local-report.json" <<'JSON'
   {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
 local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
 assert_eq "local report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$local_report_task")"
@@ -500,7 +500,7 @@ assert_eq "local report retry returns the exact previously persisted answer" "Lo
 grep -Fc "create_task" "$TODO_MCP_CALL_LOG" > "$TEST_DIR/local-create-count"
 IFS= read -r local_create_count < "$TEST_DIR/local-create-count"
 assert_eq "local report creates only one output child across retry" "1" "$local_create_count"
-jq --arg desc "/manul report User changed source after delivery" ".[0].description = \\$desc" "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-edited.json"
+jq --arg desc "/manul report User changed source after delivery" '.[0].description = $desc' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-edited.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report-edited.json"
 local_report_reval_rc=0
 todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_report_reval_rc=$?
