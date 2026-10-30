@@ -5136,12 +5136,6 @@ PROMPT_APPEND
       fi
     fi
 
-        COMMENT_POST_SUCCESS="true"
-      else
-        log "ERROR: failed to post non-terminal result comment for $COMMENT_ID"
-      fi
-    fi
-
     # The evaluator is the single authority for running→completed/queued/failed.
     # Never perform a second state transition here after evaluation.
     if [ "$COMPLETION_SUCCESS" = "true" ]; then
