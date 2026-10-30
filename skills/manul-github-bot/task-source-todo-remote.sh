@@ -16,18 +16,9 @@ todo_source_remote_config() {
 }
 
 task_source_todo_remote_poll() {
-  local source_json repository manul_user_id tasks_json shared_task_json normalized
+  local source_json manul_user_id tasks_json shared_task_json normalized resolution task_id
   source_json="$(todo_source_remote_config "$1")"
-  repository="$(todo_mcp_source_repository "$source_json")"
   manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
-  [ -n "$repository" ] || {
-    echo "task-source: todo_remote_mcp requires repository (owner/name)" >&2
-    return 2
-  }
-  [[ "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
-    echo "task-source: todo_remote_mcp repository must use owner/name format" >&2
-    return 2
-  }
   [[ "$manul_user_id" =~ ^[1-9][0-9]*$ ]] || {
     echo "task-source: todo_remote_mcp requires a positive numeric manulUserId" >&2
     return 2
@@ -41,7 +32,12 @@ task_source_todo_remote_poll() {
     [ -n "$shared_task_json" ] || continue
     todo_task_is_active "$shared_task_json" || continue
     todo_task_has_remote_share "$shared_task_json" "$manul_user_id" || continue
-    normalized="$(todo_task_to_source_json "$shared_task_json" todo_remote_mcp "$repository")" || continue
+    task_id="$(jq -r '.id // "unknown"' <<<"$shared_task_json")"
+    resolution="$(todo_task_resolve_repository "$source_json" "$shared_task_json")" || {
+      echo "task-source: remote Todo task $task_id was not queued because its repository could not be resolved" >&2
+      continue
+    }
+    normalized="$(todo_task_to_source_json "$shared_task_json" todo_remote_mcp "$resolution")" || continue
     printf '%s\n' "$normalized"
   done < <(
     jq -c --arg userId "$manul_user_id" '
