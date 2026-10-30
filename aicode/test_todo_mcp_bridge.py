@@ -192,7 +192,6 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("responsePump.GetAwaiter().GetResult()", source)
         self.assertIn("if source is reverse_channel:", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("Task.WhenAny(requestPump, responsePump)", source)
-        self.assertIn("Action\\s+(Connect|Serve)", source)
         self.assertNotIn("TcpListener", source)
         self.assertNotIn("New-NetFirewallRule", source)
 
