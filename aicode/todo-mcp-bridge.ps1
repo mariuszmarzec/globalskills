@@ -41,13 +41,53 @@ function Get-ManagedConnectorProcesses([string]$TargetRelayAddress, [int]$Target
     $addressPattern = '["]?-RelayAddress["]?\s+["]?' + [regex]::Escape($TargetRelayAddress) + '["]?'
     $portPattern = '["]?-RelayPort["]?\s+["]?' + [regex]::Escape([string]$TargetRelayPort) + '["]?'
     $actionPattern = '["]?-Action["]?\s+["]?Connect["]?'
-    $results = @()
+    $scriptPattern = '(?i)todo-mcp-bridge\.ps1'
     $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
     if ($processes.Count -eq 0) {
         throw "Unable to enumerate Windows processes; refusing to start a duplicate Todo MCP connector."
     }
+
+    $results = @()
     foreach ($processInfo in $processes) {
-        if ($processInfo.Name -notmatch '^(powershell|pwsh)\.exe
+        if ($processInfo.Name -notmatch '^(powershell|pwsh)\.exe' -or
+            -not $processInfo.CommandLine) {
+            continue
+        }
+        $commandLine = $processInfo.CommandLine
+        if ($commandLine -match $scriptPattern -and
+            $commandLine -match $actionPattern -and
+            $commandLine -match $addressPattern -and
+            $commandLine -match $portPattern) {
+            $results += [pscustomobject]@{
+                ProcessId = [int]$processInfo.ProcessId
+                CommandLine = $commandLine
+            }
+        }
+    }
+    return $results
+}
+
+function Stop-ManagedConnectorProcess($Connector) {
+    $processId = [int]$Connector.ProcessId
+    $current = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+    if (-not $current -or $current.CommandLine -ne $Connector.CommandLine) {
+        return
+    }
+    if ($current.Name -notmatch '^(powershell|pwsh)\.exe' -or
+        $current.CommandLine -notmatch '(?i)todo-mcp-bridge\.ps1' -or
+        $current.CommandLine -notmatch '["]?-Action["]?\s+["]?Connect["]?') {
+        throw "Refusing to stop PID $processId because its command line no longer identifies a Todo MCP connector."
+    }
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $stillRunning = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+        if (-not $stillRunning -or $stillRunning.CommandLine -ne $Connector.CommandLine) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Todo MCP connector PID $processId did not exit after being stopped."
+}
 
 $stateRoot = Get-BridgeStateDirectory
 if (-not (Test-Path -LiteralPath $stateRoot)) {
