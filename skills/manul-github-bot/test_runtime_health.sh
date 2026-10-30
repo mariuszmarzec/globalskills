@@ -246,7 +246,7 @@ fi
 # task-source adapters (added in 9415b99), every poll cycle dies with
 # `task_source_configured_sources: command not found` and the generic
 # provider path silently degrades to legacy GitHub Issues only.
-for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh; do
+for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh todo-mcp-client.py; do
   if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
        | grep -q "\"$_ts\""; then
     ok "Installer declares $_ts"
