@@ -32,6 +32,30 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 - Store each skill in its own folder with a clear README or skill definition file.
 - Use the shared repository as the canonical home for reusable skills.
 
+## Project repository catalog
+
+The canonical project/repository map used by Manul's Todo task routing is
+`skills/globalskills-repository/project-repositories.json`.
+
+Each entry contains:
+- `name`: canonical GitHub `owner/repo`;
+- `aliases`: unambiguous project names/phrases users may put in task descriptions;
+- `description`: short project responsibility summary;
+- `skills`: relevant skill directory names whose full `SKILL.md` content can
+  be injected into an explicitly routed task.
+
+When adding a repository, verify that it exists, add its canonical name and
+useful whole-phrase aliases, and link only skills that already exist. Keep
+aliases specific: aliases shared by multiple projects are rejected as
+ambiguous at runtime unless a longer unique alias is present. Do not add
+arbitrary repositories just because a task mentions them; Manul also validates
+resolved targets against its configured `repositoryAllowlist`.
+
+The project catalog is not a replacement for Manul's GitHub polling
+configuration. `repositories` continues to control GitHub issue polling;
+`repositoryAllowlist` controls which catalog repositories Todo tasks may
+target.
+
 # README Maintenance
 - After creating, removing, or significantly updating a skill, update `README.md` in the repository root (`~/.globalskills/README.md`).
 - The README must list every skill with a one-line description matching the skill's `description` field in its frontmatter.
