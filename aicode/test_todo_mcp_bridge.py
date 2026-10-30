@@ -83,18 +83,18 @@ class TodoMcpBridgeTests(unittest.TestCase):
                     if not chunk:
                         return
                     request.extend(chunk)
-                    if b"\\r\\n\\r\\n" not in request:
+                    if b"\r\n\r\n" not in request:
                         continue
-                    header, body = bytes(request).split(b"\\r\\n\\r\\n", 1)
+                    header, body = bytes(request).split(b"\r\n\r\n", 1)
                     content_length = 0
-                    for line in header.split(b"\\r\\n")[1:]:
+                    for line in header.split(b"\r\n")[1:]:
                         if line.lower().startswith(b"content-length:"):
                             content_length = int(line.split(b":", 1)[1].strip())
                     if len(body) >= content_length:
                         remote_channel.sendall(
-                            b"HTTP/1.1 401 Unauthorized\\r\\n"
-                            b"Content-Length: 0\\r\\n"
-                            b"Connection: close\\r\\n\\r\\n"
+                            b"HTTP/1.1 401 Unauthorized\r\n"
+                            b"Content-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
                         )
                         return
 
@@ -104,9 +104,9 @@ class TodoMcpBridgeTests(unittest.TestCase):
 
         proxy = self.make_proxy(pool)
         request = (
-            b"POST /mcp HTTP/1.1\\r\\n"
-            b"Host: 127.0.0.1:8766\\r\\n"
-            b"Content-Length: 4\\r\\n\\r\\n"
+            b"POST /mcp HTTP/1.1\r\n"
+            b"Host: 127.0.0.1:8766\r\n"
+            b"Content-Length: 4\r\n\r\n"
             b"test"
         )
         with socket.create_connection(proxy.server_address, timeout=2) as client:
