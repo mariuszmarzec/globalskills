@@ -86,6 +86,7 @@ eval "$(sed -n '/^mark_terminal_lifecycle_comment_posted() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^schedule_terminal_lifecycle_retry() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^publish_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^retry_pending_terminal_lifecycle_comments() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^close_drained_conversations() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^deliver_terminal_lifecycle_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^update_task_completion() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_finalization() {/,/^}/p' "$DAEMON")"
@@ -293,6 +294,41 @@ test_terminal_lifecycle_outbox() {
     assert_rc "retry result remains marker-free" "This attempt will retry." "$body"
 }
 test_terminal_lifecycle_outbox
+
+test_conversation_close_waits_for_terminal_delivery() {
+    local status
+    echo "=== conversation close waits for terminal outbox reconciliation ==="
+    setup_db
+    sqlite3 "$TEMP_DB" <<'SQL'
+CREATE TABLE conversations (
+  conversationId TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  activePrNumber INTEGER,
+  activePrUrl TEXT,
+  updatedAt TEXT
+);
+INSERT INTO conversations(conversationId,status,activePrNumber,activePrUrl,updatedAt)
+VALUES ('conv-pending','ACTIVE',77,'https://github.com/owner/repo/pull/77','2026-10-30T00:00:00Z');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,conversationId)
+VALUES ('issue:pending-close','owner/repo',601,'https://github.com/owner/repo/issues/601','IMPLEMENT','completed',1,'conv-pending');
+SQL
+    ensure_terminal_lifecycle_outbox
+    sqlite3 "$TEMP_DB" "
+      INSERT INTO manul_terminal_lifecycle_outbox(taskId,attempt,eventType,repository,issueNumber,body,nextAttemptAt)
+      VALUES ('issue:pending-close',1,'TASK_DONE','owner/repo',601,'<!-- manul:event pending -->',datetime('now','+30 seconds'));
+    "
+    close_drained_conversations
+    status="$(sqlite3 "$TEMP_DB" "SELECT status FROM conversations WHERE conversationId='conv-pending';")"
+    assert_rc "pending terminal outbox keeps conversation open" ACTIVE "$status"
+
+    sqlite3 "$TEMP_DB" "UPDATE manul_terminal_lifecycle_outbox SET postedAt=datetime('now'),postedCommentId='9001' WHERE taskId='issue:pending-close';"
+    close_drained_conversations
+    status="$(sqlite3 "$TEMP_DB" "SELECT status FROM conversations WHERE conversationId='conv-pending';")"
+    assert_rc "confirmed terminal marker allows conversation closure" COMPLETED "$status"
+    assert_rc "conversation closure clears active PR number" "" "$(sqlite3 "$TEMP_DB" "SELECT coalesce(activePrNumber,'') FROM conversations WHERE conversationId='conv-pending';")"
+    assert_rc "conversation closure clears active PR URL" "" "$(sqlite3 "$TEMP_DB" "SELECT coalesce(activePrUrl,'') FROM conversations WHERE conversationId='conv-pending';")"
+}
+test_conversation_close_waits_for_terminal_delivery
 
 test_external_source_terminal_lifecycle_suppression() {
     local body rc rows
