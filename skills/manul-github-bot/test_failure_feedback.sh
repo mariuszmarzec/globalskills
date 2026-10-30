@@ -198,6 +198,24 @@ test_task_started_idempotency() {
 
 test_task_started_idempotency
 
+test_task_started_concurrent_idempotency() {
+  local body pid1 pid2
+  body='<!-- manul:event {"type":"TASK_STARTED","timestamp":"2026-10-30T16:00:00Z","data":{"taskId":"issue:started-concurrent","conversationId":"conv-started-concurrent","status":"started","attempt":8}} -->
+🔄 Manul is preparing this task...
+
+— manul 🐈'
+  : > "$GH_COMMENTS_JSONL"
+  : > "$GH_CALL_LOG"
+  post_task_started_comment "test/repo" 86 "issue:started-concurrent" 8 "$body" &
+  pid1=$!
+  post_task_started_comment "test/repo" 86 "issue:started-concurrent" 8 "$body" &
+  pid2=$!
+  wait "$pid1"
+  wait "$pid2"
+  assert_eq 1 "$(count_task_started issue:started-concurrent 8)" "concurrent TASK_STARTED publishers create only one comment"
+}
+test_task_started_concurrent_idempotency
+
 test_task_started_review_thread_idempotency() {
   local target_body other_body only_other_body target_count other_count
   local task_id="issue:started-review-thread"
