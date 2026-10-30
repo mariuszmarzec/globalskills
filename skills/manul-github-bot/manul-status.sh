@@ -103,8 +103,11 @@ if [ "$LOG_MODE" = true ]; then
 fi
 
 # Ensure database exists
-if [ ! -f "$DB" ]; then
-  echo "Error: Manul database not found at $DB" >&2
+# Status is a read-only operation. Refuse missing/empty files before
+# invoking sqlite3, and use SQLite's read-only mode below so diagnostics can
+# never create or mutate the queue database.
+if [ ! -s "$DB" ]; then
+  echo "Error: Manul database not found or empty at $DB" >&2
   exit 1
 fi
 
@@ -115,7 +118,7 @@ sql_escape() {
 
 db_has_column() {
   local column="$1"
-  sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null |
+  sqlite3 -readonly "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null |
     awk -F'|' -v column="$column" '$2 == column { found=1 } END { exit !found }'
 }
 
@@ -204,7 +207,7 @@ if [ "$LIST_MODE" = true ]; then
     SOURCE_ID_SQL="COALESCE(taskSourceId,'')"
   fi
 
-  RESULTS="$(sqlite3 "$DB" "
+  RESULTS="$(sqlite3 -readonly "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
            attempts, $PRE_EXECUTION_FAILURES_SQL AS preExecutionFailures,
            $AGENT_STARTED_AT_SQL AS agentStartedAt,
@@ -368,7 +371,7 @@ else
 
   ESCAPED_TASK_ID="$(sql_escape "$TASK_ID")"
   
-  RESULT="$(sqlite3 "$DB" "
+  RESULT="$(sqlite3 -readonly "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
            parentTaskId, agent, attempts,
            $PRE_EXECUTION_FAILURES_SQL AS preExecutionFailures,
