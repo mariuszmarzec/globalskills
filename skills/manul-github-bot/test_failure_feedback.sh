@@ -286,11 +286,23 @@ insert_task() {
 
 # A diagnostic early failure must publish task id, stage and useful context while
 # redacting credential-like strings and well-known provider-token formats.
-insert_task "early-failure" 71 failed 3
+echo "CHECKPOINT: TASK_STARTED publication tests complete"
+if ! insert_task "early-failure" 71 failed 3; then
+  echo "FAIL: unable to insert early-failure fixture" >&2
+  sqlite3 "$DB" ".schema processed_comments" >&2 || true
+  exit 1
+fi
+echo "CHECKPOINT: early-failure fixture inserted"
 sensitive_error='workspace lookup failed: password=hunter2 access_token=verysecretvalue Authorization: Bearer BearerSecretValue12345 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'
-MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
+if ! MANUL_DIR="$MANUL_DIR" DB="$DB" bash "$SCRIPT_DIR/manul-result-feedback.sh" post-failed \
   --repo test/repo --issue 71 --comment-id early-failure --task-id early-failure \
-  --stage workspace_path_validation --error "$sensitive_error" >/dev/null
+  --stage workspace_path_validation --error "$sensitive_error" >/dev/null; then
+  echo "FAIL: terminal failure feedback CLI failed" >&2
+  cat "$GH_CALL_LOG" >&2
+  cat "$GH_COMMENTS_JSONL" >&2
+  exit 1
+fi
+echo "CHECKPOINT: early-failure feedback published"
 assert_eq 1 "$(count_for_task early-failure)" "early workspace failure comment published once"
 body="$(jq -s -r '[.[] | select((.body // "") | contains("\"taskId\":\"early-failure\""))][0].body' "$GH_COMMENTS_JSONL")"
 grep -q '\*\*Task:\*\* early-failure' <<< "$body" || { echo "FAIL: comment missing task id" >&2; exit 1; }
