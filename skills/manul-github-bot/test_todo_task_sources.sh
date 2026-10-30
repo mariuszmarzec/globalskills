@@ -487,13 +487,20 @@ IFS= read -r local_report_child_parent < "$TEST_DIR/local-report-child-parent"
 assert_eq "local result retains parent relationship" "501" "$local_report_child_parent"
 local_report_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "local result output leaves root active until tree completion" "true" "$local_report_root_status"
-assert_eq "verified local report child does not invalidate structural source identity" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id"; echo $?)"
-local_retry_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "A regenerated retry answer must not create a duplicate child.")"
-local_retry_result_id="$(jq -r '.resultTaskId' <<<"$local_retry_receipt")"
+local_verified_source_rc=0
+todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_verified_source_rc=$?
+assert_eq "verified local report child does not invalidate structural source identity" "0" "$local_verified_source_rc"
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "A regenerated retry answer must not create a duplicate child." > "$TEST_DIR/local-retry-receipt.json"
+jq -r .resultTaskId "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-result-id"
+IFS= read -r local_retry_result_id < "$TEST_DIR/local-retry-result-id"
 assert_eq "local report retry reuses the existing child" "$local_report_result_id" "$local_retry_result_id"
-assert_eq "local report retry returns the exact previously persisted answer" "Local report answer with exact content." "$(jq -r '.answer' <<<"$local_retry_receipt")"
-assert_eq "local report creates only one output child across retry" "1" "$(grep -c '^create_task' "$TODO_MCP_CALL_LOG")"
-jq '.[0].description = "/manul report User changed source after delivery"' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-edited.json"
+jq -r .answer "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-answer"
+IFS= read -r local_retry_answer < "$TEST_DIR/local-retry-answer"
+assert_eq "local report retry returns the exact previously persisted answer" "Local report answer with exact content." "$local_retry_answer"
+grep -Fc "create_task" "$TODO_MCP_CALL_LOG" > "$TEST_DIR/local-create-count"
+IFS= read -r local_create_count < "$TEST_DIR/local-create-count"
+assert_eq "local report creates only one output child across retry" "1" "$local_create_count"
+jq --arg desc "/manul report User changed source after delivery" ".[0].description = \\$desc" "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-edited.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report-edited.json"
 local_report_reval_rc=0
 todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" || local_report_reval_rc=$?
