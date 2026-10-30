@@ -476,6 +476,20 @@ verify_result_comment "$REPO" 42 "review:result-2b" "review:result-2b" 1 >/dev/n
 rc=$?
 assert_rc "Found: inline PR review comment with marker" 0 "$rc"
 
+# ── Test 2c: A matching marker in a different review thread must be rejected ───
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 202, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 999,
+   "body": "<!-- manul-task:review:result-2c:attempt:1 -->\nWrong review thread.\n\n— manul 🐈"}
+]
+EOF
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2c" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2c" "review:result-2c" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Rejected: result marker exists only in a different review thread" 1 "$rc"
+
 # ── Test 3: No comments with marker ────────────────────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
 [{"id": 102, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Some comment without marker"}]
