@@ -69,8 +69,10 @@ todo_task_find_root() {
 
 todo_task_fingerprint() {
   # Progress flags and modified timestamps change when Manul completes steps.
-  # Exclude them so a partial completion can be retried idempotently; retain
-  # descriptions, ids, permissions, priority, scheduler and exact tree order.
+  # Fiteo also reorders siblings by status/priority/modifiedTime. Exclude the
+  # mutable fields and canonicalize sibling arrays by stable priority/id so
+  # partial completion can be retried. The prompt itself retains the exact
+  # provider-returned order captured during polling.
   jq -cS '
     def stable:
       {
@@ -80,10 +82,6 @@ todo_task_fingerprint() {
         priority,
         scheduler,
         shares:((.shares // []) | sort_by(.userId, .permission)),
-        # Fiteo sorts siblings by isToDo/priority/modifiedTime. Progress changes
-        # reorder that response even when the user's plan has not changed.
-        # Canonicalize only the fingerprint by stable priority/id; the agent
-        # prompt still uses the exact provider-returned order from polling.
         subTasks:([.subTasks[]? | stable] | sort_by([-(.priority // 0), .id]))
       };
     stable
