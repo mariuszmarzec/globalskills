@@ -252,7 +252,13 @@ export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 task_source_todo_local_complete "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")"
 local_call="$(cat "$TODO_MCP_CALL_LOG")"
 assert_contains "local completion uses local bulk mark tool" "$local_call" 'mark_tasks_done'
-assert_contains "local completion includes root and all descendants" "$local_call" '"taskIds":[12,11,10,1]'
+assert_contains "local completion includes root and all descendants with root last" "$local_call" '"taskIds":[12,11,10,1]'
+
+jq '.[0].isToDo = false | .[0].subTasks[0].isToDo = false | .[0].subTasks[0].subTasks[0].isToDo = false | .[0].subTasks[1].isToDo = false' "$TEST_DIR/local.json" > "$TEST_DIR/local-done.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-done.json"
+: > "$TODO_MCP_CALL_LOG"
+task_source_todo_local_complete "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$local_task")"
+assert_eq "local completion retry confirms an already-done tree without another MCP mutation" "0" "$(wc -l < "$TODO_MCP_CALL_LOG" | tr -d ' ')"
 
 echo "=== Remote Fiteo source ==="
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
