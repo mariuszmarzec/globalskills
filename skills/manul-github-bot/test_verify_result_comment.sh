@@ -168,7 +168,9 @@ setup_db() {
             workerPid INTEGER,
             claimToken TEXT,
             agentStartedAt TEXT,
-            nextAttemptAt TEXT
+            nextAttemptAt TEXT,
+            action TEXT,
+            conversationId TEXT
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     " 2>/dev/null
