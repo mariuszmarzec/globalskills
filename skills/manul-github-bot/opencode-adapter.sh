@@ -300,24 +300,55 @@ else
     _config_input="/dev/null"
 fi
 if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
-def todo_mcp_tool_rules($read_enabled):
+def as_permission_object:
+  if type == "object" then .
+  elif type == "string" then {"*": .}
+  else {}
+  end;
+
+def strip_todo_legacy_tools:
+  if type == "object" then
+    del(
+      ."todo-local_*",
+      ."todo-local_ping",
+      ."todo-local_list_tasks",
+      ."todo-local_list_scheduled_tasks",
+      ."todo-local_get_task",
+      ."todo-local_list_shareable_users",
+      ."todo-local_create_task",
+      ."todo-local_create_tasks",
+      ."todo-local_create_task_tree",
+      ."todo-local_update_task",
+      ."todo-local_mark_tasks_done",
+      ."todo-local_mark_tasks_to_do",
+      ."todo-local_reorder_tasks",
+      ."todo-local_schedule_tasks",
+      ."todo-local_copy_task",
+      ."todo-local_remove_task",
+      ."todo-local_leave_shared_task"
+    )
+  else .
+  end;
+
+def todo_mcp_permission_rules($read_enabled):
   {
-    "todo-local_ping": $read_enabled,
-    "todo-local_list_tasks": $read_enabled,
-    "todo-local_list_scheduled_tasks": $read_enabled,
-    "todo-local_get_task": $read_enabled,
-    "todo-local_list_shareable_users": $read_enabled,
-    "todo-local_create_task": false,
-    "todo-local_create_tasks": false,
-    "todo-local_create_task_tree": false,
-    "todo-local_update_task": false,
-    "todo-local_mark_tasks_done": false,
-    "todo-local_mark_tasks_to_do": false,
-    "todo-local_reorder_tasks": false,
-    "todo-local_schedule_tasks": false,
-    "todo-local_copy_task": false,
-    "todo-local_remove_task": false,
-    "todo-local_leave_shared_task": false
+    "todo-local_*": "deny",
+    "todo-local_ping": (if $read_enabled then "allow" else "deny" end),
+    "todo-local_list_tasks": (if $read_enabled then "allow" else "deny" end),
+    "todo-local_list_scheduled_tasks": (if $read_enabled then "allow" else "deny" end),
+    "todo-local_get_task": (if $read_enabled then "allow" else "deny" end),
+    "todo-local_list_shareable_users": (if $read_enabled then "allow" else "deny" end),
+    "todo-local_create_task": "deny",
+    "todo-local_create_tasks": "deny",
+    "todo-local_create_task_tree": "deny",
+    "todo-local_update_task": "deny",
+    "todo-local_mark_tasks_done": "deny",
+    "todo-local_mark_tasks_to_do": "deny",
+    "todo-local_reorder_tasks": "deny",
+    "todo-local_schedule_tasks": "deny",
+    "todo-local_copy_task": "deny",
+    "todo-local_remove_task": "deny",
+    "todo-local_leave_shared_task": "deny"
   };
 
     (.[0] // {})
@@ -382,20 +413,20 @@ def todo_mcp_tool_rules($read_enabled):
       else
         .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
       end
-    | .tools = (
-        (.tools // {}) | if type == "object" then . else {} end
-        | del(."todo-local_*")
-        | . + todo_mcp_tool_rules((env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1")
+    | .tools = ((.tools // {}) | strip_todo_legacy_tools)
+    | .permission = (
+        (.permission // {}) | as_permission_object
+        | . + todo_mcp_permission_rules((env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1")
       )
     | .agent = (
         (.agent // {})
         | if type == "object" then
             with_entries(
               .key as $agent_name
-              | .value.tools = (
-                  (.value.tools // {}) | if type == "object" then . else {} end
-                  | del(."todo-local_*")
-                  | . + todo_mcp_tool_rules(
+              | .value.tools = ((.value.tools // {}) | strip_todo_legacy_tools)
+              | .value.permission = (
+                  (.value.permission // {}) | as_permission_object
+                  | . + todo_mcp_permission_rules(
                       (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" and $agent_name != "chat"
                     )
                 )
