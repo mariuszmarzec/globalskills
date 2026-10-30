@@ -76,6 +76,7 @@ repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | c
 ok "Manul's stored Caracal environment is refreshed before repair"
 contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "Manul injects Caracal into its task-local OpenCode config"
 contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "Manul injects Todo local MCP into the task-local OpenCode config when available"
+contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_resolve_url' "Manul resolves the Todo endpoint for its current host"
 contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
 contains "$MANUL/opencode-adapter.sh" 'TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"' "Manul refreshes the Todo token from its runtime environment for each task"
 contains "$MANUL/manul-env.sh" 'TODO_LOCAL_MCP_TOKEN' "Manul persists Todo local MCP token for unattended tasks"
@@ -205,12 +206,15 @@ echo
 echo "All Caracal MCP regression guards passed."
 
 
-# Todo Desktop runs in Windows; OpenCode receives only the authenticated WSL loopback bridge.
+# Todo Desktop exposes a loopback endpoint natively; WSL uses the Windows bridge only when needed.
 contains "$AICODE" '. "$HOME/.config/opencode/todo-mcp.env"' "aicode loads the Todo MCP token for normal OpenCode sessions"
 contains "$AICODE" 'if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then' "an exported shell token takes precedence over the optional Todo env file"
 contains "$AICODE" 'ensure_todo_mcp_bridge' "aicode starts the optional Todo bridge before OpenCode"
 contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aicode only enables Todo MCP after the unauthenticated 401 probe"
-contains "$AICODE" 'url: "http://127.0.0.1:8766/mcp"' "OpenCode uses the stable WSL loopback bridge URL"
+contains "$AICODE" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
+contains "$ROOT/skills/manul-github-bot/todo-local-mcp-url.sh" 'todo_local_mcp_is_wsl' "Todo endpoint discovery distinguishes WSL from native hosts"
+contains "$ROOT/skills/manul-github-bot/todo-local-mcp-url.sh" 'http://127.0.0.1:8765/mcp' "native hosts use Todo Desktop's direct loopback endpoint"
+contains "$ROOT/skills/manul-github-bot/todo-local-mcp-url.sh" 'http://127.0.0.1:8766/mcp' "WSL can fall back to the authenticated loopback relay"
 contains "$AICODE" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'remote.Address.Equals(allowed)' "Windows bridge restricts connections to the current WSL source IP"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'Rejected connection from ' "Windows bridge diagnostics include the observed client and expected WSL source IP"
