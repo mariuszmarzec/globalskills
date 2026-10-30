@@ -142,7 +142,7 @@ PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
 PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 mkdir -p "$PERM_CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
@@ -371,7 +371,7 @@ CLI_ROOT="$(mktemp -d /tmp/manul-cli-XXXXXX)"
 CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # Deploy a real runtime so the CLI can actually run
