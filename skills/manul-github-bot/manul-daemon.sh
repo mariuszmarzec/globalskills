@@ -1947,19 +1947,61 @@ publish_terminal_lifecycle_comment() {
   fi
   flock -u "$lock_fd" || true; exec {lock_fd}>&-; return 1
 }
+close_drained_conversations() {
+  ensure_terminal_lifecycle_outbox || return 1
+  local changed
+  changed="$(sqlite3 "$DB" "
+    UPDATE conversations
+    SET status='COMPLETED',
+        activePrNumber=NULL,
+        activePrUrl=NULL,
+        updatedAt=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    WHERE status != 'COMPLETED'
+      AND EXISTS (
+        SELECT 1 FROM processed_comments task
+        WHERE task.conversationId=conversations.conversationId
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM processed_comments active_task
+        WHERE active_task.conversationId=conversations.conversationId
+          AND active_task.status IN ('queued','running','blocked_user')
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM manul_terminal_lifecycle_outbox pending
+        JOIN processed_comments pending_task ON pending_task.commentId=pending.taskId
+        WHERE pending_task.conversationId=conversations.conversationId
+          AND pending.postedAt IS NULL
+      );
+    SELECT changes();
+  " 2>>"$LOG" | tail -n 1)" || {
+    log "ERROR: could not reconcile conversation closure against pending terminal lifecycle events"
+    return 1
+  }
+  if [[ "$changed" =~ ^[1-9][0-9]*$ ]]; then
+    log "closed $changed drained conversation(s) after terminal lifecycle delivery was reconciled"
+  fi
+  return 0
+}
+
 retry_pending_terminal_lifecycle_comments() {
   ensure_terminal_lifecycle_outbox || return 1
   local rows row task_id attempt event_type
   rows="$(sqlite3 -json "$DB" "SELECT taskId,attempt,eventType FROM manul_terminal_lifecycle_outbox WHERE postedAt IS NULL AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt LIMIT 10;" 2>>"$LOG")" || return 1
-  [ -n "$rows" ] || return 0
-  while IFS= read -r row; do
-    [ -n "$row" ] || continue
-    task_id="$(printf '%s' "$row" | jq -r '.taskId')"
-    attempt="$(printf '%s' "$row" | jq -r '.attempt')"
-    event_type="$(printf '%s' "$row" | jq -r '.eventType')"
-    publish_terminal_lifecycle_comment "$task_id" "$attempt" "$event_type" || \
-      log "WARN: terminal lifecycle comment remains pending for $task_id attempt $attempt event $event_type"
-  done < <(printf '%s' "$rows" | jq -c '.[]')
+  if [ -n "$rows" ]; then
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      task_id="$(printf '%s' "$row" | jq -r '.taskId')"
+      attempt="$(printf '%s' "$row" | jq -r '.attempt')"
+      event_type="$(printf '%s' "$row" | jq -r '.eventType')"
+      publish_terminal_lifecycle_comment "$task_id" "$attempt" "$event_type" || \
+        log "WARN: terminal lifecycle comment remains pending for $task_id attempt $attempt event $event_type"
+    done < <(printf '%s' "$rows" | jq -c '.[]')
+  fi
+  # A completed task may have finished while its result comment was pending.
+  # Close conversations only after every terminal lifecycle outbox entry in
+  # that conversation has been reconciled by a confirmed GitHub read-back/post.
+  close_drained_conversations || log "WARN: deferred conversation-close reconciliation failed"
 }
 
 # Queue a terminal event and publish it when it has a GitHub destination.
@@ -4939,25 +4981,15 @@ PROMPT_APPEND
       set_activity "$COMMENT_ID" "completed"
     fi
 
-    # Auto-close conversation when all tasks are finalized (completed or failed).
-    # Skip if the task was requeued for retry.
+    # Auto-close only when all tasks are terminal AND every terminal
+    # lifecycle event in the conversation has been reconciled. A pending
+    # outbox row keeps the conversation open until a later dispatcher retry
+    # confirms the marker with GitHub.
     if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
-      local task_conv_id_for_close
-      task_conv_id_for_close="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-      if [ -n "$task_conv_id_for_close" ]; then
-        local remaining_tasks
-        remaining_tasks="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status IN ('queued', 'running', 'blocked_user');" 2>>"$LOG")" || remaining_tasks=""
-        if [ -z "$remaining_tasks" ]; then
-          log "ERROR: failed to count remaining tasks for conversation $task_conv_id_for_close (task drain)"
-        elif [ "$remaining_tasks" -eq 0 ]; then
-          local now_close
-          now_close="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          if sqlite3 "$DB" "UPDATE conversations SET status='COMPLETED', activePrNumber=NULL, activePrUrl=NULL, updatedAt='$now_close' WHERE conversationId='$(sql_escape "$task_conv_id_for_close")' AND status != 'COMPLETED';" 2>>"$LOG"; then
-            log "auto-closed conversation $task_conv_id_for_close (all tasks finalized, status=$task_final_status)"
-          else
-            log "ERROR: failed to close conversation $task_conv_id_for_close (task drain)"
-          fi
-        fi
+      if [ "$COMMENT_POST_SUCCESS" = "true" ]; then
+        close_drained_conversations || log "WARN: conversation close deferred until terminal lifecycle delivery is reconciled"
+      else
+        log "INFO: conversation close deferred; terminal lifecycle result remains pending for $COMMENT_ID"
       fi
     fi
 
