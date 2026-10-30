@@ -528,7 +528,8 @@ assert_eq "remote report uses Fiteo create tool" "1" "$(grep -c '^todo_create_ta
 assert_eq "remote report uses Fiteo partial-update tool to complete the result" "1" "$(grep -c '^todo_update_task' "$TODO_MCP_CALL_LOG")"
 remote_report_child_status="$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "remote result child is completed after read-back" "false" "$remote_report_child_status"
-assert_eq "remote root remains active until the task tree completion step" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
+remote_root_todo=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote root remains active until the task tree completion step" "true" "$remote_root_todo"
 assert_eq "remote output result does not invalidate source identity" "0" "$(todo_task_still_current "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id"; echo $?)"
 
 # The common completion operation must still mark the report child and all
