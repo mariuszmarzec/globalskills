@@ -119,7 +119,7 @@ public static class TodoMcpWindowsBridge
                 client.Close();
                 return;
             }
-            if (remote.Address.Equals(bind))
+            if (remote.Address.Equals(bind) || IPAddress.IsLoopback(remote.Address))
             {
                 // Ensure() performs a local TCP readiness probe from Windows.
                 // It must not be confused with a rejected WSL client connection.
