@@ -12,8 +12,8 @@ import select
 import signal
 import socket
 import socketserver
-import subprocess
 import struct
+import subprocess
 import sys
 import threading
 import time
