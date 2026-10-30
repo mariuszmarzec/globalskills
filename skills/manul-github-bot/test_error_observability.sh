@@ -200,7 +200,8 @@ test_pre_execution_failure_budget_wiring() {
   local preflight_line dispatch_line completion_line
 
   if ! grep -Fq '"failure_code":"PRE_EXECUTION_FAILURE"' "$adapter" ||
-     ! grep -Fq '"stage":"caracal_mcp_preflight","agent_started":false' "$adapter"; then
+     ! grep -Fq '_mcp_preflight_stage="caracal_mcp_preflight"' "$adapter" ||
+     ! grep -Fq '"agent_started":false' "$adapter"; then
     fail "OpenCode Caracal preflight result lacks a structured pre-execution failure code"
     return
   fi
