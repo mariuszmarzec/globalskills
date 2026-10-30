@@ -16,6 +16,141 @@ todo_mcp_source_repository() {
   jq -r '.repository // empty' <<<"$1"
 }
 
+todo_mcp_source_repository_allowlist() {
+  jq -c '
+    .repositoryAllowlist
+    | if type == "array" then map(select(type == "string")) | unique else [] end
+  ' <<<"$1"
+}
+
+todo_task_repository_catalog_path() {
+  printf '%s\n' "${TODO_TASK_REPOSITORY_CATALOG:-$TODO_TASK_SOURCE_DIR/../globalskills-repository/project-repositories.json}"
+}
+
+# Resolve a task target only from the curated project catalog. Explicit GitHub
+# URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
+# source-level repositoryAllowlist can narrow the catalog, but never widen it.
+todo_task_resolve_repository() {
+  local source_json="$1" task_json="$2"
+  local catalog_file description explicit_matches candidate_count repository method matched_alias
+  local catalog_json matches_json match_json entry_json allowlist_json canonical_repository skills_json
+
+  catalog_file="$(todo_task_repository_catalog_path)"
+  [ -r "$catalog_file" ] || {
+    echo "repository catalog is unavailable: $catalog_file" >&2
+    return 2
+  }
+  catalog_json="$(cat "$catalog_file")" || return 2
+  jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1 || {
+    echo "repository catalog has no repositories array" >&2
+    return 2
+  }
+
+  description="$(jq -r '.description // ""' <<<"$task_json")"
+  explicit_matches="$(
+    grep -Eo 'https?://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
+      | sed -E 's#^https?://github\\.com/##; s#\\.git$##' \
+      | sort -u || true
+  )"
+  candidate_count="$(printf '%s\n' "$explicit_matches" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+
+  if [ "$candidate_count" -gt 1 ]; then
+    echo "Todo task mentions multiple GitHub repositories; routing is ambiguous" >&2
+    return 1
+  fi
+
+  if [ "$candidate_count" -eq 1 ]; then
+    repository="$explicit_matches"
+    method="explicit_github_url"
+    matched_alias=""
+  else
+    matches_json="$(jq -c --arg description "$description" '
+      def norm:
+        ascii_downcase
+        | gsub("[^a-z0-9]+"; " ")
+        | gsub("^ +| +$"; "");
+      ($description | norm) as $task_text
+      | [
+          .repositories[] as $repo
+          | ($repo.aliases // [])[] as $alias
+          | ($alias | norm) as $normalized_alias
+          | select($normalized_alias != "")
+          | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
+          | {
+              repository: $repo.name,
+              alias: $alias,
+              length: ($normalized_alias | length)
+            }
+        ]
+      | if length == 0 then []
+        else (map(.length) | max) as $max_length
+        | map(select(.length == $max_length))
+        | unique_by(.repository)
+        end
+    ' <<<"$catalog_json")" || return 2
+    candidate_count="$(jq -r 'length' <<<"$matches_json")"
+    if [ "$candidate_count" -eq 0 ]; then
+      echo "no project alias matched the Todo task description" >&2
+      return 1
+    fi
+    if [ "$candidate_count" -gt 1 ]; then
+      local candidates
+      candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$matches_json")"
+      echo "Todo task matches multiple projects ($candidates); routing is ambiguous" >&2
+      return 1
+    fi
+    match_json="$(jq -c '.[0]' <<<"$matches_json")"
+    repository="$(jq -r '.repository' <<<"$match_json")"
+    matched_alias="$(jq -r '.alias' <<<"$match_json")"
+    method="catalog_alias"
+  fi
+
+  [[ "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
+    echo "resolved repository has an invalid owner/name value" >&2
+    return 2
+  }
+
+  entry_json="$(jq -c --arg repo "$repository" '
+    [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
+    | first // empty
+  ' <<<"$catalog_json")" || return 2
+  [ -n "$entry_json" ] || {
+    echo "repository $repository is not in the curated project catalog" >&2
+    return 1
+  }
+  canonical_repository="$(jq -r '.name' <<<"$entry_json")"
+
+  allowlist_json="$(todo_mcp_source_repository_allowlist "$source_json")" || return 2
+  if [ "$(jq -r 'length' <<<"$allowlist_json")" -gt 0 ] &&
+      ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$allowlist_json" >/dev/null 2>&1; then
+    echo "repository $canonical_repository is excluded by this Todo source allowlist" >&2
+    return 1
+  fi
+
+  skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")"
+  jq -cn \
+    --arg repository "$canonical_repository" \
+    --arg method "$method" \
+    --arg matchedAlias "$matched_alias" \
+    --argjson skills "$skills_json" \
+    '{repository:$repository,method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+}
+
+todo_task_resolved_skill_context() {
+  local resolution_json="$1" skill skill_file
+  while IFS= read -r skill; do
+    [[ "$skill" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
+    skill_file="$TODO_TASK_SOURCE_DIR/../$skill/SKILL.md"
+    [ -r "$skill_file" ] || {
+      echo "project skill context is unavailable: $skill" >&2
+      continue
+    }
+    printf '\n## Project skill context: %s\n\n' "$skill"
+    cat "$skill_file"
+    printf '\n'
+  done < <(jq -r '.skills[]? // empty' <<<"$resolution_json")
+}
+
 todo_mcp_source_call() {
   local source_json="$1" tool="$2" arguments="$3"
   local url token_env
@@ -151,8 +286,11 @@ todo_task_prompt() {
 }
 
 todo_task_to_source_json() {
-  local task_json="$1" source_type="$2" repository="$3"
-  local task_id fingerprint source_id source_url title body prompt ids created updated
+  local task_json="$1" source_type="$2" resolution_json="${4:-}"
+  local repository task_id fingerprint source_id source_url title body prompt ids created updated
+  [ -n "$resolution_json" ] || resolution_json='{}'
+  repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
+  [ -n "$repository" ] || return 1
   task_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
   fingerprint="$(todo_task_fingerprint "$task_json")"
@@ -165,6 +303,655 @@ todo_task_to_source_json() {
   title="$(jq -r '.description // "Todo task"' <<<"$task_json")"
   body="$title"
   prompt="$(todo_task_prompt "$task_json")"
+  prompt+=
+  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
+  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
+  jq -cn \
+    --arg type "$source_type" \
+    --arg sourceId "$source_id" \
+    --arg sourceUrl "$source_url" \
+    --arg title "$title" \
+    --arg body "$body" \
+    --arg prompt "$prompt" \
+    --arg created "$created" \
+    --arg updated "$updated" \
+    --arg repository "$repository" \
+    --argjson resolution "$resolution_json" \
+    --argjson taskId "$task_id" \
+    --argjson stepIds "$ids" \
+    '{
+      taskSourceType:$type,
+      taskSourceId:$sourceId,
+      taskSourceUrl:$sourceUrl,
+      title:$title,
+      body:$body,
+      prompt:$prompt,
+      action:"IMPLEMENT",
+      createdAt:$created,
+      updatedAt:$updated,
+      state:"OPEN",
+      metadata:{
+        repository:$repository,
+        repositoryResolution:$resolution,
+        issueNumber:0,
+        todoTaskId:$taskId,
+        stepIds:$stepIds
+      },
+      execution:{kind:"repository"}
+    }'
+}
+
+todo_task_is_active() {
+  jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_has_local_trigger() {
+  jq -r '.description // ""' <<<"$1" |
+    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+}
+
+todo_task_has_remote_share() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -e --arg userId "$user_id" '
+    any(.shares[]?;
+      ((.userId | tostring) == $userId)
+      and .permission == "EDITOR_AND_VIEWER"
+    )
+  ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_still_current() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  return 0
+}
+
+todo_task_mark_done() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version ids_json arguments tool
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
+  ids_json="$(todo_task_ids_json "$task_json")"
+  if [ "$source_type" = "todo_local_mcp" ]; then
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+  else
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
+  fi
+}
+\n\n## Repository routing\n'
+  prompt+="Target repository: $repository"
+  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
+  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
+  jq -cn \
+    --arg type "$source_type" \
+    --arg sourceId "$source_id" \
+    --arg sourceUrl "$source_url" \
+    --arg title "$title" \
+    --arg body "$body" \
+    --arg prompt "$prompt" \
+    --arg created "$created" \
+    --arg updated "$updated" \
+    --arg repository "$repository" \
+    --argjson taskId "$task_id" \
+    --argjson stepIds "$ids" \
+    '{
+      taskSourceType:$type,
+      taskSourceId:$sourceId,
+      taskSourceUrl:$sourceUrl,
+      title:$title,
+      body:$body,
+      prompt:$prompt,
+      action:"IMPLEMENT",
+      createdAt:$created,
+      updatedAt:$updated,
+      state:"OPEN",
+      metadata:{
+        repository:$repository,
+        issueNumber:0,
+        todoTaskId:$taskId,
+        stepIds:$stepIds
+      },
+      execution:{kind:"repository"}
+    }'
+}
+
+todo_task_is_active() {
+  jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_has_local_trigger() {
+  jq -r '.description // ""' <<<"$1" |
+    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+}
+
+todo_task_has_remote_share() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -e --arg userId "$user_id" '
+    any(.shares[]?;
+      ((.userId | tostring) == $userId)
+      and .permission == "EDITOR_AND_VIEWER"
+    )
+  ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_still_current() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  return 0
+}
+
+todo_task_mark_done() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version ids_json arguments tool
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
+  ids_json="$(todo_task_ids_json "$task_json")"
+  if [ "$source_type" = "todo_local_mcp" ]; then
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+  else
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
+  fi
+}
+\n'
+  prompt+="Resolution method: $(jq -r '.method // "unknown"' <<<"$resolution_json")"
+  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
+  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
+  jq -cn \
+    --arg type "$source_type" \
+    --arg sourceId "$source_id" \
+    --arg sourceUrl "$source_url" \
+    --arg title "$title" \
+    --arg body "$body" \
+    --arg prompt "$prompt" \
+    --arg created "$created" \
+    --arg updated "$updated" \
+    --arg repository "$repository" \
+    --argjson taskId "$task_id" \
+    --argjson stepIds "$ids" \
+    '{
+      taskSourceType:$type,
+      taskSourceId:$sourceId,
+      taskSourceUrl:$sourceUrl,
+      title:$title,
+      body:$body,
+      prompt:$prompt,
+      action:"IMPLEMENT",
+      createdAt:$created,
+      updatedAt:$updated,
+      state:"OPEN",
+      metadata:{
+        repository:$repository,
+        issueNumber:0,
+        todoTaskId:$taskId,
+        stepIds:$stepIds
+      },
+      execution:{kind:"repository"}
+    }'
+}
+
+todo_task_is_active() {
+  jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_has_local_trigger() {
+  jq -r '.description // ""' <<<"$1" |
+    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+}
+
+todo_task_has_remote_share() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -e --arg userId "$user_id" '
+    any(.shares[]?;
+      ((.userId | tostring) == $userId)
+      and .permission == "EDITOR_AND_VIEWER"
+    )
+  ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_still_current() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  return 0
+}
+
+todo_task_mark_done() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version ids_json arguments tool
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
+  ids_json="$(todo_task_ids_json "$task_json")"
+  if [ "$source_type" = "todo_local_mcp" ]; then
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+  else
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
+  fi
+}
+\n'
+  matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+  if [ -n "$matched_alias" ]; then
+    prompt+="Matched project alias: $matched_alias"
+  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
+  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
+  jq -cn \
+    --arg type "$source_type" \
+    --arg sourceId "$source_id" \
+    --arg sourceUrl "$source_url" \
+    --arg title "$title" \
+    --arg body "$body" \
+    --arg prompt "$prompt" \
+    --arg created "$created" \
+    --arg updated "$updated" \
+    --arg repository "$repository" \
+    --argjson taskId "$task_id" \
+    --argjson stepIds "$ids" \
+    '{
+      taskSourceType:$type,
+      taskSourceId:$sourceId,
+      taskSourceUrl:$sourceUrl,
+      title:$title,
+      body:$body,
+      prompt:$prompt,
+      action:"IMPLEMENT",
+      createdAt:$created,
+      updatedAt:$updated,
+      state:"OPEN",
+      metadata:{
+        repository:$repository,
+        issueNumber:0,
+        todoTaskId:$taskId,
+        stepIds:$stepIds
+      },
+      execution:{kind:"repository"}
+    }'
+}
+
+todo_task_is_active() {
+  jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_has_local_trigger() {
+  jq -r '.description // ""' <<<"$1" |
+    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+}
+
+todo_task_has_remote_share() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -e --arg userId "$user_id" '
+    any(.shares[]?;
+      ((.userId | tostring) == $userId)
+      and .permission == "EDITOR_AND_VIEWER"
+    )
+  ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_still_current() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  return 0
+}
+
+todo_task_mark_done() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version ids_json arguments tool
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
+  ids_json="$(todo_task_ids_json "$task_json")"
+  if [ "$source_type" = "todo_local_mcp" ]; then
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+  else
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
+  fi
+}
+\n'
+  fi
+  project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+  if [ -n "$project_skill_context" ]; then
+    prompt+=
+  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
+  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
+  jq -cn \
+    --arg type "$source_type" \
+    --arg sourceId "$source_id" \
+    --arg sourceUrl "$source_url" \
+    --arg title "$title" \
+    --arg body "$body" \
+    --arg prompt "$prompt" \
+    --arg created "$created" \
+    --arg updated "$updated" \
+    --arg repository "$repository" \
+    --argjson taskId "$task_id" \
+    --argjson stepIds "$ids" \
+    '{
+      taskSourceType:$type,
+      taskSourceId:$sourceId,
+      taskSourceUrl:$sourceUrl,
+      title:$title,
+      body:$body,
+      prompt:$prompt,
+      action:"IMPLEMENT",
+      createdAt:$created,
+      updatedAt:$updated,
+      state:"OPEN",
+      metadata:{
+        repository:$repository,
+        issueNumber:0,
+        todoTaskId:$taskId,
+        stepIds:$stepIds
+      },
+      execution:{kind:"repository"}
+    }'
+}
+
+todo_task_is_active() {
+  jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
+todo_task_has_local_trigger() {
+  jq -r '.description // ""' <<<"$1" |
+    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+}
+
+todo_task_has_remote_share() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -e --arg userId "$user_id" '
+    any(.shares[]?;
+      ((.userId | tostring) == $userId)
+      and .permission == "EDITOR_AND_VIEWER"
+    )
+  ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_still_current() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  return 0
+}
+
+todo_task_mark_done() {
+  local source_json="$1" source_type="$2" source_id="$3"
+  local task_id expected_version tasks_json task_json actual_version ids_json arguments tool
+  task_id="$(todo_task_id_from_source_id "$source_id")"
+  expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 1
+  task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  case "$source_type" in
+    todo_local_mcp)
+      todo_task_has_local_trigger "$task_json" || return 1 ;;
+    todo_remote_mcp)
+      local manul_user_id
+      manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+      todo_task_has_remote_share "$task_json" "$manul_user_id" || return 1 ;;
+    *)
+      return 2 ;;
+  esac
+  actual_version="$(todo_task_fingerprint "$task_json")"
+  [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
+  ids_json="$(todo_task_ids_json "$task_json")"
+  if [ "$source_type" = "todo_local_mcp" ]; then
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
+    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+  else
+    # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
+    # task individually preserves its existing ancestor-share permission rules.
+    # Descendants go first and the root last, so the root stays active if one
+    # child update fails and a retry can safely resume the same tree.
+    local task_item
+    while IFS= read -r task_item; do
+      local step_id
+      step_id="$(jq -r '.id' <<<"$task_item")"
+      arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
+      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+    done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
+  fi
+}
+\n## Relevant project skills (included below)\n'
+    prompt+="$project_skill_context"
+  fi
   ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
   updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
