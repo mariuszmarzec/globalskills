@@ -44,6 +44,20 @@ assert_contains "global repository allowlist is inherited by local Todo source" 
 assert_contains "global repository allowlist is inherited by remote Todo source" "$todo_sources" '"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp","repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
 assert_not_contains "global Todo repository allowlist does not alter GitHub repository filters" "$todo_sources" '"type":"github_issues","repositories":["owner/issues"],"repositoryAllowlist"'
 
+cat >"$WORK/todo-allowlist-intersection.json" <<'JSON'
+{
+  "repositoryAllowlist": ["owner/catalog-a"],
+  "taskSources": [
+    {"type":"todo_local_mcp","enabled":true,"repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]},
+    {"type":"todo_remote_mcp","enabled":true,"repositoryAllowlist":[]}
+  ]
+}
+JSON
+intersected_todo_sources="$(task_source_configured_sources "$WORK/todo-allowlist-intersection.json")"
+assert_contains "per-source Todo allowlist is intersected with the global allowlist" "$intersected_todo_sources" '"repositoryAllowlist":["owner/catalog-a"]'
+assert_contains "explicit empty source allowlist remains deny-all after intersection" "$intersected_todo_sources" '"repositoryAllowlist":[],"repositoryAllowlistEnforced":true'
+
+
 
 cat >"$WORK/legacy.json" <<'JSON'
 {"repositories":["owner/legacy"]}
