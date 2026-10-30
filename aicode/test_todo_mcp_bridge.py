@@ -104,7 +104,7 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("--allowed-reverse-client", source)
         self.assertIn("--reverse-listen-port 18766", source)
         self.assertIn("-Action Ensure -RelayAddress", source)
-        self.assertIn("url: \\"http://127.0.0.1:8766/mcp\\"", source)
+        self.assertIn('url: "http://127.0.0.1:8766/mcp"', source)
         self.assertIn("Bearer {env:TODO_LOCAL_MCP_TOKEN}", source)
         self.assertIn('if [ "$http_status" = "401" ]; then', source)
         self.assertNotIn("18765", source)
