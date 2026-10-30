@@ -228,7 +228,7 @@ Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
 sources may target. Unknown, ambiguous, and disallowed targets are logged and
 not queued; Manul must never fall back to a hardcoded Todo repository.
 
-The local adapter uses the existing WSL loopback bridge at `http://127.0.0.1:8766/mcp` and `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and a PAT supplied through a configured environment variable (default `FITEO_PAT`). Neither token belongs in `config.json`.
+The local adapter uses `TODO_LOCAL_MCP_TOKEN` and discovers the Todo Desktop endpoint per host: direct loopback `http://127.0.0.1:8765/mcp` on native macOS/Linux/Windows, or the WSL relay at `http://127.0.0.1:8766/mcp` when Todo runs on Windows and direct WSL loopback is unavailable. The remote adapter requires an HTTPS MCP URL and a PAT supplied through a configured environment variable (default `FITEO_PAT`). Neither token belongs in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
 
