@@ -21,7 +21,7 @@ ALLOWED_TOOLS = {
     "todo_mark_tasks",
     "todo_update_task",
 }
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-06-18"
 
 
 class McpClientError(RuntimeError):
