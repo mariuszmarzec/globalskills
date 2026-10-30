@@ -31,12 +31,20 @@ lc_log() { echo "$*" >>"$LIFECYCLE_LOG"; }
 
 verifier_source="$(sed -n '/^verify_existing_task_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 merged_verifier_source="$(sed -n '/^verify_merged_result_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
-if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ]; then
-  echo "FAIL: existing-task PR verifier functions were not found in manul-daemon.sh" >&2
+pr_check_source="$(sed -n '/^pr_check_existing() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+pr_auto_source="$(sed -n '/^pr_auto_create() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+required_pr_source="$(sed -n '/^verify_required_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+base_infer_source="$(sed -n '/^infer_task_base_branch() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ]; then
+  echo "FAIL: existing-task/required-PR verifier functions were not found in manul-daemon.sh" >&2
   exit 1
 fi
 eval "$verifier_source"
 eval "$merged_verifier_source"
+eval "$pr_check_source"
+eval "$pr_auto_source"
+eval "$base_infer_source"
+eval "$required_pr_source"
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
@@ -80,12 +88,32 @@ MANUL_TESTING=true
 export FAKE_GH_PR_LIST="$TMP/pr-list.json"
 export FAKE_RESULT_COMMENTS_JSON="$TMP/result-comments.json"
 export FAKE_PR_VIEW_JSON="$TMP/pr-view.json"
+export PR_CREATE_COUNT_FILE="$TMP/pr-create-count"
 export FAKE_ISSUE_STATE="closed"
 cat >"$TMP/bin-gh" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
   cat "$FAKE_GH_PR_LIST"
   exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "create" ]]; then
+  count="$(cat "$PR_CREATE_COUNT_FILE" 2>/dev/null || echo 0)"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$PR_CREATE_COUNT_FILE"
+  base=""
+  head=""
+  while (($#)); do
+    case "$1" in
+      --base) base="$2"; shift 2 ;;
+      --head) head="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  jq -cn --arg base "$base" --arg head "$head" \
+    '[{number:19,url:"https://github.com/test/repo/pull/19",state:"OPEN",baseRefName:$base,headRefName:$head,body:"Automatically created by Manul for task issue:6127115709."}]' \
+    >"$FAKE_GH_PR_LIST"
+  # Simulate GitHub accepting the PR but the client losing the response.
+  exit 1
 fi
 if [[ "$1" == "pr" && "$2" == "view" ]]; then
   cat "$FAKE_PR_VIEW_JSON"
@@ -233,5 +261,56 @@ grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
 grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
 echo "PASS: IMPLEMENT evaluator recognizes independently verified merged PRs and retains result URL verification"
+
+# Ambiguous PR creation: GitHub creates the PR, but the gh client reports a
+# transport failure. The following retry must discover and reuse that PR rather
+# than issuing a second create request for the same head/base.
+RETRY_BRANCH="feature/task-pr-ambiguous-create"
+git -C "$WORKDIR" checkout -qb "$RETRY_BRANCH" main
+printf 'retry-safe delivery\n' >"$WORKDIR/retry-safe.txt"
+git -C "$WORKDIR" add retry-safe.txt
+git -C "$WORKDIR" commit -qm "Add retry-safe delivery"
+# Simulate an ambiguous git push: the remote accepts the branch, but the
+# client reports a transport failure. Retry should observe the remote head and
+# must not push or create the same PR again.
+REAL_GIT="$(command -v git)"
+PUSH_BIN="$TMP/push-bin"
+mkdir -p "$PUSH_BIN"
+export REAL_GIT
+export PUSH_COUNT_FILE="$TMP/push-count"
+cat >"$PUSH_BIN/git" <<'GITMOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-C" ] && [ "${3:-}" = "push" ]; then
+  count="$(cat "$PUSH_COUNT_FILE" 2>/dev/null || echo 0)"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$PUSH_COUNT_FILE"
+  "$REAL_GIT" "$@"
+  git_rc=$?
+  [ "$git_rc" -eq 0 ] || exit "$git_rc"
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+GITMOCK
+chmod +x "$PUSH_BIN/git"
+PATH="$PUSH_BIN:$PATH"
+printf '0\n' >"$PUSH_COUNT_FILE"
+printf '0\n' >"$PR_CREATE_COUNT_FILE"
+printf '[]\n' >"$FAKE_GH_PR_LIST"
+printf '{"autoCreatePr":true,"automation":{"maxAttemptsBeforeFail":3}}\n' >"$TMP/auto-create-config.json"
+CONFIG="$TMP/auto-create-config.json"
+
+first_rc=0
+verify_required_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" || first_rc=$?
+[ "$first_rc" -eq 1 ] || { echo "FAIL: expected first ambiguous PR creation attempt to report failure (rc=$first_rc)" >&2; exit 1; }
+[ "$(cat "$PR_CREATE_COUNT_FILE")" = "1" ] || { echo "FAIL: expected one PR create request after ambiguous acceptance" >&2; exit 1; }
+[ "$(cat "$PUSH_COUNT_FILE")" = "1" ] || { echo "FAIL: expected one accepted-but-client-error branch push" >&2; exit 1; }
+[ -n "$("$REAL_GIT" -C "$WORKDIR" ls-remote --heads origin "$RETRY_BRANCH" | awk 'NR==1 {print $1}')" ] || { echo "FAIL: ambiguous push did not leave the branch on origin" >&2; exit 1; }
+second_rc=0
+verify_required_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" || second_rc=$?
+[ "$second_rc" -eq 0 ] || { echo "FAIL: retry did not discover the PR accepted by GitHub (rc=$second_rc)" >&2; exit 1; }
+[ "$(cat "$PR_CREATE_COUNT_FILE")" = "1" ] || { echo "FAIL: retry issued a duplicate PR create request" >&2; exit 1; }
+[ "$(cat "$PUSH_COUNT_FILE")" = "1" ] || { echo "FAIL: retry re-pushed a branch already accepted by origin" >&2; exit 1; }
+jq -e 'length == 1 and .[0].headRefName == "feature/task-pr-ambiguous-create"' "$FAKE_GH_PR_LIST" >/dev/null
+echo "PASS: retry after accepted-but-client-error push/PR reuses remote branch and existing PR without duplicates"
 
 echo "All existing-task PR regression tests passed."

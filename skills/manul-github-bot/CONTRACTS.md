@@ -163,6 +163,57 @@ Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution,
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
 
+## 8a. Lifecycle event publication and idempotency
+
+Lifecycle events are machine-readable comments, not evidence that an agent completed
+work. They are keyed by the exact task ID and execution attempt.
+
+For `TASK_STARTED`:
+- the daemon publishes at most one signed start comment for a task/attempt;
+- before posting, it reads the correct issue-comment or PR-review-comment endpoint
+  and matches the event type, task ID, attempt, Manul signature, and (for review
+  tasks) the exact `in_reply_to_id` thread;
+- an existing match suppresses publication; a failed read-before-write check is
+  fail-closed and must not publish blindly;
+- when the publish client reports an error, the daemon reads the same endpoint
+  again and treats the operation as successful only when the exact signed event
+  is found. A retry must not create another visible comment.
+
+Result-comment verification for inline PR review tasks is scoped to the exact source
+review thread (`in_reply_to_id` from the source `discussion_r` URL). Marker
+verification, non-empty-result verification, canonical PR URL verification and
+stale-marker repair must all use that same thread. A marker or PR URL in another
+review thread is not delivery evidence.
+
+For terminal `TASK_DONE` and `TASK_FAILED` events:
+- the marker is assembled into the exact user-facing result body before posting;
+- the daemon persists the full body and routing metadata in a SQLite outbox keyed
+  by task ID, attempt, and event type before calling GitHub;
+- publication is serialized per event and reconciled by reading the matching
+  task/attempt marker before every post and after an ambiguous post error;
+- a confirmed existing marker records the outbox receipt without posting again;
+- definite or ambiguous publication failures remain pending for retry. The
+  terminal task state is not rolled back, and retries reuse the persisted body;
+- intermediate retry states do not emit terminal events.
+
+Neither `TASK_STARTED` nor a queued/published terminal comment can bypass the
+result-comment, repository-delivery, or explicit `TASK_DONE` verification
+contracts above. A start event, partial GitHub activity, or a terminal database
+state without a verified result is never sufficient evidence of successful work.
+
+
+## 8b. Issue #110 incident diagnosis and evidence boundary
+
+The #110 audit established these code-level failure modes:
+
+- **Duplicate TASK_STARTED:** publication was previously treated as acknowledged only when the POST client returned success. There was no exact task/attempt read-before-write or read-back after a non-zero POST. A transport error after GitHub accepted the comment could therefore enter pre-execution recovery and reuse the same attempt without knowing whether the marker already existed. Review-thread tasks also require lookup and deduplication in the exact in_reply_to_id thread.
+- **Missing terminal lifecycle evidence:** the result body could be posted before its TASK_DONE/TASK_FAILED marker was appended. A failed POST was only logged, with no durable body/routing record for retry; task state and conversation closure could advance while the corresponding GitHub marker was still absent.
+- **OpenCode continuation misclassification:** step-limit detection over the whole JSONL stream could match ordinary task text or tool payloads. Independently, the controller converted any TIMEOUT carrying a session ID into NEEDS_CONTINUATION, including overall and watchdog timeouts that the adapter reports as TIMEOUT. Only an explicit structured step-limit continuation is resumable.
+- **Attempt diagnostics:** preExecutionFailures and agentStartedAt were already delivered on the base by merged PR #114; they are not reimplemented here. Pre-agent rollback must clear agentStartedAt and the claim/lease metadata while returning the claim-time attempt bump and charging the separate infrastructure counter.
+
+The regression suite uses deterministic GitHub and runtime fakes to prove the corrected behavior at the publication, controller, adapter, session-state and dispatcher boundaries. The historical issue comments do not preserve every raw OpenCode JSONL stream or GitHub transport response for each old attempt; therefore this audit establishes the reproducible code-level causes and verifies the repaired failure semantics, but does not claim to reconstruct the exact network event sequence for every historical duplicate.
+
+
 ## 9. Comment routing
 
 Tasks originating from:
@@ -642,7 +693,7 @@ Failure codes must be stable and actionable:
 - `AGENT_STEP_NO_PROGRESS_TIMEOUT` — an OpenCode `step_start` remained unfinished past the bounded active-step budget.
 - `AGENT_TOOL_NO_PROGRESS_TIMEOUT` — an explicitly active OpenCode tool call failed to complete within its bounded budget.
 - `TASK_NEEDS_USER` — structured user decision is required.
-- `NEEDS_CONTINUATION` — runtime can continue an existing session.
+- `NEEDS_CONTINUATION` — adapter explicitly identified a bounded, resumable runtime condition and returned a session ID. A `TIMEOUT` plus a non-empty session ID is not sufficient; overall, idle, step-idle and tool-idle watchdog timeouts remain timeouts and clear the continuation pointer.
 - `DELIVERY_NOT_COMMITTED` — repository changes remain uncommitted when the agent reports completion; the dirty workspace is preserved for diagnosis and must not be treated as delivered.
 - `DELIVERY_NOT_PUSHED` — committed work is not present on the remote/PR head.
 - `DELIVERY_COMMENT_MISSING` — the required task/attempt result marker could not be verified; a completion marker from the agent is not a substitute for delivery evidence.

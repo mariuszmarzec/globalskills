@@ -624,8 +624,20 @@ while true; do
     fi
 
     current_step_limit_detected="false"
-    if [ "$pr_rc" -ne 124 ] && [ -s "$CURRENT_RUN_STDOUT_FILE" ] && \
-       grep -Eiq 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null; then
+    # A step limit is a runtime control signal only when it comes from a
+    # structured error event. Text events and tool payloads are task content
+    # and may mention "maximum steps" without exhausting the runtime budget.
+    current_step_limit_message=""
+    if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
+        current_step_limit_message="$(jq -Rr '
+            try fromjson catch empty
+            | select(.type == "error")
+            | (.error.message // .error.data.message // .message // empty)
+        ' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null |
+            grep -Ei 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' |
+            head -n 1 || true)"
+    fi
+    if [ "$pr_rc" -ne 124 ] && [ -n "$current_step_limit_message" ]; then
         current_step_limit_detected="true"
     fi
     final_step_limit_detected="$current_step_limit_detected"
@@ -739,7 +751,7 @@ error_type=""
 error_source=""
 last_event_type=""
 if [ -s "$RAW_STDOUT_FILE" ]; then
-    error_message="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.message // .message // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
+    error_message="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.message // .error.data.message // .message // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
     error_type="$(jq -Rr 'try fromjson catch empty | select(.type == "error") | (.error.name // .error.type // empty)' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { print; exit }')"
     last_event_type="$(jq -Rr 'try fromjson catch empty | .type // empty' "$RAW_STDOUT_FILE" 2>/dev/null | awk 'length { value=$0 } END { print value }')"
     if [ -n "$error_message" ]; then

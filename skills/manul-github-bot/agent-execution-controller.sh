@@ -81,11 +81,13 @@ AgentExecutionController.execute() {
             # The agent posted TASK_DONE before the outer timeout — treat as success.
             result="$(printf '%s' "$result" | jq -c '. + {status: "COMPLETED", exit_code: 0, summary: "Completed despite timeout wrapper (TASK_DONE already present)"}')"
             AgentExecutionController_SessionId="$session_id"
-        elif [ "$status" = "TIMEOUT" ] && [ -n "$session_id" ]; then
-            # Time out mid-session but session exists — surface NEEDS_CONTINUATION.
-            result="$(printf '%s' "$result" | jq -c '. + {status: "NEEDS_CONTINUATION", summary: (.summary + " (session continue possible)")}')"
-            AgentExecutionController_SessionId="$session_id"
         else
+            # A session ID alone does not make a timeout resumable. Watchdog,
+            # tool-idle, step-idle and overall runtime timeouts are terminal for
+            # this execution attempt. Adapters must explicitly return
+            # NEEDS_CONTINUATION for a bounded continuation condition (for
+            # example, an OpenCode step-limit event). That explicit status is
+            # handled by the non-timeout branch below.
             AgentExecutionController_SessionId=""
         fi
     else
