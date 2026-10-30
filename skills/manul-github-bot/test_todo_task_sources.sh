@@ -508,7 +508,10 @@ local_second_report_id="$(jq -r '.taskSourceId' <<<"$local_second_report_task")"
 assert_not_contains "second report version receives a new source identity" "$local_second_report_id" "$local_report_id"
 local_second_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id" "Second report answer.")"
 assert_eq "second report version persists its exact answer" "Second report answer." "$(jq -r '.answer' <<<"$local_second_report_receipt")"
-historical_report_count=$(jq -r '[.[0].subTasks[] | select((.description // "") | contains("Local report answer with exact content."))] | length' "$TODO_MCP_FIXTURE")
+jq -r --arg expected "Local report answer with exact content." \
+  '[.[0].subTasks[] | select((.description // "") | contains($expected))] | length' \
+  "$TODO_MCP_FIXTURE" > "$TEST_DIR/historical-report-count"
+IFS= read -r historical_report_count < "$TEST_DIR/historical-report-count"
 assert_eq "previous report remains in the source tree as history" "1" "$historical_report_count"
 assert_eq "second report is excluded without hiding the historical output" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_second_report_id"; echo $?)"
 
