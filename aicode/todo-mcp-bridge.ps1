@@ -140,12 +140,13 @@ public static class TodoMcpWindowsBridge
             byte[] rewrittenHeader = RewriteRequestHeader(requestHeader);
             upstreamStream.Write(rewrittenHeader, 0, rewrittenHeader.Length);
 
+            // Todo receives Connection: close, so its response stream ending is
+            // the lifecycle boundary for this one-request reverse channel.
+            // Do not wait for requestPump: an HTTP client may keep its request
+            // socket open after sending Content-Length bytes.
             Task requestPump = channelStream.CopyToAsync(upstreamStream);
             Task responsePump = upstreamStream.CopyToAsync(channelStream);
-            Task completed = Task.WhenAny(requestPump, responsePump).GetAwaiter().GetResult();
-            completed.GetAwaiter().GetResult();
-            if (completed == requestPump)
-                responsePump.GetAwaiter().GetResult();
+            responsePump.GetAwaiter().GetResult();
         }
         catch (Exception error)
         {
