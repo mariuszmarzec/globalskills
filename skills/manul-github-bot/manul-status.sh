@@ -190,11 +190,29 @@ if [ "$LIST_MODE" = true ]; then
   if db_has_column taskSourceId; then
     SOURCE_ID_SQL="COALESCE(taskSourceId,'')"
   fi
+  # Attempt-accounting columns (issue #110): surface pre-execution infrastructure
+  # failures, the actual agent-start timestamp, and the attempt number for which
+  # TASK_STARTED was published. Older DBs without these columns degrade to null.
+  INFRA_FAILURES_SQL="0"
+  AGENT_STARTED_AT_SQL="''"
+  STARTED_ATTEMPT_SQL="NULL"
+  if db_has_column preExecutionFailures; then
+    INFRA_FAILURES_SQL="COALESCE(preExecutionFailures,0)"
+  fi
+  if db_has_column agentStartedAt; then
+    AGENT_STARTED_AT_SQL="COALESCE(agentStartedAt,'')"
+  fi
+  if db_has_column startedAttempt; then
+    STARTED_ATTEMPT_SQL="COALESCE(startedAttempt,NULL)"
+  fi
 
   RESULTS="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
            attempts, createdAt, processedAt, workerPid, workspaceId, nextAttemptAt,
-           $SOURCE_TYPE_SQL AS taskSourceType, $SOURCE_ID_SQL AS taskSourceId
+           $SOURCE_TYPE_SQL AS taskSourceType, $SOURCE_ID_SQL AS taskSourceId,
+           $INFRA_FAILURES_SQL AS preExecutionFailures,
+           $AGENT_STARTED_AT_SQL AS agentStartedAt,
+           $STARTED_ATTEMPT_SQL AS startedAttempt
     FROM processed_comments $WHERE_CLAUSE
     ORDER BY createdAt DESC
     LIMIT 100;
@@ -215,7 +233,7 @@ if [ "$LIST_MODE" = true ]; then
   if [ "$OUTPUT_FORMAT" = "json" ]; then
     echo "["
     FIRST=true
-    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id infra_failures agent_started_at started_attempt; do
       if [ "$FIRST" = true ]; then
         FIRST=false
       else
@@ -240,6 +258,9 @@ if [ "$LIST_MODE" = true ]; then
         --arg taskSourceId "$task_source_id" \
         --arg source "$source_name" \
         --arg sourceId "$source_record_id" \
+        --arg preExecutionFailures "$infra_failures" \
+        --arg agentStartedAt "$agent_started_at" \
+        --arg startedAttempt "$started_attempt" \
         '{
           taskId: $taskId,
           repo: $repo,
@@ -255,7 +276,10 @@ if [ "$LIST_MODE" = true ]; then
           source: $source,
           sourceId: (if $sourceId == "" then null else $sourceId end),
           taskSourceType: (if $taskSourceType == "" then null else $taskSourceType end),
-          taskSourceId: (if $taskSourceId == "" then null else $taskSourceId end)
+          taskSourceId: (if $taskSourceId == "" then null else $taskSourceId end),
+          preExecutionFailures: ($preExecutionFailures | tonumber),
+          agentStartedAt: (if $agentStartedAt == "" then null else $agentStartedAt end),
+          startedAttempt: (if $startedAttempt == "" then null else ($startedAttempt | tonumber) end)
         }')"
       printf '  %s' "$json_object"
     done <<< "$RESULTS"
@@ -270,6 +294,9 @@ if [ "$LIST_MODE" = true ]; then
     header_status="STATUS"
     header_attempts="ATTEMPTS"
     header_created="CREATED"
+    header_started_agent="AGENT_STARTED"
+    header_started_attempt="STARTED_ATTEMPT"
+    header_infra_failures="INFRA_FAIL"
 
     task_id_width=${#header_task_id}
     repo_issue_width=${#header_repo_issue}
@@ -278,8 +305,11 @@ if [ "$LIST_MODE" = true ]; then
     status_width=${#header_status}
     attempts_width=${#header_attempts}
     created_width=${#header_created}
+    started_agent_width=${#header_started_agent}
+    started_attempt_width=${#header_started_attempt}
+    infra_failures_width=${#header_infra_failures}
 
-    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id infra_failures agent_started_at started_attempt; do
       source_name="$(task_source_label "$task_source_type")"
       source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
       repo_reference="$repo"
@@ -294,38 +324,50 @@ if [ "$LIST_MODE" = true ]; then
       [ ${#status} -le "$status_width" ] || status_width=${#status}
       [ ${#attempts} -le "$attempts_width" ] || attempts_width=${#attempts}
       [ ${#created} -le "$created_width" ] || created_width=${#created}
+      [ ${#agent_started_at} -le "$started_agent_width" ] || started_agent_width=${#agent_started_at}
+      [ ${#started_attempt} -le "$started_attempt_width" ] || started_attempt_width=${#started_attempt}
+      [ ${#infra_failures} -le "$infra_failures_width" ] || infra_failures_width=${#infra_failures}
     done <<< "$RESULTS"
 
-    printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
+    printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
       "$task_id_width" "$header_task_id" \
       "$repo_issue_width" "$header_repo_issue" \
       "$source_width" "$header_source" \
       "$source_id_width" "$header_source_id" \
       "$status_width" "$header_status" \
-      "$attempts_width" "$header_attempts" "$header_created"
-    printf "%s  %s  %s  %s  %s  %s  %s\n" \
+      "$attempts_width" "$header_attempts" \
+      "$started_agent_width" "$header_started_agent" \
+      "$started_attempt_width" "$header_started_attempt" \
+      "$infra_failures_width" "$header_infra_failures" "$header_created"
+    printf "%s  %s  %s  %s  %s  %s  %s  %s  %s  %s\n" \
       "$(printf '%*s' "$task_id_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$repo_issue_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$source_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$source_id_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$status_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$attempts_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$started_agent_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$started_attempt_width" '' | tr ' ' '-')" \
+      "$(printf '%*s' "$infra_failures_width" '' | tr ' ' '-')" \
       "$(printf '%*s' "$created_width" '' | tr ' ' '-')"
 
-    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id infra_failures agent_started_at started_attempt; do
       source_name="$(task_source_label "$task_source_type")"
       source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
       repo_reference="$repo"
       if [ "$issue" != "0" ]; then
         repo_reference="$repo#$issue"
       fi
-      printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
+      printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n" \
         "$task_id_width" "$tid" \
         "$repo_issue_width" "$repo_reference" \
         "$source_width" "$source_name" \
         "$source_id_width" "$source_record_id" \
         "$status_width" "$status" \
-        "$attempts_width" "$attempts" "$created"
+        "$attempts_width" "$attempts" \
+        "$started_agent_width" "$agent_started_at" \
+        "$started_attempt_width" "$started_attempt" \
+        "$infra_failures_width" "$infra_failures" "$created"
     done <<< "$RESULTS"
   fi
 else
@@ -337,10 +379,26 @@ else
 
   ESCAPED_TASK_ID="$(sql_escape "$TASK_ID")"
   
+SINGLE_INFRA_SQL="0"
+  SINGLE_STARTED_AT_SQL="''"
+  SINGLE_STARTED_ATTEMPT_SQL="NULL"
+  if db_has_column preExecutionFailures; then
+    SINGLE_INFRA_SQL="COALESCE(preExecutionFailures,0)"
+  fi
+  if db_has_column agentStartedAt; then
+    SINGLE_STARTED_AT_SQL="COALESCE(agentStartedAt,'')"
+  fi
+  if db_has_column startedAttempt; then
+    SINGLE_STARTED_ATTEMPT_SQL="COALESCE(startedAttempt,NULL)"
+  fi
+
   RESULT="$(sqlite3 "$DB" "
     SELECT commentId, repository, issueNumber, status, conversationId,
            parentTaskId, agent, attempts, createdAt, processedAt,
-           workerPid, workspaceId, nextAttemptAt, prompt
+           workerPid, workspaceId, nextAttemptAt, prompt,
+           $SINGLE_INFRA_SQL AS preExecutionFailures,
+           $SINGLE_STARTED_AT_SQL AS agentStartedAt,
+           $SINGLE_STARTED_ATTEMPT_SQL AS startedAttempt
     FROM processed_comments
     WHERE commentId='$ESCAPED_TASK_ID';
   " 2>/dev/null)" || {
@@ -357,7 +415,7 @@ else
     exit 1
   fi
 
-  IFS='|' read -r tid repo issue status conv parent agent attempts created started worker ws next prompt <<< "$RESULT"
+  IFS='|' read -r tid repo issue status conv parent agent attempts created started worker ws next prompt infra_failures agent_started_at started_attempt <<< "$RESULT"
 
   if [ "$OUTPUT_FORMAT" = "json" ]; then
     # Build JSON output
@@ -370,14 +428,17 @@ else
     [ -n "$parent" ] && JSON+=", \"parentTaskId\": \"$parent\""
     JSON+=", \"attempts\": ${attempts:-0}"
     JSON+=", \"createdAt\": \"$created\""
-    
+    JSON+=", \"preExecutionFailures\": ${infra_failures:-0}"
+    [ -n "$agent_started_at" ] && JSON+=", \"agentStartedAt\": \"$agent_started_at\""
+    [ -n "$started_attempt" ] && JSON+=", \"startedAttempt\": $started_attempt"
+
     # Optional fields
     [ -n "$started" ] && JSON+=", \"startedAt\": \"$started\""
     [ -n "$worker" ] && JSON+=", \"workerId\": $worker"
     [ -n "$ws" ] && JSON+=", \"workspaceId\": \"$ws\""
     [ -n "$next" ] && JSON+=", \"nextAttemptAt\": \"$next\""
     [ -n "$prompt" ] && JSON+=", \"prompt\": \"$(echo "$prompt" | sed 's/"/\\"/g')\""
-    
+
     JSON+="}"
     echo "$JSON"
   else
@@ -394,6 +455,9 @@ else
     [ -n "$worker" ] && echo "  workerId:       $worker"
     [ -n "$ws" ] && echo "  workspaceId:    $ws"
     [ -n "$next" ] && echo "  nextAttemptAt:  $next"
+    echo "  preExecutionFailures: ${infra_failures:-0}"
+    [ -n "$agent_started_at" ] && echo "  agentStartedAt: $agent_started_at"
+    [ -n "$started_attempt" ] && echo "  startedAttempt: $started_attempt"
   fi
 fi
 

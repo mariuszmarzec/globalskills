@@ -1663,6 +1663,18 @@ ensure_recovery_tracking_columns() {
     }
     log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
   fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\n' "$columns" | grep -q '|startedAttempt|'; then
+    local alter_started_attempt
+    alter_started_attempt="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN startedAttempt INTEGER DEFAULT NULL; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|startedAttempt|'; then
+        log "ERROR: failed to add startedAttempt column: $alter_started_attempt"
+        return 1
+      fi
+    }
+    log "migration: startedAttempt column added or already present"
+  fi
   return 0
 }
 
@@ -1840,6 +1852,51 @@ handle_pre_execution_failure() {
     post_lifecycle_comment "$repo" "$issue_num" "$retry_comment" "$reply_to" || log "WARN: failed to post retry comment for $comment_id"
   fi
   return 0
+}
+
+# Check whether a TASK_STARTED lifecycle marker for this exact task/attempt was
+# already published to GitHub. Used to make TASK_STARTED idempotent: a retry that
+# reuses the same attempt number after a pre-execution failure must not post a
+# duplicate visible "in progress" comment.
+start_comment_already_posted() {
+  local repo="$1" issue="$2" comment_id="$3" safe_comment_id="$4" attempt="$5"
+  local safe_key comment_url url_issue_num endpoint filter tmpdir bodies_file body
+
+  [[ "$attempt" =~ ^[0-9]+$ ]] || return 1
+  safe_key="$(sql_escape "$safe_comment_id")"
+  comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_key';" 2>/dev/null)"
+  [ -n "$comment_url" ] || return 1
+  url_issue_num="$(printf '%s' "$comment_url" | grep -oE '(issues|pull)/[0-9]+' | grep -oE '[0-9]+' || true)"
+  [ -n "$url_issue_num" ] || return 1
+
+  if [[ "$comment_url" == *"/pull/"*"#discussion_r"* ]] || [[ "$comment_id" =~ ^review:[0-9]+$ ]]; then
+    endpoint="repos/$repo/pulls/$url_issue_num/comments"
+    filter='.[] | .body // "" | gsub("\n"; "\\n")'
+  else
+    endpoint="repos/$repo/issues/$url_issue_num/comments"
+    filter='.[] | .body // "" | gsub("\n"; "\\n")'
+  fi
+
+  tmpdir="$(mktemp -d)" || return 1
+  bodies_file="$tmpdir/bodies.txt"
+  if ! timeout "${GH_API_TIMEOUT:-30}" gh api "$endpoint" --paginate --jq "$filter" 2>>"$LOG" >"$bodies_file"; then
+    log "WARN: start_comment_already_posted: gh api failed for task $comment_id attempt $attempt; treating as not-yet-posted"
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  while IFS= read -r body; do
+    if [[ "$body" == *manul:event* && "$body" == *"TASK_STARTED"* && \
+          "$body" == *"taskId\":\"$comment_id\""* && \
+          "$body" == *\"attempt\":$attempt* ]]; then
+      log "start_comment_already_posted: TASK_STARTED marker found for task $comment_id attempt $attempt"
+      rm -rf "$tmpdir"
+      return 0
+    fi
+  done < "$bodies_file"
+
+  rm -rf "$tmpdir"
+  return 1
 }
 
 # Repair the invisible attempt marker only when one unique result comment for this
@@ -3640,12 +3697,25 @@ dispatch_once() {
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
     refresh_heartbeat "$COMMENT_ID"
 
-    # 4. Post "in progress" comment BEFORE invoking the LLM
+# 4. Post "in progress" comment BEFORE invoking the LLM
     # Gather task metadata for an informative status comment
     local TRIGGERER="$AUTHOR"
     local SOURCE_LINK="$COMMENT_URL"
     local TASK_SUMMARY
     TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
+
+    # Idempotency guard for TASK_STARTED: a pre-execution failure requeues the
+    # task with the same attempt number, so a naive retry would post a duplicate
+    # visible "in progress" comment. Skip the post when the same task/attempt
+    # already has a TASK_STARTED marker on GitHub, or when the DB fast-path
+    # records one. Fail closed only on the GitHub pre-check; a transient API
+    # failure must not silently suppress a legitimate start.
+    local already_posted="false"
+    if [ "$(sqlite3 "$DB" "SELECT startedAttempt FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)" = "$current_attempt" ]; then
+      already_posted="true"
+    elif start_comment_already_posted "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+      already_posted="true"
+    fi
 
     local start_conv_id
     start_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
@@ -3656,22 +3726,25 @@ dispatch_once() {
 
     local IN_PROGRESS_BODY="$start_event_marker
 
-🔄 Manul is working on this task...
+    🔄 Manul is working on this task...
 
-**Summary:** $TASK_SUMMARY
-**Triggered by:** $TRIGGERER
-**Source:** $SOURCE_LINK"
+    **Summary:** $TASK_SUMMARY
+    **Triggered by:** $TRIGGERER
+    **Source:** $SOURCE_LINK"
 
-    if ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
+    if [ "$already_posted" = "true" ]; then
+      log "dispatch: TASK_STARTED already posted for $COMMENT_ID attempt $current_attempt; skipping duplicate in-progress comment"
+      lc_log "TASK_STARTED_DEDUP" "task=$COMMENT_ID attempt=$current_attempt"
+    elif ! post_lifecycle_comment "$REPO" "$ISSUE_NUM" "$IN_PROGRESS_BODY" "$REPLY_TO"; then
       log "dispatch: FAILED to post in-progress comment for $COMMENT_ID; releasing the claim as a pre-agent infrastructure failure"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_post_failed"
       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not publish the in-progress lifecycle comment before starting the agent." "${PR_NUM_FROM_URL:-}" "$current_attempt" "in_progress_comment"
       return 0
+    else
+      log "dispatch: posted in-progress comment for $COMMENT_ID"
+      log "dispatch: TASK_STARTED embedded in in-progress comment for $COMMENT_ID"
+      sqlite3 "$DB" "UPDATE processed_comments SET startedAttempt=$current_attempt WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$(sql_escape "$CLAIM_TOKEN")';" 2>/dev/null || log "WARN: failed to record startedAttempt for $COMMENT_ID"
     fi
-
-    log "dispatch: posted in-progress comment for $COMMENT_ID"
-
-    log "dispatch: TASK_STARTED embedded in in-progress comment for $COMMENT_ID"
 
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
@@ -4425,21 +4498,6 @@ PROMPT_APPEND
     FINAL_COMMENT="${FINAL_COMMENT:-}"
     FAIL_REASON="${FAIL_REASON:-}"
 
-    # 9. Post lifecycle comment to the SAME GitHub thread
-    # The agent posts its own result comment; daemon posts lifecycle markers only.
-    # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
-    local COMMENT_POST_SUCCESS="false"
-    if [ -n "$FINAL_COMMENT" ]; then
-      # FINAL_COMMENT is the agent's actual user-facing result. It must remain
-      # visible in human mode; only daemon orchestration/status/error comments
-      # are suppressed there.
-      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
-        COMMENT_POST_SUCCESS="true"
-      else
-        log "ERROR: failed to post result comment for $COMMENT_ID"
-      fi
-    fi
-
     # The evaluator is the single authority for running→completed/queued/failed.
     # Never perform a second state transition here after evaluation.
     if [ "$COMPLETION_SUCCESS" = "true" ]; then
@@ -4476,6 +4534,11 @@ PROMPT_APPEND
 
     # Structured terminal events are embedded in the lifecycle comment itself.
     # Intermediate retries intentionally emit no TASK_FAILED event.
+    # CRITICAL: The TASK_DONE/TASK_FAILED machine-event marker must be assembled
+    # into FINAL_COMMENT BEFORE the comment is posted to GitHub. The previous
+    # order posted the agent's result first and then mutated FINAL_COMMENT, so
+    # the terminal event marker never reached the comment body that GitHub
+    # actually received.
     local lifecycle_conv_id
     lifecycle_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
     local lifecycle_pr_num
@@ -4498,6 +4561,22 @@ PROMPT_APPEND
         local lifecycle_event_marker
         lifecycle_event_marker="<!-- manul:event $(printf '%s' "$lifecycle_event_data" | jq -c --arg type "TASK_FAILED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
         FINAL_COMMENT="$lifecycle_event_marker"$'\n\n'"$FINAL_COMMENT"
+      fi
+    fi
+
+    # 9. Post lifecycle comment to the SAME GitHub thread
+    # The agent posts its own result comment; daemon posts lifecycle markers only.
+    # CRITICAL: Post comment BEFORE marking task as completed in SQLite, and
+    # AFTER the terminal event marker has been assembled into FINAL_COMMENT.
+    local COMMENT_POST_SUCCESS="false"
+    if [ -n "$FINAL_COMMENT" ]; then
+      # FINAL_COMMENT is the agent's actual user-facing result. It must remain
+      # visible in human mode; only daemon orchestration/status/error comments
+      # are suppressed there.
+      if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
+        COMMENT_POST_SUCCESS="true"
+      else
+        log "ERROR: failed to post result comment for $COMMENT_ID"
       fi
     fi
 

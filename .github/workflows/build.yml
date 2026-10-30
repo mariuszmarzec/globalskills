@@ -30,6 +30,7 @@ env:
     skills/manul-github-bot/test_manul_cli.sh
     skills/manul-github-bot/test_queue_reset.sh
     skills/manul-github-bot/test_daemon_wrapper_integration.sh
+    skills/manul-github-bot/test_attempt_accounting.sh
     skills/manul-github-bot/test_task_branch_lifecycle.sh
     skills/manul-github-bot/test_workspace_behavior.sh
     skills/manul-github-bot/test_task_workspace_layout.sh
