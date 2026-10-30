@@ -3,6 +3,7 @@
 # This is transport/normalization support, not a combined Todo adapter.
 
 TODO_TASK_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+. "$TODO_TASK_SOURCE_DIR/todo-local-mcp-url.sh"
 
 todo_mcp_source_url() {
   jq -r '.url // empty' <<<"$1"
