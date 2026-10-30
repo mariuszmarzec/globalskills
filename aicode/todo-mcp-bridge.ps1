@@ -37,18 +37,6 @@ function Test-IPv4Address([string]$Value) {
     return $private
 }
 
-function Test-ManagedBridgeProcess([int]$ProcessId, [string]$ScriptPath) {
-    if ($ProcessId -le 0) {
-        return $false
-    }
-    $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
-    if (-not $processInfo -or -not $processInfo.CommandLine) {
-        return $false
-    }
-    return $processInfo.CommandLine.IndexOf($ScriptPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $processInfo.CommandLine -match '(?i)-Action\s+(Connect|Serve)'
-}
-
 function Get-ManagedConnectorProcesses([string]$TargetRelayAddress, [int]$TargetRelayPort) {
     $addressPattern = '["]?-RelayAddress["]?\s+["]?' + [regex]::Escape($TargetRelayAddress) + '["]?'
     $portPattern = '["]?-RelayPort["]?\s+["]?' + [regex]::Escape([string]$TargetRelayPort) + '["]?'
