@@ -19,6 +19,7 @@ ALLOWED_TOOLS = {
     "mark_tasks_done",
     "todo_list_tasks",
     "todo_mark_tasks",
+    "todo_update_task",
 }
 PROTOCOL_VERSION = "2025-03-26"
 
@@ -67,6 +68,7 @@ class StreamableHttpClient:
         self.timeout = timeout
         self.session_id: str | None = None
         self.request_id = 0
+        self.initialized = False
 
     def post(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         headers = {
@@ -76,6 +78,7 @@ class StreamableHttpClient:
         }
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
+        if self.initialized:
             headers["MCP-Protocol-Version"] = PROTOCOL_VERSION
         request = urllib.request.Request(
             self.url,
@@ -140,6 +143,7 @@ class StreamableHttpClient:
                 },
             },
         )
+        self.initialized = True
         self.notify_initialized()
         result = self.request(
             "tools/call",
