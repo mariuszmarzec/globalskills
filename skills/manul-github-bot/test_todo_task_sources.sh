@@ -452,7 +452,7 @@ remote_order="$(cut -f2- "$TODO_MCP_CALL_LOG" | jq -cs '[.[].id]')"
 assert_eq "remote completion reverses the original ordered tree" "[26,23,22,21]" "$remote_order"
 
 echo "=== Report-only Todo delivery ==="
-cat > "$TEST_DIR/local-report.json" <<'JSON
+cat > "$TEST_DIR/local-report.json" <<'JSON'
 [
   {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
