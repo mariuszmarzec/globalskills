@@ -2126,6 +2126,35 @@ post_task_started_comment() {
   return 1
 }
 
+# Publish TASK_STARTED for the claimed attempt and apply pre-agent recovery
+# only when the comment cannot be confirmed. This keeps attempt accounting
+# coupled to the publication result and makes the boundary directly testable.
+publish_task_started_for_claim() {
+  local comment_id="$1" claim_token="$2" repo="$3" issue_num="$4"
+  local workspace_id="$5" reply_to="$6" body="$7" pr_number="${8:-}"
+  local attempt="$9" start_post_rc=0 start_post_reason start_post_stage
+
+  post_task_started_comment "$repo" "$issue_num" "$comment_id" "$attempt" "$body" "$reply_to" || start_post_rc=$?
+  if [ "$start_post_rc" -ne 0 ]; then
+    if [ "$start_post_rc" -eq 2 ]; then
+      start_post_reason="Could not verify whether the TASK_STARTED lifecycle comment already exists; refusing to publish a possibly duplicate start event."
+      start_post_stage="in_progress_comment_idempotency_check"
+    else
+      start_post_reason="Could not publish the in-progress lifecycle comment before starting the agent."
+      start_post_stage="in_progress_comment"
+    fi
+    log "dispatch: TASK_STARTED publication did not complete for $comment_id (rc=$start_post_rc); releasing the claim as a pre-agent infrastructure failure"
+    lc_log "TASK_ERROR" "task=$comment_id reason=task_started_publication_failed rc=$start_post_rc"
+    handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "$workspace_id" "$reply_to" "$start_post_reason" "$pr_number" "$attempt" "$start_post_stage"
+    return 0
+  fi
+
+  log "dispatch: posted in-progress comment for $comment_id"
+  log "dispatch: TASK_STARTED embedded in in-progress comment for $comment_id"
+  return 0
+}
+
+
 
 # Publish terminal failures through the shared feedback handler so all failure
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
@@ -4117,26 +4146,7 @@ dispatch_once() {
 **Triggered by:** $TRIGGERER
 **Source:** $SOURCE_LINK"
 
-    local start_post_rc=0
-    post_task_started_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$current_attempt" "$IN_PROGRESS_BODY" "$REPLY_TO" || start_post_rc=$?
-    if [ "$start_post_rc" -ne 0 ]; then
-      local start_post_reason start_post_stage
-      if [ "$start_post_rc" -eq 2 ]; then
-        start_post_reason="Could not verify whether the TASK_STARTED lifecycle comment already exists; refusing to publish a possibly duplicate start event."
-        start_post_stage="in_progress_comment_idempotency_check"
-      else
-        start_post_reason="Could not publish the in-progress lifecycle comment before starting the agent."
-        start_post_stage="in_progress_comment"
-      fi
-      log "dispatch: TASK_STARTED publication did not complete for $COMMENT_ID (rc=$start_post_rc); releasing the claim as a pre-agent infrastructure failure"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=task_started_publication_failed rc=$start_post_rc"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$start_post_reason" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$start_post_stage"
-      return 0
-    fi
-
-    log "dispatch: posted in-progress comment for $COMMENT_ID"
-
-    log "dispatch: TASK_STARTED embedded in in-progress comment for $COMMENT_ID"
+    publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"
 
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
