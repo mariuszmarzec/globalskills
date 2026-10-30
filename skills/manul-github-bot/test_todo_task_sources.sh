@@ -588,7 +588,7 @@ unset TODO_MCP_FAIL_CREATE
 assert_rc "remote result creation failure is surfaced" "2" "$remote_create_failure_rc"
 remote_create_failure_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "remote result creation failure leaves root active" "true" "$remote_create_failure_root_status"
-remote_create_failure_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+remote_create_failure_child_count=$(jq -r ".[0].subTasks | length" "$TODO_MCP_FIXTURE")
 assert_eq "remote result creation failure writes no child" "0" "$remote_create_failure_child_count"
 
 
