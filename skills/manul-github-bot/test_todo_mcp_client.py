@@ -57,6 +57,18 @@ class FakeMcpHandler(BaseHTTPRequestHandler):
         elif method == "notifications/initialized":
             self._respond(status=202)
         elif method == "tools/call":
+            tool_name = payload["params"]["name"]
+            if tool_name in {"create_task", "todo_create_task"}:
+                arguments = payload["params"]["arguments"]
+                task = arguments if tool_name == "create_task" else arguments["task"]
+                result_value = {
+                    "id": 8,
+                    "description": task["description"],
+                    "parentTaskId": task["parentTaskId"],
+                    "isToDo": True,
+                }
+            else:
+                result_value = [{"id": 7, "description": "Fixture task", "subTasks": []}]
             self._respond(
                 {
                     "jsonrpc": "2.0",
@@ -65,9 +77,7 @@ class FakeMcpHandler(BaseHTTPRequestHandler):
                         "content": [
                             {
                                 "type": "text",
-                                "text": json.dumps(
-                                    [{"id": 7, "description": "Fixture task", "subTasks": []}]
-                                ),
+                                "text": json.dumps(result_value),
                             }
                         ],
                     },
@@ -138,6 +148,44 @@ class TodoMcpClientTests(unittest.TestCase):
         )
         self.assertEqual(7, result[0]["id"])
         self.assertEqual("todo_update_task", FakeMcpHandler.requests[-1][0]["params"]["name"])
+
+    def test_local_and_remote_create_tools_are_allowlisted_and_receive_exact_arguments(self):
+        cases = [
+            (
+                "create_task",
+                {
+                    "description": "Local report result",
+                    "parentTaskId": 42,
+                    "highestPriorityAsDefault": False,
+                },
+            ),
+            (
+                "todo_create_task",
+                {
+                    "task": {
+                        "description": "Remote report result",
+                        "parentTaskId": 77,
+                        "highestPriorityAsDefault": False,
+                    }
+                },
+            ),
+        ]
+        for tool_name, arguments in cases:
+            with self.subTest(tool=tool_name):
+                FakeMcpHandler.requests.clear()
+                client = CLIENT.StreamableHttpClient(self.url, "fixture-token", 3)
+                result = client.call_tool(tool_name, arguments)
+                self.assertEqual(8, result["id"])
+                self.assertEqual(
+                    arguments["description"] if tool_name == "create_task" else arguments["task"]["description"],
+                    result["description"],
+                )
+                call = [
+                    payload for payload, _ in FakeMcpHandler.requests
+                    if payload.get("method") == "tools/call"
+                ][0]
+                self.assertEqual(tool_name, call["params"]["name"])
+                self.assertEqual(arguments, call["params"]["arguments"])
 
     def test_url_embedded_credentials_are_rejected(self):
         with self.assertRaises(CLIENT.McpClientError):

@@ -2975,6 +2975,7 @@ evaluate_task_completion() {
   local PR_HEAD_BRANCH="${17:-}"
   local DELIVERY_MODE="${19:-implementation}"
   local TASK_SOURCE_TYPE="${20:-}"
+  local TASK_EXECUTION_KIND="${21:-repository}"
   # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
   local VERIFIED_MERGED_RESULT_PR_BASE=""
 
@@ -3008,7 +3009,14 @@ evaluate_task_completion() {
   # A user-input request is a deliberate pause, not task failure.
   # Detect and validate the complete structured block before any success/failure
   # verification. Malformed/partial blocks intentionally remain failures.
-  if [ -f "$STDOUT_FILE" ] && {
+  if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [ -f "$STDOUT_FILE" ] && {
+    grep -q "^TASK_NEEDS_USER_BEGIN$" "$STDOUT_FILE" 2>/dev/null ||
+    grep -q "^TASK_NEEDS_USER_END$" "$STDOUT_FILE" 2>/dev/null
+  }; then
+    FAIL_REASON="Report-only Todo tasks cannot pause for user input; return a complete answer or TASK_FAILED"
+    FAILURE_CODE="REPORT_ONLY_USER_INPUT_UNSUPPORTED"
+    USER_DECISION_INVALID="true"
+  elif [ -f "$STDOUT_FILE" ] && {
     grep -q "^TASK_NEEDS_USER_BEGIN$" "$STDOUT_FILE" 2>/dev/null ||
     grep -q "^TASK_NEEDS_USER_END$" "$STDOUT_FILE" 2>/dev/null
   }; then
@@ -3069,6 +3077,7 @@ evaluate_task_completion() {
   fi
 
 
+  if [ "$TASK_EXECUTION_KIND" != "report_only" ]; then
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
@@ -3263,6 +3272,74 @@ else
     fi
   fi
 
+  fi
+
+  # Report-only Todo tasks persist their final answer before any source-tree
+  # completion. The adapter returns a source-bound receipt only after read-back.
+  if [ "$SUCCESS" = "true" ] && [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
+    if ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      SUCCESS="false"
+      FAILURE_CODE="REPORT_ONLY_SOURCE_INVALID"
+      FAIL_REASON="Report-only execution is supported only for Todo task sources"
+    elif [ ! -s "$STDOUT_FILE" ]; then
+      SUCCESS="false"
+      FAILURE_CODE="REPORT_ONLY_ANSWER_EMPTY"
+      FAIL_REASON="Report-only agent returned no answer to persist"
+    else
+      local REPORT_ANSWER REPORT_RECEIPT REPORT_DELIVERY_RC REPORT_ROOT_ID REPORT_RESULT_ID REPORT_DIGEST
+      REPORT_ANSWER="$(python3 - "$STDOUT_FILE" <<'PY_REPORT_ANSWER'
+import re
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+lines = [line for line in output.splitlines() if not re.match(r"^TASK_(?:DONE|COMPLETED)(?:\s|$)", line)]
+print("\n".join(lines).strip())
+PY_REPORT_ANSWER
+)" || REPORT_ANSWER=""
+      if [ -z "$(printf '%s' "$REPORT_ANSWER" | tr -d '[:space:]')" ]; then
+        SUCCESS="false"
+        FAILURE_CODE="REPORT_ONLY_ANSWER_EMPTY"
+        FAIL_REASON="Report-only agent emitted TASK_DONE without a non-empty answer"
+      else
+        REPORT_DELIVERY_RC=0
+        REPORT_RECEIPT="$(task_source_report_deliver "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" "$REPORT_ANSWER")" || REPORT_DELIVERY_RC=$?
+        REPORT_ROOT_ID="${TASK_SOURCE_ID%%@*}"
+        if [ "$REPORT_DELIVERY_RC" -ne 0 ] || ! jq -e --arg sourceId "$TASK_SOURCE_ID" --arg answer "$REPORT_ANSWER" --argjson rootId "$REPORT_ROOT_ID" '
+          .sourceId == $sourceId
+          and .rootTaskId == $rootId
+          and .answer == $answer
+          and (.resultTaskId | type == "number" and . > 0)
+          and (.answerSha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        ' <<<"$REPORT_RECEIPT" >/dev/null 2>&1; then
+          SUCCESS="false"
+          FAILURE_CODE="TODO_REPORT_DELIVERY_FAILED"
+          FAIL_REASON="The report answer could not be persisted and verified as a Todo subtask; the Todo root remains active"
+          log "ERROR: report-only delivery failed for Todo source $TASK_SOURCE_ID (rc=$REPORT_DELIVERY_RC)"
+          lc_log "TODO_REPORT_DELIVERY_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE rc=$REPORT_DELIVERY_RC"
+        else
+          REPORT_RESULT_ID="$(jq -r '.resultTaskId' <<<"$REPORT_RECEIPT")"
+          REPORT_DIGEST="$(jq -r '.answerSha256' <<<"$REPORT_RECEIPT")"
+          local safe_report_receipt safe_report_summary report_update_result report_update_changes
+          safe_report_receipt="$(sql_escape "$REPORT_RECEIPT")"
+          safe_report_summary="$(sql_escape "Verified Todo report subtask #$REPORT_RESULT_ID (sha256 $REPORT_DIGEST)")"
+          report_update_result="$(sqlite3 "$DB" "UPDATE processed_comments SET resultJson='$safe_report_receipt', resultSummary='$safe_report_summary' WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG")" || report_update_result=""
+          report_update_changes="$(printf '%s\n' "$report_update_result" | tail -n 1)"
+          if [ "$report_update_changes" != "1" ]; then
+            SUCCESS="false"
+            FAILURE_CODE="TODO_REPORT_RECEIPT_PERSIST_FAILED"
+            FAIL_REASON="Todo contains the verified report subtask, but Manul could not persist its local delivery receipt; retry will safely reuse the same subtask"
+            log "ERROR: could not persist report-only receipt for task $COMMENT_ID (changes=${report_update_changes:-unknown})"
+            lc_log "TODO_REPORT_RECEIPT_PERSIST_FAILED" "task=$COMMENT_ID result=$REPORT_RESULT_ID"
+          else
+            log "dispatch: report-only answer verified in Todo subtask #$REPORT_RESULT_ID (sha256=$REPORT_DIGEST)"
+            lc_log "TODO_REPORT_DELIVERY_VERIFIED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE result=$REPORT_RESULT_ID sha256=$REPORT_DIGEST"
+            FINAL_COMMENT="Report saved as Todo subtask #$REPORT_RESULT_ID."
+          fi
+        fi
+      fi
+    fi
+  fi
   # GitHub-rooted tasks require a deterministic result-comment receipt.
   # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
   if [ "$SUCCESS" = "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
@@ -3286,7 +3363,11 @@ else
     else
       SUCCESS="false"
       FAILURE_CODE="TODO_SOURCE_UPDATE_FAILED"
-      FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
+      if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
+        FAIL_REASON="The Todo report was saved, but the task tree could not be marked done. The Todo root remains open and the result subtask can be safely reused on retry."
+      else
+        FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
+      fi
       log "ERROR: Todo source completion failed for task $TASK_SOURCE_ID"
       lc_log "TODO_SOURCE_COMPLETION_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
     fi
@@ -3446,12 +3527,22 @@ dispatch_once() {
     return 0
   fi
 
-  # Reconcile the workspace pool only when a task is ready to run.
-  if ! ensure_workspace_pool; then
-    log "dispatch: workspace pool reconciliation failed"
-    lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
-    release_task_lock
-    return 0
+  # Report-only Todo tasks do not need a repository workspace pool. Inspect
+  # the same oldest eligible row the claim query below will select.
+  local next_task_id next_task_context next_execution_kind
+  next_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
+  next_task_context="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$(sql_escape "$next_task_id")' LIMIT 1;" 2>/dev/null)"
+  next_execution_kind="$(printf '%s' "$next_task_context" | jq -r '.execution.kind // "repository"' 2>/dev/null || echo "repository")"
+  if [ "$next_execution_kind" != "report_only" ]; then
+    if ! ensure_workspace_pool; then
+      log "dispatch: workspace pool reconciliation failed"
+      lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
+      release_task_lock
+      return 0
+    fi
+  else
+    log "dispatch: report-only Todo task $next_task_id skips repository workspace pool"
+    lc_log "REPORT_ONLY_DISPATCH" "task=$next_task_id phase=workspace_pool_skipped"
   fi
 
     # 1. Find next eligible task using proper SQLite query with retry backoff
@@ -3590,9 +3681,28 @@ dispatch_once() {
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
+    local TASK_EXECUTION_KIND
+    TASK_EXECUTION_KIND="$(printf '%s' "$TASK_CONTEXT" | jq -r '.execution.kind // "repository"' 2>/dev/null || echo "repository")"
+    case "$TASK_EXECUTION_KIND" in
+      repository|report_only) ;;
+      *)
+        log "dispatch: refusing unsupported execution kind '$TASK_EXECUTION_KIND' for task $COMMENT_ID"
+        mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
+        ;;
+    esac
     local TASK_SOURCE_TYPE TASK_SOURCE_ID
     TASK_SOURCE_TYPE="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_SOURCE_ID="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      log "dispatch: refusing report-only execution for non-Todo source $TASK_SOURCE_TYPE"
+      mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    fi
     local TASK_AUTO_ACCEPT
     TASK_AUTO_ACCEPT="$(sqlite3 "$DB" "SELECT autoAccept FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     case "$TASK_AUTO_ACCEPT" in 1|true|TRUE) TASK_AUTO_ACCEPT=1 ;; *) TASK_AUTO_ACCEPT=0 ;; esac
@@ -3624,7 +3734,9 @@ dispatch_once() {
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
       mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
       stop_heartbeat "$COMMENT_ID"
-      release_repo_lock "$REPO"
+      if [ "$TASK_EXECUTION_KIND" != "report_only" ]; then
+        release_repo_lock "$REPO"
+      fi
       release_task_lock
       set_activity "none" "idle"
       return 0
@@ -3642,20 +3754,12 @@ dispatch_once() {
 
     # Mark the transition to actual agent execution BEFORE posting the
     # in-progress comment that embeds the TASK_STARTED event marker. This
-    # ordering is critical: recovery uses agentStartedAt to distinguish a
-    # genuine agent attempt from a pre-execution infrastructure failure.
-    # If the worker crashes between setting this marker and posting the
-    # comment, recovery will correctly classify the lost execution as an
-    # agent-attempt failure (deducting from the max-attempts budget) rather
-    # than a recoverable pre-execution failure (which would roll back the
-    # attempt bump and reuse the same attempt number, causing a duplicate
-    # TASK_STARTED comment on retry).
-    # Pre-agent failures after this point are handled by adapters that
-    # explicitly report PRE_EXECUTION_FAILURE, which resets agentStartedAt.
+    # ordering prevents stale recovery from reusing an attempt number after
+    # the comment is already visible to the user.
     local agent_start_changed
     agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
     if [ "$agent_start_changed" != "1" ]; then
-      log "ERROR: could not record agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
+      log "ERROR: could not record the agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before posting the lifecycle comment." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
       return 0
@@ -3927,6 +4031,59 @@ This task originates from a Todo task tree, not a GitHub issue or comment.
 TODO_SOURCE_PROMPT
     fi
 
+    local REPO_DIR="" WORKDIR="" WORKSPACE_ID="" workspace_path=""
+    local CURRENT_BRANCH="report-only" INITIAL_BRANCH="report-only" INITIAL_HEAD="" DEFAULT_BRANCH="" INITIAL_BASE_BRANCH=""
+    local RELATED_REPOSITORIES="" RELATED_UNAVAILABLE="" REPORT_ONLY_DIR=""
+    if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
+      REPORT_ONLY_DIR="$(mktemp -d /tmp/manul-report-only.XXXXXX)" || {
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create an isolated scratch directory for the report-only task." "" "$current_attempt" "report_only_workspace"
+        return 0
+      }
+      workspace_path="$REPORT_ONLY_DIR"
+      WORKDIR="$REPORT_ONLY_DIR"
+      TASK_TYPE="todo_report"
+      PR_HEAD_BRANCH=""
+      REPLY_TO=""
+      cat >> "$TASK_PROMPT_FILE" <<'REPORT_ONLY_PROMPT'
+
+## Report-only execution contract — overrides every generic repository/GitHub instruction above
+
+This is a report-only Todo task. No repository is assigned and no repository checkout exists.
+- Do not run git, gh, repository commands, create/edit files outside the isolated scratch directory below, create branches, commit, push, or open a pull request.
+- Do not post GitHub comments or invoke GitHub write APIs.
+- Use the Todo task description and ordered subtask context already included above. For current or externally changing facts, use authorized web/search tools and cite trustworthy sources in your answer.
+- The scratch directory below exists only as the agent working directory; it is not a repository and must not be populated with cloned repositories.
+- Return a complete, directly useful answer in plain text/Markdown. Do not output TASK_NEEDS_USER blocks. When the answer is complete, emit TASK_DONE on its own final line.
+- If the request cannot be answered safely or required evidence is unavailable, emit TASK_FAILED: followed by the concrete reason. Never claim success without a complete answer.
+
+## Isolated scratch directory
+__WORKDIR__
+REPORT_ONLY_PROMPT
+      local prompt_content
+      prompt_content="$(cat "$TASK_PROMPT_FILE")"
+      prompt_content="${prompt_content//__REPO__/No repository (report-only)}"
+      prompt_content="${prompt_content//__ISSUE_NUM__/N\/A}"
+      prompt_content="${prompt_content//__COMMENT_ID__/$COMMENT_ID}"
+      prompt_content="${prompt_content//__COMMENT_URL__/$COMMENT_URL}"
+      prompt_content="${prompt_content//__TASK_TYPE__/todo_report}"
+      prompt_content="${prompt_content//__TASK_ACTION__/REPORT}"
+      prompt_content="${prompt_content//__PR_NUMBER__/N\/A}"
+      prompt_content="${prompt_content//__REPLY_TO__/N\/A}"
+      prompt_content="${prompt_content//__MANUL_MODE__/$MANUL_MODE}"
+      prompt_content="${prompt_content//__HUMAN_COMMENT_MAX_LINES__/$CFG_HUMAN_COMMENT_MAX_LINES}"
+      prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
+      prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"
+      prompt_content="${prompt_content//__WORKSPACE_ROOT__/$workspace_path}"
+      prompt_content="${prompt_content//__RELATED_REPOSITORIES__/None}"
+      prompt_content="${prompt_content//__RELATED_UNAVAILABLE__/None}"
+      prompt_content="${prompt_content//__PR_HEAD_BRANCH__/None}"
+      prompt_content="${prompt_content//__CURRENT_BRANCH__/report-only}"
+      prompt_content="${prompt_content//__DEFAULT_BRANCH__/None}"
+      prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/None}"
+      printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
+      log "dispatch: report-only Todo task $COMMENT_ID uses isolated scratch; no repository checkout or repo lock"
+      lc_log "TODO_REPORT_ONLY_START" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE scratch=$REPORT_ONLY_DIR"
+    else
     # Repository Management: Ensure target repository exists and is authoritative
     local REPO_DIR
     local ensure_repo_rc=0
@@ -4264,6 +4421,8 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
+    fi
+
 # 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
      # The daemon never calls adapter scripts directly; the controller owns
      # timeout enforcement, session continuation, and result mapping.
@@ -4328,7 +4487,7 @@ PROMPT_APPEND
      # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
      # executor or any descendants inherit it: their lifetime may outlive the
      # worker and would keep the dispatcher lock held across a restart.
-      setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
+     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0
      wait "$executor_launcher_pid" || rc=$?
@@ -4405,7 +4564,7 @@ PROMPT_APPEND
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
@@ -4440,10 +4599,9 @@ PROMPT_APPEND
     # The agent posts its own result comment; daemon posts lifecycle markers only.
     # CRITICAL: Post comment BEFORE marking task as completed in SQLite.
     local COMMENT_POST_SUCCESS="false"
-    if [ -n "$FINAL_COMMENT" ]; then
-      # FINAL_COMMENT is the agent's actual user-facing result. It must remain
-      # visible in human mode; only daemon orchestration/status/error comments
-      # are suppressed there.
+    if [ -n "$FINAL_COMMENT" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      # Todo has no GitHub comment protocol; its answer is saved as a verified
+      # child task and the local receipt is stored in processed_comments.
       if post_github_comment "$REPO" "$ISSUE_NUM" "$FINAL_COMMENT" "$REPLY_TO"; then
         COMMENT_POST_SUCCESS="true"
       else
@@ -4527,8 +4685,12 @@ PROMPT_APPEND
     # Persist task diagnostics before removing transient worker artifacts.
     archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
 
-    # Cleanup task artifacts (no separate workdir to remove)
+    # Cleanup task artifacts. Report-only tasks own a disposable scratch
+    # directory rather than a leased repository workspace.
     rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [[ "${REPORT_ONLY_DIR:-}" == /tmp/manul-report-only.* ]] && [ -d "$REPORT_ONLY_DIR" ] && [ ! -L "$REPORT_ONLY_DIR" ]; then
+      rm -rf -- "$REPORT_ONLY_DIR"
+    fi
 
     release_task_lock
     set_activity "none" "idle"

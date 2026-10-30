@@ -52,6 +52,20 @@ Manul has two independent Todo source adapters; enable them individually in `~/.
 - `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
 
+Set `allowReportOnly: true` on either Todo source to opt in to informational
+tasks using a description line such as:
+
+```text
+/manul report Summarize the current state of the project and list the risks
+```
+
+Report-only tasks do not need a repository URL or project alias and never create
+a checkout, branch, or PR. Manul saves the answer as a completed child task under
+the Todo root, reads it back to verify the exact content, and only then completes
+the original task tree. A partial create/update is safely reused on retry rather
+than producing duplicate result children. The default remains disabled in the
+example configuration.
+
 Todo tasks are not assigned to the Todo app repository by default. Manul
 resolves their target from an explicit GitHub repository URL or a unique
 whole-phrase alias in

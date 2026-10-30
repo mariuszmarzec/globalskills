@@ -16,8 +16,10 @@ from urllib.parse import urlsplit
 
 ALLOWED_TOOLS = {
     "list_tasks",
+    "create_task",
     "mark_tasks_done",
     "todo_list_tasks",
+    "todo_create_task",
     "todo_mark_tasks",
     "todo_update_task",
 }
