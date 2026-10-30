@@ -58,6 +58,13 @@ On the next aicode launch:
   the task when that optional MCP was enabled; unrelated tasks continue when
   Todo Desktop is unavailable.
 
+The Windows helper serializes Ensure operations, finds all connector processes
+for the target relay (even when bridge.json is missing or stale), and stops
+stale or duplicate instances before starting one replacement. A per-relay
+Windows mutex also prevents a second Connect process from competing for the
+same channel pool. The WSL relay uses a larger TCP accept backlog for brief
+reconnect bursts and immediately resets rejected excess channels.
+
 The bridge does not change Todo's listener, disable DNS-rebinding protection,
 add Windows Firewall rules, or listen on Windows LAN interfaces. Todo Desktop
 must be running with todo.localMcpServer enabled. Windows bridge logs are
