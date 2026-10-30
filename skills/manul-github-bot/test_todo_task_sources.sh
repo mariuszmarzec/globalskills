@@ -469,9 +469,12 @@ export TODO_MCP_FAIL_MARK=1
 local_report_rc=0
 todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content." >/dev/null || local_report_rc=$?
 assert_rc "failed completion mutation leaves the report task retryable" "2" "$local_report_rc"
-assert_eq "partial local write leaves root task active" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "partial local write keeps one result subtask" "1" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-assert_eq "partial local write leaves result subtask pending" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+partial_local_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "partial local write leaves root task active" "true" "$partial_local_root_status"
+partial_local_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "partial local write keeps one result subtask" "1" "$partial_local_child_count"
+partial_local_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "partial local write leaves result subtask pending" "true" "$partial_local_child_status"
 unset TODO_MCP_FAIL_MARK
 local_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content.")"
 assert_eq "local report receipt preserves the exact answer" "Local report answer with exact content." "$(jq -r '.answer' <<<"$local_report_receipt")"
@@ -482,7 +485,8 @@ assert_eq "local result child is marked completed after read-back" "false" "$loc
 jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-child-parent"
 IFS= read -r local_report_child_parent < "$TEST_DIR/local-report-child-parent"
 assert_eq "local result retains parent relationship" "501" "$local_report_child_parent"
-assert_eq "local result output leaves root active until tree completion" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
+local_report_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "local result output leaves root active until tree completion" "true" "$local_report_root_status"
 assert_eq "verified local report child does not invalidate structural source identity" "0" "$(todo_task_still_current "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id"; echo $?)"
 local_retry_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "A regenerated retry answer must not create a duplicate child.")"
 local_retry_result_id="$(jq -r '.resultTaskId' <<<"$local_retry_receipt")"
@@ -520,8 +524,10 @@ local_create_failure_rc=0
 todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_create_failure_id" "Must not be lost." >/dev/null || local_create_failure_rc=$?
 unset TODO_MCP_FAIL_CREATE
 assert_rc "local result creation failure is surfaced" "2" "$local_create_failure_rc"
-assert_eq "local result creation failure leaves root active" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "local result creation failure writes no child" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+local_create_failure_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "local result creation failure leaves root active" "true" "$local_create_failure_root_status"
+local_create_failure_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "local result creation failure writes no child" "0" "$local_create_failure_child_count"
 
 cat > "$TEST_DIR/remote-report.json" <<'JSON'
 [
@@ -538,17 +544,21 @@ export TODO_MCP_FAIL_MARK=1
 remote_report_rc=0
 todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "Remote Fiteo report answer." >/dev/null || remote_report_rc=$?
 assert_rc "remote partial completion failure remains retryable" "2" "$remote_report_rc"
-assert_eq "remote partial write leaves root active" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "remote partial write keeps exactly one result child" "1" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+remote_partial_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote partial write leaves root active" "true" "$remote_partial_root_status"
+remote_partial_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "remote partial write keeps exactly one result child" "1" "$remote_partial_child_count"
 remote_pending_status="$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "remote result child stays pending when completion update fails" "true" "$remote_pending_status"
 unset TODO_MCP_FAIL_MARK
 remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
-assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$(grep -c '^todo_create_task' "$TODO_MCP_CALL_LOG")"
-assert_eq "remote report retries Fiteo completion update" "2" "$(grep -c '^todo_update_task' "$TODO_MCP_CALL_LOG")"
-remote_report_child_status="$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
+assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$remote_create_call_count"
+remote_update_call_count=$(grep -c todo_update_task "$TODO_MCP_CALL_LOG")
+assert_eq "remote report retries Fiteo completion update" "2" "$remote_update_call_count"
+remote_report_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "remote result child is completed after verified retry read-back" "false" "$remote_report_child_status"
 remote_root_todo="$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")"
 assert_eq "remote root remains active until the task tree completion step" "true" "$remote_root_todo"
@@ -573,8 +583,10 @@ remote_create_failure_rc=0
 todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_create_failure_id" "Must remain active." >/dev/null || remote_create_failure_rc=$?
 unset TODO_MCP_FAIL_CREATE
 assert_rc "remote result creation failure is surfaced" "2" "$remote_create_failure_rc"
-assert_eq "remote result creation failure leaves root active" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "remote result creation failure writes no child" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+remote_create_failure_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
+assert_eq "remote result creation failure leaves root active" "true" "$remote_create_failure_root_status"
+remote_create_failure_child_count=$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")
+assert_eq "remote result creation failure writes no child" "0" "$remote_create_failure_child_count"
 
 
 echo
