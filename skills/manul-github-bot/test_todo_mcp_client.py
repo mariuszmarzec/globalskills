@@ -113,7 +113,11 @@ class TodoMcpClientTests(unittest.TestCase):
             ],
             [item[0]["method"] for item in FakeMcpHandler.requests],
         )
-        for _, headers in FakeMcpHandler.requests:
+        initialize_headers = FakeMcpHandler.requests[0][1]
+        self.assertEqual("Bearer fixture-token", initialize_headers["Authorization"])
+        self.assertNotIn("Mcp-Session-Id", initialize_headers)
+        self.assertNotIn("MCP-Protocol-Version", initialize_headers)
+        for _, headers in FakeMcpHandler.requests[1:]:
             self.assertEqual("Bearer fixture-token", headers["Authorization"])
             self.assertEqual("fixture-session", headers["Mcp-Session-Id"])
             self.assertEqual(CLIENT.PROTOCOL_VERSION, headers["MCP-Protocol-Version"])
