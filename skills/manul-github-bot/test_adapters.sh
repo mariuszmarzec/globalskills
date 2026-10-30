@@ -1195,6 +1195,154 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 10c. Todo local MCP is injected only when the Windows bridge is reachable
+# ---------------------------------------------------------------------------
+test_opencode_todo_local_mcp() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  local home="$tmp/home"
+  local workspace="$home/.manul/workspace/ws-todo"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$workspace"
+  cat >"$home/.config/opencode/opencode.json" <<'JSON'
+{
+  "model": "test/provider",
+  "mcp": {
+    "other-server": {"type":"remote","url":"https://example.invalid/mcp","enabled":true},
+    "todo-local": {"type":"remote","url":"http://stale.invalid/mcp","enabled":true}
+  },
+  "tools": {"todo-local_*": true},
+  "agent": {
+    "coder": {"tools": {"*": true}},
+    "chat": {"tools": {"*": false}}
+  }
+}
+JSON
+  cat >"$home/.manul/.env" <<'ENV'
+TODO_LOCAL_MCP_TOKEN=runtime-todo-token
+ENV
+  chmod 600 "$home/.manul/.env"
+  cat >"$tmp/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+status="${MOCK_TODO_PROBE_STATUS:-401}"
+printf '%s' "$status"
+[ "$status" = "401" ] && exit 0
+exit 7
+MOCK
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  config="${OPENCODE_CONFIG:?effective task config missing}"
+  expected="${TODO_LOCAL_MCP_AVAILABLE:-0}"
+  jq -e --arg expected "$expected" '
+    .mcp["other-server"].url == "https://example.invalid/mcp"
+    and .mcp["caracal-rag"].type == "remote"
+    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp["caracal-rag"].enabled == true
+    and .tools["caracal-rag_*"] == true
+    and .agent.coder.tools["caracal-rag_*"] == true
+    and .agent.chat.tools["caracal-rag_*"] == null
+    and (
+      if $expected == "1" then
+        .mcp["todo-local"].type == "remote"
+        and .mcp["todo-local"].url == "http://127.0.0.1:8766/mcp"
+        and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
+        and .mcp["todo-local"].enabled == true
+        and .tools["todo-local_*"] == true
+        and .agent.coder.tools["todo-local_*"] == true
+        and .agent.chat.tools["todo-local_*"] == null
+      else
+        .mcp["todo-local"] == null
+        and .tools["todo-local_*"] == null
+        and .agent.coder.tools["todo-local_*"] == null
+      end
+    )
+  ' "$config" >/dev/null
+  : >"${MOCK_CONFIG_CHECK_FILE:?}"
+  printf '%s\n' 'caracal-rag connected'
+  if [ "$expected" = "1" ]; then
+    if [ "${MOCK_TODO_MCP_STATE:-connected}" = "connected" ]; then
+      printf '%s\n' 'todo-local connected'
+      exit 0
+    fi
+    printf '%s\n' 'todo-local failed'
+    printf 'Authorization: Bearer %s\n' "${TODO_LOCAL_MCP_TOKEN:-}" >&2
+    exit 1
+  fi
+  exit 0
+fi
+: >"${MOCK_TASK_STARTED_FILE:?}"
+cat >/dev/null
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_todo","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_todo","part":{"type":"text","text":"TASK_DONE todo local verified"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_todo","part":{"type":"step-finish"}}'
+MOCK
+  chmod +x "$tmp/bin/curl" "$tmp/bin/opencode"
+  printf '%s\n' "Use Todo local MCP if available" >"$tmp/prompt"
+
+  local out rc
+  # A long-lived daemon must read the latest token saved by aicode, not an
+  # inherited stale value from when the daemon originally started.
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
+    TODO_LOCAL_MCP_TOKEN="stale-inherited-token" MOCK_TODO_PROBE_STATUS=401 \
+    MOCK_TODO_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/connected-config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/connected-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-todo-connected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/connected.stdout" --stderr-file "$tmp/connected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode runs task with Todo local MCP connected"
+  [ "$rc" -eq 0 ] && ok "Connected Todo local MCP permits task execution" || fail "Todo connected rc=$rc"
+  [ -f "$tmp/connected-config-checked" ] && ok "Task-scoped config injects Todo local with the runtime token placeholder" || fail "Todo local config injection failed"
+  [ -f "$tmp/connected-task-started" ] && ok "Task starts after Todo local preflight passes" || fail "Task did not start after Todo local preflight passed"
+
+  rm -f "$tmp/connected-config-checked" "$tmp/connected-task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
+    MOCK_TODO_PROBE_STATUS=401 MOCK_TODO_MCP_STATE=disconnected \
+    MOCK_CONFIG_CHECK_FILE="$tmp/disconnected-config-checked" MOCK_TASK_STARTED_FILE="$tmp/disconnected-task-started" \
+    MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-todo-disconnected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/disconnected.stdout" --stderr-file "$tmp/disconnected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "FAILED" "OpenCode refuses a task when an available Todo local MCP is disconnected"
+  [ "$rc" -eq 78 ] && ok "Disconnected Todo local MCP fails before agent execution" || fail "Todo disconnected rc=$rc"
+  printf '%s' "$out" | jq -r '.diagnostics.stage // empty' | grep -qx 'todo_local_mcp_preflight' \
+    && ok "Todo local connection failure has a distinct preflight stage" \
+    || fail "Todo local preflight stage missing"
+  [ ! -f "$tmp/disconnected-task-started" ] && ok "Task does not start without connected Todo local MCP" || fail "Task started despite disconnected Todo local MCP"
+  grep -Fq 'Todo local MCP preflight stderr: Authorization: Bearer [REDACTED]' "$tmp/disconnected.stderr" \
+    && ok "Todo local token is redacted from preflight diagnostics" \
+    || fail "Todo local token was not redacted"
+  if grep -Fq 'runtime-todo-token' "$tmp/disconnected.stderr"; then
+    fail "Todo local preflight diagnostics leaked the bearer token"
+  else
+    ok "Todo local preflight diagnostics do not expose the bearer token"
+  fi
+
+  rm -f "$tmp/disconnected-config-checked" "$tmp/disconnected-task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
+    MOCK_TODO_PROBE_STATUS=000 MOCK_CONFIG_CHECK_FILE="$tmp/unavailable-config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/unavailable-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-todo-unavailable --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/unavailable.stdout" --stderr-file "$tmp/unavailable.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode continues normally when optional Todo bridge is unavailable"
+  [ "$rc" -eq 0 ] && ok "Unavailable optional Todo MCP does not block unrelated tasks" || fail "Todo unavailable rc=$rc"
+  [ -f "$tmp/unavailable-config-checked" ] && ok "Stale Todo MCP entry is removed when bridge is unavailable" || fail "Unavailable Todo config was not validated"
+  [ -f "$tmp/unavailable-task-started" ] && ok "Task executes without optional Todo MCP" || fail "Task did not execute without Todo MCP"
+}
+
+# ---------------------------------------------------------------------------
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
 test_agent_executor_dispatch() {
@@ -1501,6 +1649,7 @@ test_opencode_permission_recovery
 test_opencode_missing
 test_opencode_continuation
 test_opencode_caracal_mcp
+test_opencode_todo_local_mcp
 test_agent_executor_dispatch
 test_runtime_selection
 test_unknown_runtime

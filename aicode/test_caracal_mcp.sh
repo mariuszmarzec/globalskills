@@ -75,6 +75,10 @@ repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | c
 [ -n "$bootstrap_line" ] && [ -n "$repair_line" ] && [ "$bootstrap_line" -lt "$repair_line" ] || fail "Caracal environment refresh must happen before Manul repair"
 ok "Manul's stored Caracal environment is refreshed before repair"
 contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "Manul injects Caracal into its task-local OpenCode config"
+contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "Manul injects Todo local MCP into the task-local OpenCode config when available"
+contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
+contains "$MANUL/opencode-adapter.sh" 'TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"' "Manul refreshes the Todo token from its runtime environment for each task"
+contains "$MANUL/manul-env.sh" 'TODO_LOCAL_MCP_TOKEN' "Manul persists Todo local MCP token for unattended tasks"
 contains "$MANUL/opencode-adapter.sh" 'ProcessRunner.run --timeout 45' "Manul checks the live OpenCode MCP registry"
 contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to start a task without a live Caracal connection"
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
@@ -203,6 +207,7 @@ echo "All Caracal MCP regression guards passed."
 
 # Todo Desktop runs in Windows; OpenCode receives only the authenticated WSL loopback bridge.
 contains "$AICODE" '. "$HOME/.config/opencode/todo-mcp.env"' "aicode loads the Todo MCP token for normal OpenCode sessions"
+contains "$AICODE" 'if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then' "an exported shell token takes precedence over the optional Todo env file"
 contains "$AICODE" 'ensure_todo_mcp_bridge' "aicode starts the optional Todo bridge before OpenCode"
 contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aicode only enables Todo MCP after the unauthenticated 401 probe"
 contains "$AICODE" 'url: "http://127.0.0.1:8766/mcp"' "OpenCode uses the stable WSL loopback bridge URL"
