@@ -305,18 +305,18 @@ todo_task_to_source_json() {
   body="$title"
   prompt="$(todo_task_prompt "$task_json")"
   resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
-  prompt+=$'\\n\\n## Repository routing\\n\\nTarget repository: '
+  prompt+=$'\n\n## Repository routing\n\nTarget repository: '
   prompt+="$repository"
-  prompt+=$'\\nResolution method: '
+  prompt+=$'\nResolution method: '
   prompt+="$resolution_method"
   matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
   if [ -n "$matched_alias" ]; then
-    prompt+=$'\\nMatched project alias: '
+    prompt+=$'\nMatched project alias: '
     prompt+="$matched_alias"
   fi
   project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
   if [ -n "$project_skill_context" ]; then
-    prompt+=$'\\n\\n## Relevant project skills (included below)\\n\\n'
+    prompt+=$'\n\n## Relevant project skills (included below)\n\n'
     prompt+="$project_skill_context"
   fi
   ids="$(todo_task_ids_json "$task_json")"
