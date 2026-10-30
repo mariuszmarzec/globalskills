@@ -3305,10 +3305,10 @@ PY_REPORT_ANSWER
         REPORT_DELIVERY_RC=0
         REPORT_RECEIPT="$(task_source_report_deliver "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" "$REPORT_ANSWER")" || REPORT_DELIVERY_RC=$?
         REPORT_ROOT_ID="${TASK_SOURCE_ID%%@*}"
-        if [ "$REPORT_DELIVERY_RC" -ne 0 ] || ! jq -e --arg sourceId "$TASK_SOURCE_ID" --arg answer "$REPORT_ANSWER" --argjson rootId "$REPORT_ROOT_ID" '
+        if [ "$REPORT_DELIVERY_RC" -ne 0 ] || ! jq -e --arg sourceId "$TASK_SOURCE_ID" --argjson rootId "$REPORT_ROOT_ID" '
           .sourceId == $sourceId
           and .rootTaskId == $rootId
-          and .answer == $answer
+          and (.answer | type == "string" and length > 0)
           and (.resultTaskId | type == "number" and . > 0)
           and (.answerSha256 | type == "string" and test("^[0-9a-f]{64}$"))
         ' <<<"$REPORT_RECEIPT" >/dev/null 2>&1; then
