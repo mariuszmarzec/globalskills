@@ -59,6 +59,7 @@ source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
 source "$DAEMON_SCRIPT_DIR/agent-session-state.sh"
+source "$DAEMON_SCRIPT_DIR/task-source.sh"
 
 CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
@@ -1718,6 +1719,10 @@ post_github_comment() {
 # about orchestration state on GitHub; the agent result comment is verified
 # separately via the deterministic task/attempt marker.
 post_lifecycle_comment() {
+  if [[ "${2:-}" =~ ^0+$ ]]; then
+    lc_log "EXTERNAL_SOURCE_LIFECYCLE_SUPPRESSED" "issue=0"
+    return 0
+  fi
   if [ "$MANUL_MODE" = "human" ]; then
     return 0
   fi
@@ -1728,6 +1733,10 @@ post_lifecycle_comment() {
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
 post_task_failure_feedback() {
   local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}" stage="${6:-task_execution}"
+  if [[ "$issue_num" =~ ^0+$ ]]; then
+    lc_log "EXTERNAL_SOURCE_FAILURE_FEEDBACK_SUPPRESSED" "task=$comment_id stage=$stage"
+    return 0
+  fi
   error="$(manul_redact_failure_details "$error")"
   local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error" --stage "$stage")
 
@@ -3561,6 +3570,9 @@ dispatch_once() {
     TASK_CONTEXT="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
+    local TASK_SOURCE_TYPE TASK_SOURCE_ID
+    TASK_SOURCE_TYPE="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    TASK_SOURCE_ID="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     local TASK_AUTO_ACCEPT
     TASK_AUTO_ACCEPT="$(sqlite3 "$DB" "SELECT autoAccept FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     case "$TASK_AUTO_ACCEPT" in 1|true|TRUE) TASK_AUTO_ACCEPT=1 ;; *) TASK_AUTO_ACCEPT=0 ;; esac
@@ -3582,7 +3594,11 @@ dispatch_once() {
 
     # 3.5 Pre-flight source revalidation — terminal if source no longer valid
     local reval_rc=0
-    revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      task_source_revalidate "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" || reval_rc=$?
+    else
+      revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
+    fi
     if [ "$reval_rc" -eq 1 ]; then
       log "dispatch: source stale for task $COMMENT_ID, marking terminal"
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
