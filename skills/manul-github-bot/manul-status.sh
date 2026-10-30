@@ -328,7 +328,6 @@ if [ "$LIST_MODE" = true ]; then
         "$attempts_width" "$attempts" "$created"
     done <<< "$RESULTS"
   fi
-  fi
 else
   # Single task mode
   if [ -z "$TASK_ID" ]; then
