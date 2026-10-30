@@ -544,7 +544,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_PAT"}'
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
