@@ -2,6 +2,7 @@
 import importlib.util
 import queue
 import socket
+import struct
 import threading
 import unittest
 from unittest.mock import patch
@@ -126,6 +127,31 @@ class TodoMcpBridgeTests(unittest.TestCase):
 
         self.assertTrue(received.startswith(b"HTTP/1.1 401 Unauthorized"))
 
+    def test_reverse_listener_backlog_handles_short_reconnect_bursts(self):
+        self.assertEqual(128, proxy_module.reverse_listen_backlog(4))
+        self.assertEqual(128, proxy_module.reverse_listen_backlog(16))
+        self.assertEqual(256, proxy_module.reverse_listen_backlog(32))
+
+    def test_rejected_reverse_channels_use_immediate_tcp_reset(self):
+        class RecordingSocket:
+            def __init__(self):
+                self.options = []
+                self.closed = False
+
+            def setsockopt(self, level, option, value):
+                self.options.append((level, option, value))
+
+            def close(self):
+                self.closed = True
+
+        channel = RecordingSocket()
+        proxy_module.reject_reverse_channel(channel)
+        self.assertEqual(
+            [(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))],
+            channel.options,
+        )
+        self.assertTrue(channel.closed)
+
     def test_reverse_pool_discards_channels_closed_before_assignment(self):
         pool = proxy_module.ReverseChannelPool("172.24.0.1", max_channels=1)
         local_channel, remote_channel = socket.socketpair()
@@ -144,6 +170,19 @@ class TodoMcpBridgeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     proxy_module.ensure_ipv4_private(address, "test address")
 
+    def test_windows_bridge_reaps_orphans_and_serializes_connector_startup(self):
+        source = WINDOWS_BRIDGE.read_text(encoding="utf-8")
+        self.assertIn("Get-ManagedConnectorProcesses", source)
+        self.assertIn("Get-CimInstance -ClassName Win32_Process", source)
+        self.assertIn("todo-mcp-bridge\\.ps1", source)
+        self.assertIn('$connectors = @(Get-ManagedConnectorProcesses $RelayAddress $RelayPort)', source)
+        self.assertIn("foreach ($connector in $connectors)", source)
+        self.assertIn("Stop-ManagedConnectorProcess $connector", source)
+        self.assertIn('$connectors.Count -eq 1', source)
+        self.assertIn("Global\\GlobalSkillsTodoMcpBridgeEnsure", source)
+        self.assertIn("Global\\GlobalSkillsTodoMcpBridgeConnect_", source)
+        self.assertIn("$connectMutex.WaitOne(0)", source)
+
     def test_windows_bridge_only_initiates_outbound_channels(self):
         source = WINDOWS_BRIDGE.read_text(encoding="utf-8")
         self.assertIn("channel.BeginConnect(relay, relayPort", source)
@@ -153,7 +192,6 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("responsePump.GetAwaiter().GetResult()", source)
         self.assertIn("if source is reverse_channel:", SCRIPT.read_text(encoding="utf-8"))
         self.assertNotIn("Task.WhenAny(requestPump, responsePump)", source)
-        self.assertIn("Action\\s+(Connect|Serve)", source)
         self.assertNotIn("TcpListener", source)
         self.assertNotIn("New-NetFirewallRule", source)
 

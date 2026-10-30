@@ -12,6 +12,7 @@ import select
 import signal
 import socket
 import socketserver
+import struct
 import subprocess
 import sys
 import threading
@@ -23,7 +24,26 @@ DEFAULT_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 8766
 DEFAULT_REVERSE_LISTEN_PORT = 18766
 DEFAULT_CHANNEL_COUNT = 4
+DEFAULT_REVERSE_LISTEN_BACKLOG = 128
+EXCESS_CHANNEL_LOG_INTERVAL = 64
 SCRIPT_PATH = str(Path(__file__).resolve())
+
+def reverse_listen_backlog(max_channels):
+    """Keep short connector reconnect bursts out of the kernel's small default backlog."""
+    return max(DEFAULT_REVERSE_LISTEN_BACKLOG, max_channels * 8)
+
+
+def reject_reverse_channel(channel):
+    """Reset rejected TCP channels immediately instead of leaving half-closed peers."""
+    try:
+        channel.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    except OSError:
+        pass
+    try:
+        channel.close()
+    except OSError:
+        pass
+
 
 
 def ensure_ipv4_private(value, description):
@@ -52,13 +72,14 @@ class ReverseChannelPool:
         self.stop_event = threading.Event()
         self.listener = None
         self.thread = None
+        self.rejected_excess_channels = 0
 
     def start(self, listen_host, listen_port):
         listen_host = ensure_ipv4_private(listen_host, "reverse listen host")
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((listen_host, listen_port))
-        listener.listen(self.channels.maxsize)
+        listener.listen(reverse_listen_backlog(self.channels.maxsize))
         listener.settimeout(0.5)
         self.listener = listener
         self.thread = threading.Thread(
@@ -90,7 +111,7 @@ class ReverseChannelPool:
                     f"expected {self.allowed_client_address}.",
                     flush=True,
                 )
-                channel.close()
+                reject_reverse_channel(channel)
                 continue
 
             channel.setblocking(True)
@@ -98,8 +119,15 @@ class ReverseChannelPool:
                 self.channels.put(channel, timeout=0.25)
                 print("Accepted a Windows-initiated reverse channel.", flush=True)
             except queue.Full:
-                print("Rejected an excess reverse channel; pool is full.", flush=True)
-                channel.close()
+                self.rejected_excess_channels += 1
+                rejected = self.rejected_excess_channels
+                if rejected == 1 or rejected % EXCESS_CHANNEL_LOG_INTERVAL == 0:
+                    print(
+                        f"Rejected excess reverse channels because the pool is full "
+                        f"(total rejected: {rejected}).",
+                        flush=True,
+                    )
+                reject_reverse_channel(channel)
 
     @staticmethod
     def _channel_is_idle_and_open(channel):
