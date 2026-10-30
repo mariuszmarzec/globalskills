@@ -238,18 +238,24 @@ test_task_started_claim_accounting() {
 test_task_started_claim_accounting
 
 test_dispatch_stops_after_unconfirmed_task_started() {
-  local dispatch_body
+  local dispatch_body guard_block call_line prompt_line
   dispatch_body="$(sed -n '/^dispatch_once()/,/^run_once()/p' "$DAEMON")"
-  assert_contains "dispatcher aborts after TASK_STARTED publication failure" "$dispatch_body" "if ! publish_task_started_for_claim"
-  assert_contains "dispatcher returns before prompt creation when TASK_STARTED is unconfirmed" "$dispatch_body" "return 0"
-  local call_line prompt_line
+  guard_block="$(printf '%s\n' "$dispatch_body" | sed -n '/if ! publish_task_started_for_claim/,/^    fi/p')"
+  if [[ "$dispatch_body" != *"if ! publish_task_started_for_claim"* ]]; then
+    echo "FAIL: dispatcher does not guard an unconfirmed TASK_STARTED publication" >&2
+    return 1
+  fi
+  if [[ "$guard_block" != *"return 0"* ]]; then
+    echo "FAIL: dispatcher does not return after TASK_STARTED recovery" >&2
+    return 1
+  fi
   call_line="$(printf '%s\n' "$dispatch_body" | grep -n "if ! publish_task_started_for_claim" | head -1 | cut -d: -f1)"
   prompt_line="$(printf '%s\n' "$dispatch_body" | grep -n 'Create per-task prompt' | head -1 | cut -d: -f1)"
-  [ -n "$call_line" ] && [ -n "$prompt_line" ] && [ "$prompt_line" -gt "$call_line" ] || {
+  if [ -z "$call_line" ] || [ -z "$prompt_line" ] || [ "$prompt_line" -le "$call_line" ]; then
     echo "FAIL: TASK_STARTED guard is missing or appears after prompt creation" >&2
     return 1
-  }
-  ok "TASK_STARTED failure guard is before prompt/runtime setup"
+  fi
+  echo "PASS: TASK_STARTED publication failure exits dispatch before prompt/runtime setup"
 }
 test_dispatch_stops_after_unconfirmed_task_started
 
