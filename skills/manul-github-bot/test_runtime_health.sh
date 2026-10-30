@@ -254,6 +254,9 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
     fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
   fi
 done
+grep -q 'enabled Todo MCP task source requires python3' "$SCRIPT_DIR/install-manul.sh" \
+  && ok "Installer requires python3 only when a Todo MCP source is enabled" \
+  || fail "Installer does not validate python3 for enabled Todo MCP sources"
 
 # Runtime session-state helper must be deployed alongside the execution controller.
 if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
