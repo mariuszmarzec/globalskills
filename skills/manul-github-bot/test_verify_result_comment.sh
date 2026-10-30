@@ -207,8 +207,7 @@ find_terminal_lifecycle_comment_id() {
       def event:
         (.body // "") as $body | ($body | split("<!-- manul:event ")) as $parts
         | if ($parts|length) < 2 then null else (try ($parts[1] | split(" -->")[0] | fromjson) catch null) end;
-      (add // [])
-      | map(. as $comment | ($comment | event) as $event
+      map(. as $comment | ($comment | event) as $event
           | select($event.type == $type and $event.data.taskId == $task and $event.data.attempt == $attempt
               and (($reply == "") or (($comment.in_reply_to_id // "")|tostring) == $reply))
           | $comment.id)
