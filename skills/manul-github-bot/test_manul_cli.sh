@@ -412,6 +412,49 @@ test_status() {
     fail "Text list shows Todo Local/Remote and their provider task IDs" "Todo Local 420 and Todo Remote 421" "$OUTPUT"
   fi
 
+  # Regression: long identifiers and repository/source IDs must not shift columns.
+  LONG_TASK_ID="review-fix-conv-mariuszmarzec/fiteoApp-issue-22-5712883306"
+  LONG_REPO="mariuszmarzec/repository-name-longer-than-twenty-characters"
+  LONG_SOURCE_ID="provider-source-record-id-longer-than-twenty-four-characters"
+  LONG_CREATED="2026-10-30T13:28:12Z"
+  sqlite3 "$DB" "
+    INSERT INTO processed_comments
+      (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)
+    VALUES
+      ('$LONG_TASK_ID','$LONG_REPO',42,'stale',3,'$LONG_CREATED','github_issues','$LONG_SOURCE_ID');
+  "
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  if printf '%s\\n' "$OUTPUT" | awk \\
+    -v task_id="$LONG_TASK_ID" \\
+    -v repo_ref="$LONG_REPO#42" \\
+    -v source_id="$LONG_SOURCE_ID" \\
+    -v created="$LONG_CREATED" '
+      NR == 1 {
+        task_col = index($0, "TASK_ID")
+        repo_col = index($0, "REPO#ISSUE")
+        source_col = index($0, "SOURCE")
+        source_id_col = index($0, "SOURCE_ID")
+        status_col = index($0, "STATUS")
+        attempts_col = index($0, "ATTEMPTS")
+        created_col = index($0, "CREATED")
+        next
+      }
+      index($0, task_id) == task_col {
+        if (substr($0, repo_col, length(repo_ref)) != repo_ref) exit 1
+        if (substr($0, source_col, 6) != "GitHub") exit 1
+        if (substr($0, source_id_col, length(source_id)) != source_id) exit 1
+        if (substr($0, status_col, 5) != "stale") exit 1
+        if (substr($0, attempts_col, 1) != "3") exit 1
+        if (substr($0, created_col, length(created)) != created) exit 1
+        found = 1
+      }
+      END { if (!found) exit 1 }
+    '; then
+    pass "Long task/repository/source IDs keep every text-list column aligned"
+  else
+    fail "Long task/repository/source IDs keep every text-list column aligned" "all values start under their headers" "$OUTPUT"
+  fi
+
   # Test 7: Text format output for a single task
   log "Text format output"
   MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-submit.sh" \

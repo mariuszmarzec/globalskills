@@ -261,10 +261,24 @@ if [ "$LIST_MODE" = true ]; then
     done <<< "$RESULTS"
     printf '\n]\n'
   else
-    printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
-      "TASK_ID" "REPO#ISSUE" "SOURCE" "SOURCE_ID" "STATUS" "ATTEMPTS" "CREATED"
-    printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
-      "-------" "----------" "------" "---------" "------" "--------" "-------"
+    # Calculate widths from all rendered values. printf field widths are minimums,
+    # not maximums, so fixed widths let long task IDs/repository names shift columns.
+    header_task_id="TASK_ID"
+    header_repo_issue="REPO#ISSUE"
+    header_source="SOURCE"
+    header_source_id="SOURCE_ID"
+    header_status="STATUS"
+    header_attempts="ATTEMPTS"
+    header_created="CREATED"
+
+    task_id_width=${#header_task_id}
+    repo_issue_width=${#header_repo_issue}
+    source_width=${#header_source}
+    source_id_width=${#header_source_id}
+    status_width=${#header_status}
+    attempts_width=${#header_attempts}
+    created_width=${#header_created}
+
     while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
       source_name="$(task_source_label "$task_source_type")"
       source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
@@ -272,9 +286,48 @@ if [ "$LIST_MODE" = true ]; then
       if [ "$issue" != "0" ]; then
         repo_reference="$repo#$issue"
       fi
-      printf "%-40s %-20s %-14s %-24s %-10s %-10s %s\n" \
-        "$tid" "$repo_reference" "$source_name" "$source_record_id" "$status" "$attempts" "$created"
+
+      [ ${#tid} -le "$task_id_width" ] || task_id_width=${#tid}
+      [ ${#repo_reference} -le "$repo_issue_width" ] || repo_issue_width=${#repo_reference}
+      [ ${#source_name} -le "$source_width" ] || source_width=${#source_name}
+      [ ${#source_record_id} -le "$source_id_width" ] || source_id_width=${#source_record_id}
+      [ ${#status} -le "$status_width" ] || status_width=${#status}
+      [ ${#attempts} -le "$attempts_width" ] || attempts_width=${#attempts}
+      [ ${#created} -le "$created_width" ] || created_width=${#created}
     done <<< "$RESULTS"
+
+    printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\\n" \\
+      "$task_id_width" "$header_task_id" \\
+      "$repo_issue_width" "$header_repo_issue" \\
+      "$source_width" "$header_source" \\
+      "$source_id_width" "$header_source_id" \\
+      "$status_width" "$header_status" \\
+      "$attempts_width" "$header_attempts" "$header_created"
+    printf "%s  %s  %s  %s  %s  %s  %s\\n" \\
+      "$(printf '%*s' "$task_id_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$repo_issue_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$source_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$source_id_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$status_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$attempts_width" '' | tr ' ' '-')" \\
+      "$(printf '%*s' "$created_width" '' | tr ' ' '-')"
+
+    while IFS='|' read -r tid repo issue status conv attempts created started worker ws next task_source_type task_source_id; do
+      source_name="$(task_source_label "$task_source_type")"
+      source_record_id="$(task_source_record_id "$task_source_type" "$task_source_id")"
+      repo_reference="$repo"
+      if [ "$issue" != "0" ]; then
+        repo_reference="$repo#$issue"
+      fi
+      printf "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\\n" \\
+        "$task_id_width" "$tid" \\
+        "$repo_issue_width" "$repo_reference" \\
+        "$source_width" "$source_name" \\
+        "$source_id_width" "$source_record_id" \\
+        "$status_width" "$status" \\
+        "$attempts_width" "$attempts" "$created"
+    done <<< "$RESULTS"
+  fi
   fi
 else
   # Single task mode
