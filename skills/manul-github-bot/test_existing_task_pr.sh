@@ -110,7 +110,7 @@ if [[ "$1" == "pr" && "$2" == "create" ]]; then
     esac
   done
   jq -cn --arg base "$base" --arg head "$head" \
-    '{[{number:19,url:"https://github.com/test/repo/pull/19",state:"OPEN",baseRefName:$base,headRefName:$head,body:"Automatically created by Manul for task issue:6127115709."}]}' \
+    '[{number:19,url:"https://github.com/test/repo/pull/19",state:"OPEN",baseRefName:$base,headRefName:$head,body:"Automatically created by Manul for task issue:6127115709."}]' \
     >"$FAKE_GH_PR_LIST"
   # Simulate GitHub accepting the PR but the client losing the response.
   exit 1
