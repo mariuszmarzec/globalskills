@@ -73,7 +73,7 @@ RESULT="$(sqlite3 "$DB" "
   SELECT commentId, status, conversationId, attempts, processedAt,
          prompt, COALESCE(resultSummary, context) as summary_data
   FROM processed_comments
-  WHERE commentId='$ESCAPED_TASK_ID' AND status IN ('completed', 'failed');
+  WHERE commentId='$ESCAPED_TASK_ID' AND status IN ('completed', 'failed', 'blocked_user');
 " 2>/dev/null)" || {
   echo "Error: Failed to query task result" >&2
   exit 1
@@ -99,6 +99,9 @@ else
   SUCCESS="false"
   SUMMARY="null"
   ERROR="$(printf '%s' "$summary_data" | sed 's/"/\\"/g')"
+fi
+if [ "$status" = "blocked_user" ]; then
+  ERROR="${summary_data:-"Task is blocked waiting for user input"}"
 fi
 
 if [ "$OUTPUT_FORMAT" = "json" ]; then
@@ -139,7 +142,7 @@ else
     echo "  error:          $ERROR"
   fi
   echo ""
-  echo "Note: For detailed results (changed files, commits, PRs), check the GitHub comment."
+  echo "Note: For detailed results (changed files, commits, PRs), check the linked PR. Todo-source questions are stored here; update the Todo task to resume with a new source version."
 fi
 
 exit 0
