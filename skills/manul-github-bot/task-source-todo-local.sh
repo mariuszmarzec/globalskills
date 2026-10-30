@@ -2,7 +2,7 @@
 # Independent source adapter for Todo Desktop's local MCP endpoint.
 set -uo pipefail
 
-TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]:-$0}")" && pwd)"
+TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
 
 todo_source_local_config() {
