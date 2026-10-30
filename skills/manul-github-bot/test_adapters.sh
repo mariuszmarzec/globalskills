@@ -557,6 +557,46 @@ MOCK
 # ---------------------------------------------------------------------------
 # 8. OpenCode normal stop without TASK_DONE
 # ---------------------------------------------------------------------------
+test_opencode_step_limit_text_is_not_authoritative() {
+  local tmp out rc
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/runtime"
+  printf '%s\\n' '{"automation":{"opencodeMaxStepLimitContinuations":3}}' >"$tmp/runtime/config.json"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'caracal-rag connected'
+  exit 0
+fi
+count="$(cat "$MOCK_COUNT_FILE" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf '%s\\n' "$count" >"$MOCK_COUNT_FILE"
+printf '%s\\n' '{"type":"tool_use","timestamp":1000,"sessionID":"ses_false_limit","part":{"type":"tool-use","tool":"bash","state":{"status":"completed","input":{"note":"maximum steps reached"}}}}'
+printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_false_limit","part":{"type":"text","text":"Documentation mentions maximum steps reached"}}'
+printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_false_limit","part":{"type":"step-finish","reason":"stop"}}'
+exit 0
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' 'Do the task' >"$tmp/prompt"
+
+  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_COUNT_FILE="$tmp/count" \\
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \\
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \\
+      --task-id oc-false-step-limit --prompt "$tmp/prompt" --workspace "$tmp" \\
+      --attempt 1 --timeout 30 --session-id "" \\
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "FAILED" "Text/tool payload mentioning a step limit is not a runtime step-limit event"
+  [ "$rc" -eq 1 ] && ok "False-positive step-limit text remains a failure" || fail "False-positive step-limit rc=$rc"
+  [ "$(cat "$tmp/count")" = "1" ] \\
+    && ok "False-positive step-limit text does not trigger a same-session continuation" \\
+    || fail "False-positive step-limit text triggered another invocation"
+  printf '%s' "$out" | jq -r '.failure_code // empty' | grep -qx 'RUNTIME_FAILURE' \\
+    && ok "False-positive step-limit text is classified as a normal runtime failure" \\
+    || fail "False-positive step-limit failure code was not RUNTIME_FAILURE"
+}
+
 test_opencode_stop_without_marker() {
   local tmp
   tmp="$(mktemp -d)"
@@ -1642,6 +1682,7 @@ test_opencode_task_scoped_config
 test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
 test_opencode_step_limit_resumes_inside_attempt
+test_opencode_step_limit_text_is_not_authoritative
 test_opencode_stop_without_marker
 test_opencode_failure
 test_opencode_permission_blocked
