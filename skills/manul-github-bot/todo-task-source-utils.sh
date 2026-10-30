@@ -117,15 +117,16 @@ todo_strip_manul_trigger() {
 }
 
 todo_task_prompt() {
-  local task_json="$1" prompt_text steps_json steps_markdown description
+  local task_json="$1" prompt_text steps_json steps_markdown description task_id
   description="$(jq -r '.description // ""' <<<"$task_json")"
+  task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
   prompt_text="$(todo_strip_manul_trigger "$description")"
   steps_json="$(todo_task_steps_json "$task_json")"
   steps_markdown="$(jq -r '
     to_entries[]
     | .key as $index
     | .value as $step
-    | (("  " * ($step.depth // 0))
+    | (([range(0; ($step.depth // 0)) | "  "] | join(""))
        + (($index + 1 | tostring) + ". ")
        + (if $step.isToDo then "[TODO] " else "[DONE] " end)
        + ($step.description // ""))
@@ -133,6 +134,7 @@ todo_task_prompt() {
 
   {
     printf '## Todo task\n\n'
+    printf '**Todo task ID:** %s\n\n' "$task_id"
     if [ -n "$prompt_text" ]; then
       printf '%s\n' "$prompt_text"
     else
@@ -201,6 +203,13 @@ todo_task_is_active() {
   jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
 }
 
+todo_task_tree_is_done() {
+  jq -e '
+    def tasks: [.] + ([.subTasks[]? | tasks] | add // []);
+    all(tasks[]; .isToDo == false)
+  ' <<<"$1" >/dev/null 2>&1
+}
+
 todo_task_has_local_trigger() {
   jq -r '.description // ""' <<<"$1" |
     grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
@@ -224,7 +233,6 @@ todo_task_still_current() {
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return 2
   task_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
-  todo_task_is_active "$task_json" || return 1
   case "$source_type" in
     todo_local_mcp)
       todo_task_has_local_trigger "$task_json" || return 1 ;;
@@ -260,9 +268,14 @@ todo_task_mark_done() {
   esac
   actual_version="$(todo_task_fingerprint "$task_json")"
   [ "$actual_version" = "$expected_version" ] || return 1
+  # A lost response after the final root update is still a successful,
+  # idempotent completion when the entire tree is already done.
+  todo_task_tree_is_done "$task_json" && return 0
+  todo_task_is_active "$task_json" || return 1
   ids_json="$(todo_task_ids_json "$task_json")"
   if [ "$source_type" = "todo_local_mcp" ]; then
-    arguments="$(jq -cn --argjson taskIds "$ids_json" '{taskIds:$taskIds}')"
+    arguments="$(jq -c 'reverse' <<<"$ids_json")"
+    arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
     todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
   else
     # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
