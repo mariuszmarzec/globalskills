@@ -346,49 +346,34 @@ ensure_todo_mcp_bridge() {
         return 0
     fi
 
-    echo "Ensuring the Windows Todo MCP bridge is limited to the current WSL address..."
-    if ! powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$windows_script" \
-        -Action Ensure -BindAddress "$windows_host_ip" -AllowedClientAddress "$wsl_client_ip" -ListenPort 18765; then
-        echo "WARNING: Windows Todo MCP bridge could not start; check %LOCALAPPDATA%\GlobalSkills\TodoMcpBridge\bridge-error.log." >&2
+    echo "Starting the WSL-side Todo MCP reverse relay..."
+    if ! python3 "$AICODE_SOURCE_DIR/todo-mcp-local-proxy.py" \
+        --reverse-listen-host "$wsl_client_ip" \
+        --reverse-listen-port 18766 \
+        --allowed-reverse-client "$windows_host_ip" \
+        --channel-count 4 \
+        --listen-port 8766 \
+        --state-dir "$HOME/.cache/globalskills/todo-mcp-bridge"; then
+        echo "WARNING: WSL Todo MCP reverse relay could not start; see ~/.cache/globalskills/todo-mcp-bridge/bridge.log." >&2
         return 0
     fi
 
-    if ! python3 "$AICODE_SOURCE_DIR/todo-mcp-local-proxy.py" \
-        --upstream-host "$windows_host_ip" --upstream-port 18765 --listen-port 8766 \
-        --state-dir "$HOME/.cache/globalskills/todo-mcp-bridge"; then
-        echo "WARNING: WSL Todo MCP loopback proxy could not start; see ~/.cache/globalskills/todo-mcp-bridge/bridge.log." >&2
+    echo "Ensuring the Windows Todo MCP bridge opens outbound channels to WSL..."
+    if ! powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$windows_script" \
+        -Action Ensure -RelayAddress "$wsl_client_ip" -RelayPort 18766 -ChannelCount 4; then
+        echo "WARNING: Windows Todo MCP reverse bridge could not connect; check %LOCALAPPDATA%\GlobalSkills\TodoMcpBridge\bridge-error.log." >&2
         return 0
     fi
 
     local http_status
-    http_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
-
-    # Windows can observe a different WSL source address than the one inferred
-    # from the route (for example after WSL networking changes). Recover only
-    # when the observed address is currently assigned to this WSL instance.
-    if [ "$http_status" != "401" ]; then
-        local observed_client_ip
-        observed_client_ip="$(powershell.exe -NoProfile -NonInteractive -Command '$logFile = Join-Path (Join-Path $env:LOCALAPPDATA "GlobalSkills\TodoMcpBridge") "bridge.log"; if (Test-Path -LiteralPath $logFile) { $match = Get-Content -LiteralPath $logFile | Select-String -Pattern "Rejected connection from (?<ip>[0-9]{1,3}(?:\.[0-9]{1,3}){3}); expected WSL source" | Select-Object -Last 1; if ($match) { $match.Matches[0].Groups["ip"].Value } }' 2>/dev/null | tr -d '\r' | tail -n 1)"
-
-        if [[ "$observed_client_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] &&
-           ip -o -4 addr show 2>/dev/null | awk '{ split($4, address, "/"); print address[1] }' | grep -Fxq "$observed_client_ip"; then
-            echo "Windows observed WSL source $observed_client_ip; synchronizing the bridge allowlist and retrying..."
-            if powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$windows_script" -Action Ensure -BindAddress "$windows_host_ip" -AllowedClientAddress "$observed_client_ip" -ListenPort 18765; then
-                http_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
-            else
-                echo "WARNING: Windows Todo bridge could not be synchronized to the observed WSL address." >&2
-            fi
-        elif [ -n "$observed_client_ip" ]; then
-            echo "WARNING: Windows Todo bridge observed source $observed_client_ip, which is not assigned to this WSL instance; refusing to expand the allowlist." >&2
-        fi
-    fi
-
+    http_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
     if [ "$http_status" = "401" ]; then
         export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
-        echo "Todo MCP bridge verified at http://127.0.0.1:8766/mcp; unauthenticated access is rejected."
+        echo "Todo MCP reverse bridge verified at http://127.0.0.1:8766/mcp; unauthenticated access is rejected."
     else
-        echo "WARNING: Todo MCP bridge did not return the expected HTTP 401 challenge (status $http_status). Todo MCP is disabled for this launch." >&2
-        powershell.exe -NoProfile -NonInteractive -Command '$root = Join-Path $env:LOCALAPPDATA "GlobalSkills\TodoMcpBridge"; $stateFile = Join-Path $root "bridge.json"; $logFile = Join-Path $root "bridge.log"; if (Test-Path -LiteralPath $stateFile) { $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json; Write-Output ("Windows bridge expected WSL source: " + $state.allowedClientAddress) }; if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Tail 12 }' 2>/dev/null | tr -d '\r' | sed 's/^/  Windows bridge: /' >&2
+        echo "WARNING: Todo MCP reverse bridge did not return the expected HTTP 401 challenge (status $http_status). Todo MCP is disabled for this launch." >&2
+        tail -n 12 "$HOME/.cache/globalskills/todo-mcp-bridge/bridge.log" 2>/dev/null | sed 's/^/  WSL relay: /' >&2
+        powershell.exe -NoProfile -NonInteractive -Command '$root = Join-Path $env:LOCALAPPDATA "GlobalSkills\TodoMcpBridge"; $logFile = Join-Path $root "bridge.log"; if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Tail 12 }' 2>/dev/null | tr -d '\r' | sed 's/^/  Windows bridge: /' >&2
         echo "Check that Todo Desktop is running with todo.localMcpServer enabled." >&2
     fi
     return 0
