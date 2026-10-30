@@ -98,7 +98,7 @@ todo_task_steps_json() {
   jq -c '
     def descendants($depth):
       . as $task
-      | [{id:$task.id, description:($task.description // ""), isToDo:($task.isToDo // true), depth:$depth}]
+      | [{id:$task.id, description:($task.description // ""), isToDo:(if ($task | has("isToDo")) then $task.isToDo else true end), depth:$depth}]
         + ([ $task.subTasks[]? | descendants($depth + 1) ] | add // []);
     [.subTasks[]? | descendants(0)] | add // []
   ' <<<"$1"
