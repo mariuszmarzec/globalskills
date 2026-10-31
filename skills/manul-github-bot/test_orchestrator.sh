@@ -198,6 +198,10 @@ test_end_to_end() {
   # Submit review-fix
   fix_task_id="$(orch fix --conversation-id "$conv_id" --prompt "Fix" --task-id "$task_id" --pr-number 100 --json 2>/dev/null | jq -r '.taskId // empty')"
   [ -n "$fix_task_id" ] || return 1
+  case "$fix_task_id" in
+    "review-fix-${conv_id}-orchestrator-fix-"*) ;;
+    *) echo "fix task id is not deterministic from the parent task: $fix_task_id" >&2; return 1 ;;
+  esac
 
   # Mark fix task as completed too
   complete_all_tasks "$conv_id"
