@@ -1800,7 +1800,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     local started
     local result=0
 
-    script="$(readlink -f "${BASH_SOURCE[0]}")"
+    script="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
     started="$SECONDS"
 
     # --fork + --wait gives us a stable launcher we can wait on while the
