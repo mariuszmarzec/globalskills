@@ -110,19 +110,20 @@ the global config and every Manul task-scoped config. It is not conditional on
 the `todo_remote_mcp` task source being enabled. The server uses Streamable HTTP
 at `{FITEO_BASE_URL}/mcp` and authenticates each request with a Fiteo PAT.
 
-Set both variables in `~/.config/opencode/opencode.env` (or export them before
-launching `aicode`):
+Keep both variables exported in your existing `~/.zshrc`; no separate
+`opencode.env` file is needed:
 
 ```bash
-FITEO_BASE_URL="https://your-fiteo-backend" # base URL without a trailing slash
-FITEO_PAT="YOUR_FITEO_PAT"
+export FITEO_BASE_URL="https://your-fiteo-backend" # base URL without a trailing slash
+export FITEO_PAT="YOUR_FITEO_PAT"
 ```
 
-The MCP entry is still present when either variable is missing, but it cannot
-connect until both are configured. `aicode` refreshes the endpoint/PAT pair in
-the mode-600 `~/.manul/.env`; Manul reloads the latest pair for each task, and
-the OpenClaw ACP wrapper refreshes it before starting an OpenCode session. The
-token value is never written into OpenCode's JSON config or repository files.
+Start `aicode` from a Zsh session that has loaded this file. The MCP entry is
+always registered; it can connect once both variables are available.
+`aicode` refreshes the endpoint/PAT pair in the mode-600 `~/.manul/.env`;
+Manul reloads the latest pair for each task, and the OpenClaw ACP wrapper
+refreshes it before starting an OpenCode session. The token value is never
+written into OpenCode's JSON config or repository files.
 
 ## Todo task sources for Manul
 
