@@ -1525,6 +1525,42 @@ eligible_queued_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now'));" 2>/dev/null || echo 0
 }
 
+# Read selected SQLite rows as JSON without depending on the sqlite3 CLI's
+# version-specific -json flag. Python's stdlib driver is available on supported
+# Manul hosts and opens this connection read-only, so this helper cannot mutate
+# task state.
+sqlite_query_json() {
+  local database="${1:-}" query="${2:-}"
+  [ -n "$database" ] && [ -n "$query" ] || return 2
+  python3 - "$database" "$query" <<'PY'
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+database_path, query = sys.argv[1:3]
+connection = None
+try:
+    database_uri = Path(database_path).resolve().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(database_uri, uri=True, timeout=5.0)
+    cursor = connection.execute(query)
+    if cursor.description is None:
+        raise ValueError("query did not return rows")
+    columns = [column[0] for column in cursor.description]
+    rows = [
+        {column: value for column, value in zip(columns, row)}
+        for row in cursor.fetchall()
+    ]
+    sys.stdout.write(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
+except Exception as error:
+    print("sqlite_query_json: {}: {}".format(type(error).__name__, error), file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    if connection is not None:
+        connection.close()
+PY
+}
+
 sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
@@ -1892,7 +1928,7 @@ publish_terminal_lifecycle_comment() {
   ensure_terminal_lifecycle_outbox || return 1
   safe_task_id="$(sql_escape "$task_id")"
   safe_event="$(sql_escape "$event_type")"
-  row="$(sqlite3 -json "$DB" "SELECT repository,issueNumber,replyTo,body,postedAt FROM manul_terminal_lifecycle_outbox WHERE taskId='$safe_task_id' AND attempt=$attempt AND eventType='$safe_event' LIMIT 1;" 2>>"$LOG")" || return 1
+  row="$(sqlite_query_json "$DB" "SELECT repository,issueNumber,replyTo,body,postedAt FROM manul_terminal_lifecycle_outbox WHERE taskId='$safe_task_id' AND attempt=$attempt AND eventType='$safe_event' LIMIT 1;" 2>>"$LOG")" || return 1
   if [ -z "$row" ] || [ "$(printf '%s' "$row" | jq 'length' 2>/dev/null)" != "1" ]; then
     log "ERROR: terminal lifecycle outbox row missing for $task_id attempt $attempt event $event_type"
     return 1
@@ -1909,7 +1945,7 @@ publish_terminal_lifecycle_comment() {
   lock_file="$lock_dir/terminal-comment-$lock_key.lock"
   exec {lock_fd}>"$lock_file" || return 1
   flock "$lock_fd" || { exec {lock_fd}>&-; return 1; }
-  row="$(sqlite3 -json "$DB" "SELECT postedAt FROM manul_terminal_lifecycle_outbox WHERE taskId='$safe_task_id' AND attempt=$attempt AND eventType='$safe_event' LIMIT 1;" 2>>"$LOG")" || row="[]"
+  row="$(sqlite_query_json "$DB" "SELECT postedAt FROM manul_terminal_lifecycle_outbox WHERE taskId='$safe_task_id' AND attempt=$attempt AND eventType='$safe_event' LIMIT 1;" 2>>"$LOG")" || row="[]"
   posted_at="$(printf '%s' "$row" | jq -r '.[0].postedAt // ""' 2>/dev/null || true)"
   if [ -n "$posted_at" ]; then flock -u "$lock_fd" || true; exec {lock_fd}>&-; return 0; fi
   existing_id=""
@@ -1987,7 +2023,7 @@ close_drained_conversations() {
 retry_pending_terminal_lifecycle_comments() {
   ensure_terminal_lifecycle_outbox || return 1
   local rows row task_id attempt event_type
-  rows="$(sqlite3 -json "$DB" "SELECT taskId,attempt,eventType FROM manul_terminal_lifecycle_outbox WHERE postedAt IS NULL AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt LIMIT 10;" 2>>"$LOG")" || return 1
+  rows="$(sqlite_query_json "$DB" "SELECT taskId,attempt,eventType FROM manul_terminal_lifecycle_outbox WHERE postedAt IS NULL AND (nextAttemptAt IS NULL OR nextAttemptAt <= datetime('now')) ORDER BY createdAt LIMIT 10;" 2>>"$LOG")" || return 1
   if [ -n "$rows" ]; then
     while IFS= read -r row; do
       [ -n "$row" ] || continue
