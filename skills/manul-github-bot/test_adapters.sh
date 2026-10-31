@@ -1435,7 +1435,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
-printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
+printf '%s\n' "$(realpath -e -- "$MANUL_TASK_WORKSPACE_ROOT")" "$(realpath -e -- "$MANUL_TASK_WORKDIR")" "$(realpath -e -- "$MANUL_DIR")" "$(realpath -e -- "$MANUL_WORKSPACE")" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
 MOCK
@@ -1449,7 +1449,7 @@ MOCK
     AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
-  printf '%s\n' "$(realpath -e "$workspace_root")" "$(realpath -e "$workdir")" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
+  printf '%s\n' "$(realpath -e -- "$workspace_root")" "$(realpath -e -- "$workdir")" "$(realpath -e -- "$custom_manul_dir")" "$(realpath -e -- "$custom_workspace_base")" >"$tmp/task-env.expected"
   cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
     && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
     || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
