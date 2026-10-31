@@ -221,7 +221,7 @@ test_end_to_end() {
 # Test 13: Wait command handles missing DB
 test_wait_missing_db() {
   local output
-  output="$(orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || true
+  output="$(MANUL_DB="$TEST_DIR/missing-manul.db" orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || true
   echo "$output" | jq -e '.status == "not_found"' >/dev/null 2>&1
 }
 
