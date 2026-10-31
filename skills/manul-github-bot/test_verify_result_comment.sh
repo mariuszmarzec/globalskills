@@ -202,7 +202,7 @@ test_sqlite_query_json_compatibility() {
         and .[0].repository == "owner/repo"
         and .[0].issueNumber == 501
         and .[0].replyTo == null
-        and .[0].body == "line one\\nline two with \\"quotes\\""
+        and .[0].body == ("line one" + "\\n" + "line two with \\"quotes\\"")
         and .[0].postedAt == null
     ' >/dev/null; then
         ok "read-only SQLite JSON helper preserves nulls, numbers, quotes, and newlines"
