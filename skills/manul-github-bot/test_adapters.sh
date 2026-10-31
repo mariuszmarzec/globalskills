@@ -1435,7 +1435,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   printf '%s\n' 'caracal-rag failed'
   exit 1
 fi
-printf '%s\n' "$(realpath -e -- "$MANUL_TASK_WORKSPACE_ROOT")" "$(realpath -e -- "$MANUL_TASK_WORKDIR")" "$(realpath -e -- "$MANUL_DIR")" "$(realpath -e -- "$MANUL_WORKSPACE")" >"$MOCK_TASK_ENV"
+printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
 printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
 exit 0
 MOCK
@@ -1449,10 +1449,34 @@ MOCK
     AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
-  printf '%s\n' "$(realpath -e -- "$workspace_root")" "$(realpath -e -- "$workdir")" "$(realpath -e -- "$custom_manul_dir")" "$(realpath -e -- "$custom_workspace_base")" >"$tmp/task-env.expected"
-  cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
-    && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
-    || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
+  if python3 - "$tmp/task-env" "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" <<'PY_PATH_COMPARE'
+import os
+import sys
+
+actual_path, *expected_paths = sys.argv[1:]
+with open(actual_path, encoding="utf-8") as stream:
+    actual_paths = stream.read().splitlines()
+
+if len(actual_paths) != len(expected_paths):
+    print(f"expected {len(expected_paths)} paths, received {len(actual_paths)}", file=sys.stderr)
+    raise SystemExit(1)
+
+for index, (actual, expected) in enumerate(zip(actual_paths, expected_paths), start=1):
+    actual_real = os.path.realpath(actual)
+    expected_real = os.path.realpath(expected)
+    if actual_real != expected_real:
+        print(
+            f"path {index} mismatch: actual={actual!r} ({actual_real!r}), "
+            f"expected={expected!r} ({expected_real!r})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+PY_PATH_COMPARE
+  then
+    ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary"
+  else
+    fail "AgentExecutor path/config environment mismatch"
+  fi
 }
 
 # ---------------------------------------------------------------------------
