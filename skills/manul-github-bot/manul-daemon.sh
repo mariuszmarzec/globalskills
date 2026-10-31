@@ -2010,6 +2010,10 @@ close_drained_conversations() {
   ensure_terminal_lifecycle_outbox || return 1
   local changed
   changed="$(sqlite3 "$DB" "
+    -- The poller and dispatcher share this database. A concurrent short write
+    -- must not turn an otherwise safe conversation-close reconciliation into
+    -- a one-off error; match the timeout used by other daemon write paths.
+    PRAGMA busy_timeout=5000;
     UPDATE conversations
     SET status='COMPLETED',
         activePrNumber=NULL,
