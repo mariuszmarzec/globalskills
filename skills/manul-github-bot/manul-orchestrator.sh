@@ -362,14 +362,27 @@ cmd_wait() {
     return 0
   fi
   
-  local wait_output
-  wait_output="$(bash "$MANUL_WAIT" --task-id "$TASK_ID" --timeout "$timeout" --json 2>/dev/null)" || {
-    local rc=$?
-    if [ "$rc" -eq 4 ]; then
-      error_exit "Task wait timed out" 4
-    fi
-    error_exit "Wait failed" "$rc"
-  }
+  local wait_output wait_rc=0
+  wait_output="$(bash "$MANUL_WAIT" --task-id "$TASK_ID" --timeout "$timeout" --json 2>/dev/null)" || wait_rc=$?
+  if [ "$wait_rc" -ne 0 ]; then
+    case "$wait_rc" in
+      2)
+        # A missing Manul DB/task is an expected query result, not a generic
+        # wrapper failure. Preserve the machine-readable not_found payload.
+        if [ -n "$wait_output" ] && printf '%s' "$wait_output" | jq -e '.status == "not_found"' >/dev/null 2>&1; then
+          if [ "$JSON_OUTPUT" = true ]; then
+            printf '%s\n' "$wait_output" | jq .
+          else
+            printf '%s\n' "$wait_output" | jq -r '.error // "Task not found"'
+          fi
+          return 2
+        fi
+        error_exit "Wait failed" "$wait_rc"
+        ;;
+      4) error_exit "Task wait timed out" 4 ;;
+      *) error_exit "Wait failed" "$wait_rc" ;;
+    esac
+  fi
   
   local task_status task_result
   task_status="$(echo "$wait_output" | jq -r '.status // empty')"
