@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
 
 TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEST_DIR"' EXIT
 export MANUL_DIR="$TEST_DIR/manul"
 export ORCHESTRATOR_DIR="$TEST_DIR/orchestrator"
 DB="$MANUL_DIR/manul.db"
@@ -17,6 +18,7 @@ mkdir -p "$MANUL_DIR" "$ORCHESTRATOR_DIR" "$RESULTS_DIR"
 
 # Create symlinks to the actual scripts
 ln -s "$SCRIPT_DIR/manul-conversation.sh" "$ORCHESTRATOR_DIR/manul-conversation.sh"
+ln -s "$SCRIPT_DIR/manul-paths.sh" "$ORCHESTRATOR_DIR/manul-paths.sh"
 ln -s "$SCRIPT_DIR/manul-wait.sh" "$ORCHESTRATOR_DIR/manul-wait.sh" 2>/dev/null || true
 
 # Create mock gh for tests (no real GitHub required)
