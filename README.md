@@ -30,8 +30,12 @@ git -C ~/.globalskills pull
 The Manul/aicode runtime supports macOS when its process and filesystem tools
 are installed through Homebrew. Install the required packages once:
 
+The Manul installer also requires the GitHub CLI (gh), jq, SQLite (sqlite3),
+and Python 3. Install at least one supported agent runtime (OpenClaw, OpenCode,
+Codex, or Claude Code) separately.
+
 ```bash
-brew install bash coreutils util-linux
+brew install bash coreutils util-linux gh jq sqlite python
 ```
 
 The platform bootstrap automatically prepends Homebrew Bash, GNU Coreutils
