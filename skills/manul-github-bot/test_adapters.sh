@@ -1258,7 +1258,7 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# 10c. Todo local MCP is injected only when the Windows bridge is reachable
+# 10c. Todo local MCP is injected only when a supported local endpoint is reachable
 # ---------------------------------------------------------------------------
 test_opencode_todo_local_mcp() {
   local tmp
@@ -1310,7 +1310,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and (
       if $expected == "1" then
         .mcp["todo-local"].type == "remote"
-        and .mcp["todo-local"].url == "http://127.0.0.1:8766/mcp"
+        and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
         and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
         and .mcp["todo-local"].enabled == true
         and .tools["todo-local_*"] == true
