@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tests:
-        description: 'Comma-separated CI test scripts. Empty = configured CI suite.'
+        description: 'Comma-separated integration test scripts. Empty = configured suite.'
         required: false
         default: ''
 
@@ -27,61 +27,27 @@ env:
     aicode/test_caracal_mcp.sh
     aicode/test_openclaw_snapshot.sh
     aicode/test_opencode_acp_caracal.sh
-    skills/manul-github-bot/test_manul_cli.sh
-    skills/manul-github-bot/test_queue_reset.sh
-    skills/manul-github-bot/test_daemon_wrapper_integration.sh
-    skills/manul-github-bot/test_task_branch_lifecycle.sh
-    skills/manul-github-bot/test_workspace_behavior.sh
-    skills/manul-github-bot/test_task_workspace_layout.sh
-    skills/manul-github-bot/test_workspace_checkout_recovery.sh
-    skills/manul-github-bot/test_pool_recovery.sh
-    skills/manul-github-bot/test_github_control_protocol.sh
-    skills/manul-github-bot/test_github_control_integration.sh
-    skills/manul-github-bot/test_existing_task_pr.sh
-    skills/manul-github-bot/test_prompt_generation.sh
-    skills/manul-github-bot/test_conversation_orchestrator.sh
-    skills/manul-github-bot/test_orchestrator.sh
-    skills/manul-github-bot/test_conversation_regressions.sh
-    skills/manul-github-bot/test_conversation_schema_migration.sh
-    skills/manul-github-bot/test_runtime_health.sh
-    skills/manul-github-bot/test_adapters.sh
-    skills/manul-github-bot/test_codex_claude_adapters.sh
-    skills/manul-github-bot/test_opencode_permissions.sh
-    skills/manul-github-bot/test_opencode_marker_recovery.sh
-    skills/manul-github-bot/test_agent_modes.sh
-    skills/manul-github-bot/test_agent_session_state.sh
-    skills/manul-github-bot/test_agent_execution_controller.sh
-    skills/manul-github-bot/test_agent_execution_smoke.sh
-    skills/manul-github-bot/test_manul_environment.sh
-    skills/manul-github-bot/test_openclaw_binary_override.sh
-    skills/manul-github-bot/test_conversation_strict.sh
-    skills/manul-github-bot/test_error_observability.sh
-    skills/manul-github-bot/test_verify_result_comment.sh
-    skills/manul-github-bot/test_poll_timeout.sh
-    skills/manul-github-bot/test_poll_result_parsing.sh
-    skills/manul-github-bot/test_producer_consumer_separation.sh
-    skills/manul-github-bot/test_worker_lease_recovery.sh
-    skills/manul-github-bot/test_failure_feedback.sh
-    skills/manul-github-bot/test_source_revalidation.sh
-    skills/manul-github-bot/test_allowed_users_placeholder.sh
-    skills/manul-github-bot/test_trigger_parsing.sh
-    skills/manul-github-bot/test_task_retention.sh
-    skills/manul-github-bot/test_task_sources.sh
-    skills/manul-github-bot/test_todo_task_sources.sh
-    skills/manul-github-bot/test_comments_remove.sh
-    skills/manul-github-bot/test_user_decision_blocking.sh
-    skills/manul-github-bot/test_feedback_routing.sh
-    skills/manul-github-bot/test_human_mode.sh
+    skills/globalskills-repository/test_agent_modes.sh
 
 jobs:
   verify-macos:
-    name: Verify native macOS runtime compatibility
+    name: Verify native macOS Manul and aicode integration
     runs-on: macos-latest
+    env:
+      MANUL_CANONICAL_ROOT: ${{ github.workspace }}/manul-repo
+      MANUL_CANONICAL_DIR: ${{ github.workspace }}/manul-repo/skills/manul-github-bot
+      MANUL_CANONICAL_BRANCH: main
     steps:
-      - name: Checkout code
+      - name: Checkout globalskills
         uses: actions/checkout@v4
+      - name: Checkout standalone Manul runtime
+        uses: actions/checkout@v4
+        with:
+          repository: mariuszmarzec/manul
+          ref: main
+          path: manul-repo
       - name: Install macOS runtime dependencies
-        run: brew install bash coreutils util-linux jq sqlite
+        run: brew install bash coreutils util-linux jq sqlite gh
       - name: Add Homebrew runtime tools to PATH
         run: |
           prefix="$(brew --prefix)"
@@ -94,77 +60,60 @@ jobs:
         run: |
           set -euo pipefail
           test "${BASH_VERSINFO[0]}" -ge 4
-          source skills/manul-github-bot/manul-platform.sh
+          source "$MANUL_CANONICAL_DIR/manul-platform.sh"
           manul_platform_prepare
           for command in bash flock setsid timeout realpath stat sha256sum; do
             command -v "$command"
           done
           bash -n aicode/aicode
           bash -n aicode/chroma-lifecycle.sh
-          while IFS= read -r script; do bash -n "$script"; done < <(find skills/manul-github-bot -maxdepth 1 -type f -name '*.sh' -print)
-      - name: Run native Todo MCP and adapter tests
+          while IFS= read -r script; do bash -n "$script"; done < <(find "$MANUL_CANONICAL_DIR" -maxdepth 1 -type f -name '*.sh' -print)
+      - name: Run native Todo MCP and adapter integration tests
         shell: bash
         run: |
           set -euo pipefail
           bash aicode/test_caracal_mcp.sh
-          bash skills/manul-github-bot/test_todo_task_sources.sh
-          bash skills/manul-github-bot/test_adapters.sh
+          bash "$MANUL_CANONICAL_DIR/test_todo_task_sources.sh"
+          bash "$MANUL_CANONICAL_DIR/test_adapters.sh"
 
   verify:
-    name: Verify skills and Manul tests
+    name: Verify skills and standalone Manul integration
     runs-on: ubuntu-latest
+    env:
+      MANUL_CANONICAL_ROOT: ${{ github.workspace }}/manul-repo
+      MANUL_CANONICAL_DIR: ${{ github.workspace }}/manul-repo/skills/manul-github-bot
+      MANUL_CANONICAL_BRANCH: main
     steps:
-      - name: Checkout code
+      - name: Checkout globalskills
         uses: actions/checkout@v4
+      - name: Checkout standalone Manul runtime
+        uses: actions/checkout@v4
+        with:
+          repository: mariuszmarzec/manul
+          ref: main
+          path: manul-repo
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq sqlite3
+          sudo apt-get install -y jq sqlite3 util-linux gh
       - name: Run benchmark framework unit tests
         run: python3 -m unittest discover -s skill-benchmarks/tests -v
-
-      - name: Diagnose Todo source shell parse boundaries
-        run: |
-          python3 - <<'PY_DIAG'
-          from pathlib import Path
-          import subprocess
-
-          path = Path("skills/manul-github-bot/test_todo_task_sources.sh")
-          lines = path.read_text(encoding="utf-8").splitlines()
-          for end, line in enumerate(lines, 1):
-              if end < 440 or line.strip():
-                  continue
-              result = subprocess.run(
-                  ["bash", "-n"],
-                  input="\n".join(lines[:end]) + "\n",
-                  text=True,
-                  capture_output=True,
-              )
-              if result.returncode:
-                  print(f"First invalid prefix ends at line {end}: {result.stderr.strip()}")
-                  break
-          else:
-              print("All tested command boundaries parse")
-          PY_DIAG
-
       - name: Validate shell syntax
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t scripts < <(find skills/manul-github-bot -maxdepth 1 -type f -name '*.sh' -print | sort)
+          mapfile -t scripts < <(find "$MANUL_CANONICAL_DIR" -maxdepth 1 -type f -name '*.sh' -print | sort)
           for script in "${scripts[@]}"; do
             echo "bash -n $script"
             bash -n "$script"
           done
-
           for script in aicode/aicode aicode/chroma-lifecycle.sh aicode/test_chroma_lifecycle.sh aicode/openclaw-config-snapshot.sh aicode/test_openclaw_snapshot.sh; do
             echo "bash -n $script"
             bash -n "$script"
           done
       - name: Run Todo MCP client unit tests
-        run: python3 skills/manul-github-bot/test_todo_mcp_client.py
-
-      - name: Run configured Manul tests
+        run: python3 "$MANUL_CANONICAL_DIR/test_todo_mcp_client.py"
+      - name: Run configured globalskills integration tests
         env:
           REQUESTED_TESTS: ${{ inputs.tests }}
         shell: bash
@@ -208,10 +157,10 @@ jobs:
           echo "Passed suites: $passed" >> "$GITHUB_STEP_SUMMARY"
           echo "Failed suites: $failed" >> "$GITHUB_STEP_SUMMARY"
           [ "$failed" -eq 0 ]
-      - name: Upload test logs on failure
+      - name: Upload integration test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: manul-ci-test-logs
+          name: globalskills-integration-test-logs
           path: test-results/
           if-no-files-found: ignore
