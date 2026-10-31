@@ -5,12 +5,24 @@
       "name": "mariuszmarzec/globalskills",
       "aliases": [
         "globalskills",
-        "global skills repository",
-        "manul bot"
+        "global skills repository"
       ],
-      "description": "Global skills, OpenCode agents, and Manul automation.",
+      "description": "Global skills, OpenCode agents, and developer-tool integrations.",
       "skills": [
         "globalskills-repository"
+      ]
+    },
+    {
+      "name": "mariuszmarzec/manul",
+      "aliases": [
+        "manul",
+        "manul bot",
+        "manul runtime",
+        "github task orchestrator"
+      ],
+      "description": "Standalone GitHub task orchestrator with agent runtime adapters, durable task queue, and isolated workspaces.",
+      "skills": [
+        "manul-github-bot"
       ]
     },
     {
