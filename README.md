@@ -25,6 +25,22 @@ Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
 git -C ~/.globalskills pull
 ```
 
+## macOS runtime prerequisites
+
+The Manul/aicode runtime supports macOS when its process and filesystem tools
+are installed through Homebrew. Install the required packages once:
+
+```bash
+brew install bash coreutils util-linux
+```
+
+The platform bootstrap automatically prepends Homebrew Bash, GNU Coreutils
+(`timeout`, `stat`, `realpath`, `sha256sum`) and util-linux
+(`flock`, `setsid`) to PATH. It re-executes the launcher, daemon and
+watchdog under Homebrew Bash 4+ where necessary. The watchdog repeats this
+bootstrap when started by cron, whose PATH does not inherit interactive shell
+configuration. No Linux VM, Docker, WSL, or Todo bridge is needed on macOS.
+
 ## Todo Desktop MCP (cross-platform)
 
 Todo Desktop exposes its Streamable HTTP MCP endpoint on loopback at
