@@ -103,6 +103,27 @@ under %LOCALAPPDATA%/GlobalSkills/TodoMcpBridge; the WSL log is
 ~/.cache/globalskills/todo-mcp-bridge/bridge.log. The relay is recreated when
 the WSL address or bridge code changes.
 
+## Fiteo backend MCP (remote)
+
+`aicode` always registers the remote `fiteo` MCP server in OpenCode, including
+the global config and every Manul task-scoped config. It is not conditional on
+the `todo_remote_mcp` task source being enabled. The server uses Streamable HTTP
+at `{FITEO_BASE_URL}/mcp` and authenticates each request with a Fiteo PAT.
+
+Set both variables in `~/.config/opencode/opencode.env` (or export them before
+launching `aicode`):
+
+```bash
+FITEO_BASE_URL="https://your-fiteo-backend" # base URL without a trailing slash
+FITEO_PAT="YOUR_FITEO_PAT"
+```
+
+The MCP entry is still present when either variable is missing, but it cannot
+connect until both are configured. `aicode` refreshes the endpoint/PAT pair in
+the mode-600 `~/.manul/.env`; Manul reloads the latest pair for each task, and
+the OpenClaw ACP wrapper refreshes it before starting an OpenCode session. The
+token value is never written into OpenCode's JSON config or repository files.
+
 ## Todo task sources for Manul
 
 Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
