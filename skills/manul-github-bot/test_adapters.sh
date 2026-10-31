@@ -1216,6 +1216,10 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   : >"${MOCK_CONFIG_CHECK_FILE:?}"
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
+    if [ "${MOCK_FITEO_MCP_STATE:-connected}" = "disconnected" ]; then
+      printf '%s\n' 'fiteo failed'
+      exit 1
+    fi
     exit 0
   fi
   printf '%s\n' 'caracal-rag failed'
@@ -1279,6 +1283,23 @@ MOCK
   assert_json_status "$out" "COMPLETED" "OpenCode runs task after Caracal MCP preflight passes"
   [ "$rc" -eq 0 ] && ok "Connected Caracal MCP permits task execution" || fail "Connected Caracal rc=$rc"
   [ -f "$tmp/task-started" ] && ok "Task starts after positive Caracal MCP healthcheck" || fail "Task did not start after positive MCP healthcheck"
+ 
+  rm -f "$tmp/config-checked" "$tmp/task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    FITEO_BASE_URL="https://inherited-stale.example" FITEO_PAT="stale-inherited-pat" \
+    MOCK_CARACAL_MCP_STATE=connected MOCK_FITEO_MCP_STATE=disconnected \
+    MOCK_CONFIG_CHECK_FILE="$tmp/fiteo-disconnected-config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/fiteo-disconnected-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-fiteo-disconnected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/fiteo-disconnected.stdout" --stderr-file "$tmp/fiteo-disconnected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode task proceeds when optional Fiteo MCP is disconnected"
+  [ "$rc" -eq 0 ] && ok "Fiteo MCP outage does not fail an unrelated Manul task" || fail "Fiteo outage blocked task rc=$rc"
+  [ -f "$tmp/fiteo-disconnected-config-checked" ] && ok "Fiteo remains registered in task config during an outage" || fail "Fiteo entry disappeared during outage"
+  [ -f "$tmp/fiteo-disconnected-task-started" ] && ok "Task execution starts despite an optional Fiteo MCP outage" || fail "Task was blocked by Fiteo MCP outage"
 }
 
 # ---------------------------------------------------------------------------
