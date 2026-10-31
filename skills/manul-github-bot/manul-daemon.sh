@@ -49,6 +49,13 @@ done
 DAEMON_SCRIPT_DIR="$(cd -P "$(dirname "$DAEMON_SCRIPT_PATH")" && pwd)"
 DAEMON_SCRIPT_ABS="$DAEMON_SCRIPT_DIR/$(basename "$DAEMON_SCRIPT_PATH")"
 
+# On macOS load Homebrew Bash/coreutils/util-linux before executing any runtime
+# code. Cron/watchdog launches do not inherit interactive shell PATH settings.
+source "$DAEMON_SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$DAEMON_SCRIPT_ABS" "$@"
+
+
 # Load operator/provider overrides from the runtime-owned environment file.
 # This is required for unattended cron/watchdog execution because ~/.zshrc is
 # not loaded there.
