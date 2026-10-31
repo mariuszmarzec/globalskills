@@ -1,10 +1,33 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # aicode - Start AI dev environment and launch OpenCode
 
 export PATH="$HOME/.opencode/bin:$PATH"
 
-AICODE_SOURCE_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}" 2>/dev/null || readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
-AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
+# Resolve symlinks using POSIX tools (macOS readlink has no -f option).
+AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$AICODE_SOURCE_PATH" ]; do
+    AICODE_SOURCE_PARENT="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
+    AICODE_SOURCE_TARGET="$(readlink "$AICODE_SOURCE_PATH")"
+    case "$AICODE_SOURCE_TARGET" in
+        /*) AICODE_SOURCE_PATH="$AICODE_SOURCE_TARGET" ;;
+        *)  AICODE_SOURCE_PATH="$AICODE_SOURCE_PARENT/$AICODE_SOURCE_TARGET" ;;
+    esac
+done
+AICODE_SOURCE_DIR="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
+AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename -- "$AICODE_SOURCE_PATH")"
+
+# Manul uses Bash 4+ and GNU process/filesystem tools. Load Homebrew's versions
+# before starting any daemon workers, and re-exec under Homebrew Bash if this
+# launcher was entered through macOS's system Bash 3.2.
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+    HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+    if [ -n "$HOMEBREW_PREFIX" ]; then
+        export PATH="$HOMEBREW_PREFIX/opt/bash/bin:$HOMEBREW_PREFIX/opt/coreutils/libexec/gnubin:$HOMEBREW_PREFIX/opt/util-linux/bin:$HOMEBREW_PREFIX/bin:$PATH"
+        if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] && [ -x "$HOMEBREW_PREFIX/opt/bash/bin/bash" ]; then
+            exec "$HOMEBREW_PREFIX/opt/bash/bin/bash" "$AICODE_SOURCE_PATH" "$@"
+        fi
+    fi
+fi
 
 TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/todo-local-mcp-url.sh"
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
