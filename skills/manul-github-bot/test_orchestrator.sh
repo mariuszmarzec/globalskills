@@ -224,9 +224,16 @@ test_end_to_end() {
 
 # Test 13: Wait command handles missing DB
 test_wait_missing_db() {
-  local output
-  output="$(MANUL_DB="$TEST_DIR/missing-manul.db" orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || true
-  echo "$output" | jq -e '.status == "not_found"' >/dev/null 2>&1
+  local output rc=0
+  output="$(MANUL_DB="$TEST_DIR/missing-manul.db" orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 2 ] || {
+    echo "expected wait to return exit code 2 for a missing database, got $rc" >&2
+    return 1
+  }
+  printf '%s\n' "$output" | jq -e '.status == "not_found"' >/dev/null 2>&1 || {
+    echo "expected a machine-readable not_found result, got: $output" >&2
+    return 1
+  }
 }
 
 # Test 14: Max review cycles enforced
