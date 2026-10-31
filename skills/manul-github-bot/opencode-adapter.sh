@@ -442,11 +442,10 @@ elif [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ] &&
     _mcp_preflight_stage="todo_local_mcp_preflight"
     _mcp_preflight_label="Todo local"
     _mcp_preflight_summary="Todo local MCP was reachable but did not report connected in OpenCode; task was not started"
-elif [ "$_caracal_preflight_rc" != "0" ]; then
-    _mcp_preflight_stage="mcp_preflight"
-    _mcp_preflight_label="OpenCode"
-    _mcp_preflight_summary="OpenCode MCP preflight command failed; task was not started"
 fi
+# OpenCode may report a non-zero aggregate MCP-list status when an optional
+# server such as Fiteo is offline. Caracal's explicit connected status is the
+# required gate; a failure from an unrelated MCP must not block this task.
 
 if [ -n "$_mcp_preflight_stage" ]; then
     log "$_mcp_preflight_label MCP preflight failed; OpenCode reported the server disconnected or unavailable"
