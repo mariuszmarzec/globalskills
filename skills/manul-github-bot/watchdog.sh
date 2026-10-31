@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # watchdog.sh — ONLY automatic recovery mechanism
 #
 # Run from cron every 5 minutes:
@@ -13,6 +13,10 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Cron does not inherit the interactive Homebrew PATH on macOS.
+source "$SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$SCRIPT_DIR/watchdog.sh" "$@"
 # Cron does not load ~/.zshrc, so load the runtime-owned environment before
 # resolving Manul paths or watchdog operator overrides.
 source "$SCRIPT_DIR/manul-env.sh"

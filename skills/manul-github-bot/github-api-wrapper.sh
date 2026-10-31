@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 # github-api-wrapper.sh — Centralized GitHub API integration with resilience
 #
 # This wrapper provides resilient GitHub API calls with:

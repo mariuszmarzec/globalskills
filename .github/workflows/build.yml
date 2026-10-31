@@ -74,6 +74,42 @@ env:
     skills/manul-github-bot/test_human_mode.sh
 
 jobs:
+  verify-macos:
+    name: Verify native macOS runtime compatibility
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install macOS runtime dependencies
+        run: brew install bash coreutils util-linux jq sqlite
+      - name: Add Homebrew runtime tools to PATH
+        run: |
+          prefix="$(brew --prefix)"
+          echo "$prefix/opt/bash/bin" >> "$GITHUB_PATH"
+          echo "$prefix/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$prefix/opt/util-linux/bin" >> "$GITHUB_PATH"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Verify platform bootstrap and shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${BASH_VERSINFO[0]}" -ge 4
+          source skills/manul-github-bot/manul-platform.sh
+          manul_platform_prepare
+          for command in bash flock setsid timeout realpath stat sha256sum; do
+            command -v "$command"
+          done
+          bash -n aicode/aicode
+          bash -n aicode/chroma-lifecycle.sh
+          while IFS= read -r script; do bash -n "$script"; done < <(find skills/manul-github-bot -maxdepth 1 -type f -name '*.sh' -print)
+      - name: Run native Todo MCP and adapter tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash aicode/test_caracal_mcp.sh
+          bash skills/manul-github-bot/test_todo_task_sources.sh
+          bash skills/manul-github-bot/test_adapters.sh
+
   verify:
     name: Verify skills and Manul tests
     runs-on: ubuntu-latest

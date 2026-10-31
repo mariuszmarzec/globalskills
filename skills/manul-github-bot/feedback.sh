@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 # feedback.sh — Post a signed GitHub comment (used by poll.sh for skip-comment draining).
 #
 # Usage: feedback.sh <repo> <issue> [<message>]

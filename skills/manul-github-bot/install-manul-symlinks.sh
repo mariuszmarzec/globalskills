@@ -89,6 +89,7 @@ SCRIPTS=(
     "task-source-github-issues.sh"
     "task-source-jira-tasks.sh"
     "task-source-todo-local.sh"
+    "todo-local-mcp-url.sh"
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
     "todo-mcp-client.py"
@@ -104,6 +105,7 @@ SCRIPTS=(
     "manul-paths.sh"
     "manul-failure-utils.sh"
     "manul-env.sh"
+    "manul-platform.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
     "codex-adapter.sh"
@@ -213,8 +215,7 @@ for script in "${SCRIPTS[@]}"; do
     fi
     if [ -L "$runtime_path" ]; then
         target="$(readlink "$runtime_path" 2>/dev/null || true)"
-        resolved="$(readlink -f "$runtime_path" 2>/dev/null || true)"
-        if [ "$target" = "$canonical_file" ] && [ -f "$resolved" ]; then
+        if [ "$target" = "$canonical_file" ] && [ -f "$runtime_path" ]; then
             echo "OK $script -> $target"
         else
             echo "FAIL $script -> BROKEN: target=$target resolved=$resolved" >&2

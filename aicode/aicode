@@ -1,10 +1,39 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # aicode - Start AI dev environment and launch OpenCode
 
 export PATH="$HOME/.opencode/bin:$PATH"
 
-AICODE_SOURCE_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
-AICODE_SOURCE_DIR="$(cd -- "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd -P)"
+# Resolve symlinks using POSIX tools (macOS readlink has no -f option).
+AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
+while [ -L "$AICODE_SOURCE_PATH" ]; do
+    AICODE_SOURCE_PARENT="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
+    AICODE_SOURCE_TARGET="$(readlink "$AICODE_SOURCE_PATH")"
+    case "$AICODE_SOURCE_TARGET" in
+        /*) AICODE_SOURCE_PATH="$AICODE_SOURCE_TARGET" ;;
+        *)  AICODE_SOURCE_PATH="$AICODE_SOURCE_PARENT/$AICODE_SOURCE_TARGET" ;;
+    esac
+done
+AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
+AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
+
+MANUL_PLATFORM_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/manul-platform.sh"
+if [ -r "$MANUL_PLATFORM_HELPER" ]; then
+    # shellcheck source=skills/manul-github-bot/manul-platform.sh
+    . "$MANUL_PLATFORM_HELPER"
+    manul_platform_prepare || exit 1
+    manul_platform_reexec_if_needed "$AICODE_SOURCE_PATH" "$@"
+elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+    echo "ERROR: Manul platform helper is missing: $MANUL_PLATFORM_HELPER" >&2
+    exit 1
+fi
+
+TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/todo-local-mcp-url.sh"
+if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
+    # shellcheck source=skills/manul-github-bot/todo-local-mcp-url.sh
+    . "$TODO_LOCAL_MCP_URL_HELPER"
+else
+    echo "WARNING: shared Todo MCP endpoint helper is missing; Todo MCP will be disabled." >&2
+fi
 
 if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     set -a
@@ -152,8 +181,8 @@ caracal_http_ready() {
 
 caracal_pid_matches() {
     local pid="$1" command_line
-    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
-    command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    command_line="$(ps -p "$pid" -o args= 2>/dev/null || true)"
     [[ "$command_line" == *"caracal-rag mcp --transport http"* &&
        "$command_line" == *"--port $CARACAL_MCP_PORT"* &&
        "$command_line" == *"--path $CARACAL_MCP_PATH"* ]]
@@ -318,14 +347,40 @@ ensure_caracal_mcp() {
 
 ensure_todo_mcp_bridge() {
     export TODO_LOCAL_MCP_AVAILABLE=0 TODO_LOCAL_MCP_CONNECTED=0
+    unset TODO_LOCAL_MCP_URL
 
     if [ -z "$TODO_LOCAL_MCP_TOKEN" ]; then
-        echo "Todo MCP token is not configured; skipping the optional Windows bridge."
+        echo "Todo MCP token is not configured; skipping the optional local endpoint."
         return 0
     fi
+    if ! command -v curl >/dev/null 2>&1 ||
+       ! declare -F todo_local_mcp_is_wsl >/dev/null 2>&1 ||
+       ! declare -F todo_local_mcp_probe_status >/dev/null 2>&1; then
+        echo "WARNING: Todo MCP endpoint discovery prerequisites are missing; Todo MCP is disabled for this launch." >&2
+        return 0
+    fi
+
+    local direct_url="http://127.0.0.1:8765/mcp"
+    local direct_status
+    direct_status="$(todo_local_mcp_probe_status "$direct_url")"
+    if [ "$direct_status" = "401" ]; then
+        export TODO_LOCAL_MCP_URL="$direct_url"
+        export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
+        echo "Todo MCP verified directly at $TODO_LOCAL_MCP_URL."
+        return 0
+    fi
+
+    # Only WSL needs the Windows host bridge. Native Linux/macOS connects to
+    # Todo Desktop's loopback listener and never invokes PowerShell or wslpath.
+    if ! todo_local_mcp_is_wsl; then
+        echo "WARNING: Todo Desktop MCP is not reachable at $direct_url (HTTP $direct_status); Todo MCP is disabled for this launch." >&2
+        echo "Check that Todo Desktop is running, todo.localMcpServer is enabled, and a user session is active." >&2
+        return 0
+    fi
+
     if ! command -v powershell.exe >/dev/null 2>&1 || ! command -v wslpath >/dev/null 2>&1 ||
        ! command -v ip >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-        echo "WARNING: Windows/WSL bridge prerequisites are missing; Todo MCP is disabled for this launch." >&2
+        echo "WARNING: WSL/Windows bridge prerequisites are missing; Todo MCP is disabled for this launch." >&2
         return 0
     fi
 
@@ -366,10 +421,11 @@ ensure_todo_mcp_bridge() {
     fi
 
     local http_status
-    http_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8766/mcp 2>/dev/null || true)"
+    http_status="$(todo_local_mcp_probe_status "http://127.0.0.1:8766/mcp")"
     if [ "$http_status" = "401" ]; then
+        export TODO_LOCAL_MCP_URL="http://127.0.0.1:8766/mcp"
         export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
-        echo "Todo MCP reverse bridge verified at http://127.0.0.1:8766/mcp; unauthenticated access is rejected."
+        echo "Todo MCP reverse bridge verified at $TODO_LOCAL_MCP_URL; unauthenticated access is rejected."
     else
         echo "WARNING: Todo MCP reverse bridge did not return the expected HTTP 401 challenge (status $http_status). Todo MCP is disabled for this launch." >&2
         tail -n 12 "$HOME/.cache/globalskills/todo-mcp-bridge/bridge.log" 2>/dev/null | sed 's/^/  WSL relay: /' >&2
@@ -383,7 +439,7 @@ ensure_opencode_caracal_config() {
     OPENCODE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
     export OPENCODE_CONFIG
     local config_dir tmp config_input
-    config_dir="$(dirname -- "$OPENCODE_CONFIG")"
+    config_dir="$(dirname "$OPENCODE_CONFIG")"
     mkdir -p "$config_dir" || return 1
     if [ -L "$OPENCODE_CONFIG" ]; then
         echo "ERROR: refusing symlinked OpenCode config path: $OPENCODE_CONFIG" >&2
@@ -435,7 +491,7 @@ ensure_opencode_caracal_config() {
                 | . + {
                     "todo-local": {
                         type: "remote",
-                        url: "http://127.0.0.1:8766/mcp",
+                        url: "{env:TODO_LOCAL_MCP_URL}",
                         oauth: false,
                         enabled: true,
                         headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
@@ -500,7 +556,7 @@ JQ
         echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
         return 1
     fi
-    if ! mcp_output="$(timeout 45 "$opencode_cli" mcp list 2>&1)" ||
+    if ! mcp_output="$(python3 "$AICODE_SOURCE_DIR/run-with-timeout.py" 45 "$opencode_cli" mcp list 2>&1)" ||
        ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
         echo "ERROR: OpenCode does not report caracal-rag as connected; see the output of 'opencode mcp list'. No agent runtime will start." >&2
         return 1

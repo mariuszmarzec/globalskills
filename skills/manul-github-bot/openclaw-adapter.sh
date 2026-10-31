@@ -175,7 +175,7 @@ elif [ "$rc" -eq 0 ] && grep -qE '^TASK_FAILED([[:space:]:]|$)' "$OPT_STDOUT_FIL
 elif [ "$rc" -eq 0 ] && grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     _status="COMPLETED"
     _exit_code=0
-    _summary="$(grep -oP '(?<=^TASK_DONE\s).+' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || true)"
+    _summary="$(awk '/^TASK_DONE[[:space:]]/ {sub(/^TASK_DONE[[:space:]]+/, ""); print; exit}' "$OPT_STDOUT_FILE" 2>/dev/null || true)"
     : "${_summary:=Agent completed}"
 elif [ "$rc" -eq 0 ]; then
     # A clean OpenClaw process exit is NOT a successful Manul task completion.

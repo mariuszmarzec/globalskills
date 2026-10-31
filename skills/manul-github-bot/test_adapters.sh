@@ -372,7 +372,14 @@ if [ "${1:-}" = "run" ]; then
   # Inspect the actual config used by this run, not a debug command that the
   # production adapter never invokes. OpenCode evaluates patterns in order;
   # the task-specific allow must follow the broader sibling-workspace deny.
-  jq -e --arg active "$ACTIVE_WORKSPACE" --arg activeGlob "$ACTIVE_WORKSPACE/**" --arg globalPattern "$MANUL_WORKSPACE/**" --arg sibling "$SIBLING_WORKSPACE" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$ACTIVE_WORKSPACE" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$EXPECTED_PRIMARY_CHECKOUT" '
+  # macOS resolves /var through /private/var. Compare canonical filesystem
+  # paths because the production adapter intentionally resolves symlinks before
+  # granting an external-directory allow.
+  active_real="$(realpath -e "$ACTIVE_WORKSPACE")"
+  sibling_real="$(realpath -e "$SIBLING_WORKSPACE")"
+  workspace_base_real="$(realpath -e "$MANUL_WORKSPACE")"
+  expected_workdir_real="$(realpath -e "$EXPECTED_PRIMARY_CHECKOUT")"
+  jq -e --arg active "$active_real" --arg activeGlob "$active_real/**" --arg globalPattern "$workspace_base_real/**" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
     .permission.external_directory as $rules
     | ($rules[$globalPattern] == "deny")
       and ($rules[$active] == "allow")
@@ -1258,7 +1265,7 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
-# 10c. Todo local MCP is injected only when the Windows bridge is reachable
+# 10c. Todo local MCP is injected only when a supported local endpoint is reachable
 # ---------------------------------------------------------------------------
 test_opencode_todo_local_mcp() {
   local tmp
@@ -1310,7 +1317,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and (
       if $expected == "1" then
         .mcp["todo-local"].type == "remote"
-        and .mcp["todo-local"].url == "http://127.0.0.1:8766/mcp"
+        and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
         and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
         and .mcp["todo-local"].enabled == true
         and .tools["todo-local_*"] == true
@@ -1442,10 +1449,34 @@ MOCK
     AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
-  printf '%s\n' "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
-  cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
-    && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
-    || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
+  if python3 - "$tmp/task-env" "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" <<'PY_PATH_COMPARE'
+import os
+import sys
+
+actual_path, *expected_paths = sys.argv[1:]
+with open(actual_path, encoding="utf-8") as stream:
+    actual_paths = stream.read().splitlines()
+
+if len(actual_paths) != len(expected_paths):
+    print(f"expected {len(expected_paths)} paths, received {len(actual_paths)}", file=sys.stderr)
+    raise SystemExit(1)
+
+for index, (actual, expected) in enumerate(zip(actual_paths, expected_paths), start=1):
+    actual_real = os.path.realpath(actual)
+    expected_real = os.path.realpath(expected)
+    if actual_real != expected_real:
+        print(
+            f"path {index} mismatch: actual={actual!r} ({actual_real!r}), "
+            f"expected={expected!r} ({expected_real!r})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+PY_PATH_COMPARE
+  then
+    ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary"
+  else
+    fail "AgentExecutor path/config environment mismatch"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1553,134 +1584,6 @@ test_opencode_adapter_syntax() {
   else
     fail "OpenCode adapter has shell syntax errors: $err"
   fi
-}
-
-# ---------------------------------------------------------------------------
-# 11. AgentExecutor dispatch
-# ---------------------------------------------------------------------------
-test_agent_executor_dispatch() {
-  local tmp custom_manul_dir custom_workspace_base workspace_root workdir
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  custom_manul_dir="$tmp/custom Manul runtime"
-  custom_workspace_base="$tmp/custom workspace tree"
-  workspace_root="$custom_workspace_base/ws-route"
-  workdir="$workspace_root/repos/test-owner/test-repo"
-  mkdir -p "$tmp/bin" "$workspace_root" "$workdir" "$tmp/home"
-  cat >"$tmp/bin/opencode" <<'MOCK'
-#!/usr/bin/env bash
-# Universal Caracal MCP fixture for OpenCode adapter tests.
-if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\n' 'caracal-rag connected'
-    exit 0
-  fi
-  printf '%s\n' 'caracal-rag failed'
-  exit 1
-fi
-printf '%s\n' "$MANUL_TASK_WORKSPACE_ROOT" "$MANUL_TASK_WORKDIR" "$MANUL_DIR" "$MANUL_WORKSPACE" >"$MOCK_TASK_ENV"
-printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_route","part":{"type":"text","text":"TASK_DONE routed"}}'
-exit 0
-MOCK
-  chmod +x "$tmp/bin/opencode"
-  echo "Do the task" >"$tmp/prompt"
-  jq -n --arg p "$tmp/prompt" --arg w "$workspace_root" --arg wr "$workspace_root" --arg wd "$workdir" \
-    '{taskId:"route-1",prompt:$p,workspace:$w,workspaceRoot:$wr,workdir:$wd,attempt:1,timeout:30}' >"$tmp/context.json"
-
-  local out
-  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" MOCK_TASK_ENV="$tmp/task-env" \
-    AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
-    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
-  printf '%s\n' "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
-  cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
-    && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
-    || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
-}
-
-# ---------------------------------------------------------------------------
-# 12. Default/config runtime selection
-# ---------------------------------------------------------------------------
-test_runtime_selection() {
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/runtime"
-  printf '%s\n' '{"automation":{"agentRuntime":"opencode"}}' >"$tmp/runtime/config.json"
-
-  local runtime
-  runtime="$(MANUL_DIR="$tmp/runtime" unset AGENT_RUNTIME MANUL_AGENT_RUNTIME; \
-    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "opencode" ] \
-    && ok "manul-paths reads automation.agentRuntime from config" \
-    || fail "manul-paths ignored automation.agentRuntime (got $runtime)"
-
-  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "openclaw" ] \
-    && ok "OpenClaw remains the default runtime" \
-    || fail "Default runtime changed unexpectedly: $runtime"
-}
-
-# ---------------------------------------------------------------------------
-# 13. Unknown runtime fails closed
-# ---------------------------------------------------------------------------
-test_unknown_runtime() {
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-
-  local rc err
-  AGENT_RUNTIME=bogus MANUL_DIR="$tmp/runtime" \
-    bash -c 'source "$1/agent-executor.sh"' _ "$SCRIPT_DIR" 2>"$tmp/err"
-  rc=$?
-  err="$(cat "$tmp/err" 2>/dev/null || true)"
-  [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi 'unknown agent runtime' \
-    && ok "Unknown runtime is rejected before dispatch" \
-    || fail "Unknown runtime guard rc=$rc err=$err"
-}
-
-# ---------------------------------------------------------------------------
-# 14. Controller honors caller-supplied stdout path
-# ---------------------------------------------------------------------------
-test_controller_stdout_path() {
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin"
-  cat >"$tmp/bin/opencode" <<'MOCK'
-#!/usr/bin/env bash
-# Universal Caracal MCP fixture for OpenCode adapter tests.
-if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\n' 'caracal-rag connected'
-    exit 0
-  fi
-  printf '%s\n' 'caracal-rag failed'
-  exit 1
-fi
-sleep 5
-exit 0
-MOCK
-  chmod +x "$tmp/bin/opencode"
-  echo "Do the task" >"$tmp/prompt"
-  echo "TASK_DONE completed before controller timeout" >"$tmp/custom.stdout"
-  jq -n --arg id "controller-1" --arg p "$tmp/prompt" --arg w "$tmp" \
-    --arg out "$tmp/custom.stdout" --arg err "$tmp/custom.stderr" \
-    '{taskId:$id,prompt:$p,workspace:$w,attempt:1,timeout:1,stdout_file:$out,stderr_file:$err}' >"$tmp/context.json"
-
-  # Mock AgentExecutor at the shell-function boundary so the controller test
-  # isolates the output-path logic.
-  local out
-  out="$(MANUL_DIR="$tmp/runtime" bash -c '
-    source "$1/manul-paths.sh"
-    source "$1/agent-execution-controller.sh"
-    AgentExecutor.execute() {
-      printf "%s\n" "{\"status\":\"TIMEOUT\",\"task_id\":\"controller-1\",\"exit_code\":124,\"summary\":\"timed out\",\"session_id\":\"ses_controller\",\"duration_s\":1}"
-      return 124
-    }
-    AgentExecutionController.execute "$2"
-  ' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "Controller checks the caller-supplied stdout file"
 }
 
 echo "=== Adapter Unit Tests ==="

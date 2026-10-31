@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # repair-manul-runtime.sh — Repair Manul runtime directory
 #
 # Usage:
@@ -25,6 +25,10 @@ set -euo pipefail
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+SCRIPT_DIR="$CANONICAL_DIR"
+source "$SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$SCRIPT_DIR/repair-manul-runtime.sh" "$@"
 
 # Parse CLI flags (env vars take priority; flags override defaults only)
 while [[ $# -gt 0 ]]; do

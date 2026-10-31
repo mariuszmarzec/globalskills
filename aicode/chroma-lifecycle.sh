@@ -42,8 +42,9 @@ chroma_http_ready() {
 
 chroma_pid_matches() {
     local pid="$1" chroma_cli="$2" bind_host="$3" port="$4" data_dir="$5" command_line
-    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || return 1
-    command_line="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+    [ -n "$command_line" ] || return 1
     [[ -n "$command_line" ]] || return 1
 
     # Match the executable and all deployment-specific arguments before treating a PID as ours.

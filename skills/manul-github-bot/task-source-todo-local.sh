@@ -4,55 +4,35 @@ set -uo pipefail
 
 TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
+source "$TODO_LOCAL_SOURCE_DIR/todo-local-mcp-url.sh"
 
 todo_source_local_config() {
-  local source_json="$1" url
-  source_json="$(jq -c '
-    .url = (.url // "http://127.0.0.1:8766/mcp")
-    | .tokenEnv = (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
-  ' <<<"$source_json")" || return 2
-  url="$(jq -r '.url // empty' <<<"$source_json")"
-  if ! python3 - "$url" <<'PY_TODO_LOCAL_URL'
-import ipaddress
-import sys
-from urllib.parse import urlsplit
+  local source_json="$1" url configured_url resolved_url
+  configured_url="$(jq -r '.url // empty' <<<"$source_json")" || return 2
 
-try:
-    parsed = urlsplit(sys.argv[1])
-    host = parsed.hostname
-    port = parsed.port
-except ValueError:
-    raise SystemExit(1)
-
-if (
-    parsed.scheme != "http"
-    or host is None
-    or parsed.path != "/mcp"
-    or parsed.query
-    or parsed.fragment
-    or parsed.username is not None
-    or parsed.password is not None
-):
-    raise SystemExit(1)
-
-if host.casefold() == "localhost":
-    raise SystemExit(0)
-
-try:
-    address = ipaddress.ip_address(host)
-except ValueError:
-    raise SystemExit(1)
-
-if not address.is_loopback:
-    raise SystemExit(1)
-PY_TODO_LOCAL_URL
-  then
-    echo "task-source: local Todo MCP URL must use HTTP loopback (localhost, 127.0.0.0/8 or ::1) and the /mcp path" >&2
-    return 2
+  # Preserve explicitly configured custom loopback ports. The two standard
+  # endpoints are resolved dynamically so an old 8766 config migrates to
+  # native 8765 where possible while WSL can still select its relay.
+  if [ -n "$configured_url" ] &&
+     [ "$configured_url" != "http://127.0.0.1:8765/mcp" ] &&
+     [ "$configured_url" != "http://127.0.0.1:8766/mcp" ]; then
+    url="$configured_url"
+    if ! todo_local_mcp_url_is_supported "$url"; then
+      echo "task-source: local Todo MCP URL must use HTTP loopback and the /mcp path" >&2
+      return 2
+    fi
+  else
+    url="$(todo_local_mcp_resolve_url "$configured_url")" || {
+      echo "task-source: Todo Desktop MCP is not reachable on a supported local endpoint" >&2
+      return 2
+    }
   fi
-  printf '%s\n' "$source_json"
-}
 
+  jq -c --arg url "$url" '
+    .url = $url
+    | .tokenEnv = (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
+  ' <<<"$source_json"
+}
 task_source_todo_local_poll() {
   local source_json tasks_json task_json normalized resolution task_id
   source_json="$(todo_source_local_config "$1")"

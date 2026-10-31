@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches pipeline errors
 # manul-daemon.sh — background poll loop for the manul GitHub bot.
 #
@@ -37,8 +37,24 @@ export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/ve
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
-DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
-DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+DAEMON_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+while [ -L "$DAEMON_SCRIPT_PATH" ]; do
+  DAEMON_SCRIPT_PARENT="$(cd -P "$(dirname "$DAEMON_SCRIPT_PATH")" && pwd)"
+  DAEMON_SCRIPT_TARGET="$(readlink "$DAEMON_SCRIPT_PATH")"
+  case "$DAEMON_SCRIPT_TARGET" in
+    /*) DAEMON_SCRIPT_PATH="$DAEMON_SCRIPT_TARGET" ;;
+    *)  DAEMON_SCRIPT_PATH="$DAEMON_SCRIPT_PARENT/$DAEMON_SCRIPT_TARGET" ;;
+  esac
+done
+DAEMON_SCRIPT_DIR="$(cd -P "$(dirname "$DAEMON_SCRIPT_PATH")" && pwd)"
+DAEMON_SCRIPT_ABS="$DAEMON_SCRIPT_DIR/$(basename "$DAEMON_SCRIPT_PATH")"
+
+# On macOS load Homebrew Bash/coreutils/util-linux before executing any runtime
+# code. Cron/watchdog launches do not inherit interactive shell PATH settings.
+source "$DAEMON_SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$DAEMON_SCRIPT_ABS" "$@"
+
 
 # Load operator/provider overrides from the runtime-owned environment file.
 # This is required for unattended cron/watchdog execution because ~/.zshrc is
@@ -929,7 +945,7 @@ task_process_is_running() {
 # different process group, which a group-only signal cannot terminate.
 task_descendant_pids() {
   local root_pid="$1"
-  ps -eo pid=,ppid= | awk -v root="$root_pid" '
+  ps -axo pid=,ppid= | awk -v root="$root_pid" '
     {
       pids[NR] = $1
       parents[$1] = $2
@@ -959,19 +975,14 @@ find_task_executor_pid() {
   local comment_id="$1"
   local expected_context="$(manul_task_file_path "$MANUL_STATE_DIR/tasks" "$comment_id" "ctx.json")"
   local expected_pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
-  local cmdline_file cmdline pid
+  local pid cmdline
 
-  for cmdline_file in /proc/[0-9]*/cmdline; do
-    [ -r "$cmdline_file" ] || continue
-    cmdline="$(tr '\0' ' ' < "$cmdline_file" 2>/dev/null || true)"
+  while read -r pid cmdline; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
     [[ "$cmdline" == *agent-task-runner.sh*"$expected_context"*"$expected_pid_file"* ]] || continue
-    pid="${cmdline_file#/proc/}"
-    pid="${pid%/cmdline}"
-    if [[ "$pid" =~ ^[0-9]+$ ]]; then
-      printf '%s\n' "$pid"
-      return 0
-    fi
-  done
+    printf '%s\n' "$pid"
+    return 0
+  done < <(ps -ww -axo pid=,command= 2>/dev/null)
   return 1
 }
 
@@ -1088,9 +1099,9 @@ list_task_executor_ids() {
     seen_task_ids["$task_id"]=1
   done
 
-  for cmdline_file in /proc/[0-9]*/cmdline; do
-    [ -r "$cmdline_file" ] || continue
-    cmdline="$(tr '\0' ' ' < "$cmdline_file" 2>/dev/null || true)"
+  local process_pid
+  while read -r process_pid cmdline; do
+    [[ "$process_pid" =~ ^[0-9]+$ ]] || continue
     [[ "$cmdline" == *agent-task-runner.sh*"$context_prefix"*".ctx.json"* ]] || continue
     remainder="${cmdline#*"$context_prefix"}"
     file_key="${remainder%%.ctx.json*}"
@@ -1098,7 +1109,7 @@ list_task_executor_ids() {
     resolved_task_id="$(task_id_from_file_key "$file_key" 2>/dev/null || true)"
     task_id="${resolved_task_id:-$file_key}"
     seen_task_ids["$task_id"]=1
-  done
+  done < <(ps -ww -axo pid=,command= 2>/dev/null)
 
   for task_id in "${!seen_task_ids[@]}"; do
     printf '%s\n' "$task_id"
@@ -1118,8 +1129,8 @@ terminate_all_task_executors() {
 # process if the PID from an old PID file has been reused by the OS.
 is_manul_heartbeat_process() {
   local pid="$1" cmdline fd_target daemon_pid worker_file worker_pid
-  [ -r "/proc/$pid/cmdline" ] || return 1
-  cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  cmdline="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
+  [ -n "$cmdline" ] || return 1
 
   daemon_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   [ "$pid" = "$daemon_pid" ] && return 1
@@ -1132,7 +1143,13 @@ is_manul_heartbeat_process() {
   if [[ "$cmdline" == *manul-daemon.sh* && "$cmdline" == *loop* ]]; then
     return 0
   fi
-  fd_target="$(readlink "/proc/$pid/fd/210" 2>/dev/null || true)"
+  if [ -r "/proc/$pid/fd/210" ]; then
+    fd_target="$(readlink "/proc/$pid/fd/210" 2>/dev/null || true)"
+  elif command -v lsof >/dev/null 2>&1; then
+    fd_target="$(lsof -a -p "$pid" -d 210 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+  else
+    fd_target=""
+  fi
   [ "$fd_target" = "$TASK_LOCK_FILE" ]
 }
 
@@ -1277,7 +1294,7 @@ start() {
     local initial_pid initial_cmdline
     initial_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [[ "$initial_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$initial_pid" 2>/dev/null; then
-      initial_cmdline="$(tr '\0' ' ' < "/proc/$initial_pid/cmdline" 2>/dev/null || true)"
+      initial_cmdline="$(ps -ww -p "$initial_pid" -o command= 2>/dev/null || true)"
       if [[ "$initial_cmdline" == *"manul-daemon.sh"* ]]; then
         flock -u 200
         exec 200>&-
@@ -1464,7 +1481,7 @@ stop() {
       local orphan_poller_pid orphan_poller_cmdline
       orphan_poller_pid="$(cat "$POLLER_PID_FILE" 2>/dev/null || true)"
       if [[ "$orphan_poller_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$orphan_poller_pid" 2>/dev/null; then
-        orphan_poller_cmdline="$(tr '\0' ' ' < "/proc/$orphan_poller_pid/cmdline" 2>/dev/null || true)"
+        orphan_poller_cmdline="$(ps -ww -p "$orphan_poller_pid" -o command= 2>/dev/null || true)"
         if [[ "$orphan_poller_cmdline" == *"manul-daemon.sh"* && "$orphan_poller_cmdline" == *"--poller"* ]]; then
           kill -- "-$orphan_poller_pid" 2>/dev/null || kill "$orphan_poller_pid" 2>/dev/null || true
         fi
@@ -1497,7 +1514,7 @@ stop() {
     poller_pid="$(cat "$POLLER_PID_FILE" 2>/dev/null || true)"
     if [[ "$poller_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$poller_pid" 2>/dev/null; then
       local poller_cmdline
-      poller_cmdline="$(tr '\0' ' ' < "/proc/$poller_pid/cmdline" 2>/dev/null || true)"
+      poller_cmdline="$(ps -ww -p "$poller_pid" -o command= 2>/dev/null || true)"
       if [[ "$poller_cmdline" == *"manul-daemon.sh"* && "$poller_cmdline" == *"--poller"* ]]; then
         kill -- "-$poller_pid" 2>/dev/null || kill "$poller_pid" 2>/dev/null || true
       fi
