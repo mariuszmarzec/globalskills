@@ -57,7 +57,9 @@ fi
 export MANUL_CANONICAL_DIR
 export MANUL_CANONICAL_ROOT="$MANUL_REPO_DIR"
 export MANUL_CANONICAL_BRANCH="$MANUL_BRANCH"
+export MANUL_HOST_SKILLS_DIR="$SKILLS_DIR"
 echo "Manul source available at: $MANUL_CANONICAL_DIR"
+echo "Host project skills available at: $MANUL_HOST_SKILLS_DIR"
 
 # Prepare the Manul runtime and CLI. A fresh runtime is initialized only when
 # no database exists; an existing database always uses the non-destructive path.
