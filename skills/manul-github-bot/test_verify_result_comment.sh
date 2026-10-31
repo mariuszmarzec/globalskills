@@ -363,8 +363,8 @@ test_conversation_close_tolerates_sqlite_contention() {
     local lock_pid rc status
     echo "=== conversation close tolerates a concurrent SQLite writer ==="
     setup_db
-    sqlite3 "$TEMP_DB" <<'SQL'
-CREATE TABLE conversations (
+    sqlite3 "$TEMP_DB" "
+CREATE TABLE IF NOT EXISTS conversations (
   conversationId TEXT PRIMARY KEY,
   status TEXT NOT NULL,
   activePrNumber INTEGER,
@@ -375,8 +375,14 @@ INSERT INTO conversations(conversationId,status,activePrNumber,activePrUrl,updat
 VALUES ('conv-lock','ACTIVE',88,'https://github.com/owner/repo/pull/88','2026-10-30T00:00:00Z');
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,action,status,attempts,conversationId)
 VALUES ('issue:lock-close','owner/repo',602,'https://github.com/owner/repo/issues/602','test prompt','IMPLEMENT','completed',1,'conv-lock');
-SQL
-    ensure_terminal_lifecycle_outbox
+" || {
+        fail "SQLite contention fixture schema and rows are created"
+        return
+    }
+    ensure_terminal_lifecycle_outbox || {
+        fail "SQLite contention fixture outbox is initialized"
+        return
+    }
     rm -f "$lock_ready"
 
     # Hold a RESERVED SQLite write lock briefly on a separate connection.
