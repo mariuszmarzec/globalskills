@@ -70,9 +70,12 @@ fi
 
 # The CLI checks effective config, environment expansion, HTTP connection, and
 # bearer authentication. Do not print its output; it may expose endpoint details.
-if ! mcp_output="$(timeout 45 "$opencode_bin" mcp list 2>&1)" ||
-   ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
-    log "OpenCode did not report caracal-rag as connected; refusing the ACP session"
+# Its aggregate exit code may be non-zero when an optional MCP (Fiteo) is down;
+# only Caracal's explicit connected status gates the ACP session.
+mcp_list_rc=0
+mcp_output="$(timeout 45 "$opencode_bin" mcp list 2>&1)" || mcp_list_rc=$?
+if ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
+    log "OpenCode did not report caracal-rag as connected (mcp list exit $mcp_list_rc); refusing the ACP session"
     exit 78
 fi
 
