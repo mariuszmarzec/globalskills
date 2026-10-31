@@ -74,6 +74,7 @@ DAEMON="$SCRIPT_DIR/manul-daemon.sh"
 eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^lc_log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^sql_escape() {/,/^}/p' "$DAEMON")"
+eval "$(sed -n '/^sqlite_query_json() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^get_daemon_pid() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^repair_result_comment_marker() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^verify_result_comment() {/,/^}/p' "$DAEMON")"
@@ -188,11 +189,36 @@ insert_task() {
     " 2>/dev/null
 }
 
+test_sqlite_query_json_compatibility() {
+    local result write_rc=0
+    echo "=== legacy sqlite3 CLI compatibility ==="
+    setup_db
+    result="$(sqlite_query_json "$TEMP_DB" "SELECT 'owner/repo' AS repository, 501 AS issueNumber, NULL AS replyTo, 'line one' || char(10) || 'line two with \"quotes\"' AS body, NULL AS postedAt;")" || {
+        fail "read-only SQLite JSON helper executes on legacy CLI hosts"
+        return
+    }
+    if printf '%s' "$result" | jq -e '
+        length == 1
+        and .[0].repository == "owner/repo"
+        and .[0].issueNumber == 501
+        and .[0].replyTo == null
+        and .[0].body == ("line one" + "\n" + "line two with \"quotes\"")
+        and .[0].postedAt == null
+    ' >/dev/null; then
+        ok "read-only SQLite JSON helper preserves nulls, numbers, quotes, and newlines"
+    else
+        fail "read-only SQLite JSON helper preserves nulls, numbers, quotes, and newlines"
+    fi
+    sqlite_query_json "$TEMP_DB" "DELETE FROM processed_comments;" >/dev/null 2>&1 || write_rc=$?
+    assert_rc "SQLite JSON helper refuses writes" "1" "$write_rc"
+}
+
 FAKE_LIFECYCLE_COMMENTS="$WORK/lifecycle-comments.jsonl"
 POST_CAPTURE_FILE="$WORK/terminal-post-body.txt"
 : > "$FAKE_LIFECYCLE_COMMENTS"
 FAKE_POST_MODE="success"
 FAKE_FIND_FAIL="0"
+test_sqlite_query_json_compatibility
 
 post_github_comment() {
     local repo="$1" issue="$2" body="$3" reply_to="${4:-}"
