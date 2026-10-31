@@ -70,7 +70,10 @@ sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 
 # Helper: run orchestrator with test env
 orch() {
-  ORCHESTRATOR_DIR="$ORCHESTRATOR_DIR" MANUL_DIR="$MANUL_DIR" bash "$ORCHESTRATOR" "$@"
+  ORCHESTRATOR_DIR="$ORCHESTRATOR_DIR" \
+  MANUL_DIR="$MANUL_DIR" \
+  MANUL_DB="${MANUL_DB:-$MANUL_DIR/state/manul.db}" \
+  bash "$ORCHESTRATOR" "$@"
 }
 
 # Helper: mark all tasks for conversation as completed
