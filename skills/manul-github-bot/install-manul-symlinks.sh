@@ -214,8 +214,7 @@ for script in "${SCRIPTS[@]}"; do
     fi
     if [ -L "$runtime_path" ]; then
         target="$(readlink "$runtime_path" 2>/dev/null || true)"
-        resolved="$(readlink -f "$runtime_path" 2>/dev/null || true)"
-        if [ "$target" = "$canonical_file" ] && [ -f "$resolved" ]; then
+        if [ "$target" = "$canonical_file" ] && [ -f "$runtime_path" ]; then
             echo "OK $script -> $target"
         else
             echo "FAIL $script -> BROKEN: target=$target resolved=$resolved" >&2
