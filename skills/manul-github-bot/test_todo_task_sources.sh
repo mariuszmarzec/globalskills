@@ -102,6 +102,30 @@ esac
 PYTHON
 chmod +x "$BIN/python3"
 export REAL_PYTHON_BIN="$PYTHON_BIN"
+cat > "$BIN/curl" <<'CURL'
+#!/usr/bin/env bash
+set -uo pipefail
+url=""
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  http://127.0.0.1:8765/mcp)
+    status="$(printenv TODO_LOCAL_MCP_DIRECT_STATUS 2>/dev/null || printf '401')"
+    ;;
+  http://127.0.0.1:8766/mcp)
+    status="$(printenv TODO_LOCAL_MCP_BRIDGE_STATUS 2>/dev/null || printf '000')"
+    ;;
+  *)
+    status="000"
+    ;;
+esac
+printf '%s' "$status"
+[ "$status" = "401" ] && exit 0
+exit 7
+CURL
+chmod +x "$BIN/curl"
+export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
+export TODO_LOCAL_MCP_DIRECT_STATUS=401
+export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
 export FITEO_PAT="remote-test-token"
@@ -363,7 +387,18 @@ local_task="$(printf '%s\n' "$local_tasks" | jq -c '.')"
 assert_contains "local root source type is normalized" "$local_task" '"taskSourceType":"todo_local_mcp"'
 assert_eq "local Todo adapter assigns repository from description, not a static default" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_task")"
 assert_eq "local source persists repository-resolution provenance" "catalog_alias" "$(jq -r '.metadata.repositoryResolution.method' <<<"$local_task")"
-assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8766/mcp'
+assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
+
+# WSL prefers direct loopback but falls back to its authenticated bridge when
+# Todo Desktop runs on the Windows host and direct loopback is unavailable.
+export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=wsl
+export TODO_LOCAL_MCP_DIRECT_STATUS=000
+export TODO_LOCAL_MCP_BRIDGE_STATUS=401
+wsl_local_config="$(todo_source_local_config "$LOCAL_SOURCE")"
+assert_contains "WSL falls back to the existing Todo bridge when direct loopback is unavailable" "$wsl_local_config" 'http://127.0.0.1:8766/mcp'
+export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
+export TODO_LOCAL_MCP_DIRECT_STATUS=401
+export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 assert_contains "local Todo accepts localhost on another port" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://localhost:9876/mcp"}')" 'http://localhost:9876/mcp'
 assert_contains "local Todo accepts IPv6 loopback" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://[::1]:8766/mcp"}')" 'http://[::1]:8766/mcp'
 if todo_source_local_config '{"type":"todo_local_mcp","url":"http://todo.example.test:8766/mcp"}' >/dev/null 2>&1; then
