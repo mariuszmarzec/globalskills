@@ -87,8 +87,11 @@ repository allowlist permits the intended target.
 
 The `aicode` launcher uses
 `MANUL_CANONICAL_DIR` to load Manul's platform helper, path resolver,
-environment helper, installer, and repairer. Todo local MCP endpoint discovery
-is shared through Manul's `todo-local-mcp-url.sh`; tokens are stored in the
+environment helper, installer, and repairer. It also passes
+`MANUL_HOST_SKILLS_DIR` with this repository's `skills/` directory, so
+mapped project skill content is available to Todo task prompts even though the
+Manul runtime is installed separately. Todo local MCP endpoint discovery is
+shared through Manul's `todo-local-mcp-url.sh`; tokens are stored in the
 runtime environment, never in source control.
 
 ## Documentation
