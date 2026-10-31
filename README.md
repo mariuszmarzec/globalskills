@@ -10,11 +10,12 @@ agent lives in `agents/<name>.md`.
 wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszmarzec/globalskills/master/install.sh && bash /tmp/install-globalskills.sh
 ```
 
-This clones the repo to `~/.globalskills` and symlinks:
+This clones/updates `~/.globalskills` and the standalone Manul source at `~/.manul-repo`, prepares the Manul runtime under `~/.manul`, and symlinks:
 
 - `~/.agents/skills -> ~/.globalskills/skills`
 - `~/.config/opencode/agents -> ~/.globalskills/agents`
 - `~/.aicode/aicode -> ~/.globalskills/aicode/aicode` (the installer backs up an existing launcher instead of overwriting it)
+- `~/.manul-repo` — standalone Manul source; runtime state, configuration, database, logs, and workspaces remain under `~/.manul`
 
 Skills are loaded by OpenCode via `skills.paths` in `~/.config/opencode/opencode.json`.
 Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
@@ -22,8 +23,11 @@ Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
 ## Updating
 
 ```bash
-git -C ~/.globalskills pull
+bash ~/.globalskills/install.sh
 ```
+
+This updates both source repositories and refreshes Manul's runtime symlinks
+without deleting the existing `~/.manul` database or task data.
 
 ## macOS runtime prerequisites
 
