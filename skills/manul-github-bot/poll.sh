@@ -1819,7 +1819,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
     # Resolve the real session leader created by setsid --fork.
     for _ in {1..50}; do
-      pid="$(ps -axo pid=,ppid= 2>/dev/null | awk -v parent="$launcher_pid" '$2 == parent {print $1; exit}')"
+      pid="$(ps -ww -axo pid=,ppid= 2>/dev/null | awk -v parent="$launcher_pid" '$2 == parent {print $1; exit}')"
       [ -n "$pid" ] && break
       kill -0 "$launcher_pid" 2>/dev/null || break
       sleep 0.01
