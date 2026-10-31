@@ -351,9 +351,13 @@ cmd_wait() {
   conv_id="$(sqlite3 "$ORCH_DB" "SELECT conversationId FROM task_history WHERE taskId='$TASK_ID' LIMIT 1;" 2>/dev/null)"
   
   if [ -z "$conv_id" ]; then
-    # Try to get from Manul DB directly
+    # Try to get from Manul DB directly. sqlite3 creates a new database file
+    # when given a missing path, even for a SELECT; do not turn a not-found
+    # lookup into an empty production database before manul-wait handles it.
     local db="$MANUL_DB"
-    conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ -f "$db" ]; then
+      conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    fi
   fi
   
   # Wait via Manul CLI
@@ -362,14 +366,27 @@ cmd_wait() {
     return 0
   fi
   
-  local wait_output
-  wait_output="$(bash "$MANUL_WAIT" --task-id "$TASK_ID" --timeout "$timeout" --json 2>/dev/null)" || {
-    local rc=$?
-    if [ "$rc" -eq 4 ]; then
-      error_exit "Task wait timed out" 4
-    fi
-    error_exit "Wait failed" "$rc"
-  }
+  local wait_output wait_rc=0
+  wait_output="$(bash "$MANUL_WAIT" --task-id "$TASK_ID" --timeout "$timeout" --json 2>/dev/null)" || wait_rc=$?
+  if [ "$wait_rc" -ne 0 ]; then
+    case "$wait_rc" in
+      2)
+        # A missing Manul DB/task is an expected query result, not a generic
+        # wrapper failure. Preserve the machine-readable not_found payload.
+        if [ -n "$wait_output" ] && printf '%s' "$wait_output" | jq -e '.status == "not_found"' >/dev/null 2>&1; then
+          if [ "$JSON_OUTPUT" = true ]; then
+            printf '%s\n' "$wait_output" | jq .
+          else
+            printf '%s\n' "$wait_output" | jq -r '.error // "Task not found"'
+          fi
+          return 2
+        fi
+        error_exit "Wait failed" "$wait_rc"
+        ;;
+      4) error_exit "Task wait timed out" 4 ;;
+      *) error_exit "Wait failed" "$wait_rc" ;;
+    esac
+  fi
   
   local task_status task_result
   task_status="$(echo "$wait_output" | jq -r '.status // empty')"
@@ -674,7 +691,22 @@ cmd_fix() {
     --action REVIEW_FIX
     --parent-task-id "$TASK_ID"
   )
-  
+
+  # The conversation CLI requires a stable review ID whenever REVIEW_FIX
+  # targets a PR. The orchestrator does not receive a GitHub review ID, so
+  # derive one from the parent task: retries for the same task keep the same
+  # identity, while fixes for different parent tasks remain independent.
+  local review_id task_hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    task_hash="$(printf '%s' "$TASK_ID" | sha256sum | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    task_hash="$(printf '%s' "$TASK_ID" | shasum -a 256 | awk '{print $1}')"
+  else
+    error_exit "REVIEW_FIX requires sha256sum or shasum for deterministic task identity" 1
+  fi
+  review_id="orchestrator-fix-${task_hash:0:32}"
+  fix_args+=(--review-id "$review_id")
+
   if [ -n "$pr_num" ]; then
     fix_args+=(--pr-number "$pr_num")
   fi
