@@ -25,12 +25,23 @@ Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
 git -C ~/.globalskills pull
 ```
 
-## Todo Desktop MCP bridge for WSL
+## Todo Desktop MCP (cross-platform)
 
-When OpenCode runs inside WSL but Todo Desktop runs in Windows, aicode can bridge
-to Todo's existing loopback-only MCP endpoint. Export TODO_LOCAL_MCP_TOKEN in
-your shell (for example, from ~/.zshrc); alternatively, set it in
-~/.config/opencode/todo-mcp.env. An already-exported token takes precedence:
+Todo Desktop exposes its Streamable HTTP MCP endpoint on loopback at
+`http://127.0.0.1:8765/mcp`. Native Linux and macOS clients connect directly;
+they do not need PowerShell, WSL networking, a relay, or a bridge. The endpoint
+is available only while Todo Desktop is running, `todo.localMcpServer` is
+enabled, and a user session is active.
+
+When OpenCode runs inside WSL while Todo Desktop runs in Windows, aicode first
+tries the direct loopback endpoint (which works with mirrored/forwarded WSL
+networking). Only when that probe fails does it start the existing WSL-to-
+Windows bridge and expose the endpoint to OpenCode and Manul at
+`http://127.0.0.1:8766/mcp`.
+
+Export TODO_LOCAL_MCP_TOKEN in your shell (for example, from ~/.zshrc);
+alternatively, set it in ~/.config/opencode/todo-mcp.env. An already-exported
+token takes precedence:
 
 ```bash
 export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
@@ -76,7 +87,7 @@ the WSL address or bridge code changes.
 
 Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
 
-- `todo_local_mcp` talks to the existing Todo Desktop MCP bridge at `http://127.0.0.1:8766/mcp`. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
+- `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
 
 Set `allowReportOnly: true` on either Todo source to opt in to informational
