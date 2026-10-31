@@ -69,6 +69,9 @@ contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caraca
 # make a task-local config plus a live MCP preflight before running OpenCode.
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL' "Manul persists the Caracal endpoint"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN' "Manul persists the Caracal token"
+contains "$MANUL/manul-env.sh" 'MANUL_HOST_SKILLS_DIR' "Manul persists the host project skills path for unattended tasks"
+contains "$MANUL/todo-task-source-utils.sh" 'MANUL_HOST_SKILLS_DIR' "Manul reads mapped project skills from the host-provided directory"
+contains "$AICODE" 'MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"' "aicode exposes globalskills project skills to standalone Manul"
 contains "$AICODE" 'manul_env_bootstrap "$MANUL_RUNTIME"' "aicode refreshes Manul's Caracal environment before repair/startup"
 bootstrap_line="$(grep -nF 'manul_env_bootstrap "$MANUL_RUNTIME"' "$AICODE" | head -n 1 | cut -d: -f1)"
 repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | cut -d: -f1)"
