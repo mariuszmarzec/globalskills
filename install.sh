@@ -8,6 +8,21 @@ AGENTS_DIR="$REPO_DIR/agents"
 SKILLS_LINK="$HOME/.agents/skills"
 AGENTS_LINK="$HOME/.config/opencode/agents"
 
+# Resolve files and directories without GNU readlink -f (not available on macOS).
+resolve_path() {
+  local path="$1" parent target
+  while [ -L "$path" ]; do
+    parent="$(cd -P "$(dirname "$path")" && pwd)" || return 1
+    target="$(readlink "$path")" || return 1
+    case "$target" in
+      /*) path="$target" ;;
+      *)  path="$parent/$target" ;;
+    esac
+  done
+  parent="$(cd -P "$(dirname "$path")" && pwd)" || return 1
+  printf '%s/%s\n' "$parent" "$(basename "$path")"
+}
+
 echo "Installing globalskills..."
 
 if [ -d "$REPO_DIR" ]; then
@@ -53,7 +68,7 @@ if [ -f "$AICODE_SOURCE" ]; then
   # filesystem path, so moving it aside and linking it back creates a self-link
   # and leaves the checkout dirty.
   AICODE_SOURCE_PARENT="$(cd "$(dirname "$AICODE_SOURCE")" && pwd -P)"
-  AICODE_DIR_REAL="$(readlink -f "$AICODE_DIR" 2>/dev/null || true)"
+  AICODE_DIR_REAL="$(resolve_path "$AICODE_DIR" 2>/dev/null || true)"
 
   if [ -n "$AICODE_DIR_REAL" ] && [ "$AICODE_DIR_REAL" = "$AICODE_SOURCE_PARENT" ]; then
     echo "Detected ~/.aicode aliases $AICODE_SOURCE_PARENT; keeping the maintained launcher in place."
@@ -64,8 +79,8 @@ if [ -f "$AICODE_SOURCE" ]; then
       echo "Detected ~/.aicode aliases $AICODE_SOURCE_PARENT; keeping the maintained launcher in place."
     else
       AICODE_LINK="$AICODE_DIR/aicode"
-      AICODE_SOURCE_REAL="$(readlink -f "$AICODE_SOURCE" 2>/dev/null || true)"
-      AICODE_LINK_REAL="$(readlink -f "$AICODE_LINK" 2>/dev/null || true)"
+      AICODE_SOURCE_REAL="$(resolve_path "$AICODE_SOURCE" 2>/dev/null || true)"
+      AICODE_LINK_REAL="$(resolve_path "$AICODE_LINK" 2>/dev/null || true)"
 
       if [ -L "$AICODE_LINK" ] && [ -n "$AICODE_SOURCE_REAL" ] && [ "$AICODE_LINK_REAL" = "$AICODE_SOURCE_REAL" ]; then
         echo "aicode launcher already points to the maintained source."
