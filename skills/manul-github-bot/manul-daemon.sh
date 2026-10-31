@@ -945,7 +945,7 @@ task_process_is_running() {
 # different process group, which a group-only signal cannot terminate.
 task_descendant_pids() {
   local root_pid="$1"
-  ps -eo pid=,ppid= | awk -v root="$root_pid" '
+  ps -axo pid=,ppid= | awk -v root="$root_pid" '
     {
       pids[NR] = $1
       parents[$1] = $2
