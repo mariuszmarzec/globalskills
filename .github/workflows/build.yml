@@ -28,6 +28,7 @@ env:
     aicode/test_openclaw_snapshot.sh
     aicode/test_opencode_acp_caracal.sh
     skills/globalskills-repository/test_agent_modes.sh
+    skills/globalskills-repository/test_manul_human_mode_integration.sh
 
 jobs:
   verify-macos:
