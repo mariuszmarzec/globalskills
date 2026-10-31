@@ -1719,6 +1719,29 @@ ensure_claim_token_column() {
   log "migration: claimToken column added or already present"
   return 0
 }
+
+# The conversations table schema is not uniform across Manul entry points:
+# manul-conversation.sh creates it without activePrUrl, while poll.sh and
+# manul-conversation-linker.sh create it with the column. close_drained_conversations()
+# and poll.sh both write activePrUrl, so existing databases that were seeded by
+# conversation.sh must be migrated before those writes run. The column is
+# nullable, so adding it is safe on empty and populated tables alike.
+ensure_conversations_activeprurl_column() {
+  if sqlite3 "$DB" "PRAGMA table_info(conversations);" 2>>"$LOG" | grep -q '|activePrUrl|'; then
+    return 0
+  fi
+  log "migration: adding activePrUrl column to conversations"
+  local alter_err
+  alter_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE conversations ADD COLUMN activePrUrl TEXT; COMMIT;" 2>&1)" || {
+    # Another worker may have won the migration race.
+    if ! sqlite3 "$DB" "PRAGMA table_info(conversations);" 2>/dev/null | grep -q '|activePrUrl|'; then
+      log "ERROR: failed to add activePrUrl column: $alter_err"
+      return 1
+    fi
+  }
+  log "migration: activePrUrl column added or already present"
+  return 0
+}
 post_github_comment() {
   local repo="$1"
   local issue="$2"
@@ -5290,6 +5313,10 @@ loop() {
   fi
   if ! ensure_recovery_tracking_columns; then
     log "FATAL: recovery tracking schema unavailable, cannot start consumer"
+    exit 1
+  fi
+  if ! ensure_conversations_activeprurl_column; then
+    log "FATAL: activePrUrl schema migration failed, cannot start consumer"
     exit 1
   fi
 
