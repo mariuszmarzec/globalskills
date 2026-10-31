@@ -37,8 +37,17 @@ export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/ve
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
 # be relative). Workers are spawned with nohup/setsid and need a stable path.
-DAEMON_SCRIPT_ABS="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "$0")"
-DAEMON_SCRIPT_DIR="$(dirname "$DAEMON_SCRIPT_ABS")"
+DAEMON_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+while [ -L "$DAEMON_SCRIPT_PATH" ]; do
+  DAEMON_SCRIPT_PARENT="$(cd -P "$(dirname "$DAEMON_SCRIPT_PATH")" && pwd)"
+  DAEMON_SCRIPT_TARGET="$(readlink "$DAEMON_SCRIPT_PATH")"
+  case "$DAEMON_SCRIPT_TARGET" in
+    /*) DAEMON_SCRIPT_PATH="$DAEMON_SCRIPT_TARGET" ;;
+    *)  DAEMON_SCRIPT_PATH="$DAEMON_SCRIPT_PARENT/$DAEMON_SCRIPT_TARGET" ;;
+  esac
+done
+DAEMON_SCRIPT_DIR="$(cd -P "$(dirname "$DAEMON_SCRIPT_PATH")" && pwd)"
+DAEMON_SCRIPT_ABS="$DAEMON_SCRIPT_DIR/$(basename "$DAEMON_SCRIPT_PATH")"
 
 # Load operator/provider overrides from the runtime-owned environment file.
 # This is required for unattended cron/watchdog execution because ~/.zshrc is
