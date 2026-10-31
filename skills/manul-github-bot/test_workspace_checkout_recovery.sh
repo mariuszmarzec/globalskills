@@ -61,6 +61,7 @@ git -C "$SUBMODULE_SEED" add shared.txt
 git -C "$SUBMODULE_SEED" commit -qm "shared dependency"
 git -C "$SUBMODULE_SEED" remote add origin "$SUBMODULE_REMOTE"
 git -C "$SUBMODULE_SEED" push -q -u origin main
+git --git-dir="$SUBMODULE_REMOTE" symbolic-ref HEAD refs/heads/main
 git -C "$SEED" submodule add "$SUBMODULE_REMOTE" shared-utils
 git -C "$SEED" commit -qm "add shared submodule"
 git -C "$SEED" push -q origin main
