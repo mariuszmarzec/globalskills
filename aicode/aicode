@@ -470,16 +470,23 @@ ensure_opencode_caracal_config() {
                     oauth: false,
                     enabled: true,
                     headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
+                },
+                "fiteo": {
+                    type: "remote",
+                    url: "{env:FITEO_BASE_URL}/mcp",
+                    oauth: false,
+                    enabled: true,
+                    headers: {Authorization: "Bearer {env:FITEO_PAT}"}
                 }
             }
           )
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
         | .agent = (
             (.agent // {})
             | if type == "object" then
                 with_entries(
                   if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
                   end
                 )
               else {}
@@ -546,7 +553,7 @@ JQ
         echo "OpenCode Caracal MCP config updated (backup retained when replacing an existing file)."
     fi
 
-    local mcp_output opencode_cli
+    local mcp_output opencode_cli mcp_list_rc=0
     if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
         opencode_cli="$OPENCODE_BIN"
     else
@@ -556,9 +563,12 @@ JQ
         echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
         return 1
     fi
-    if ! mcp_output="$(python3 "$AICODE_SOURCE_DIR/run-with-timeout.py" 45 "$opencode_cli" mcp list 2>&1)" ||
-       ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
-        echo "ERROR: OpenCode does not report caracal-rag as connected; see the output of 'opencode mcp list'. No agent runtime will start." >&2
+    mcp_output="$(python3 "$AICODE_SOURCE_DIR/run-with-timeout.py" 45 "$opencode_cli" mcp list 2>&1)" || mcp_list_rc=$?
+    # The command can return non-zero when an optional server (for example
+    # Fiteo) is offline. Require Caracal's explicit connected status, rather
+    # than treating every server failure as a global MCP preflight failure.
+    if ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
+        echo "ERROR: OpenCode does not report caracal-rag as connected (mcp list exit $mcp_list_rc); see the output of 'opencode mcp list'. No agent runtime will start." >&2
         return 1
     fi
     echo "OpenCode reports caracal-rag connected."

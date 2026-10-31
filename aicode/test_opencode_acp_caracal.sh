@@ -11,8 +11,13 @@ HOME_DIR="$TMP/home"
 BIN="$TMP/bin"
 CARACAL="$HOME_DIR/.caracal"
 OPENCODE_CONFIG="$HOME_DIR/.config/opencode/opencode.json"
-mkdir -p "$HOME_DIR/.config/opencode" "$CARACAL/bin" "$CARACAL/venv/bin" "$CARACAL/config" "$BIN"
-chmod 700 "$HOME_DIR" "$CARACAL" "$CARACAL/config"
+mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.manul" "$CARACAL/bin" "$CARACAL/venv/bin" "$CARACAL/config" "$BIN"
+chmod 700 "$HOME_DIR" "$HOME_DIR/.manul" "$CARACAL" "$CARACAL/config"
+cat >"$HOME_DIR/.manul/.env" <<'ENV'
+FITEO_BASE_URL=https://api.fiteo.example
+FITEO_PAT=runtime-fiteo-pat
+ENV
+chmod 600 "$HOME_DIR/.manul/.env"
 
 # Caracal env provider (the wrapper sources this)
 cat >"$CARACAL/env.sh" <<'PROVIDER'
@@ -103,6 +108,13 @@ cat >"$OPENCODE_CONFIG" <<'JSON'
       "headers": {
         "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
       }
+    },
+    "fiteo": {
+      "type": "remote",
+      "url": "{env:FITEO_BASE_URL}/mcp",
+      "oauth": false,
+      "enabled": true,
+      "headers": {"Authorization": "Bearer {env:FITEO_PAT}"}
     }
   }
 }
@@ -133,14 +145,22 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${CARACAL_MCP_URL:-}" = "http://127.0.0.1:3510/mcp" ] || exit 71
   [ "${CARACAL_ACCESS_TOKEN:-}" = "test-caracal-token" ] || exit 72
   [ "${OPENCODE_CONFIG:-}" = "${EXPECTED_CONFIG:-}" ] || exit 73
+  [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] || exit 74
+  [ "${FITEO_PAT:-}" = "runtime-fiteo-pat" ] || exit 75
   jq -e '
     .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
     and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
     and .mcp["caracal-rag"].enabled == true
+    and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
+    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_PAT}"
   ' "$OPENCODE_CONFIG" >/dev/null
   : > "${PREFLIGHT_FILE:?}"
   if [ "${MOCK_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
+    if [ "${MOCK_FITEO_MCP_STATE:-connected}" = "disconnected" ]; then
+      printf '%s\n' 'fiteo failed'
+      exit 1
+    fi
     exit 0
   fi
   printf '%s\n' 'caracal-rag failed'
@@ -148,7 +168,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
 fi
 if [ "${1:-}" = "acp" ]; then
   printf '%s\n' "$*" > "${ACP_ARGS_FILE:?}"
-  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" > "${ACP_ENV_FILE:?}"
+  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" "$FITEO_BASE_URL" "$FITEO_PAT" > "${ACP_ENV_FILE:?}"
   exit 0
 fi
 exit 2
@@ -157,6 +177,7 @@ chmod +x "$BIN/opencode"
 
 run_wrapper() {
   local state="$1"
+  local fiteo_state="${2:-connected}"
   HOME="$HOME_DIR" \
   PATH="$BIN:/usr/bin:/bin" \
   CARACAL_HOME="$CARACAL" \
@@ -166,6 +187,7 @@ run_wrapper() {
   OPENCODE_BIN="$BIN/opencode" \
   EXPECTED_CONFIG="$OPENCODE_CONFIG" \
   MOCK_MCP_STATE="$state" \
+  MOCK_FITEO_MCP_STATE="$fiteo_state" \
   PREFLIGHT_FILE="$TMP/preflight" \
   ACP_ARGS_FILE="$TMP/acp-args" \
   ACP_ENV_FILE="$TMP/acp-env" \
@@ -179,11 +201,25 @@ if run_wrapper connected >"$TMP/stdout" 2>"$TMP/stderr"; then
   grep -Fxq 'http://127.0.0.1:3510/mcp' "$TMP/acp-env" || { echo "FAIL: current Caracal endpoint was not passed to ACP" >&2; exit 1; }
   grep -Fxq 'test-caracal-token' "$TMP/acp-env" || { echo "FAIL: current token was not passed to ACP" >&2; exit 1; }
   grep -Fxq "$OPENCODE_CONFIG" "$TMP/acp-env" || { echo "FAIL: OpenCode config path was not passed to ACP" >&2; exit 1; }
+  grep -Fxq 'https://api.fiteo.example' "$TMP/acp-env" || { echo "FAIL: refreshed Fiteo endpoint was not passed to ACP" >&2; exit 1; }
+  grep -Fxq 'runtime-fiteo-pat' "$TMP/acp-env" || { echo "FAIL: refreshed Fiteo PAT was not passed to ACP" >&2; exit 1; }
   echo "PASS: live Caracal MCP is verified before starting ACP"
-  echo "PASS: resolved endpoint, current token, and config reach OpenCode ACP"
+  echo "PASS: Fiteo runtime endpoint/PAT and Caracal credentials reach OpenCode ACP"
 else
   cat "$TMP/stderr" >&2
   echo "FAIL: wrapper rejected a connected Caracal MCP" >&2
+  exit 1
+fi
+
+rm -f "$TMP/preflight" "$TMP/acp-args" "$TMP/acp-env"
+# OpenCode's aggregate MCP-list command exits non-zero if the optional Fiteo
+# endpoint is down, but Caracal remains connected and ACP must still launch.
+if run_wrapper connected disconnected >"$TMP/stdout" 2>"$TMP/stderr"; then
+  grep -qx 'acp' "$TMP/acp-args" || { echo "FAIL: ACP was not started during optional Fiteo outage" >&2; exit 1; }
+  echo "PASS: optional Fiteo outage does not block ACP startup"
+else
+  cat "$TMP/stderr" >&2
+  echo "FAIL: optional Fiteo outage blocked ACP startup" >&2
   exit 1
 fi
 
