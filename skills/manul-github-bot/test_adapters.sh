@@ -372,7 +372,14 @@ if [ "${1:-}" = "run" ]; then
   # Inspect the actual config used by this run, not a debug command that the
   # production adapter never invokes. OpenCode evaluates patterns in order;
   # the task-specific allow must follow the broader sibling-workspace deny.
-  jq -e --arg active "$ACTIVE_WORKSPACE" --arg activeGlob "$ACTIVE_WORKSPACE/**" --arg globalPattern "$MANUL_WORKSPACE/**" --arg sibling "$SIBLING_WORKSPACE" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$ACTIVE_WORKSPACE" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$EXPECTED_PRIMARY_CHECKOUT" '
+  # macOS resolves /var through /private/var. Compare canonical filesystem
+  # paths because the production adapter intentionally resolves symlinks before
+  # granting an external-directory allow.
+  active_real="$(realpath -e "$ACTIVE_WORKSPACE")"
+  sibling_real="$(realpath -e "$SIBLING_WORKSPACE")"
+  workspace_base_real="$(realpath -e "$MANUL_WORKSPACE")"
+  expected_workdir_real="$(realpath -e "$EXPECTED_PRIMARY_CHECKOUT")"
+  jq -e --arg active "$active_real" --arg activeGlob "$active_real/**" --arg globalPattern "$workspace_base_real/**" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
     .permission.external_directory as $rules
     | ($rules[$globalPattern] == "deny")
       and ($rules[$active] == "allow")
@@ -1442,7 +1449,7 @@ MOCK
     AGENT_RUNTIME=opencode MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "AgentExecutor dispatches to OpenCodeAdapter"
-  printf '%s\n' "$workspace_root" "$workdir" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
+  printf '%s\n' "$(realpath -e "$workspace_root")" "$(realpath -e "$workdir")" "$custom_manul_dir" "$custom_workspace_base" >"$tmp/task-env.expected"
   cmp -s "$tmp/task-env.expected" "$tmp/task-env" \
     && ok "AgentExecutor forwards authoritative paths and runtime configuration across the process boundary" \
     || fail "AgentExecutor path/config environment mismatch: $(cat "$tmp/task-env" 2>/dev/null || true)"
