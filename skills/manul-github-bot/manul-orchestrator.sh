@@ -696,8 +696,15 @@ cmd_fix() {
   # targets a PR. The orchestrator does not receive a GitHub review ID, so
   # derive one from the parent task: retries for the same task keep the same
   # identity, while fixes for different parent tasks remain independent.
-  local review_id
-  review_id="orchestrator-fix-$(printf '%s' "$TASK_ID" | sha256sum | cut -c1-32)"
+  local review_id task_hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    task_hash="$(printf '%s' "$TASK_ID" | sha256sum | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    task_hash="$(printf '%s' "$TASK_ID" | shasum -a 256 | awk '{print $1}')"
+  else
+    error_exit "REVIEW_FIX requires sha256sum or shasum for deterministic task identity" 1
+  fi
+  review_id="orchestrator-fix-${task_hash:0:32}"
   fix_args+=(--review-id "$review_id")
 
   if [ -n "$pr_num" ]; then
