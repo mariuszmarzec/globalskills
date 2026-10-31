@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # install-manul.sh — Canonical Manul installer
 #
 # Idempotent one-shot bootstrap of a fresh Manul runtime:
@@ -25,6 +25,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$SCRIPT_DIR/install-manul.sh" "$@"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 INIT_STATE=false
