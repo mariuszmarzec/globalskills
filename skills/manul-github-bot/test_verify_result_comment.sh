@@ -358,6 +358,56 @@ SQL
 }
 test_conversation_close_waits_for_terminal_delivery
 
+test_conversation_close_tolerates_sqlite_contention() {
+    local lock_ready="$WORK/sqlite-writer-lock-ready"
+    local lock_pid rc status
+    echo "=== conversation close tolerates a concurrent SQLite writer ==="
+    setup_db
+    sqlite3 "$TEMP_DB" <<'SQL'
+CREATE TABLE conversations (
+  conversationId TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  activePrNumber INTEGER,
+  activePrUrl TEXT,
+  updatedAt TEXT
+);
+INSERT INTO conversations(conversationId,status,activePrNumber,activePrUrl,updatedAt)
+VALUES ('conv-lock','ACTIVE',88,'https://github.com/owner/repo/pull/88','2026-10-30T00:00:00Z');
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,action,status,attempts,conversationId)
+VALUES ('issue:lock-close','owner/repo',602,'https://github.com/owner/repo/issues/602','test prompt','IMPLEMENT','completed',1,'conv-lock');
+SQL
+    ensure_terminal_lifecycle_outbox
+    rm -f "$lock_ready"
+
+    # Hold a RESERVED SQLite write lock briefly on a separate connection.
+    # The marker file proves BEGIN IMMEDIATE ran before reconciliation starts.
+    sqlite3 "$TEMP_DB" >/dev/null 2>&1 <<SQL &
+BEGIN IMMEDIATE;
+SELECT 1;
+.shell touch $lock_ready
+.shell sleep 0.35
+COMMIT;
+SQL
+    lock_pid=$!
+    for _ in {1..50}; do
+        [ -f "$lock_ready" ] && break
+        sleep 0.02
+    done
+    if [ ! -f "$lock_ready" ]; then
+        wait "$lock_pid" 2>/dev/null || true
+        fail "SQLite contention fixture acquired its write lock"
+        return
+    fi
+
+    rc=0
+    close_drained_conversations || rc=$?
+    wait "$lock_pid" 2>/dev/null || true
+    assert_rc "conversation close waits through a short SQLite write lock" "0" "$rc"
+    status="$(sqlite3 "$TEMP_DB" "SELECT status FROM conversations WHERE conversationId='conv-lock';")"
+    assert_rc "conversation closes after the competing writer releases the lock" "COMPLETED" "$status"
+}
+test_conversation_close_tolerates_sqlite_contention
+
 test_external_source_terminal_lifecycle_suppression() {
     local body rc rows
     echo "=== external source terminal lifecycle suppression ==="
