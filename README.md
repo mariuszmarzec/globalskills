@@ -182,10 +182,14 @@ route every new session through the orchestrator.
 
 ## Manul 🐈
 
-Manul (kot stepowy, Pallas's cat) — the GitHub command bot living in this repo's
-skills. Watches configured repositories, reacts to `/manul` in issue/PR
-comments, implements tasks on `manul/*` branches, opens PRs, and replies
-signed `— manul 🐈`.
+[Manul](https://github.com/mariuszmarzec/manul) is maintained as a standalone
+GitHub task orchestrator. Its daemon, task queue, SQLite state, workspace
+isolation, agent-runtime adapters, installers, and runtime test suite live in
+the separate `mariuszmarzec/manul` repository.
+
+This repository retains the OpenCode skill instructions, global agent roles,
+project-repository catalog, and the `aicode` launcher integration. The
+`install.sh` script installs or updates both repositories independently.
 
 ```text
         /\_/\\
@@ -193,7 +197,7 @@ signed `— manul 🐈`.
         > ^ <
 ```
 
-Full setup, runtime/role routing, session continuation, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
+For runtime installation, configuration, CLI usage, task-source adapters, runtime/role routing, and troubleshooting, see the [Manul repository README](https://github.com/mariuszmarzec/manul) and its [Manul skill guide](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/SKILL.md).
 
 ## Skill Benchmarks
 
