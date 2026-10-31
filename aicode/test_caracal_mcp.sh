@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AICODE="$ROOT/aicode/aicode"
 ACP_WRAPPER="$ROOT/aicode/opencode-acp-caracal.sh"
-MANUL="$ROOT/skills/manul-github-bot"
+MANUL="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "PASS: $*"; }
