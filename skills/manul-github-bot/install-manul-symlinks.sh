@@ -105,6 +105,7 @@ SCRIPTS=(
     "manul-paths.sh"
     "manul-failure-utils.sh"
     "manul-env.sh"
+    "manul-platform.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
     "codex-adapter.sh"
