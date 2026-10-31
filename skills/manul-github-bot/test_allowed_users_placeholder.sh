@@ -58,17 +58,18 @@ new_db() {
 # setup_manul <dir> <allowed_users_json>
 # allowed_users_json is the raw value emitted for "allowedUsers" in config.json.
 setup_manul() {
-  TEST_DIR="$1"
-   export TEST_DIR
-   local allowed="$2"
-   MANUL_DIR="$TEST_DIR/manul"
-   MOCK_GH="$TEST_DIR/mock-gh"
-   export MOCK_GH
-  mkdir -p "$MANUL_DIR" "$MOCK_GH"
+  export TEST_DIR="$1"
+  local allowed="$2"
+  MANUL_DIR="$TEST_DIR/manul"
+  MANUL_DB="$MANUL_DIR/state/manul.db"
+  MANUL_LOCKS_DIR="$MANUL_DIR/state/locks"
+  MOCK_GH="$TEST_DIR/mock-gh"
+  export MANUL_DIR MANUL_DB MANUL_LOCKS_DIR MOCK_GH
+  mkdir -p "$MANUL_LOCKS_DIR" "$MOCK_GH"
   cat > "$MANUL_DIR/config.json" <<EOF
 {"trigger":"/manul","allowedUsers":$allowed,"repositories":["mariuszmarzec/shoppingListGenerator"],"automation":{"enabled":true,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
 EOF
-  new_db "$MANUL_DIR/manul.db"
+  new_db "$MANUL_DB"
 }
 
 # Comments fixture: A is a normal task; B is the "retry" follow-up. Both created
@@ -139,12 +140,12 @@ test_placeholder_does_not_block_retry() {
             bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator 2>&1)"
 
   local retry_queued
-  retry_queued="$(sqlite3 "$MANUL_DIR/manul.db" \
+  retry_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
   assert_eq "retry comment queued" "1" "$retry_queued"
 
   local owner_queued
-  owner_queued="$(sqlite3 "$MANUL_DIR/manul.db" \
+  owner_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5791362918' AND status='queued';")"
   assert_eq "first comment queued" "1" "$owner_queued"
 
@@ -168,12 +169,12 @@ test_mixed_placeholder_and_real_user() {
             bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator 2>&1)"
 
   local retry_queued
-  retry_queued="$(sqlite3 "$MANUL_DIR/manul.db" \
+  retry_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
   assert_eq "retry comment queued (mixed)" "1" "$retry_queued"
 
   local owner_queued
-  owner_queued="$(sqlite3 "$MANUL_DIR/manul.db" \
+  owner_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5791362918' AND status='queued';")"
   assert_eq "first comment queued (mixed)" "1" "$owner_queued"
 
@@ -195,8 +196,8 @@ test_placeholder_no_duplicates_on_repoll() {
   MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
     bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator >/dev/null 2>&1 || true
   local first
-  first="$(sqlite3 "$MANUL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;") "
-  first="$(sqlite3 "$MANUL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
+  first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;") "
+  first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
 
   local result
   result="$(MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
@@ -205,7 +206,7 @@ test_placeholder_no_duplicates_on_repoll() {
   new_count="$(extract_new_count "$result")"
   assert_eq "$TEST_NAME (second poll new=0)" "0" "$new_count"
   local second
-  second="$(sqlite3 "$MANUL_DIR/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
+  second="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
   assert_eq "$TEST_NAME (count unchanged)" "$first" "$second"
 
   cleanup
@@ -221,12 +222,15 @@ test_poll_flock_released_after_run() {
   echo "=== Test 4: poll.flock released after run ==="
   TEST_DIR="$(mktemp -d /tmp/manul-flock-XXXXXX)"
   MANUL_DIR="$TEST_DIR/manul"
+  MANUL_DB="$MANUL_DIR/state/manul.db"
+  MANUL_LOCKS_DIR="$MANUL_DIR/state/locks"
   MOCK_GH="$TEST_DIR/mock-gh"
-  mkdir -p "$MANUL_DIR" "$MOCK_GH"
+  export MANUL_DIR MANUL_DB MANUL_LOCKS_DIR MOCK_GH
+  mkdir -p "$MANUL_LOCKS_DIR" "$MOCK_GH"
   cat > "$MANUL_DIR/config.json" <<'EOF'
 {"trigger":"/manul","allowedUsers":["mariuszmarzec"],"repositories":["mariuszmarzec/shoppingListGenerator"],"automation":{"enabled":true,"leaseTimeout":900,"maxAttemptsBeforeFail":3,"lockTtl":1800}}
 EOF
-  new_db "$MANUL_DIR/manul.db"
+  new_db "$MANUL_DB"
   make_comments_json
   make_mock_gh
 
@@ -234,7 +238,7 @@ EOF
     bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator >/dev/null 2>&1 || true
 
   # No lingering worker process should hold the flock: re-acquire should succeed.
-  exec 9>"$MANUL_DIR/poll.flock"
+  exec 9>"$MANUL_LOCKS_DIR/poll.flock"
   if flock -n 9; then
     ok="1"
     flock -u 9
