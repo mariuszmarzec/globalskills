@@ -239,6 +239,10 @@ test_wait_missing_db() {
     echo "expected a machine-readable not_found result, got: $output" >&2
     return 1
   }
+  [ ! -e "$TEST_DIR/missing-manul.db" ] || {
+    echo "wait lookup unexpectedly created the missing Manul database" >&2
+    return 1
+  }
 }
 
 # Test 14: Max review cycles enforced
