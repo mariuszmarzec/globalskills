@@ -108,8 +108,7 @@ cat >"$OPENCODE_CONFIG" <<'JSON'
       "headers": {
         "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
       }
-    }
-  },
+    },
     "fiteo": {
       "type": "remote",
       "url": "{env:FITEO_BASE_URL}/mcp",
