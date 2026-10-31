@@ -89,6 +89,7 @@ SCRIPTS=(
     "task-source-github-issues.sh"
     "task-source-jira-tasks.sh"
     "task-source-todo-local.sh"
+    "todo-local-mcp-url.sh"
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
     "todo-mcp-client.py"
