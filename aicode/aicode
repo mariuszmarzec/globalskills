@@ -13,7 +13,7 @@ while [ -L "$AICODE_SOURCE_PATH" ]; do
         *)  AICODE_SOURCE_PATH="$AICODE_SOURCE_PARENT/$AICODE_SOURCE_TARGET" ;;
     esac
 done
-AICODE_SOURCE_DIR="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
+AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
 MANUL_PLATFORM_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/manul-platform.sh"
