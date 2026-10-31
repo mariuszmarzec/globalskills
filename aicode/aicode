@@ -6,7 +6,7 @@ export PATH="$HOME/.opencode/bin:$PATH"
 # Resolve symlinks using POSIX tools (macOS readlink has no -f option).
 AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
 while [ -L "$AICODE_SOURCE_PATH" ]; do
-    AICODE_SOURCE_PARENT="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
+    AICODE_SOURCE_PARENT="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
     AICODE_SOURCE_TARGET="$(readlink "$AICODE_SOURCE_PATH")"
     case "$AICODE_SOURCE_TARGET" in
         /*) AICODE_SOURCE_PATH="$AICODE_SOURCE_TARGET" ;;
@@ -14,7 +14,7 @@ while [ -L "$AICODE_SOURCE_PATH" ]; do
     esac
 done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
-AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename -- "$AICODE_SOURCE_PATH")"
+AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
 # Manul uses Bash 4+ and GNU process/filesystem tools. Load Homebrew's versions
 # before starting any daemon workers, and re-exec under Homebrew Bash if this
@@ -441,7 +441,7 @@ ensure_opencode_caracal_config() {
     OPENCODE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
     export OPENCODE_CONFIG
     local config_dir tmp config_input
-    config_dir="$(dirname -- "$OPENCODE_CONFIG")"
+    config_dir="$(dirname "$OPENCODE_CONFIG")"
     mkdir -p "$config_dir" || return 1
     if [ -L "$OPENCODE_CONFIG" ]; then
         echo "ERROR: refusing symlinked OpenCode config path: $OPENCODE_CONFIG" >&2
