@@ -69,7 +69,9 @@ todo_local_mcp_probe_status() {
     printf '000'
     return 0
   fi
-  curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 "$url" 2>/dev/null || printf '000'
+  local status
+  status="$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 "$url" 2>/dev/null || true)"
+  printf '%s' "${status:-000}"
 }
 
 # Print a usable endpoint only after the unauthenticated probe receives HTTP
