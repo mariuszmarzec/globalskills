@@ -16,17 +16,15 @@ done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname -- "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
-# Manul uses Bash 4+ and GNU process/filesystem tools. Load Homebrew's versions
-# before starting any daemon workers, and re-exec under Homebrew Bash if this
-# launcher was entered through macOS's system Bash 3.2.
-if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-    HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
-    if [ -n "$HOMEBREW_PREFIX" ]; then
-        export PATH="$HOMEBREW_PREFIX/opt/bash/bin:$HOMEBREW_PREFIX/opt/coreutils/libexec/gnubin:$HOMEBREW_PREFIX/opt/util-linux/bin:$HOMEBREW_PREFIX/bin:$PATH"
-        if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] && [ -x "$HOMEBREW_PREFIX/opt/bash/bin/bash" ]; then
-            exec "$HOMEBREW_PREFIX/opt/bash/bin/bash" "$AICODE_SOURCE_PATH" "$@"
-        fi
-    fi
+MANUL_PLATFORM_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/manul-platform.sh"
+if [ -r "$MANUL_PLATFORM_HELPER" ]; then
+    # shellcheck source=skills/manul-github-bot/manul-platform.sh
+    . "$MANUL_PLATFORM_HELPER"
+    manul_platform_prepare || exit 1
+    manul_platform_reexec_if_needed "$AICODE_SOURCE_PATH" "$@"
+elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+    echo "ERROR: Manul platform helper is missing: $MANUL_PLATFORM_HELPER" >&2
+    exit 1
 fi
 
 TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/todo-local-mcp-url.sh"
