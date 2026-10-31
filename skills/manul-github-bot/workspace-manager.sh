@@ -619,11 +619,11 @@ workspace_sync_submodules() {
   local workdir="$1"
   [ -f "$workdir/.gitmodules" ] || return 0
 
-  if ! git -C "$workdir" submodule sync --recursive; then
+  if ! git -C "$workdir" submodule sync --recursive >&2; then
     echo "workspace_sync_submodules: failed to synchronize submodule URLs in $workdir" >&2
     return 1
   fi
-  if ! git -C "$workdir" submodule update --init --recursive; then
+  if ! git -C "$workdir" submodule update --init --recursive >&2; then
     echo "workspace_sync_submodules: failed to initialize nested repositories in $workdir" >&2
     return 1
   fi
