@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # start-manul-automation.sh — Manul automation startup/management wrapper
 #
 # Manages the canonical runtime components:
@@ -17,6 +17,11 @@
 set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || exit 1
+manul_platform_reexec_if_needed "$SCRIPT_DIR/start-manul-automation.sh" "$@"
+
 DAEMON="$MANUL_DIR/manul-daemon.sh"
 WATCHDOG="$MANUL_DIR/watchdog.sh"
 WATCHDOG_CRON="*/5 * * * * $WATCHDOG"
