@@ -122,7 +122,7 @@ manul-orchestrator.sh wait \
 
 Delegates waiting to the Manul local task interface and updates orchestration state.
 
-A completed task normally moves the conversation to `PR_READY`.
+A completed task normally moves the conversation to `PR_READY`. If the Manul database is missing, the command preserves the machine-readable `not_found` result and returns exit code `2`; timeout remains exit code `4`.
 
 ### `status`
 
@@ -168,7 +168,7 @@ manul-orchestrator.sh fix \
   [--pr-number N] [--json]
 ```
 
-Creates a `REVIEW_FIX` task associated with the same conversation and PR.
+Creates a `REVIEW_FIX` task associated with the same conversation and PR. When a PR number is present, the orchestrator derives a deterministic internal review ID from `PARENT_TASK_ID`. Retrying a fix for the same parent therefore reuses the same Manul task identity; pass the latest completed task as the parent for a distinct subsequent fix cycle.
 
 ### `run`
 
