@@ -105,7 +105,7 @@ the WSL address or bridge code changes.
 
 ## Todo task sources for Manul
 
-Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
+Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see [Manul config example](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/config.json.example) for the complete examples).
 
 - `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
