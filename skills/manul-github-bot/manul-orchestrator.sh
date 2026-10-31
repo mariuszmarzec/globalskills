@@ -351,9 +351,13 @@ cmd_wait() {
   conv_id="$(sqlite3 "$ORCH_DB" "SELECT conversationId FROM task_history WHERE taskId='$TASK_ID' LIMIT 1;" 2>/dev/null)"
   
   if [ -z "$conv_id" ]; then
-    # Try to get from Manul DB directly
+    # Try to get from Manul DB directly. sqlite3 creates a new database file
+    # when given a missing path, even for a SELECT; do not turn a not-found
+    # lookup into an empty production database before manul-wait handles it.
     local db="$MANUL_DB"
-    conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    if [ -f "$db" ]; then
+      conv_id="$(sqlite3 "$db" "SELECT conversationId FROM processed_comments WHERE commentId='$(sql_escape "$TASK_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    fi
   fi
   
   # Wait via Manul CLI
