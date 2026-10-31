@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
 
 TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEST_DIR"' EXIT
 export MANUL_DIR="$TEST_DIR/manul"
 export ORCHESTRATOR_DIR="$TEST_DIR/orchestrator"
 DB="$MANUL_DIR/manul.db"
@@ -17,6 +18,7 @@ mkdir -p "$MANUL_DIR" "$ORCHESTRATOR_DIR" "$RESULTS_DIR"
 
 # Create symlinks to the actual scripts
 ln -s "$SCRIPT_DIR/manul-conversation.sh" "$ORCHESTRATOR_DIR/manul-conversation.sh"
+ln -s "$SCRIPT_DIR/manul-paths.sh" "$ORCHESTRATOR_DIR/manul-paths.sh"
 ln -s "$SCRIPT_DIR/manul-wait.sh" "$ORCHESTRATOR_DIR/manul-wait.sh" 2>/dev/null || true
 
 # Create mock gh for tests (no real GitHub required)
@@ -196,6 +198,10 @@ test_end_to_end() {
   # Submit review-fix
   fix_task_id="$(orch fix --conversation-id "$conv_id" --prompt "Fix" --task-id "$task_id" --pr-number 100 --json 2>/dev/null | jq -r '.taskId // empty')"
   [ -n "$fix_task_id" ] || return 1
+  case "$fix_task_id" in
+    "review-fix-${conv_id}-orchestrator-fix-"*) ;;
+    *) echo "fix task id is not deterministic from the parent task: $fix_task_id" >&2; return 1 ;;
+  esac
 
   # Mark fix task as completed too
   complete_all_tasks "$conv_id"
@@ -218,9 +224,16 @@ test_end_to_end() {
 
 # Test 13: Wait command handles missing DB
 test_wait_missing_db() {
-  local output
-  output="$(orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || true
-  echo "$output" | jq -e '.status == "not_found"' >/dev/null 2>&1
+  local output rc=0
+  output="$(MANUL_DB="$TEST_DIR/missing-manul.db" orch wait --task-id "nonexistent" --timeout 1 --json 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 2 ] || {
+    echo "expected wait to return exit code 2 for a missing database, got $rc" >&2
+    return 1
+  }
+  printf '%s\n' "$output" | jq -e '.status == "not_found"' >/dev/null 2>&1 || {
+    echo "expected a machine-readable not_found result, got: $output" >&2
+    return 1
+  }
 }
 
 # Test 14: Max review cycles enforced
