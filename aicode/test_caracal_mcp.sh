@@ -48,6 +48,9 @@ contains "$AICODE" 'url: "{env:FITEO_BASE_URL}/mcp"' "Fiteo MCP URL is built fro
 contains "$AICODE" 'Bearer {env:FITEO_PAT}' "Fiteo MCP bearer token is resolved from FITEO_PAT"
 contains "$AICODE" '"fiteo_*": true' "Fiteo tools are enabled for non-chat OpenCode agents"
 contains "$ACP_WRAPPER" 'load_fiteo_mcp_environment' "ACP refreshes Fiteo credentials for long-lived Gateway sessions"
+contains "$AICODE" 'mcp_list_rc=0' "aicode does not trust the aggregate MCP-list exit status when optional Fiteo is offline"
+contains "$ACP_WRAPPER" 'mcp_list_rc=0' "ACP does not fail just because optional Fiteo is offline"
+contains "$MANUL/opencode-adapter.sh" 'optional server such as Fiteo is offline' "Manul treats Fiteo as an optional live dependency"
 
 # The OpenClaw snapshot reader must be shared with its unit test, must use
 # the file hash for config.patch concurrency, and must not blindly drop stdout's first line.
