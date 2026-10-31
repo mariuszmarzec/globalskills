@@ -674,7 +674,15 @@ cmd_fix() {
     --action REVIEW_FIX
     --parent-task-id "$TASK_ID"
   )
-  
+
+  # The conversation CLI requires a stable review ID whenever REVIEW_FIX
+  # targets a PR. The orchestrator does not receive a GitHub review ID, so
+  # derive one from the parent task: retries for the same task keep the same
+  # identity, while fixes for different parent tasks remain independent.
+  local review_id
+  review_id="orchestrator-fix-$(printf '%s' "$TASK_ID" | sha256sum | cut -c1-32)"
+  fix_args+=(--review-id "$review_id")
+
   if [ -n "$pr_num" ]; then
     fix_args+=(--pr-number "$pr_num")
   fi
