@@ -70,9 +70,11 @@ sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 
 # Helper: run orchestrator with test env
 orch() {
+  local effective_db="${MANUL_DB:-$MANUL_DIR/state/manul.db}"
   ORCHESTRATOR_DIR="$ORCHESTRATOR_DIR" \
   MANUL_DIR="$MANUL_DIR" \
-  MANUL_DB="${MANUL_DB:-$MANUL_DIR/state/manul.db}" \
+  MANUL_DB="$effective_db" \
+  DB="$effective_db" \
   bash "$ORCHESTRATOR" "$@"
 }
 
