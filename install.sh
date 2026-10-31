@@ -59,6 +59,15 @@ export MANUL_CANONICAL_ROOT="$MANUL_REPO_DIR"
 export MANUL_CANONICAL_BRANCH="$MANUL_BRANCH"
 echo "Manul source available at: $MANUL_CANONICAL_DIR"
 
+# Prepare the Manul runtime and CLI. A fresh runtime is initialized only when
+# no database exists; an existing database always uses the non-destructive path.
+MANUL_DB="$HOME/.manul/state/manul.db"
+if [ -f "$MANUL_DB" ]; then
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh"
+else
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh" --init-state
+fi
+
 mkdir -p "$HOME/.agents"
 mkdir -p "$HOME/.config/opencode"
 
