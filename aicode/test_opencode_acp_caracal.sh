@@ -146,7 +146,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${CARACAL_ACCESS_TOKEN:-}" = "test-caracal-token" ] || exit 72
   [ "${OPENCODE_CONFIG:-}" = "${EXPECTED_CONFIG:-}" ] || exit 73
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] || exit 74
-  [ "${FITEO_PAT:-}" = "runtime-fiteo-pat" ] || exit 75
+  [ "${FITEO_PAT:-}" = "operator-fiteo-pat" ] || exit 75
   jq -e '
     .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
     and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
@@ -168,7 +168,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
 fi
 if [ "${1:-}" = "acp" ]; then
   printf '%s\n' "$*" > "${ACP_ARGS_FILE:?}"
-  printf \'%s\\n\' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" "$FITEO_BASE_URL" "$FITEO_PAT" "${FITEO_MANUL_PAT:-}" > "${ACP_ENV_FILE:?}"
+  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" "$FITEO_BASE_URL" "$FITEO_PAT" "${FITEO_MANUL_PAT:-}" > "${ACP_ENV_FILE:?}"
   exit 0
 fi
 exit 2
