@@ -109,25 +109,35 @@ the WSL address or bridge code changes.
 
 ## Fiteo backend MCP (remote)
 
-`aicode` always registers the remote `fiteo` MCP server in OpenCode, including
-the global config and every Manul task-scoped config. It is not conditional on
-the `todo_remote_mcp` task source being enabled. The server uses Streamable HTTP
-at `{FITEO_BASE_URL}/mcp` and authenticates each request with a Fiteo PAT.
+`aicode` always registers the remote `fiteo` MCP server in the global OpenCode
+config. This is the interactive/operator connection and uses `FITEO_BASE_URL`
+plus `FITEO_PAT`. It is independent of credentials used by standalone Manul
+task workers.
 
-Keep both variables exported in your existing `~/.zshrc`; no separate
-`opencode.env` file is needed:
+Keep the operator variables exported in your existing `~/.zshrc`:
 
 ```bash
-export FITEO_BASE_URL="https://your-fiteo-backend" # base URL without a trailing slash
-export FITEO_PAT="YOUR_FITEO_PAT"
+export FITEO_BASE_URL="https://your-fiteo-backend"
+export FITEO_PAT="YOUR_PAT"
 ```
 
-Start `aicode` from a Zsh session that has loaded this file. The MCP entry is
-always registered; it can connect once both variables are available.
-`aicode` refreshes the endpoint/PAT pair in the mode-600 `~/.manul/.env`;
-Manul reloads the latest pair for each task, and the OpenClaw ACP wrapper
-refreshes it before starting an OpenCode session. The token value is never
-written into OpenCode's JSON config or repository files.
+For the standalone Manul `todo_remote_mcp` source and task-scoped Fiteo MCP,
+use the dedicated Manul-account token `FITEO_MANUL_PAT`. Manul persists this
+token in the mode-600 `~/.manul/.env` for unattended workers. Never copy the
+operator PAT into this variable and never fall back to the operator PAT when
+the Manul token is missing. Global `aicode` continues to use `FITEO_PAT`;
+only Manul remote Todo access uses `FITEO_MANUL_PAT`.
+
+Manul-created remote Todo tasks and report subtasks are shared with the
+configured recipient using `EDITOR_AND_VIEWER`. Set the non-secret numeric
+`FITEO_MANUL_SHARE_USER_ID` in the environment used to bootstrap Manul. This
+recipient ID is separate from `manulUserId`, which identifies the Manul account
+whose shared tasks the remote adapter discovers.
+
+The OpenClaw ACP wrapper keeps the operator token for the global OpenCode
+MCP session. It must not replace it with the dedicated Manul token used by
+task workers. Token values are never written to OpenCode JSON or committed
+to repository files.
 
 ## Todo task sources for Manul
 
