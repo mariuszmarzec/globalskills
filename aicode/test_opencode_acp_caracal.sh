@@ -15,7 +15,7 @@ mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.manul" "$CARACAL/bin" "$CARACA
 chmod 700 "$HOME_DIR" "$HOME_DIR/.manul" "$CARACAL" "$CARACAL/config"
 cat >"$HOME_DIR/.manul/.env" <<'ENV'
 FITEO_BASE_URL=https://api.fiteo.example
-FITEO_PAT=runtime-fiteo-pat
+FITEO_MANUL_PAT=manul-runtime-fiteo-pat
 ENV
 chmod 600 "$HOME_DIR/.manul/.env"
 
@@ -168,7 +168,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
 fi
 if [ "${1:-}" = "acp" ]; then
   printf '%s\n' "$*" > "${ACP_ARGS_FILE:?}"
-  printf '%s\n' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" "$FITEO_BASE_URL" "$FITEO_PAT" > "${ACP_ENV_FILE:?}"
+  printf \'%s\\n\' "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" "$OPENCODE_CONFIG" "$FITEO_BASE_URL" "$FITEO_PAT" "${FITEO_MANUL_PAT:-}" > "${ACP_ENV_FILE:?}"
   exit 0
 fi
 exit 2
@@ -185,6 +185,9 @@ run_wrapper() {
   CARACAL_ACCESS_TOKEN="" \
   OPENCODE_CONFIG="$OPENCODE_CONFIG" \
   OPENCODE_BIN="$BIN/opencode" \
+  FITEO_BASE_URL="https://api.fiteo.example" \
+  FITEO_PAT="operator-fiteo-pat" \
+  FITEO_MANUL_PAT="" \
   EXPECTED_CONFIG="$OPENCODE_CONFIG" \
   MOCK_MCP_STATE="$state" \
   MOCK_FITEO_MCP_STATE="$fiteo_state" \
@@ -202,9 +205,10 @@ if run_wrapper connected >"$TMP/stdout" 2>"$TMP/stderr"; then
   grep -Fxq 'test-caracal-token' "$TMP/acp-env" || { echo "FAIL: current token was not passed to ACP" >&2; exit 1; }
   grep -Fxq "$OPENCODE_CONFIG" "$TMP/acp-env" || { echo "FAIL: OpenCode config path was not passed to ACP" >&2; exit 1; }
   grep -Fxq 'https://api.fiteo.example' "$TMP/acp-env" || { echo "FAIL: refreshed Fiteo endpoint was not passed to ACP" >&2; exit 1; }
-  grep -Fxq 'runtime-fiteo-pat' "$TMP/acp-env" || { echo "FAIL: refreshed Fiteo PAT was not passed to ACP" >&2; exit 1; }
+  grep -Fxq 'operator-fiteo-pat' "$TMP/acp-env" || { echo "FAIL: operator Fiteo PAT was not preserved for the global MCP" >&2; exit 1; }
+  [ "$(tail -n 1 "$TMP/acp-env")" = "" ] || { echo "FAIL: dedicated Manul PAT leaked into the global ACP session" >&2; exit 1; }
   echo "PASS: live Caracal MCP is verified before starting ACP"
-  echo "PASS: Fiteo runtime endpoint/PAT and Caracal credentials reach OpenCode ACP"
+  echo "PASS: operator Fiteo PAT is preserved and dedicated Manul PAT stays out of global ACP"
 else
   cat "$TMP/stderr" >&2
   echo "FAIL: wrapper rejected a connected Caracal MCP" >&2
