@@ -144,7 +144,7 @@ to repository files.
 Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see [Manul config example](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/config.json.example) for the complete examples).
 
 - `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
-- `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
+- `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission, but executes them only when `/manul` appears in the root description or a nested subtask. Use the dedicated `FITEO_MANUL_PAT` (never fall back to `FITEO_PAT`); Manul-created tasks and report subtasks are shared with `FITEO_MANUL_SHARE_USER_ID`.
 
 Set `allowReportOnly: true` on either Todo source to opt in to informational
 tasks using a description line such as:
