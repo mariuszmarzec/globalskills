@@ -16,9 +16,15 @@ done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
-MANUL_PLATFORM_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/manul-platform.sh"
+MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
+MANUL_CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.manul-repo}"
+MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-main}"
+MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"
+export MANUL_CANONICAL_DIR MANUL_CANONICAL_ROOT MANUL_CANONICAL_BRANCH MANUL_HOST_SKILLS_DIR
+
+MANUL_PLATFORM_HELPER="$MANUL_CANONICAL_DIR/manul-platform.sh"
 if [ -r "$MANUL_PLATFORM_HELPER" ]; then
-    # shellcheck source=skills/manul-github-bot/manul-platform.sh
+    # shellcheck source=~/.manul-repo/skills/manul-github-bot/manul-platform.sh
     . "$MANUL_PLATFORM_HELPER"
     manul_platform_prepare || exit 1
     manul_platform_reexec_if_needed "$AICODE_SOURCE_PATH" "$@"
@@ -27,9 +33,9 @@ elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
     exit 1
 fi
 
-TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/../skills/manul-github-bot/todo-local-mcp-url.sh"
+TODO_LOCAL_MCP_URL_HELPER="$MANUL_CANONICAL_DIR/todo-local-mcp-url.sh"
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
-    # shellcheck source=skills/manul-github-bot/todo-local-mcp-url.sh
+    # shellcheck source=~/.manul-repo/skills/manul-github-bot/todo-local-mcp-url.sh
     . "$TODO_LOCAL_MCP_URL_HELPER"
 else
     echo "WARNING: shared Todo MCP endpoint helper is missing; Todo MCP will be disabled." >&2
@@ -57,12 +63,12 @@ fi
 MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_DIR="${MANUL_DIR:-$MANUL_RUNTIME_DIR}"
 export MANUL_DIR
-MANUL_PATHS_HELPER="$HOME/.globalskills/skills/manul-github-bot/manul-paths.sh"
+MANUL_PATHS_HELPER="$MANUL_CANONICAL_DIR/manul-paths.sh"
 if [ ! -r "$MANUL_PATHS_HELPER" ]; then
     echo "ERROR: Manul runtime selector is missing: $MANUL_PATHS_HELPER" >&2
     exit 1
 fi
-# shellcheck source=skills/manul-github-bot/manul-paths.sh
+# shellcheck source=~/.manul-repo/skills/manul-github-bot/manul-paths.sh
 . "$MANUL_PATHS_HELPER"
 
 OPENCLAW_SNAPSHOT_HELPER="$AICODE_SOURCE_DIR/openclaw-config-snapshot.sh"
@@ -761,13 +767,13 @@ fi
 # Ensure Manul GitHub bot daemon is running.
 # Never let a broken/hung daemon block OpenCode startup.
 # The canonical installer/repairer is authoritative for ~/.manul runtime state.
-MANUL_INSTALLER="$HOME/.globalskills/skills/manul-github-bot/install-manul.sh"
-MANUL_REPAIRER="$HOME/.globalskills/skills/manul-github-bot/repair-manul-runtime.sh"
+MANUL_INSTALLER="$MANUL_CANONICAL_DIR/install-manul.sh"
+MANUL_REPAIRER="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_RUNTIME="$MANUL_DIR"
-MANUL_DB="$MANUL_RUNTIME/manul.db"
+MANUL_DB="$MANUL_RUNTIME/state/manul.db"
 MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
-MANUL_ENV_HELPER="$HOME/.globalskills/skills/manul-github-bot/manul-env.sh"
+MANUL_ENV_HELPER="$MANUL_CANONICAL_DIR/manul-env.sh"
 
 # Refresh the Caracal endpoint/token pair before any installer, repairer or
 # existing daemon can load a stale ~/.manul/.env. This update is atomic and
@@ -776,7 +782,7 @@ if [ ! -r "$MANUL_ENV_HELPER" ]; then
     echo "ERROR: Manul environment helper is missing: $MANUL_ENV_HELPER" >&2
     exit 1
 fi
-# shellcheck source=skills/manul-github-bot/manul-env.sh
+# shellcheck source=~/.manul-repo/skills/manul-github-bot/manul-env.sh
 source "$MANUL_ENV_HELPER" || {
     echo "ERROR: could not load the Manul environment helper." >&2
     exit 1

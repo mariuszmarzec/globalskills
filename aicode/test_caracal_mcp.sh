@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AICODE="$ROOT/aicode/aicode"
 ACP_WRAPPER="$ROOT/aicode/opencode-acp-caracal.sh"
-MANUL="$ROOT/skills/manul-github-bot"
+MANUL="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "PASS: $*"; }
@@ -79,6 +79,9 @@ contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caraca
 # make a task-local config plus a live MCP preflight before running OpenCode.
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL' "Manul persists the Caracal endpoint"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN' "Manul persists the Caracal token"
+contains "$MANUL/manul-env.sh" 'MANUL_HOST_SKILLS_DIR' "Manul persists the host project skills path for unattended tasks"
+contains "$MANUL/todo-task-source-utils.sh" 'MANUL_HOST_SKILLS_DIR' "Manul reads mapped project skills from the host-provided directory"
+contains "$AICODE" 'MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"' "aicode exposes globalskills project skills to standalone Manul"
 contains "$AICODE" 'manul_env_bootstrap "$MANUL_RUNTIME"' "aicode refreshes Manul's Caracal environment before repair/startup"
 bootstrap_line="$(grep -nF 'manul_env_bootstrap "$MANUL_RUNTIME"' "$AICODE" | head -n 1 | cut -d: -f1)"
 repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | cut -d: -f1)"
@@ -237,7 +240,7 @@ contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aico
 contains "$AICODE" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
-contains "$ROOT/skills/manul-github-bot/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
+contains "$MANUL/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
 contains "$AICODE" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'channel.BeginConnect(relay, relayPort' "Windows bridge initiates outbound connections to the WSL relay"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'upstream.Connect(IPAddress.Loopback, 8765)' "Windows bridge still forwards to Todo Desktop's loopback MCP endpoint"

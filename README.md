@@ -10,11 +10,12 @@ agent lives in `agents/<name>.md`.
 wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszmarzec/globalskills/master/install.sh && bash /tmp/install-globalskills.sh
 ```
 
-This clones the repo to `~/.globalskills` and symlinks:
+This clones/updates `~/.globalskills` and the standalone Manul source at `~/.manul-repo`, prepares the Manul runtime under `~/.manul`, and symlinks:
 
 - `~/.agents/skills -> ~/.globalskills/skills`
 - `~/.config/opencode/agents -> ~/.globalskills/agents`
 - `~/.aicode/aicode -> ~/.globalskills/aicode/aicode` (the installer backs up an existing launcher instead of overwriting it)
+- `~/.manul-repo` — standalone Manul source; runtime state, configuration, database, logs, and workspaces remain under `~/.manul`
 
 Skills are loaded by OpenCode via `skills.paths` in `~/.config/opencode/opencode.json`.
 Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
@@ -22,8 +23,11 @@ Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
 ## Updating
 
 ```bash
-git -C ~/.globalskills pull
+bash ~/.globalskills/install.sh
 ```
+
+This updates both source repositories and refreshes Manul's runtime symlinks
+without deleting the existing `~/.manul` database or task data.
 
 ## macOS runtime prerequisites
 
@@ -127,7 +131,7 @@ written into OpenCode's JSON config or repository files.
 
 ## Todo task sources for Manul
 
-Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see `skills/manul-github-bot/config.json.example` for the complete examples).
+Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see [Manul config example](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/config.json.example) for the complete examples).
 
 - `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission; the PAT is supplied by `FITEO_PAT` (or a configured `tokenEnv`).
@@ -170,7 +174,7 @@ Both adapters preserve Todo's returned subtask order and pass the whole nested t
 | `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Consults Caracal RAG's indexed QuickMVI README for documented usage; verify exact behavior against source and tests. |
 | `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing LiteLLM database connection issues. |
 | `unit-testing-language-agnostic` | Universal unit-testing principles, including whole-value assertions when equality is meaningful |
-| `manul-github-bot` | Set up, operate, and debug Manul, the GitHub task orchestrator. Automatic tasks use the configured runtime (OpenClaw by default); explicitly selected canonical roles use the configured role runtime (OpenCode by default). Manul owns task state, workspace isolation, retries, result verification, and GitHub delivery. |
+| `manul-github-bot` | Operate the standalone Manul task orchestrator and understand its host integrations with global agent roles, project aliases, aicode, and Todo MCP. Runtime implementation and tests live in `mariuszmarzec/manul`. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
 | `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible), including isolated Caracal RAG installation, authenticated MCP startup after LiteLLM, hardware-aware model selection, healthchecks, and multi-model LiteLLM routing. |
 | `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
@@ -204,10 +208,14 @@ route every new session through the orchestrator.
 
 ## Manul 🐈
 
-Manul (kot stepowy, Pallas's cat) — the GitHub command bot living in this repo's
-skills. Watches configured repositories, reacts to `/manul` in issue/PR
-comments, implements tasks on `manul/*` branches, opens PRs, and replies
-signed `— manul 🐈`.
+[Manul](https://github.com/mariuszmarzec/manul) is maintained as a standalone
+GitHub task orchestrator. Its daemon, task queue, SQLite state, workspace
+isolation, agent-runtime adapters, installers, and runtime test suite live in
+the separate `mariuszmarzec/manul` repository.
+
+This repository retains the OpenCode skill instructions, global agent roles,
+project-repository catalog, and the `aicode` launcher integration. The
+`install.sh` script installs or updates both repositories independently.
 
 ```text
         /\_/\\
@@ -215,7 +223,7 @@ signed `— manul 🐈`.
         > ^ <
 ```
 
-Full setup, runtime/role routing, session continuation, baseline semantics, and troubleshooting: `skills/manul-github-bot/SKILL.md`.
+For runtime installation, configuration, CLI usage, task-source adapters, runtime/role routing, and troubleshooting, see the [Manul repository README](https://github.com/mariuszmarzec/manul) and its [Manul skill guide](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/SKILL.md).
 
 ## Skill Benchmarks
 
