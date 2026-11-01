@@ -122,8 +122,9 @@ export FITEO_PAT="YOUR_PAT"
 ```
 
 For the standalone Manul `todo_remote_mcp` source and task-scoped Fiteo MCP,
-use the dedicated Manul-account token `FITEO_MANUL_PAT`. Manul persists this
-token in the mode-600 `~/.manul/.env` for unattended workers. Never copy the
+provide the dedicated Manul-account token through `FITEO_MANUL_PAT` in the
+local environment before Manul bootstrap. Manul persists this token in the
+mode-600 `~/.manul/.env` for unattended workers. Never copy the
 operator PAT into this variable and never fall back to the operator PAT when
 the Manul token is missing. Global `aicode` continues to use `FITEO_PAT`;
 only Manul remote Todo access uses `FITEO_MANUL_PAT`.
