@@ -12,17 +12,24 @@ documentation in the `fiteo-backend-api` skill.
 
 ## Runtime configuration
 
-Read these settings from the current process environment when a request is
-about to be made:
+Read only the settings required by the selected Fiteo integration from the
+current process environment when a request is about to be made:
 
 - `FITEO_BASE_URL` — base URL of the Fiteo backend.
-- `FITEO_MANUL_USERNAME` — username for the dedicated Manul account.
-- `FITEO_MANUL_PASSWORD` — password for the dedicated Manul account.
+- `FITEO_PAT` — operator PAT for the global/interactive `aicode` Fiteo MCP.
+- `FITEO_MANUL_PAT` — dedicated PAT for standalone Manul's remote Todo source
+  and task-scoped Fiteo MCP. Never substitute `FITEO_PAT` when this variable
+  is missing.
+- `FITEO_MANUL_SHARE_USER_ID` — non-secret numeric Fiteo user ID that receives
+  shares on tasks and report subtasks created by Manul.
+- `FITEO_MANUL_USERNAME` / `FITEO_MANUL_PASSWORD` — username/password for
+  endpoints whose documented authentication flow explicitly requires them.
 
 Values are provided by the local runtime and may change. Always use the current
 environment values at execution time. Do not cache them between independent
-runs or copy them into source code, scripts, skill files, documentation,
-temporary files, commits, issue/PR comments, or chat messages.
+runs or copy credentials into source code, scripts, skill files, documentation,
+temporary files, commits, issue/PR comments, or chat messages. The numeric
+share-recipient ID is configuration, not a credential.
 
 ## Never disclose configuration values
 
@@ -42,24 +49,34 @@ temporary files, commits, issue/PR comments, or chat messages.
 
 ## Configuration validation and startup
 
-Before making a request, verify that all three variables are set and non-empty.
-A check may name the variables, but must not print their values.
+Before making a request, validate only the variables required by the
+selected integration's documented authentication flow. Global/interactive
+PAT-based requests require `FITEO_BASE_URL` and `FITEO_PAT`; standalone Manul
+remote Todo requests require `FITEO_BASE_URL` and `FITEO_MANUL_PAT`. Do not
+use one PAT as a fallback for the other. Username/password-based requests
+require those credentials only when the endpoint contract specifies that flow.
+Task creation also requires a valid numeric `FITEO_MANUL_SHARE_USER_ID` when
+Manul is configured to share created tasks.
 
-If any variable is missing, tell the user exactly which variable names need to
-be configured in their local `~/.zshrc` or runtime environment. Do not guess
-the host or credentials and do not search unrelated files for replacements.
-If the variables are configured in `~/.zshrc` but are not present in the
-agent's process environment, explain that the shell or long-running Manul /
-OpenCode process may need to be reloaded or restarted to inherit them.
+If a required variable is missing, tell the user exactly which variable names
+need to be configured in their local `~/.zshrc` or runtime environment. Do not
+guess the host or credentials and do not search unrelated files for
+replacements. If variables are configured in `~/.zshrc` but are not present
+in the agent's process environment, explain that the shell or long-running
+Manul / OpenCode process may need to be reloaded or restarted to inherit them.
 
 ## Making requests
 
 - Use `FITEO_BASE_URL` as the runtime base URL; do not hardcode an actual
   Fiteo host in code or scripts.
+- Use `FITEO_PAT` only for the global/interactive `aicode` Fiteo connection.
+- Use `FITEO_MANUL_PAT` only for standalone Manul remote Todo operations and
+  task-scoped Fiteo MCP calls; fail closed when it is missing instead of
+  falling back to `FITEO_PAT`.
 - Use the Manul username/password only through the authentication flow
-  documented for the relevant Fiteo endpoint. Do not assume an authentication
-  scheme if the indexed documentation or current implementation does not
-  establish it.
+  documented for an endpoint that explicitly requires that flow. Do not
+  assume an authentication scheme if the indexed documentation or current
+  implementation does not establish it.
 - For endpoint paths, HTTP methods, payloads, authentication flow, and response
   contracts, follow `fiteo-backend-api` and search the indexed Fiteo API
   documentation through the `caracal-rag` MCP server before answering or
