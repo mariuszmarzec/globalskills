@@ -49,6 +49,10 @@ contains "$AICODE" 'Bearer {env:FITEO_PAT}' "Fiteo MCP bearer token is resolved 
 contains "$AICODE" '"fiteo_*": true' "Fiteo tools are enabled for non-chat OpenCode agents"
 contains "$ACP_WRAPPER" 'load_fiteo_mcp_environment' "ACP refreshes Fiteo credentials for long-lived Gateway sessions"
 contains "$AICODE" 'mcp_list_rc=0' "aicode does not trust the aggregate MCP-list exit status when optional Fiteo is offline"
+contains "$ROOT/README.md" 'FITEO_MANUL_PAT' "README documents the dedicated Manul Fiteo PAT"
+contains "$ROOT/README.md" 'FITEO_MANUL_SHARE_USER_ID' "README documents the Manul share recipient"
+contains "$ROOT/skills/fiteo-access/SKILL.md" 'Never substitute `FITEO_PAT`' "Fiteo access skill forbids operator PAT fallback"
+contains "$ROOT/skills/fiteo-access/SKILL.md" 'FITEO_MANUL_PAT' "Fiteo access skill documents the dedicated Manul PAT"
 contains "$ACP_WRAPPER" 'mcp_list_rc=0' "ACP does not fail just because optional Fiteo is offline"
 contains "$MANUL/opencode-adapter.sh" "failure from an unrelated MCP must not block this task" "Manul treats Fiteo as an optional live dependency"
 
@@ -90,9 +94,19 @@ ok "Manul's stored Caracal environment is refreshed before repair"
 contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "Manul injects Caracal into its task-local OpenCode config"
 contains "$MANUL/opencode-adapter.sh" '"fiteo": {' "Manul always injects Fiteo into its task-local OpenCode config"
 contains "$MANUL/opencode-adapter.sh" 'url: "{env:FITEO_BASE_URL}/mcp"' "Manul task config uses the Fiteo backend base URL"
-contains "$MANUL/opencode-adapter.sh" 'Bearer {env:FITEO_PAT}' "Manul task config resolves the Fiteo PAT from the environment"
+# Keep the integration test compatible while the standalone Manul PR is in review.
+# Once the dedicated-token branch is merged, assert the stricter token boundary.
+if grep -Fq 'Bearer {env:FITEO_MANUL_PAT}' "$MANUL/opencode-adapter.sh"; then
+  contains "$MANUL/opencode-adapter.sh" 'Bearer {env:FITEO_MANUL_PAT}' "Manul task config resolves its dedicated Fiteo PAT"
+  contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul persists its dedicated Fiteo PAT for unattended tasks"
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=' "$MANUL/manul-env.sh"; then
+    fail "Manul runtime must not persist the operator FITEO_PAT"
+  fi
+else
+  contains "$MANUL/opencode-adapter.sh" 'Bearer {env:FITEO_PAT}' "legacy Manul task config resolves its Fiteo PAT"
+  contains "$MANUL/manul-env.sh" 'FITEO_PAT' "legacy Manul persists the Fiteo PAT for unattended tasks"
+fi
 contains "$MANUL/manul-env.sh" 'FITEO_BASE_URL' "Manul persists the Fiteo backend base URL"
-contains "$MANUL/manul-env.sh" 'FITEO_PAT' "Manul persists the Fiteo PAT for unattended tasks"
 contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes Fiteo credentials from disk for each task"
 contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "Manul injects Todo local MCP into the task-local OpenCode config when available"
 contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
