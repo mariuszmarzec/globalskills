@@ -3,6 +3,10 @@ set -euo pipefail
 
 REPO_URL="git@github.com:mariuszmarzec/globalskills.git"
 REPO_DIR="$HOME/.globalskills"
+MANUL_REPO_URL="git@github.com:mariuszmarzec/manul.git"
+MANUL_REPO_DIR="$HOME/.manul-repo"
+MANUL_CANONICAL_DIR="$MANUL_REPO_DIR/skills/manul-github-bot"
+MANUL_BRANCH="main"
 SKILLS_DIR="$REPO_DIR/skills"
 AGENTS_DIR="$REPO_DIR/agents"
 SKILLS_LINK="$HOME/.agents/skills"
@@ -31,6 +35,39 @@ if [ -d "$REPO_DIR" ]; then
 else
   echo "Cloning repo to $REPO_DIR..."
   git clone "$REPO_URL" "$REPO_DIR"
+fi
+
+echo "Installing standalone Manul runtime source..."
+if [ -d "$MANUL_REPO_DIR/.git" ]; then
+  git -C "$MANUL_REPO_DIR" fetch origin "$MANUL_BRANCH" --quiet
+  git -C "$MANUL_REPO_DIR" checkout "$MANUL_BRANCH"
+  git -C "$MANUL_REPO_DIR" pull --ff-only origin "$MANUL_BRANCH"
+elif [ -e "$MANUL_REPO_DIR" ]; then
+  echo "ERROR: $MANUL_REPO_DIR exists but is not a Git checkout." >&2
+  echo "Move it aside or remove it before reinstalling Manul." >&2
+  exit 1
+else
+  git clone --branch "$MANUL_BRANCH" "$MANUL_REPO_URL" "$MANUL_REPO_DIR"
+fi
+
+if [ ! -f "$MANUL_CANONICAL_DIR/install-manul.sh" ]; then
+  echo "ERROR: standalone Manul installer is missing: $MANUL_CANONICAL_DIR/install-manul.sh" >&2
+  exit 1
+fi
+export MANUL_CANONICAL_DIR
+export MANUL_CANONICAL_ROOT="$MANUL_REPO_DIR"
+export MANUL_CANONICAL_BRANCH="$MANUL_BRANCH"
+export MANUL_HOST_SKILLS_DIR="$SKILLS_DIR"
+echo "Manul source available at: $MANUL_CANONICAL_DIR"
+echo "Host project skills available at: $MANUL_HOST_SKILLS_DIR"
+
+# Prepare the Manul runtime and CLI. A fresh runtime is initialized only when
+# no database exists; an existing database always uses the non-destructive path.
+MANUL_DB="$HOME/.manul/state/manul.db"
+if [ -f "$MANUL_DB" ]; then
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh"
+else
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh" --init-state
 fi
 
 mkdir -p "$HOME/.agents"
