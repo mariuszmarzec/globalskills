@@ -18,8 +18,8 @@ AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 MANUL_CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.manul-repo}"
-MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-main}"
-MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"
+MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-master}"
+MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.agents/skills}"
 export MANUL_CANONICAL_DIR MANUL_CANONICAL_ROOT MANUL_CANONICAL_BRANCH MANUL_HOST_SKILLS_DIR
 
 MANUL_PLATFORM_HELPER="$MANUL_CANONICAL_DIR/manul-platform.sh"
@@ -457,95 +457,17 @@ ensure_opencode_caracal_config() {
     else
         config_input="/dev/null"
     fi
-    # The jq program is written to a file with a quoted heredoc so that literal
-    # apostrophes in comments (OpenCode's, OpenClaw's) never terminate the
-    # surrounding single-quoted program argument. An inline multi-line single
-    # quote breaks the program into many arguments that jq treats as filenames.
-    local jq_program
-    jq_program="$(mktemp "$config_dir/.opencode-caracal-jq.XXXXXX")" || return 1
-    cat >"$jq_program" <<'JQ'
-        (.[0] // {})
-        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's
-        # separate .mcp.servers schema.
-        | .mcp = (
-            (.mcp // {}) | if type == "object" then . else {} end
-            | . + {
-                "caracal-rag": {
-                    type: "remote",
-                    url: "{env:CARACAL_MCP_URL}",
-                    oauth: false,
-                    enabled: true,
-                    headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-                },
-                "fiteo": {
-                    type: "remote",
-                    url: "{env:FITEO_BASE_URL}/mcp",
-                    oauth: false,
-                    enabled: true,
-                    headers: {Authorization: "Bearer {env:FITEO_PAT}"}
-                }
-            }
-          )
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
-                  end
-                )
-              else {}
-              end
-          )
-        | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
-            .mcp = (
-                (.mcp // {}) | if type == "object" then . else {} end
-                | . + {
-                    "todo-local": {
-                        type: "remote",
-                        url: "{env:TODO_LOCAL_MCP_URL}",
-                        oauth: false,
-                        enabled: true,
-                        headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
-                    }
-                  }
-              )
-            | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-            | .agent = (
-                (.agent // {})
-                | if type == "object" then
-                    with_entries(
-                      if .key == "chat" then .
-                      else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-                      end
-                    )
-                  else {}
-                  end
-              )
-          else
-            .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
-            | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-            | .agent = (
-                (.agent // {})
-                | if type == "object" then
-                    with_entries(
-                      if .key == "chat" then .
-                      else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-                      end
-                    )
-                  else {}
-                  end
-              )
-          end
-JQ
-    if ! jq -s -f "$jq_program" "$config_input" > "$tmp"; then
-        rm -f -- "$jq_program"
+    local jq_program="$AICODE_SOURCE_DIR/opencode-config-v2.jq"
+    if [ ! -r "$jq_program" ]; then
         rm -f -- "$tmp"
-        echo "ERROR: unable to merge Caracal MCP into the OpenCode config." >&2
+        echo "ERROR: OpenCode V2 config merger is missing: $jq_program" >&2
         return 1
     fi
-    rm -f -- "$jq_program"
+    if ! jq -s -f "$jq_program" "$config_input" > "$tmp"; then
+        rm -f -- "$tmp"
+        echo "ERROR: unable to migrate/merge OpenCode V2 MCP config." >&2
+        return 1
+    fi
     if [ -f "$OPENCODE_CONFIG" ] && cmp -s "$tmp" "$OPENCODE_CONFIG"; then
         rm -f -- "$tmp"
     else

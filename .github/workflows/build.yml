@@ -37,7 +37,7 @@ jobs:
     env:
       MANUL_CANONICAL_ROOT: ${{ github.workspace }}/manul-repo
       MANUL_CANONICAL_DIR: ${{ github.workspace }}/manul-repo/skills/manul-github-bot
-      MANUL_CANONICAL_BRANCH: main
+      MANUL_CANONICAL_BRANCH: master
     steps:
       - name: Checkout globalskills
         uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mariuszmarzec/manul
-          ref: main
+          ref: master
           path: manul-repo
       - name: Install macOS runtime dependencies
         run: brew install bash coreutils util-linux jq sqlite gh
@@ -83,7 +83,7 @@ jobs:
     env:
       MANUL_CANONICAL_ROOT: ${{ github.workspace }}/manul-repo
       MANUL_CANONICAL_DIR: ${{ github.workspace }}/manul-repo/skills/manul-github-bot
-      MANUL_CANONICAL_BRANCH: main
+      MANUL_CANONICAL_BRANCH: master
     steps:
       - name: Checkout globalskills
         uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mariuszmarzec/manul
-          ref: main
+          ref: master
           path: manul-repo
       - name: Install test dependencies
         run: |

@@ -100,21 +100,23 @@ chmod +x "$CARACAL/env.sh"
 cat >"$OPENCODE_CONFIG" <<'JSON'
 {
   "mcp": {
-    "caracal-rag": {
-      "type": "remote",
-      "url": "{env:CARACAL_MCP_URL}",
-      "oauth": false,
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    "servers": {
+      "caracal-rag": {
+        "type": "remote",
+        "url": "{env:CARACAL_MCP_URL}",
+        "oauth": false,
+        "disabled": false,
+        "headers": {
+          "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
+        }
+      },
+      "fiteo": {
+        "type": "remote",
+        "url": "{env:FITEO_BASE_URL}/mcp",
+        "oauth": false,
+        "disabled": false,
+        "headers": {"Authorization": "Bearer {env:FITEO_PAT}"}
       }
-    },
-    "fiteo": {
-      "type": "remote",
-      "url": "{env:FITEO_BASE_URL}/mcp",
-      "oauth": false,
-      "enabled": true,
-      "headers": {"Authorization": "Bearer {env:FITEO_PAT}"}
     }
   }
 }
@@ -148,11 +150,12 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] || exit 74
   [ "${FITEO_PAT:-}" = "operator-fiteo-pat" ] || exit 75
   jq -e '
-    .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp["caracal-rag"].enabled == true
-    and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
-    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_PAT}"
+    .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].disabled == false
+    and .mcp.servers.fiteo.url == "{env:FITEO_BASE_URL}/mcp"
+    and .mcp.servers.fiteo.headers.Authorization == "Bearer {env:FITEO_PAT}"
+    and .mcp.servers.fiteo.disabled == false
   ' "$OPENCODE_CONFIG" >/dev/null
   : > "${PREFLIGHT_FILE:?}"
   if [ "${MOCK_MCP_STATE:-connected}" = "connected" ]; then
