@@ -117,8 +117,8 @@ else
   contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "legacy Manul injects Todo local MCP into the task-local OpenCode config when available"
 fi
 contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
-contains "$MANUL/opencode-adapter.sh" 'TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"' "Manul refreshes the Todo token from its runtime environment for each task"
-contains "$MANUL/manul-env.sh" 'TODO_LOCAL_MCP_TOKEN' "Manul persists Todo local MCP token for unattended tasks"
+contains "$MANUL/opencode-adapter.sh" 'unset TODO_LOCAL_MCP_TOKEN' "Manul never loads or forwards the legacy Todo token"
+contains "$MANUL/manul-env.sh" 'Removed legacy local Todo MCP credential' "Manul removes stale local Todo credentials without loading them"
 contains "$MANUL/opencode-adapter.sh" 'ProcessRunner.run --timeout 45' "Manul checks the live OpenCode MCP registry"
 contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to start a task without a live Caracal connection"
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
@@ -176,6 +176,7 @@ jq -e '.mcp.timeout.catalog == 5000 and .mcp.timeout.execution == 15000 and (.ex
 jq -e '.mcp.servers["native-existing"].disabled == true' "$merge_output" >/dev/null || fail "native MCP server was not preserved"
 jq -e 'any(.permissions[]; .action == "caracal_rag_*" and .resource == "*" and .effect == "allow") and any(.permissions[]; .action == "fiteo_*" and .resource == "*" and .effect == "allow") and any(.permissions[]; .action == "todo_local_*" and .resource == "*" and .effect == "allow")' "$merge_output" >/dev/null || fail "V2 MCP permissions are incomplete"
 jq -e '.mcp.servers["todo-local"].disabled == false' "$merge_output" >/dev/null || fail "enabled Todo local MCP server missing"
+jq -e '.mcp.servers["todo-local"] | has("headers") | not' "$merge_output" >/dev/null || fail "Todo local MCP unexpectedly has authentication headers"
 jq -e '.tools.foo == true and .tools["caracal-rag_*"] == true and .tools["fiteo_*"] == true' "$merge_output" >/dev/null || fail "unrelated tool config was lost"
 jq -e '.agent.coder.tools["fiteo_*"] == true and .agent.chat.tools."*" == false' "$merge_output" >/dev/null || fail "legacy agent tool settings or chat restriction were lost"
 TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge_output" > "$tmp_dir/output-no-todo.json" || fail "V2 merge with Todo disabled failed"
@@ -187,15 +188,23 @@ echo "All Caracal MCP regression guards passed."
 
 
 # Todo Desktop runs in Windows; OpenCode receives only the authenticated WSL loopback bridge.
-contains "$AICODE" '. "$HOME/.config/opencode/todo-mcp.env"' "aicode loads the Todo MCP token for normal OpenCode sessions"
-contains "$AICODE" 'if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then' "an exported shell token takes precedence over the optional Todo env file"
+contains "$AICODE" 'unset TODO_LOCAL_MCP_TOKEN' "aicode prevents legacy Todo credentials from reaching OpenCode"
+if grep -Fq 'todo-mcp.env' "$AICODE"; then
+  fail "aicode must not load a Todo token environment file"
+else
+  ok "aicode does not load a Todo token environment file"
+fi
 contains "$AICODE" 'ensure_todo_mcp_bridge' "aicode starts the optional Todo bridge before OpenCode"
-contains "$AICODE" 'TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1' "aicode only enables Todo MCP after the unauthenticated 401 probe"
+contains "$AICODE" 'todo_local_mcp_probe_status' "aicode uses the shared MCP handshake probe"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
 contains "$MANUL/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
-contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
+if grep -Fq 'TODO_LOCAL_MCP_TOKEN' "$ROOT/aicode/opencode-config-v2.jq"; then
+  fail "OpenCode Todo config must not contain a token reference"
+else
+  ok "OpenCode Todo config contains no token reference"
+fi
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'channel.BeginConnect(relay, relayPort' "Windows bridge initiates outbound connections to the WSL relay"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'upstream.Connect(IPAddress.Loopback, 8765)' "Windows bridge still forwards to Todo Desktop's loopback MCP endpoint"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'Only HTTP GET/POST/DELETE requests to /mcp are allowed.' "Windows bridge restricts forwarded HTTP methods and MCP path"
