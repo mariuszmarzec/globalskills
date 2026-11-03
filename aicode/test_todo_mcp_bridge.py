@@ -201,10 +201,13 @@ class TodoMcpBridgeTests(unittest.TestCase):
         self.assertIn("--allowed-reverse-client", source)
         self.assertIn("--reverse-listen-port 18766", source)
         self.assertIn("-Action Ensure -RelayAddress", source)
-        self.assertIn('url: "{env:TODO_LOCAL_MCP_URL}"', source)
+        # MCP V2 server values now live in the shared config converter,
+        # while this launcher owns platform discovery and startup ordering.
+        config_source = AICODE.with_name("opencode-config-v2.jq").read_text(encoding="utf-8")
+        self.assertIn('url: "{env:TODO_LOCAL_MCP_URL}"', config_source)
+        self.assertIn("Bearer {env:TODO_LOCAL_MCP_TOKEN}", config_source)
         self.assertIn('http://127.0.0.1:8766/mcp', source)
         self.assertIn('http://127.0.0.1:8765/mcp', source)
-        self.assertIn("Bearer {env:TODO_LOCAL_MCP_TOKEN}", source)
         self.assertIn('if [ "$http_status" = "401" ]; then', source)
         self.assertNotIn("18765", source)
         self.assertNotIn("observed_client_ip", source)
