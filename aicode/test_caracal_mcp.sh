@@ -119,13 +119,10 @@ contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to s
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
 contains "$MANUL/test_manul_environment.sh" 'Bootstrap refreshes Caracal URL/token' "environment tests cover Caracal endpoint/token refresh"
 
-# The jq merge program contains literal apostrophes in comments
-# ("OpenCode's", "OpenClaw's"). They must be delivered to jq as a single
-# program, never as an inline single-quoted argument: the apostrophes would
-# terminate the shell quote early and jq would treat the comment words as
-# filenames ("Could not open file MCP: No such file or directory").
-contains "$AICODE" 'jq -s -f "$jq_program"' "aicode feeds the jq program from a file, not an inline quote"
-contains "$AICODE" 'cat >"$jq_program" <<'"'"'JQ'"'"'' "aicode writes the jq program via a quoted heredoc"
+# The shared jq transformer is stored as a tracked source file, so comments
+# with apostrophes are safe and the launcher executes that exact file.
+contains "$AICODE" 'jq -s -f "$jq_program"' "aicode feeds the shared V2 jq program from a file"
+contains "$ROOT/aicode/opencode-config-v2.jq" "OpenCode's" "the shared V2 jq program retains readable comments"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
