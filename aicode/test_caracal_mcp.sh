@@ -195,7 +195,7 @@ contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "{env:TODO_LOCAL_MCP_URL}"' 
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
 contains "$MANUL/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
-contains "$AICODE" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:TODO_LOCAL_MCP_TOKEN}' "Todo MCP bearer token is sourced from the environment"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'channel.BeginConnect(relay, relayPort' "Windows bridge initiates outbound connections to the WSL relay"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'upstream.Connect(IPAddress.Loopback, 8765)' "Windows bridge still forwards to Todo Desktop's loopback MCP endpoint"
 contains "$ROOT/aicode/todo-mcp-bridge.ps1" 'Only HTTP GET/POST/DELETE requests to /mcp are allowed.' "Windows bridge restricts forwarded HTTP methods and MCP path"
