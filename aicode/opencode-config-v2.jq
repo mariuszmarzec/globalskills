@@ -1,6 +1,6 @@
 # OpenCode V2 config merge for globalskills/aicode.
 # Move legacy V1 named MCP entries into mcp.servers and normalize fields whose
-# spelling or meaning changed; native V2 values win over V1 values.
+# spelling or meaning changed; preserve MCP-wide settings and prefer native V2.
 def migrate_mcp_server:
   . as $server
   | (if ($server.timeout | type) == "number" then
@@ -17,29 +17,43 @@ def migrate_mcp_server:
 (.[0] // {}) as $root
 | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
 | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
-| ($mcp | del(.servers)) as $legacyServers
-| .mcp = {
-    servers: (
-      ($legacyServers + $nativeServers)
-      | with_entries(.value |= migrate_mcp_server)
-      + {
-          "caracal-rag": {
-            type: "remote",
-            url: "{env:CARACAL_MCP_URL}",
-            oauth: false,
-            disabled: false,
-            headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-          },
-          "fiteo": {
-            type: "remote",
-            url: "{env:FITEO_BASE_URL}/mcp",
-            oauth: false,
-            disabled: false,
-            headers: {Authorization: "Bearer {env:FITEO_PAT}"}
-          }
+| ($mcp | del(.servers, .timeout)) as $legacyServers
+| .mcp = (
+    ($mcp | del(.servers))
+    + {
+        servers: (
+          ($legacyServers + $nativeServers)
+          | with_entries(.value |= migrate_mcp_server)
+          + {
+              "caracal-rag": {
+                type: "remote",
+                url: "{env:CARACAL_MCP_URL}",
+                oauth: false,
+                disabled: false,
+                headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
+              },
+              "fiteo": {
+                type: "remote",
+                url: "{env:FITEO_BASE_URL}/mcp",
+                oauth: false,
+                disabled: false,
+                headers: {Authorization: "Bearer {env:FITEO_PAT}"}
+              }
+            }
+        )
+      }
+  )
+| if (($root.experimental.mcp_timeout // null) | type) == "number" then
+    .mcp.timeout = (
+      (.mcp.timeout // {} | if type == "object" then . else {} end)
+      | . + {
+          catalog: (.catalog // $root.experimental.mcp_timeout),
+          execution: (.execution // $root.experimental.mcp_timeout)
         }
     )
-  }
+    | .experimental |= del(.mcp_timeout)
+  else .
+  end
 | .permissions = (
     ((.permissions // []) | if type == "array" then . else [] end)
     | reduce [
@@ -77,7 +91,8 @@ def migrate_mcp_server:
         | map(select(.action != "todo_local_*" or .resource != "*"))
         + [{action: "todo_local_*", resource: "*", effect: "allow"}]
       )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end
+      | . + {"todo-local_*": true})
     | .agent = (
         (.agent // {})
         | if type == "object" then
