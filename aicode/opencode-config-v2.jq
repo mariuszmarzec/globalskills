@@ -18,8 +18,13 @@ def migrate_mcp_server:
 | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
 | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
 | ($mcp | del(.servers, .timeout)) as $legacyServers
+| $root
 | .mcp = (
-    ($mcp | del(.servers))
+    (if ($mcp.timeout | type) == "number" then
+       {timeout: {catalog: $mcp.timeout, execution: $mcp.timeout}}
+     elif ($mcp.timeout | type) == "object" then
+       {timeout: $mcp.timeout}
+     else {} end)
     + {
         servers: (
           ($legacyServers + $nativeServers)
