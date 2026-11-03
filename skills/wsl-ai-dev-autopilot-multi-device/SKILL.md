@@ -656,7 +656,12 @@ Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at
 
 The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.host: 127.0.0.1`; never expose the token-authenticated listener on a public interface. The launcher tracks only its own PID in `~/.caracal/run/mcp.pid`, logs to `/tmp/caracal-mcp.log`, and does not kill an unknown process that happens to use the configured port.
 
-## Step 9 — Configure OpenCode
+## Step 9 — Configure OpenCode 2
+
+OpenCode 2 uses native V2 configuration for providers, agents, MCP servers,
+permissions and skill paths. V1 compatibility remains available, but this
+example writes the V2 forms directly. GlobalSkills exposes installed skills
+through the stable `~/.agents/skills` path.
 
 `~/.config/opencode/opencode.json`
 
@@ -664,18 +669,19 @@ The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.ho
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "litellm/big-pickle",
-  "small_model": "litellm/groq-llama-8b",
-  "skills": { 
-    "paths": ["~/.globalskills/skills"] 
-  },
+  "skills": [
+    "~/.agents/skills"
+  ],
   "mcp": {
-    "caracal-rag": {
-      "type": "remote",
-      "url": "{env:CARACAL_MCP_URL}",
-      "oauth": false,
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    "servers": {
+      "caracal-rag": {
+        "type": "remote",
+        "url": "{env:CARACAL_MCP_URL}",
+        "oauth": false,
+        "disabled": false,
+        "headers": {
+          "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
+        }
       }
     }
   },
@@ -686,219 +692,553 @@ The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.ho
       "~/.globalskills/**": "allow"
     }
   },
-  "agent": {
+  "permissions": [
+    {
+      "action": "external_directory",
+      "resource": "~/litellm/*",
+      "effect": "allow"
+    },
+    {
+      "action": "external_directory",
+      "resource": "~/.config/opencode/*",
+      "effect": "allow"
+    },
+    {
+      "action": "external_directory",
+      "resource": "~/.agents/skills/*",
+      "effect": "allow"
+    },
+    {
+      "action": "caracal_rag_*",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "fiteo_*",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ],
+  "agents": {
     "chat": {
       "description": "Standard conversational chat without tools",
       "mode": "primary",
-      "tools": {
-        "*": false
-      },
-      "permission": {
-        "*": "deny"
-      },
-      "prompt": "You are a helpful AI coding assistant. Respond directly in natural language and standard Markdown. Do not attempt to use any tools, and do NOT format your responses as JSON."
+      "system": "You are a helpful AI coding assistant. Respond directly in natural language and standard Markdown. Do not attempt to use any tools, and do NOT format your responses as JSON.",
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "title": {
+      "model": "litellm/groq-llama-8b"
     }
   },
-  "provider": {
+  "providers": {
     "opencode": {
-      "options": {
+      "settings": {
         "apiKey": "{env:OPENCODE_API_KEY}"
       }
     },
     "ollama": {
-      "id": "ollama",
-      "api": "openai",
       "name": "Ollama Local",
-      "options": {
-        "baseURL": "http://localhost:11434/v1"
-      },
       "models": {
         "gemma4:12b": {
-          "id": "gemma4:12b",
           "name": "Gemma 4 12B (Ollama)",
           "family": "gemma",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 32768, "output": 32768 }
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 32768,
+            "output": 32768
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
         }
+      },
+      "settings": {
+        "baseURL": "http://localhost:11434/v1"
       }
     },
     "litellm": {
-      "id": "litellm",
-      "api": "openai",
       "name": "LiteLLM Proxy",
-      "options": {
+      "models": {
+        "big-pickle": {
+          "name": "Big Pickle (via LiteLLM)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 65536
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "deepseek-v4-flash-free": {
+          "name": "DeepSeek V4 Flash Free (via LiteLLM)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 65536
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "groq-llama-70b": {
+          "name": "Llama 3.3 70B (Groq, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "groq-qwen3": {
+          "name": "Qwen3.6 27B (Groq, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "groq-llama-8b": {
+          "name": "Llama 3.1 8B (Groq, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "cerebras-gpt-oss-120b": {
+          "name": "GPT-OSS 120B (Cerebras, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "cerebras-gemma-31b": {
+          "name": "Gemma 4 31B (Cerebras, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "cerebras-glm-4.7": {
+          "name": "GLM 4.7 (Cerebras, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemini-3.6-flash": {
+          "name": "Gemini 3.6 Flash (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemini-3.5-flash": {
+          "name": "Gemini 3.5 Flash (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemini-3.5-flash-lite": {
+          "name": "Gemini 3.5 Flash Lite (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemini-3.1-flash-lite": {
+          "name": "Gemini 3.1 Flash Lite (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemma-4-31b": {
+          "name": "Gemma 4 31B (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemma-4-26b": {
+          "name": "Gemma 4 26B (Google, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "mistral-large": {
+          "name": "Mistral Large (Mistral, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 128000,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "mistral-codestral": {
+          "name": "Codestral (Mistral, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 256000,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "or-free": {
+          "name": "Free Models Router (OpenRouter, free)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "gemma4": {
+          "name": "Gemma 4 12B Local (via LiteLLM)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 131072,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        },
+        "local-coder": {
+          "name": "Local Coder (via LiteLLM)",
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "limit": {
+            "context": 131072,
+            "output": 32000
+          },
+          "capabilities": {
+            "tools": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "reasoning": {
+              "supported": false
+            }
+          }
+        }
+      },
+      "settings": {
         "baseURL": "http://localhost:4000/v1",
         "apiKey": "sk-12345678"
       },
-      "models": {
-        "big-pickle": {
-          "id": "big-pickle",
-          "name": "Big Pickle (via LiteLLM)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 65536 }
-        },
-        "deepseek-v4-flash-free": {
-          "id": "deepseek-v4-flash-free",
-          "name": "DeepSeek V4 Flash Free (via LiteLLM)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 65536 }
-        },
-        "groq-llama-70b": {
-          "id": "groq-llama-70b",
-          "name": "Llama 3.3 70B (Groq, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 32000 }
-        },
-        "groq-qwen3": {
-          "id": "groq-qwen3",
-          "name": "Qwen3.6 27B (Groq, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 32000 }
-        },
-        "groq-llama-8b": {
-          "id": "groq-llama-8b",
-          "name": "Llama 3.1 8B (Groq, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 8192 }
-        },
-        "cerebras-gpt-oss-120b": {
-          "id": "cerebras-gpt-oss-120b",
-          "name": "GPT-OSS 120B (Cerebras, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 8192, "output": 8192 }
-        },
-        "cerebras-gemma-31b": {
-          "id": "cerebras-gemma-31b",
-          "name": "Gemma 4 31B (Cerebras, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 8192, "output": 8192 }
-        },
-        "cerebras-glm-4.7": {
-          "id": "cerebras-glm-4.7",
-          "name": "GLM 4.7 (Cerebras, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 8192, "output": 8192 }
-        },
-        "gemini-3.6-flash": {
-          "id": "gemini-3.6-flash",
-          "name": "Gemini 3.6 Flash (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 1048576, "output": 8192 }
-        },
-        "gemini-3.5-flash": {
-          "id": "gemini-3.5-flash",
-          "name": "Gemini 3.5 Flash (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 1048576, "output": 8192 }
-        },
-        "gemini-3.5-flash-lite": {
-          "id": "gemini-3.5-flash-lite",
-          "name": "Gemini 3.5 Flash Lite (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 1048576, "output": 8192 }
-        },
-        "gemini-3.1-flash-lite": {
-          "id": "gemini-3.1-flash-lite",
-          "name": "Gemini 3.1 Flash Lite (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 1048576, "output": 8192 }
-        },
-        "gemma-4-31b": {
-          "id": "gemma-4-31b",
-          "name": "Gemma 4 31B (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 8192 }
-        },
-        "gemma-4-26b": {
-          "id": "gemma-4-26b",
-          "name": "Gemma 4 26B (Google, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 8192 }
-        },
-        "mistral-large": {
-          "id": "mistral-large",
-          "name": "Mistral Large (Mistral, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 128000, "output": 32000 }
-        },
-        "mistral-codestral": {
-          "id": "mistral-codestral",
-          "name": "Codestral (Mistral, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 256000, "output": 32000 }
-        },
-        "or-free": {
-          "id": "or-free",
-          "name": "Free Models Router (OpenRouter, free)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 200000, "output": 32000 }
-        },
-        "gemma4": {
-          "id": "gemma4",
-          "name": "Gemma 4 12B Local (via LiteLLM)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 32000 }
-        },
-        "local-coder": {
-          "id": "local-coder",
-          "name": "Local Coder (via LiteLLM)",
-          "tool_call": true,
-          "reasoning": false,
-          "cost": { "input": 0, "output": 0 },
-          "limit": { "context": 131072, "output": 32000 }
-        }
-      }
+      "package": "@opencode/ai/providers/openai-compatible"
     }
   }
 }
 ```
 
+
 *Note: This configuration provides three providers:*
 - *`opencode/` - Direct access to OpenCode Zen cloud models*
-- *`litellm/` - All models via LiteLLM proxy (20+ free cloud models + local)*
+- *`litellm/` - Models routed through the LiteLLM proxy*
 - *`ollama/` - Direct access to local Ollama models*
-- *Default model: `litellm/big-pickle` (OpenCode Zen, free). Fallback: groq → cerebras → gemini → mistral → openrouter → local-coder.*
+- *Default model: `litellm/big-pickle`. The LiteLLM catalog below retains each model's configured capabilities, context limits, and token costs.*
 
 **Healthcheck:**
-Execute a test prompt to verify connection.
+Execute a test prompt to verify the selected model, tool calling, and Caracal MCP connectivity.
 
 ## Step 10 — Install & Configure OpenClaw
 

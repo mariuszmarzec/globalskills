@@ -32,21 +32,18 @@ contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness wait has a bounded t
 contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
 contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded attempt count"
 
-# The OpenCode CLI must use its native named-server config format. OpenClaw has
-# a different mcp.servers schema and must not be copied into opencode.json.
-contains "$AICODE" '"caracal-rag": {' "aicode registers Caracal in OpenCode"
-contains "$AICODE" 'type: "remote"' "OpenCode config uses its native remote MCP type"
-contains "$AICODE" 'url: "{env:CARACAL_MCP_URL}"' "OpenCode endpoint is injected via environment"
-contains "$AICODE" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "OpenCode bearer token is injected via environment"
-contains "$AICODE" '"caracal-rag_*": true' "configured OpenCode agents can call Caracal tools"
-contains "$AICODE" 'opencode mcp list' "aicode probes the real OpenCode MCP registry"
-contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if OpenCode MCP is disconnected"
-
-# Fiteo backend MCP is a permanent part of every generated OpenCode config.
-contains "$AICODE" '"fiteo": {' "aicode always registers the Fiteo backend MCP"
-contains "$AICODE" 'url: "{env:FITEO_BASE_URL}/mcp"' "Fiteo MCP URL is built from FITEO_BASE_URL"
-contains "$AICODE" 'Bearer {env:FITEO_PAT}' "Fiteo MCP bearer token is resolved from FITEO_PAT"
-contains "$AICODE" '"fiteo_*": true' "Fiteo tools are enabled for non-chat OpenCode agents"
+# OpenCode V2 uses mcp.servers and ordered MCP permission rules.
+contains "$AICODE" 'opencode-config-v2.jq' "aicode uses the shared OpenCode V2 config merger"
+contains "$ROOT/aicode/opencode-config-v2.jq" '"caracal-rag": {' "V2 merger registers Caracal"
+contains "$ROOT/aicode/opencode-config-v2.jq" '"fiteo": {' "V2 merger registers Fiteo"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'servers:' "MCP entries are nested under mcp.servers"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'disabled: false' "V2 MCP uses disabled=false"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "caracal_rag_*"' "Caracal tools receive V2 permission rules"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "fiteo_*"' "Fiteo tools receive V2 permission rules"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "Caracal bearer token is environment-backed"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:FITEO_PAT}' "Fiteo bearer token is environment-backed"
+contains "$AICODE" 'opencode mcp list' "aicode probes the live OpenCode MCP registry"
+contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if Caracal is disconnected"
 contains "$ACP_WRAPPER" 'load_fiteo_mcp_environment' "ACP refreshes Fiteo credentials for long-lived Gateway sessions"
 contains "$AICODE" 'mcp_list_rc=0' "aicode does not trust the aggregate MCP-list exit status when optional Fiteo is offline"
 contains "$ROOT/README.md" 'FITEO_MANUL_PAT' "README documents the dedicated Manul Fiteo PAT"
@@ -91,9 +88,13 @@ bootstrap_line="$(grep -nF 'manul_env_bootstrap "$MANUL_RUNTIME"' "$AICODE" | he
 repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | cut -d: -f1)"
 [ -n "$bootstrap_line" ] && [ -n "$repair_line" ] && [ "$bootstrap_line" -lt "$repair_line" ] || fail "Caracal environment refresh must happen before Manul repair"
 ok "Manul's stored Caracal environment is refreshed before repair"
-contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "Manul injects Caracal into its task-local OpenCode config"
-contains "$MANUL/opencode-adapter.sh" '"fiteo": {' "Manul always injects Fiteo into its task-local OpenCode config"
-contains "$MANUL/opencode-adapter.sh" 'url: "{env:FITEO_BASE_URL}/mcp"' "Manul task config uses the Fiteo backend base URL"
+if grep -Fq 'mcp.servers' "$MANUL/opencode-adapter.sh"; then
+  contains "$MANUL/opencode-adapter.sh" 'mcp.servers' "Manul injects V2 MCP servers into its task-local config"
+  contains "$MANUL/opencode-adapter.sh" 'disabled:false' "Manul task MCP uses V2 disabled semantics"
+else
+  contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "legacy Manul injects Caracal into task-local OpenCode config"
+  contains "$MANUL/opencode-adapter.sh" '"fiteo": {' "legacy Manul injects Fiteo into task-local OpenCode config"
+fi
 # Keep the integration test compatible while the standalone Manul PR is in review.
 # Once the dedicated-token branch is merged, assert the stricter token boundary.
 if grep -Fq 'Bearer {env:FITEO_MANUL_PAT}' "$MANUL/opencode-adapter.sh"; then
@@ -161,88 +162,21 @@ acpx_call_line="$(grep -nF 'if ! configure_openclaw_opencode_acp; then' "$AICODE
 ok "OpenClaw Gateway and ACPX are only initialized for OpenClaw agentRuntime"
 merge_input="$tmp_dir/input.json"
 merge_output="$tmp_dir/output.json"
-printf '{"mcp":{"existing":true},"tools":{"foo":true},"agent":{"coder":{"tools":{"*":true}},"chat":{"tools":{"*":false}}}}' > "$merge_input"
-if ! jq -s -f <(cat <<'JQ'
-        (.[0] // {})
-        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's
-        # separate .mcp.servers schema.
-        | .mcp = (
-            (.mcp // {}) | if type == "object" then . else {} end
-            | . + {
-                "caracal-rag": {
-                    type: "remote",
-                    url: "{env:CARACAL_MCP_URL}",
-                    oauth: false,
-                    enabled: true,
-                    headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-                },
-                "fiteo": {
-                    type: "remote",
-                    url: "{env:FITEO_BASE_URL}/mcp",
-                    oauth: false,
-                    enabled: true,
-                    headers: {Authorization: "Bearer {env:FITEO_PAT}"}
-                }
-            }
-          )
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
-                  end
-                )
-              else {}
-              end
-          )
-JQ
-) "$merge_input" > "$merge_output" 2>/dev/null; then
-    fail "jq merge with apostrophes in comments failed to produce output"
-fi
-jq -e '.mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"' "$merge_output" >/dev/null || fail "merged config lost the caracal-rag url"
-jq -e '.mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"' "$merge_output" >/dev/null || fail "merged config lost the bearer header"
-jq -e '.mcp.fiteo.url == "{env:FITEO_BASE_URL}/mcp" and .mcp.fiteo.headers.Authorization == "Bearer {env:FITEO_PAT}"' "$merge_output" >/dev/null || fail "merged config lost the Fiteo backend MCP"
-jq -e '.mcp.existing == true' "$merge_output" >/dev/null || fail "merged config dropped unrelated .mcp entries"
-jq -e '.tools.foo == true and .tools["caracal-rag_*"] == true and .tools["fiteo_*"] == true' "$merge_output" >/dev/null || fail "merged config lost unrelated .tools entries"
-jq -e '.agent.coder.tools["fiteo_*"] == true and .agent.chat.tools."*" == false' "$merge_output" >/dev/null || fail "merged config did not enable Fiteo tools for coder or dropped the chat agent"
-ok "jq merge preserves existing config and registers caracal-rag"
-
-# An inline single-quoted multi-line program with literal apostrophes must fail,
-# which is exactly the defect this test guards against. The broken program is
-# written to a file with literal apostrophes (not the '"'"' escape) so the
-# shell quote is genuinely terminated mid-line.
-broken_tmp="$tmp_dir/broken.json"
-broken_prog="$tmp_dir/broken.jq"
-printf '{"mcp":{}}' > "$broken_tmp"
-printf '%s\n' \
-    "        (.[0] // {})" \
-    "        # OpenCode's MCP schema is .mcp[server-name], unlike OpenClaw's" \
-    "        | .mcp = {}" \
-    > "$broken_prog"
-# Assemble the broken invocation the way the old aicode did: an inline
-# single-quoted program followed by the input file argument.
-broken_cmd="$tmp_dir/broken.sh"
-{
-    printf '#!/usr/bin/env bash\n'
-    printf 'jq -s '
-    # emit the literal single-quoted program, line by line
-    while IFS= read -r line; do
-        printf "'%s'" "$line"
-    done < "$broken_prog"
-    printf ' "%s"\n' "$broken_tmp"
-} > "$broken_cmd"
-chmod +x "$broken_cmd"
-set +e
-bash "$broken_cmd" > /dev/null 2>"$tmp_dir/broken.err"
-broken_rc=$?
-set -e
-[ "$broken_rc" -ne 0 ] || fail "the broken inline-quote form unexpectedly succeeded"
-grep -q "Could not open file" "$tmp_dir/broken.err" || grep -q "no matches found" "$tmp_dir/broken.err" || fail "the broken inline-quote form produced an unexpected error"
-ok "the original inline single-quote defect is reproduced by this test"
-
-echo
+printf '%s\n' '{"mcp":{"legacy":{"type":"local","command":["node","server.js"],"enabled":true,"timeout":12000},"servers":{"native-existing":{"type":"remote","url":"https://native.example/mcp","disabled":true}}},"tools":{"foo":true},"agent":{"coder":{"tools":{"*":true}},"chat":{"tools":{"*":false}}}}' > "$merge_input"
+TODO_LOCAL_MCP_AVAILABLE=1 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge_input" > "$merge_output" || fail "V2 MCP merge failed"
+jq -e '.mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}" and .mcp.servers["caracal-rag"].disabled == false' "$merge_output" >/dev/null || fail "Caracal V2 server missing or disabled"
+jq -e '.mcp.servers.fiteo.url == "{env:FITEO_BASE_URL}/mcp" and .mcp.servers.fiteo.headers.Authorization == "Bearer {env:FITEO_PAT}" and .mcp.servers.fiteo.disabled == false' "$merge_output" >/dev/null || fail "Fiteo V2 server missing or disabled"
+jq -e '.mcp.servers.legacy.disabled == false and .mcp.servers.legacy.timeout.catalog == 12000 and .mcp.servers.legacy.timeout.execution == 12000' "$merge_output" >/dev/null || fail "legacy MCP entry was not migrated"
+jq -e '.mcp.servers["native-existing"].disabled == true' "$merge_output" >/dev/null || fail "native MCP server was not preserved"
+jq -e 'any(.permissions[]; .action == "caracal_rag_*" and .resource == "*" and .effect == "allow") and any(.permissions[]; .action == "fiteo_*" and .resource == "*" and .effect == "allow") and any(.permissions[]; .action == "todo_local_*" and .resource == "*" and .effect == "allow")' "$merge_output" >/dev/null || fail "V2 MCP permissions are incomplete"
+jq -e '.mcp.servers["todo-local"].disabled == false' "$merge_output" >/dev/null || fail "enabled Todo local MCP server missing"
+jq -e '.tools.foo == true and .tools["caracal-rag_*"] == true and .tools["fiteo_*"] == true' "$merge_output" >/dev/null || fail "unrelated tool config was lost"
+jq -e '.agent.coder.tools["fiteo_*"] == true and .agent.chat.tools."*" == false' "$merge_output" >/dev/null || fail "legacy agent tool settings or chat restriction were lost"
+TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge_output" > "$tmp_dir/output-no-todo.json" || fail "V2 merge with Todo disabled failed"
+jq -e '.mcp.servers | has("todo-local") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo MCP was not removed"
+jq -e 'any(.permissions[]; .action == "todo_local_*") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo permissions were not removed"
+ok "shared jq converter migrates legacy MCP entries and preserves native config"
+contains "$AICODE" 'jq -s -f "$jq_program" "$config_input"' "aicode executes the tested V2 jq file"
 echo "All Caracal MCP regression guards passed."
 
 
