@@ -81,7 +81,7 @@ contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caraca
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL' "Manul persists the Caracal endpoint"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN' "Manul persists the Caracal token"
 contains "$MANUL/manul-env.sh" 'MANUL_HOST_SKILLS_DIR' "Manul persists the host project skills path for unattended tasks"
-contains "$MANUL/todo-task-source-utils.sh" 'MANUL_HOST_SKILLS_DIR' "Manul reads mapped project skills from the host-provided directory"
+contains "$MANUL/todo-task-source-utils.sh" 'skills_dir="$HOME/.agents/skills"' "Manul reads mapped project skills from the canonical ~/.agents/skills directory"
 contains "$AICODE" 'MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.agents/skills}"' "aicode exposes the shared installed skills directory to standalone Manul"
 contains "$AICODE" 'MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-master}"' "aicode uses Manul default branch master"
 contains "$AICODE" 'manul_env_bootstrap "$MANUL_RUNTIME"' "aicode refreshes Manul's Caracal environment before repair/startup"
