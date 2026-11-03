@@ -89,7 +89,7 @@ bootstrap_line="$(grep -nF 'manul_env_bootstrap "$MANUL_RUNTIME"' "$AICODE" | he
 repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | cut -d: -f1)"
 [ -n "$bootstrap_line" ] && [ -n "$repair_line" ] && [ "$bootstrap_line" -lt "$repair_line" ] || fail "Caracal environment refresh must happen before Manul repair"
 ok "Manul's stored Caracal environment is refreshed before repair"
-if grep -Fq 'mcp.servers' "$MANUL/opencode-adapter.sh"; then
+if grep -Fq 'disabled:false' "$MANUL/opencode-adapter.sh"; then
   contains "$MANUL/opencode-adapter.sh" 'mcp.servers' "Manul injects V2 MCP servers into its task-local config"
   contains "$MANUL/opencode-adapter.sh" 'disabled:false' "Manul task MCP uses V2 disabled semantics"
 else
