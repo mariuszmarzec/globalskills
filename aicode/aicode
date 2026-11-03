@@ -2,6 +2,7 @@
 # aicode - Start AI dev environment and launch OpenCode
 
 export PATH="$HOME/.opencode/bin:$PATH"
+unset TODO_LOCAL_MCP_TOKEN
 
 # Resolve symlinks using POSIX tools (macOS readlink has no -f option).
 AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
@@ -46,12 +47,7 @@ if [ -f "$HOME/.config/opencode/opencode.env" ]; then
     . "$HOME/.config/opencode/opencode.env"
     set +a
 fi
-
-if [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ] && [ -f "$HOME/.config/opencode/todo-mcp.env" ]; then
-    set -a
-    . "$HOME/.config/opencode/todo-mcp.env"
-    set +a
-fi
+unset TODO_LOCAL_MCP_TOKEN
 
 if [ -z "${OPENCODE_API_KEY:-}" ]; then
     echo "WARNING: OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable."
@@ -355,11 +351,7 @@ ensure_todo_mcp_bridge() {
     export TODO_LOCAL_MCP_AVAILABLE=0 TODO_LOCAL_MCP_CONNECTED=0
     unset TODO_LOCAL_MCP_URL
 
-    if [ -z "$TODO_LOCAL_MCP_TOKEN" ]; then
-        echo "Todo MCP token is not configured; skipping the optional local endpoint."
-        return 0
-    fi
-    if ! command -v curl >/dev/null 2>&1 ||
+    if ! command -v python3 >/dev/null 2>&1 ||
        ! declare -F todo_local_mcp_is_wsl >/dev/null 2>&1 ||
        ! declare -F todo_local_mcp_probe_status >/dev/null 2>&1; then
         echo "WARNING: Todo MCP endpoint discovery prerequisites are missing; Todo MCP is disabled for this launch." >&2
@@ -369,17 +361,17 @@ ensure_todo_mcp_bridge() {
     local direct_url="http://127.0.0.1:8765/mcp"
     local direct_status
     direct_status="$(todo_local_mcp_probe_status "$direct_url")"
-    if [ "$direct_status" = "401" ]; then
+    if [ "$direct_status" = "200" ]; then
         export TODO_LOCAL_MCP_URL="$direct_url"
         export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
-        echo "Todo MCP verified directly at $TODO_LOCAL_MCP_URL."
+        echo "Todo MCP initialize and tools/list handshake succeeded at $TODO_LOCAL_MCP_URL."
         return 0
     fi
 
     # Only WSL needs the Windows host bridge. Native Linux/macOS connects to
     # Todo Desktop's loopback listener and never invokes PowerShell or wslpath.
     if ! todo_local_mcp_is_wsl; then
-        echo "WARNING: Todo Desktop MCP is not reachable at $direct_url (HTTP $direct_status); Todo MCP is disabled for this launch." >&2
+        echo "WARNING: Todo Desktop MCP did not complete an unauthenticated initialize/tools/list handshake at $direct_url (probe status $direct_status); Todo MCP is disabled for this launch." >&2
         echo "Check that Todo Desktop is running, todo.localMcpServer is enabled, and a user session is active." >&2
         return 0
     fi
@@ -428,12 +420,12 @@ ensure_todo_mcp_bridge() {
 
     local http_status
     http_status="$(todo_local_mcp_probe_status "http://127.0.0.1:8766/mcp")"
-    if [ "$http_status" = "401" ]; then
+    if [ "$http_status" = "200" ]; then
         export TODO_LOCAL_MCP_URL="http://127.0.0.1:8766/mcp"
         export TODO_LOCAL_MCP_AVAILABLE=1 TODO_LOCAL_MCP_CONNECTED=1
-        echo "Todo MCP reverse bridge verified at $TODO_LOCAL_MCP_URL; unauthenticated access is rejected."
+        echo "Todo MCP initialize and tools/list handshake succeeded through the reverse bridge at $TODO_LOCAL_MCP_URL."
     else
-        echo "WARNING: Todo MCP reverse bridge did not return the expected HTTP 401 challenge (status $http_status). Todo MCP is disabled for this launch." >&2
+        echo "WARNING: Todo MCP reverse bridge did not complete an unauthenticated initialize/tools/list handshake (probe status $http_status). Todo MCP is disabled for this launch." >&2
         tail -n 12 "$HOME/.cache/globalskills/todo-mcp-bridge/bridge.log" 2>/dev/null | sed 's/^/  WSL relay: /' >&2
         powershell.exe -NoProfile -NonInteractive -Command '$root = Join-Path $env:LOCALAPPDATA "GlobalSkills\TodoMcpBridge"; $logFile = Join-Path $root "bridge.log"; if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Tail 12 }' 2>/dev/null | tr -d '\r' | sed 's/^/  Windows bridge: /' >&2
         echo "Check that Todo Desktop is running with todo.localMcpServer enabled." >&2

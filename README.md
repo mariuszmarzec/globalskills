@@ -63,14 +63,6 @@ networking). Only when that probe fails does it start the existing WSL-to-
 Windows bridge and expose the endpoint to OpenCode and Manul at
 `http://127.0.0.1:8766/mcp`.
 
-Export TODO_LOCAL_MCP_TOKEN in your shell (for example, from ~/.zshrc);
-alternatively, set it in ~/.config/opencode/todo-mcp.env. An already-exported
-token takes precedence:
-
-```bash
-export TODO_LOCAL_MCP_TOKEN='YOUR_TODO_DESKTOP_TOKEN'
-```
-
 On the next aicode launch:
 
 - The WSL relay listens on 127.0.0.1:8766 for OpenCode and Manul, and on the
@@ -82,16 +74,17 @@ On the next aicode launch:
   127.0.0.1:8765 MCP endpoint; Windows does not open an inbound bridge port.
 - The Windows helper forwards only HTTP GET/POST/DELETE requests to /mcp and
   rewrites Host/Origin headers for Todo's DNS-rebinding protection.
-- The launcher sends an unauthenticated probe and enables the OpenCode MCP entry
-  only after Todo rejects it with HTTP 401. Todo still validates the Bearer
-  token on every MCP request.
-- The current token is refreshed in ~/.manul/.env so unattended Manul tasks
-  can use the same MCP entry.
-- Manul's OpenCode adapter reloads the token from ~/.manul/.env for each task,
-  probes the bridge, and adds todo-local to the task-scoped config only when
-  the bridge is reachable. It verifies todo-local connected before starting
-  the task when that optional MCP was enabled; unrelated tasks continue when
-  Todo Desktop is unavailable.
+- The launcher sends an unauthenticated MCP `initialize` handshake followed by
+  the read-only `tools/list` request. HTTP 401/403 or any invalid/incomplete MCP
+  response is treated as unavailable; an HTTP status alone never marks Todo as
+  connected.
+- Todo Desktop MCP uses no bearer token. No Todo credential is loaded or passed
+  to OpenCode or persisted in the Manul runtime.
+- Manul probes the local endpoint with the same unauthenticated MCP handshake
+  and adds todo-local to the task-scoped config only when the handshake
+  succeeds. It verifies todo-local connected before starting a task when that
+  optional MCP was enabled; unrelated tasks continue when Todo Desktop is
+  unavailable.
 
 The Windows helper serializes Ensure operations, finds all connector processes
 for the target relay (even when bridge.json is missing or stale), and stops
@@ -144,7 +137,7 @@ to repository files.
 
 Manul has two independent Todo source adapters; enable them individually in `~/.manul/config.json` under `taskSources` (see [Manul config example](https://github.com/mariuszmarzec/manul/blob/main/skills/manul-github-bot/config.json.example) for the complete examples).
 
-- `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It queues active root tasks whose description contains a line beginning with `/manul`; the token is supplied by `TODO_LOCAL_MCP_TOKEN`.
+- `todo_local_mcp` connects to `http://127.0.0.1:8765/mcp` on native Linux/macOS and uses the WSL relay at `http://127.0.0.1:8766/mcp` only when direct loopback is unavailable. It uses no bearer token and queues active root tasks only after an unauthenticated MCP initialize/read-only tools-list handshake succeeds.
 - `todo_remote_mcp` talks to Fiteo's backend `/mcp` endpoint over HTTPS. It queues active root tasks shared with the configured numeric `manulUserId` using `EDITOR_AND_VIEWER` permission, but executes them only when `/manul` appears in the root description or a nested subtask. Use the dedicated `FITEO_MANUL_PAT` (never fall back to `FITEO_PAT`); Manul-created tasks and report subtasks are shared with `FITEO_MANUL_SHARE_USER_ID`.
 
 Set `allowReportOnly: true` on either Todo source to opt in to informational

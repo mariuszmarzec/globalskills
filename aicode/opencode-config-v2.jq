@@ -88,8 +88,7 @@ def migrate_mcp_server:
       type: "remote",
       url: "{env:TODO_LOCAL_MCP_URL}",
       oauth: false,
-      disabled: false,
-      headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
+      disabled: false
     }
     | .permissions = (
         (.permissions // [])

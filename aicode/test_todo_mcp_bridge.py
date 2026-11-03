@@ -205,10 +205,11 @@ class TodoMcpBridgeTests(unittest.TestCase):
         # while this launcher owns platform discovery and startup ordering.
         config_source = AICODE.with_name("opencode-config-v2.jq").read_text(encoding="utf-8")
         self.assertIn('url: "{env:TODO_LOCAL_MCP_URL}"', config_source)
-        self.assertIn("Bearer {env:TODO_LOCAL_MCP_TOKEN}", config_source)
+        self.assertNotIn("TODO_LOCAL_MCP_TOKEN", config_source)
+        self.assertIn("tools/list handshake", source)
         self.assertIn('http://127.0.0.1:8766/mcp', source)
         self.assertIn('http://127.0.0.1:8765/mcp', source)
-        self.assertIn('if [ "$http_status" = "401" ]; then', source)
+        self.assertIn('if [ "$http_status" = "200" ]; then', source)
         self.assertNotIn("18765", source)
         self.assertNotIn("observed_client_ip", source)
         self.assertLess(
