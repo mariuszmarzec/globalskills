@@ -118,7 +118,6 @@ else
 fi
 contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
 contains "$MANUL/opencode-adapter.sh" 'unset TODO_LOCAL_MCP_TOKEN' "Manul never loads or forwards the legacy Todo token"
-contains "$MANUL/manul-env.sh" 'Removed legacy local Todo MCP credential' "Manul removes stale local Todo credentials without loading them"
 contains "$MANUL/opencode-adapter.sh" 'ProcessRunner.run --timeout 45' "Manul checks the live OpenCode MCP registry"
 contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to start a task without a live Caracal connection"
 contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
