@@ -1,4 +1,4 @@
-# OpenCode V2 config merge for globalskills/aicode.
+# OpenCode's V2 config merge for globalskills/aicode.
 # Move legacy V1 named MCP entries into mcp.servers and normalize fields whose
 # spelling or meaning changed; preserve MCP-wide settings and prefer native V2.
 def migrate_mcp_server:
