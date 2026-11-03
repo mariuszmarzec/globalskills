@@ -110,7 +110,12 @@ else
 fi
 contains "$MANUL/manul-env.sh" 'FITEO_BASE_URL' "Manul persists the Fiteo backend base URL"
 contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes Fiteo credentials from disk for each task"
-contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "Manul injects Todo local MCP into the task-local OpenCode config when available"
+if grep -Fq '.mcp.servers["todo-local"]' "$MANUL/opencode-adapter.sh"; then
+  contains "$MANUL/opencode-adapter.sh" '.mcp.servers["todo-local"]' "Manul injects Todo local MCP into the task-local V2 config when available"
+  contains "$MANUL/opencode-adapter.sh" 'env.TODO_LOCAL_MCP_AVAILABLE' "Manul only injects Todo MCP after endpoint discovery"
+else
+  contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "legacy Manul injects Todo local MCP into the task-local OpenCode config when available"
+fi
 contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
 contains "$MANUL/opencode-adapter.sh" 'TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"' "Manul refreshes the Todo token from its runtime environment for each task"
 contains "$MANUL/manul-env.sh" 'TODO_LOCAL_MCP_TOKEN' "Manul persists Todo local MCP token for unattended tasks"
