@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 RUNTIMES = ("opencode", "copilot")
 REPOSITORY = "mariuszmarzec/globalskills"
@@ -195,7 +195,11 @@ def inventory(source: Path, runtime: str):
     if not (source / "skills").is_dir() or not (source / "agents").is_dir():
         raise InstallerError(f"{source} is not a Globalskills checkout")
     skills, agents = {}, {}
-    for folder in sorted(p for p in (source / "skills").iterdir() if p.is_dir() and not p.name.startswith(".")):
+    for folder in sorted((source / "skills").iterdir()):
+        if folder.is_symlink():
+            raise InstallerError(f"Skill directory is a symlink: {folder}")
+        if not folder.is_dir() or folder.name.startswith("."):
+            continue
         validate_skill(folder)
         files, modes = {}, {}
         for path in sorted(folder.rglob("*")):
@@ -208,6 +212,8 @@ def inventory(source: Path, runtime: str):
         digest = sha(json.dumps({key: sha(value) for key, value in files.items()}, sort_keys=True).encode())
         skills[folder.name] = {"name": folder.name, "target": folder.name, "files": files, "modes": modes, "digest": digest}
     for path in sorted((source / "agents").glob("*.md")):
+        if path.is_symlink():
+            raise InstallerError(f"Agent definition is a symlink: {path}")
         agent = render_agent(path, runtime)
         agents[agent["name"]] = agent
     return {"skills": skills, "agents": agents}
@@ -222,11 +228,23 @@ def runtime_roots(home: Path):
 
 
 def resource_base(root: Path, kind: str, item):
-    return root / item["target"] if kind == "skills" else root
+    if kind != "skills":
+        return root
+    target = safe_relative(item["target"])
+    if len(target.parts) != 1:
+        raise InstallerError(f"Unsafe skill destination name: {item['target']}")
+    return root / target
+
+
+def safe_relative(relative: str) -> Path:
+    path = PurePosixPath(relative)
+    if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
+        raise InstallerError(f"Unsafe relative resource path: {relative}")
+    return Path(*path.parts)
 
 
 def target_file(root: Path, kind: str, item, relative: str):
-    return resource_base(root, kind, item) / relative
+    return resource_base(root, kind, item) / safe_relative(relative)
 
 
 def symlink_in_path(root: Path, path: Path):
@@ -246,6 +264,12 @@ def file_hash(path: Path):
     if not path.is_file() or path.is_symlink():
         return None
     return sha(path.read_bytes())
+
+
+def file_mode(path: Path):
+    if not path.is_file() or path.is_symlink():
+        return None
+    return path.stat().st_mode & 0o777
 
 
 def load_manifest(path: Path):
@@ -298,16 +322,24 @@ def classify(root: Path, kind: str, item, previous):
             return "conflict", f"destination contains a symlink: {link}"
     previous_files = previous.get("files", {}) if previous else {}
     for relative, metadata in previous_files.items():
-        if file_hash(target_file(root, kind, item, relative)) != metadata["sha256"]:
-            return "conflict", f"local modification or deletion: {relative}"
+        installed = target_file(root, kind, item, relative)
+        if (
+            file_hash(installed) != metadata["sha256"]
+            or file_mode(installed) != metadata.get("mode", 0o644)
+        ):
+            return "conflict", f"local modification, permission change, or deletion: {relative}"
     for relative, data in item["files"].items():
         if relative in previous_files:
             continue
         destination = target_file(root, kind, item, relative)
-        if destination.exists() and file_hash(destination) != sha(data):
+        if destination.exists() and (
+            file_hash(destination) != sha(data)
+            or file_mode(destination) != item["modes"].get(relative, 0o644)
+        ):
             return "conflict", f"new upstream file collides with unmanaged local file: {destination}"
     changed = any(
         file_hash(target_file(root, kind, item, relative)) != sha(data)
+        or file_mode(target_file(root, kind, item, relative)) != item["modes"].get(relative, 0o644)
         for relative, data in item["files"].items()
     )
     changed = changed or bool(previous and set(previous_files) != set(item["files"]))
@@ -324,7 +356,7 @@ def backup_resource(state: Path, root: Path, kind: str, item, previous):
     destination.mkdir(parents=True, exist_ok=True)
     for relative in previous.get("files", {}):
         source = target_file(root, kind, item, relative)
-        output = destination / relative
+        output = destination / safe_relative(relative)
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, output)
     return backup_relative.as_posix()
@@ -386,7 +418,7 @@ def install_item(root: Path, kind: str, item, previous, state: Path, commit: str
                 if destination.is_file():
                     destination.unlink()
             for relative in previous.get("files", {}):
-                source_file = state / backup / relative
+                source_file = state / backup / safe_relative(relative)
                 destination = target_file(root, kind, item, relative)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_file, destination)
@@ -465,6 +497,7 @@ def install_or_update(args):
                 item = {"name": name, "target": previous.get("target", name), "files": {}, "modes": {}}
                 dirty = any(
                     file_hash(target_file(root, kind, item, relative)) != metadata["sha256"]
+                    or file_mode(target_file(root, kind, item, relative)) != metadata.get("mode", 0o644)
                     for relative, metadata in previous.get("files", {}).items()
                 )
                 if dirty:
@@ -522,14 +555,19 @@ def rollback(args):
         item = {"name": name, "target": record["target"], "files": {}, "modes": {}}
         for relative, metadata in record.get("files", {}).items():
             path = target_file(root, kind, item, relative)
-            if symlink_in_path(root, path) or file_hash(path) != metadata["sha256"]:
+            if (
+                symlink_in_path(root, path)
+                or file_hash(path) != metadata["sha256"]
+                or file_mode(path) != metadata.get("mode", 0o644)
+            ):
                 raise InstallerError(f"Refusing to overwrite local change: {path}")
-        backup = state / record["previous"]["backup"]
+        backup = state / safe_relative(record["previous"]["backup"])
         if not backup.is_dir():
             raise InstallerError(f"Missing rollback backup: {backup}")
         for relative in record["previous"].get("files", {}):
-            if not (backup / relative).is_file():
-                raise InstallerError(f"Incomplete rollback backup: {backup / relative}")
+            backup_file = backup / safe_relative(relative)
+            if not backup_file.is_file():
+                raise InstallerError(f"Incomplete rollback backup: {backup_file}")
     for runtime, kind, record in matches:
         root = roots[runtime][kind]
         item = {"name": name, "target": record["target"], "files": {}, "modes": {}}
@@ -538,9 +576,9 @@ def rollback(args):
             if path.is_file():
                 path.unlink()
         previous = record["previous"]
-        backup = state / previous["backup"]
+        backup = state / safe_relative(previous["backup"])
         for relative in previous.get("files", {}):
-            source_file = backup / relative
+            source_file = backup / safe_relative(relative)
             destination = target_file(root, kind, item, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, destination)

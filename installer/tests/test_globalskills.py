@@ -172,6 +172,22 @@ disable_model_invocation = false
         restored = self.home / ".agents" / "skills" / "sample-skill" / "SKILL.md"
         self.assertIn("first version", restored.read_text())
 
+    def test_source_permission_changes_are_installed_and_tracked(self):
+        source_script = self.source / "skills" / "sample-skill" / "scripts" / "run.sh"
+        source_script.chmod(0o755)
+        self.assertEqual(0, self.run_cli("install"))
+        installed = self.home / ".agents" / "skills" / "sample-skill" / "scripts" / "run.sh"
+        self.assertEqual(0o755, installed.stat().st_mode & 0o777)
+        source_script.chmod(0o644)
+        self.assertEqual(0, self.run_cli("update"))
+        self.assertEqual(0o644, installed.stat().st_mode & 0o777)
+
+    def test_manifest_paths_cannot_escape_managed_directories(self):
+        with self.assertRaises(globalskills.InstallerError):
+            globalskills.safe_relative("../outside")
+        with self.assertRaises(globalskills.InstallerError):
+            globalskills.safe_relative("/absolute/path")
+
     def test_check_does_not_write_or_create_destinations(self):
         self.assertEqual(1, self.run_cli("update", "--check"))
         self.assertFalse(self.home.exists())

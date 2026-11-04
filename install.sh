@@ -141,8 +141,7 @@ if [ -f "$AICODE_SOURCE" ]; then
   fi
 fi
 
-echo "Done. OpenCode skills: $HOME/.agents/skills"
-echo "Done. Copilot skills: $HOME/.copilot/skills"
+echo "Done. Shared skills (OpenCode, Copilot, Manul): $HOME/.agents/skills"
 echo "Done. OpenCode agents: $HOME/.config/opencode/agents"
 echo "Done. Copilot agents: $HOME/.copilot/agents"
 echo "Run 'globalskills status' to inspect installed resources."
