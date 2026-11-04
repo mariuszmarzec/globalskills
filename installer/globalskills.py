@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
-RUNTIMES = ("opencode", "copilot")
+RUNTIMES = ("opencode", "copilot", "manul")
 REPOSITORY = "mariuszmarzec/globalskills"
 
 
@@ -154,9 +154,15 @@ def render_agent(path: Path, runtime: str):
     description = metadata.get("description")
     if name != path.stem or not isinstance(description, str) or not description.strip():
         raise InstallerError(f"{path}: id must match filename and description is required")
-    config = metadata.get(runtime)
-    if not isinstance(config, dict):
-        raise InstallerError(f"{path}: missing [{runtime}] config")
+    if runtime == "manul":
+        # Manul adapters strip YAML frontmatter before prepending a role prompt.
+        # Keep this compatibility output free of the canonical TOML metadata.
+        frontmatter = {"name": name, "description": description}
+        target = f"{name}.md"
+    else:
+        config = metadata.get(runtime)
+        if not isinstance(config, dict):
+            raise InstallerError(f"{path}: missing [{runtime}] config")
     if runtime == "opencode":
         allowed = {"mode", "model", "steps", "permissions"}
         unsupported = set(config) - allowed
@@ -185,7 +191,7 @@ def render_agent(path: Path, runtime: str):
             "permissions": permission_rules,
         }
         target = f"{name}.md"
-    else:
+    elif runtime == "copilot":
         frontmatter = {
             "name": config.get("name", name),
             "description": description,
@@ -263,6 +269,7 @@ def runtime_roots(home: Path):
         "shared": {"skills": home / ".agents" / "skills"},
         "opencode": {"agents": home / ".config" / "opencode" / "agents"},
         "copilot": {"agents": home / ".copilot" / "agents"},
+        "manul": {"agents": home / ".agents" / "agents"},
     }
 
 

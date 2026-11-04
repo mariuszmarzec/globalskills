@@ -1,6 +1,6 @@
 ---
 name: globalskills-repository
-description: Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository.
+description: Manage the global skills and canonical agent sources in ~/.globalskills. Use when creating or updating skills and runtime-neutral agent definitions, or configuring their generated OpenCode, Copilot, and Manul installations.
 ---
 
 # Global Skills Repository
@@ -28,9 +28,13 @@ runtime-specific Markdown format:
 - Shared skills: `~/.agents/skills/` (discovered by both OpenCode and GitHub Copilot in VS Code, and used by Manul)
 - OpenCode agents: `~/.config/opencode/agents/`
 - Copilot agents: `~/.copilot/agents/`
+- Manul role definitions: `~/.agents/agents/` (Manul adapters strip YAML frontmatter before prepending the shared prompt body)
 
 The generated files are managed output. Make prompt and metadata changes in
-`agents/<name>.md`, not in generated runtime files. The OpenCode adapter emits
+`agents/<name>.md`, not in generated runtime files. Manul's OpenClaw, Codex, and
+Claude Code adapters read role files from `~/.agents/agents/` and strip their
+YAML frontmatter; OpenCode uses its native generated agents and Copilot uses
+its own custom-agent format. The OpenCode adapter emits
 V2 `permissions` rules and current fields; the Copilot adapter emits Copilot
 custom-agent frontmatter. OpenCode V1-only fields such as `permission` and
 per-agent `temperature` are not copied into V2 output.

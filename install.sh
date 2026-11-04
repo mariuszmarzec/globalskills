@@ -144,4 +144,5 @@ fi
 echo "Done. Shared skills (OpenCode, Copilot, Manul): $HOME/.agents/skills"
 echo "Done. OpenCode agents: $HOME/.config/opencode/agents"
 echo "Done. Copilot agents: $HOME/.copilot/agents"
+echo "Done. Manul role definitions: $HOME/.agents/agents"
 echo "Run 'globalskills status' to inspect installed resources."

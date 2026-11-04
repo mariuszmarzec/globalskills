@@ -12,7 +12,7 @@ wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszm
 ```
 
 This clones/updates `~/.globalskills`, installs native skills and generates
-agents for OpenCode and GitHub Copilot, then prepares the standalone Manul
+agents for OpenCode, GitHub Copilot, and Manul, then prepares the standalone Manul
 source at `~/.manul-repo` and runtime under `~/.manul`.
 
 Native install destinations:
@@ -20,13 +20,15 @@ Native install destinations:
 - `~/.agents/skills` — one shared skills copy discovered by OpenCode, GitHub Copilot in VS Code, and Manul.
 - `~/.config/opencode/agents` — generated OpenCode agent files.
 - `~/.copilot/agents` — generated GitHub Copilot agent files.
+- `~/.agents/agents` — generated YAML-frontmatter role files consumed by Manul's OpenClaw, Codex, and Claude Code adapters.
 - `~/.local/bin/globalskills` — CLI entry point (single-file symlink).
 - `~/.aicode/aicode` — maintained launcher (single-file symlink; existing launchers are backed up).
 - `~/.manul-repo` — standalone Manul source; runtime state, configuration, database, logs, and workspaces remain under `~/.manul`.
 
 Skills are copied as complete directories, including scripts and references.
 Agents are generated from one canonical source file into each runtime's native
-Markdown format. Installed resources are tracked in
+Markdown format. Manul receives YAML-frontmatter role files at `~/.agents/agents`,
+which its adapters strip before using the shared prompt body. Installed resources are tracked in
 `~/.local/state/globalskills/manifest.json` (or
 `$XDG_STATE_HOME/globalskills/manifest.json`).
 
@@ -193,7 +195,7 @@ Both adapters preserve Todo's returned subtask order and pass the whole nested t
 
 | Skill | Description |
 |-------|-------------|
-| `agent-orchestration` | Rules for the Globalskills multi-agent orchestration system across OpenCode and GitHub Copilot. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles. |
+| `agent-orchestration` | Rules for the Globalskills multi-agent orchestration system across OpenCode, GitHub Copilot, and Manul. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles. |
 | `ai-commit-attribution` | Preserve the human developer as the Git commit author and add a Co-authored-by trailer to every AI-created commit. Use whenever creating a Git commit. Never change Git author config, never use --author, and always append the OpenCode <opencode@ai.local> trailer (or the identity of the active agent outside OpenCode). |
 | `android-clean-architecture` | Android clean architecture patterns for layered applications using Kotlin, coroutines, caching strategies, MVI state management, and reactive programming. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
@@ -219,7 +221,7 @@ Both adapters preserve Todo's returned subtask order and pass the whole nested t
 
 ## Agents (multi-agent orchestration)
 
-Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native runtime files; never edit generated files directly. OpenCode agents use the V2 frontmatter schema, including ordered `permissions` rules; deprecated V1 `permission` and per-agent `temperature` fields are not emitted. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
+Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native OpenCode V2, Copilot custom-agent, and Manul YAML-frontmatter files; Manul adapters strip the YAML frontmatter and prepend the same prompt body. Never edit generated files directly. OpenCode agents use the V2 frontmatter schema, including ordered `permissions` rules; deprecated V1 `permission` and per-agent `temperature` fields are not emitted. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|

@@ -79,6 +79,10 @@ disable_model_invocation = false
         self.assertFalse((self.home / ".copilot" / "skills").exists())
         opencode = (self.home / ".config" / "opencode" / "agents" / "reviewer.md").read_text()
         copilot = (self.home / ".copilot" / "agents" / "reviewer.agent.md").read_text()
+        manul = (self.home / ".agents" / "agents" / "reviewer.md").read_text()
+        self.assertTrue(manul.startswith('---\nname: "reviewer"'))
+        self.assertNotIn("+++", manul)
+        self.assertIn("Never modify code.", manul)
         self.assertIn('model: "litellm/deepseek-v4-flash-free"', opencode)
         self.assertIn('permissions:\n  - action: "edit"\n    resource: "*"\n    effect: "deny"\n  - action: "shell"\n    resource: "*"\n    effect: "deny"', opencode)
         self.assertNotIn("\npermission:", opencode)
@@ -88,7 +92,7 @@ disable_model_invocation = false
         self.assertIn("Never modify code.", copilot)
         data = self.manifest()
         self.assertIn("sample-skill", data["shared"]["skills"])
-        for runtime in ("opencode", "copilot"):
+        for runtime in ("opencode", "copilot", "manul"):
             self.assertIn("reviewer", data["runtimes"][runtime]["agents"])
 
     def test_install_is_idempotent_and_status_is_clean(self):
@@ -119,6 +123,16 @@ disable_model_invocation = false
         self.assertTrue((self.home / ".agents" / "skills" / "sample-skill" / "SKILL.md").is_file())
         self.assertTrue((self.home / ".copilot" / "agents" / "reviewer.agent.md").is_file())
         self.assertFalse((self.home / ".config" / "opencode" / "agents" / "reviewer.md").exists())
+        self.assertFalse((self.home / ".agents" / "agents" / "reviewer.md").exists())
+
+    def test_manul_runtime_generates_yaml_frontmatter_for_role_prompt_stripping(self):
+        rendered = globalskills.render_agent(self.source / "agents" / "reviewer.md", "manul")
+        output = rendered["files"]["reviewer.md"].decode()
+        self.assertTrue(output.startswith('---\nname: "reviewer"'))
+        self.assertIn('description: "Reviews code without changing it."', output)
+        self.assertNotIn("+++", output)
+        _, body = output.split("\n---\n\n", 1)
+        self.assertEqual("You are the Reviewer. Never modify code.\n", body)
 
     def test_status_detects_not_yet_installed_source_resources(self):
         self.assertEqual(1, self.run_cli("status"))

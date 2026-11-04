@@ -1,7 +1,7 @@
 ---
 name: agent-orchestration
 
-description: Rules for the Globalskills multi-agent orchestration system across OpenCode and GitHub Copilot. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles.
+description: Rules for the Globalskills multi-agent orchestration system across OpenCode, GitHub Copilot, and Manul. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles.
 ---
 
 # Agent Orchestration
