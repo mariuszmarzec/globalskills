@@ -10,7 +10,6 @@ access = "full"
 mode = "all"
 model = "litellm/deepseek-v4-flash-free"
 steps = 60
-temperature = 0.2
 
 [copilot]
 user_invocable = true

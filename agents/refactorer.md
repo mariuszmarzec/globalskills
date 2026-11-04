@@ -10,7 +10,6 @@ access = "full"
 mode = "all"
 model = "litellm/groq-qwen3"
 steps = 40
-temperature = 0.2
 
 [copilot]
 user_invocable = true

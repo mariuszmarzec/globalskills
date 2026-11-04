@@ -219,7 +219,7 @@ Both adapters preserve Todo's returned subtask order and pass the whole nested t
 
 ## Agents (multi-agent orchestration)
 
-Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native runtime files; never edit generated files directly. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
+Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native runtime files; never edit generated files directly. OpenCode agents use the V2 frontmatter schema, including ordered `permissions` rules; deprecated V1 `permission` and per-agent `temperature` fields are not emitted. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|

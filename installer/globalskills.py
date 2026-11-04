@@ -126,9 +126,20 @@ def yaml_lines(mapping, indent=0):
         if isinstance(value, dict):
             output.append(f"{pad}{key}:")
             output.extend(yaml_lines(value, indent + 2))
-        elif isinstance(value, list) and value:
+        elif isinstance(value, list):
             output.append(f"{pad}{key}:")
-            output.extend(f"{pad}  - {yaml_value(item)}" for item in value)
+            for item in value:
+                if isinstance(item, dict):
+                    entries = list(item.items())
+                    if not entries:
+                        output.append(f"{pad}  - {{}}")
+                        continue
+                    first_key, first_value = entries[0]
+                    output.append(f"{pad}  - {first_key}: {yaml_value(first_value)}")
+                    for nested_key, nested_value in entries[1:]:
+                        output.append(f"{pad}    {nested_key}: {yaml_value(nested_value)}")
+                else:
+                    output.append(f"{pad}  - {yaml_value(item)}")
         else:
             output.append(f"{pad}{key}: {yaml_value(value)}")
     return output
@@ -144,7 +155,32 @@ def render_agent(path: Path, runtime: str):
     if not isinstance(config, dict):
         raise InstallerError(f"{path}: missing [{runtime}] config")
     if runtime == "opencode":
-        frontmatter = {"description": description, **config}
+        allowed = {"mode", "model", "steps", "permissions"}
+        unsupported = set(config) - allowed
+        if unsupported:
+            raise InstallerError(
+                f"{path}: unsupported OpenCode V2 agent fields: {', '.join(sorted(unsupported))}"
+            )
+        permissions = config.get("permissions", {})
+        if not isinstance(permissions, dict):
+            raise InstallerError(f"{path}: [opencode.permissions] must be a table")
+        action_aliases = {"bash": "shell", "task": "subagent"}
+        permission_rules = []
+        for action, effect in permissions.items():
+            if effect not in ("allow", "ask", "deny"):
+                raise InstallerError(f"{path}: invalid OpenCode permission effect for {action}: {effect}")
+            permission_rules.append({
+                "action": action_aliases.get(action, action),
+                "resource": "*",
+                "effect": effect,
+            })
+        frontmatter = {
+            "description": description,
+            **{key: value for key, value in config.items() if key in ("mode", "model", "steps")},
+            # The V2 field forces the current schema even for agents with no
+            # explicit rules; legacy permission and temperature are not emitted.
+            "permissions": permission_rules,
+        }
         target = f"{name}.md"
     else:
         frontmatter = {

@@ -10,9 +10,8 @@ access = "read-only"
 mode = "all"
 model = "litellm/big-pickle"
 steps = 40
-temperature = 0
 
-[opencode.permission]
+[opencode.permissions]
 edit = "deny"
 
 [copilot]

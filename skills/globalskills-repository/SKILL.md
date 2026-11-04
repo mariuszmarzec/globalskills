@@ -30,7 +30,10 @@ runtime-specific Markdown format:
 - Copilot agents: `~/.copilot/agents/`
 
 The generated files are managed output. Make prompt and metadata changes in
-`agents/<name>.md`, not in generated runtime files.
+`agents/<name>.md`, not in generated runtime files. The OpenCode adapter emits
+V2 `permissions` rules and current fields; the Copilot adapter emits Copilot
+custom-agent frontmatter. OpenCode V1-only fields such as `permission` and
+per-agent `temperature` are not copied into V2 output.
 
 Install or synchronize resources with:
 

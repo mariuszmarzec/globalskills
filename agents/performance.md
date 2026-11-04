@@ -10,9 +10,8 @@ access = "review-before-edit"
 mode = "all"
 model = "litellm/gemini-3.6-flash"
 steps = 40
-temperature = 0
 
-[opencode.permission]
+[opencode.permissions]
 edit = "ask"
 
 [copilot]

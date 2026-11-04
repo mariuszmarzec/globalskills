@@ -10,7 +10,6 @@ access = "full"
 mode = "all"
 model = "litellm/groq-llama-8b"
 steps = 20
-temperature = 0.2
 
 [copilot]
 user_invocable = true

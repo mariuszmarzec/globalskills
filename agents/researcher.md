@@ -11,7 +11,7 @@ mode = "all"
 model = "litellm/gemini-3.1-flash-lite"
 steps = 20
 
-[opencode.permission]
+[opencode.permissions]
 edit = "deny"
 
 [copilot]

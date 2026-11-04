@@ -11,7 +11,7 @@ mode = "all"
 model = "litellm/big-pickle"
 steps = 40
 
-[opencode.permission]
+[opencode.permissions]
 edit = "ask"
 
 [copilot]

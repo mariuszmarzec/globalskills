@@ -47,7 +47,7 @@ model = "litellm/deepseek-v4-flash-free"
 steps = 30
 temperature = 0
 
-[opencode.permission]
+[opencode.permissions]
 edit = "deny"
 bash = "deny"
 
@@ -81,7 +81,9 @@ disable_model_invocation = false
         opencode = (self.home / ".config" / "opencode" / "agents" / "reviewer.md").read_text()
         copilot = (self.home / ".copilot" / "agents" / "reviewer.agent.md").read_text()
         self.assertIn('model: "litellm/deepseek-v4-flash-free"', opencode)
-        self.assertIn('edit: "deny"', opencode)
+        self.assertIn('permissions:\n  - action: "edit"\n    resource: "*"\n    effect: "deny"\n  - action: "shell"\n    resource: "*"\n    effect: "deny"', opencode)
+        self.assertNotIn("\npermission:", opencode)
+        self.assertNotIn("\ntemperature:", opencode)
         self.assertIn('tools:\n  - "read"\n  - "search"', copilot)
         self.assertNotIn("litellm/", copilot)
         self.assertIn("Never modify code.", copilot)
@@ -94,6 +96,24 @@ disable_model_invocation = false
         self.assertEqual(0, self.run_cli("install"))
         self.assertEqual(0, self.run_cli("install"))
         self.assertEqual(0, self.run_cli("status"))
+
+    def test_opencode_v2_permission_aliases_are_converted(self):
+        rendered = globalskills.render_agent(self.source / "agents" / "reviewer.md", "opencode")
+        output = rendered["files"]["reviewer.md"].decode()
+        self.assertIn('action: "shell"', output)
+        self.assertNotIn('action: "bash"', output)
+
+    def test_opencode_v2_agents_without_rules_still_use_v2_frontmatter(self):
+        self.write_agent()
+        path = self.source / "agents" / "reviewer.md"
+        text = path.read_text()
+        text = text.replace('[opencode.permissions]\nedit = "deny"\nbash = "deny"\n', '')
+        path.write_text(text, encoding="utf-8")
+        rendered = globalskills.render_agent(path, "opencode")
+        output = rendered["files"]["reviewer.md"].decode()
+        self.assertIn("permissions: []", output)
+        self.assertNotIn("temperature:", output)
+        self.assertNotIn("\npermission:", output)
 
     def test_runtime_specific_install_still_installs_shared_skills(self):
         self.assertEqual(0, self.run_cli("install", "--runtime", "copilot"))

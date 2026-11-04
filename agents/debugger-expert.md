@@ -10,7 +10,6 @@ access = "full"
 mode = "all"
 model = "litellm/big-pickle"
 steps = 80
-temperature = 0.2
 
 [copilot]
 user_invocable = true
