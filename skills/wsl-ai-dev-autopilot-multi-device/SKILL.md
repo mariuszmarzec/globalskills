@@ -1359,7 +1359,7 @@ Verify:
 * Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
 * Native OpenCode and Copilot agent files are generated and readable (`~/.config/opencode/agents/orchestrator.md`, `~/.copilot/agents/orchestrator.agent.md`).
-* Skills are installed as native copies for OpenCode/Manul (`~/.agents/skills/`) and Copilot (`~/.copilot/skills/`).
+* One shared native skills copy is installed at `~/.agents/skills/` for OpenCode, Copilot, and Manul.
 * Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
 * `opencode mcp list` reports `caracal-rag` connected when launched through `aicode`.
 * The OpenClaw ACPX config points the `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`.
