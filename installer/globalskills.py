@@ -127,6 +127,9 @@ def yaml_lines(mapping, indent=0):
             output.append(f"{pad}{key}:")
             output.extend(yaml_lines(value, indent + 2))
         elif isinstance(value, list):
+            if not value:
+                output.append(f"{pad}{key}: []")
+                continue
             output.append(f"{pad}{key}:")
             for item in value:
                 if isinstance(item, dict):
