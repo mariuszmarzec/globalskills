@@ -1,10 +1,22 @@
----
-description: Implements features, modifies code, writes and runs tests, fixes implementation issues. The primary execution agent.
-mode: all
-model: litellm/groq-llama-70b
-steps: 40
-temperature: 0.2
----
++++
+id = "coder"
+description = "Implements features, modifies code, writes and runs tests, fixes implementation issues. The primary execution agent."
+
+[globalskills]
+model_tier = "normal"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/groq-llama-70b"
+steps = 40
+temperature = 0.2
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Coder**. You implement and verify code changes.
 

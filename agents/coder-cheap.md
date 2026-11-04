@@ -1,10 +1,22 @@
----
-description: Coder at CHEAP tier. Fastest/cheapest model for trivial single-file tasks: typo fixes, renames, adding simple fields, small obvious bugs. Escalate to coder if it gets stuck.
-mode: all
-model: litellm/groq-llama-8b
-steps: 20
-temperature: 0.2
----
++++
+id = "coder-cheap"
+description = "Coder at CHEAP tier. Fastest/cheapest model for trivial single-file tasks: typo fixes, renames, adding simple fields, small obvious bugs. Escalate to coder if it gets stuck."
+
+[globalskills]
+model_tier = "cheap"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/groq-llama-8b"
+steps = 20
+temperature = 0.2
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Coder (CHEAP tier)**. You handle trivial, well-scoped,
 single-file changes as fast and cheaply as possible.

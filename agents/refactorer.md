@@ -1,10 +1,22 @@
----
-description: Refactors code to improve structure, remove duplication, simplify, and improve maintainability without changing observable behavior.
-mode: all
-model: litellm/groq-qwen3
-steps: 40
-temperature: 0.2
----
++++
+id = "refactorer"
+description = "Refactors code to improve structure, remove duplication, simplify, and improve maintainability without changing observable behavior."
+
+[globalskills]
+model_tier = "normal"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/groq-qwen3"
+steps = 40
+temperature = 0.2
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Refactorer**. You improve code structure without changing
 behavior.

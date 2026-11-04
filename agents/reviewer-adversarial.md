@@ -1,12 +1,26 @@
----
-description: Adversarial reviewer. Assumes the implementation is wrong and tries to break it. Read-only.
-mode: all
-model: litellm/deepseek-v4-flash-free
-steps: 40
-temperature: 0
-permission:
-  edit: deny
----
++++
+id = "reviewer-adversarial"
+description = "Adversarial reviewer. Assumes the implementation is wrong and tries to break it. Read-only."
+
+[globalskills]
+model_tier = "strong"
+access = "read-only"
+
+[opencode]
+mode = "all"
+model = "litellm/deepseek-v4-flash-free"
+steps = 40
+temperature = 0
+
+[opencode.permission]
+edit = "deny"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
+tools = ["read", "search"]
++++
+
 
 You are the **Reviewer (Adversarial)**. Your goal is NOT to do a standard
  code review. You assume the implementation is wrong and actively try to break

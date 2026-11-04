@@ -13,19 +13,43 @@ Always create new skills in the global skills repository at ~/.globalskills/skil
 - If a skill already exists in another location, move or mirror it into ~/.globalskills/skills when appropriate.
 - When a user asks to create or update a skill, use the global skills repository as the default destination.
 
-## Installation (linking to ~/.agents/skills)
+## Installation and distribution
 
-Skills are discovered by OpenCode from `~/.agents/skills/`. To set up the symlink:
+Keep source files only in the canonical repository:
+
+- Skills: `~/.globalskills/skills/<skill-name>/`
+- Agents: `~/.globalskills/agents/<agent-name>.md`
+
+Do not create runtime symlinks to the skills or agents directories. The
+Globalskills installer copies complete skills into the native locations for
+OpenCode and GitHub Copilot, and compiles each canonical agent file into the
+runtime-specific Markdown format:
+
+- Shared skills: `~/.agents/skills/` (discovered by both OpenCode and GitHub Copilot in VS Code, and used by Manul)
+- OpenCode agents: `~/.config/opencode/agents/`
+- Copilot agents: `~/.copilot/agents/`
+
+The generated files are managed output. Make prompt and metadata changes in
+`agents/<name>.md`, not in generated runtime files.
+
+Install or synchronize resources with:
 
 ```bash
-mkdir -p ~/.agents && ln -s ~/.globalskills/skills ~/.agents/skills
+globalskills install
+globalskills update --check
+globalskills update
+globalskills status
+globalskills rollback skill:<name> --runtime all
+globalskills rollback agent:<name> --runtime all
 ```
 
-Or use the install script (clones repo + creates symlink):
-
-```bash
-wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszmarzec/globalskills/master/install.sh && bash /tmp/install-globalskills.sh
-```
+The installer records source commits and installed-file hashes in
+`~/.local/state/globalskills/manifest.json` (or
+`$XDG_STATE_HOME/globalskills/manifest.json`). It preserves extra local files,
+refuses to overwrite locally modified managed files, and stores previous
+versions for rollback. Only the individual `~/.local/bin/globalskills` and
+`~/.aicode/aicode` launcher files may be symlinks; do not symlink whole
+runtime directories.
 
 ## Guidance
 - Keep skill names descriptive and scoped to their purpose.

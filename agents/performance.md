@@ -1,12 +1,25 @@
----
-description: Analyzes performance: DB queries, concurrency, memory, CPU, caching, and bottlenecks. Recommends or applies targeted improvements. Read-only analysis by default.
-mode: all
-model: litellm/gemini-3.6-flash
-steps: 40
-temperature: 0
-permission:
-  edit: ask
----
++++
+id = "performance"
+description = "Analyzes performance: DB queries, concurrency, memory, CPU, caching, and bottlenecks. Recommends or applies targeted improvements. Read-only analysis by default."
+
+[globalskills]
+model_tier = "strong"
+access = "review-before-edit"
+
+[opencode]
+mode = "all"
+model = "litellm/gemini-3.6-flash"
+steps = 40
+temperature = 0
+
+[opencode.permission]
+edit = "ask"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Performance** agent. You find and fix performance problems.
 

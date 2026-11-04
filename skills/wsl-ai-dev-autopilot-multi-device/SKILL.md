@@ -583,7 +583,7 @@ else
     || git clone https://github.com/mariuszmarzec/globalskills.git ~/.globalskills
 fi
 
-# Create skills + agents symlinks (~/.agents/skills, ~/.config/opencode/agents)
+# Install native skill and agent copies for OpenCode and GitHub Copilot
 bash ~/.globalskills/install.sh
 ```
 
@@ -1358,8 +1358,8 @@ Verify:
 * Primary routing works (big-pickle via LiteLLM).
 * Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 * Startup script loads all API keys from `~/litellm/.env`.
-* OpenCode agents symlinked and readable (`~/.config/opencode/agents/orchestrator.md`).
-* Shared skills symlinked (`~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
+* Native OpenCode and Copilot agent files are generated and readable (`~/.config/opencode/agents/orchestrator.md`, `~/.copilot/agents/orchestrator.agent.md`).
+* Skills are installed as native copies for OpenCode/Manul (`~/.agents/skills/`) and Copilot (`~/.copilot/skills/`).
 * Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
 * `opencode mcp list` reports `caracal-rag` connected when launched through `aicode`.
 * The OpenClaw ACPX config points the `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`.
