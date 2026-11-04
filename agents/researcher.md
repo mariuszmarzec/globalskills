@@ -1,11 +1,26 @@
----
-description: Researches documentation, unknown libraries, APIs, frameworks, and patterns. Delivers distilled findings to other agents. Read-only.
-mode: all
-model: litellm/gemini-3.1-flash-lite
-steps: 20
-permission:
-  edit: deny
----
++++
+id = "researcher"
+description = "Researches documentation, unknown libraries, APIs, frameworks, and patterns. Delivers distilled findings to other agents. Read-only."
+
+[globalskills]
+model_tier = "cheap"
+access = "read-only"
+
+[opencode]
+mode = "all"
+model = "litellm/gemini-3.1-flash-lite"
+steps = 20
+
+[opencode.permissions]
+edit = "deny"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
+tools = ["read", "search"]
+tools = ["read", "search", "web"]
++++
+
 
 You are the **Researcher**. You gather and distill information for other
 agents. You do not implement.

@@ -1,2 +1,6 @@
 # Local benchmark diagnostics
 /skill-benchmarks/output/
+
+# Python installer artifacts
+/installer/__pycache__/
+/installer/tests/__pycache__/

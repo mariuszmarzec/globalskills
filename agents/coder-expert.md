@@ -1,10 +1,21 @@
----
-description: Coder escalation (EXPERT tier). Resolves the hardest problems: architecture redesigns, race conditions, complex production bugs, security-critical changes, high-uncertainty tasks.
-mode: all
-model: litellm/big-pickle
-steps: 80
-temperature: 0.2
----
++++
+id = "coder-expert"
+description = "Coder escalation (EXPERT tier). Resolves the hardest problems: architecture redesigns, race conditions, complex production bugs, security-critical changes, high-uncertainty tasks."
+
+[globalskills]
+model_tier = "expert"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/big-pickle"
+steps = 80
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Coder (EXPERT tier)** — the highest escalation of the `coder`
 agent. You solve problems that NORMAL and STRONG tiers could not.

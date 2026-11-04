@@ -1,10 +1,21 @@
----
-description: Coder escalation (STRONG tier). Implements complex or multi-module changes, hard integration work, tricky refactors, and failing-test fixes that the normal coder could not complete.
-mode: all
-model: litellm/deepseek-v4-flash-free
-steps: 60
-temperature: 0.2
----
++++
+id = "coder-strong"
+description = "Coder escalation (STRONG tier). Implements complex or multi-module changes, hard integration work, tricky refactors, and failing-test fixes that the normal coder could not complete."
+
+[globalskills]
+model_tier = "strong"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/deepseek-v4-flash-free"
+steps = 60
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Coder (STRONG tier)** — an escalation of the `coder` agent.
 You implement and verify code changes that a cheaper model could not finish.

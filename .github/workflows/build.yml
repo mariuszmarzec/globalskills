@@ -29,6 +29,7 @@ env:
     aicode/test_opencode_acp_caracal.sh
     skills/globalskills-repository/test_agent_modes.sh
     skills/globalskills-repository/test_manul_human_mode_integration.sh
+    installer/test_globalskills.sh
 
 jobs:
   verify-macos:
@@ -68,6 +69,8 @@ jobs:
           done
           bash -n aicode/aicode
           bash -n aicode/chroma-lifecycle.sh
+          bash -n bin/globalskills
+          bash -n installer/test_globalskills.sh
           while IFS= read -r script; do bash -n "$script"; done < <(find "$MANUL_CANONICAL_DIR" -maxdepth 1 -type f -name '*.sh' -print)
       - name: Run native Todo MCP and adapter integration tests
         shell: bash
@@ -108,7 +111,7 @@ jobs:
             echo "bash -n $script"
             bash -n "$script"
           done
-          for script in aicode/aicode aicode/chroma-lifecycle.sh aicode/test_chroma_lifecycle.sh aicode/openclaw-config-snapshot.sh aicode/test_openclaw_snapshot.sh; do
+          for script in aicode/aicode aicode/chroma-lifecycle.sh aicode/test_chroma_lifecycle.sh aicode/openclaw-config-snapshot.sh aicode/test_openclaw_snapshot.sh bin/globalskills installer/test_globalskills.sh; do
             echo "bash -n $script"
             bash -n "$script"
           done

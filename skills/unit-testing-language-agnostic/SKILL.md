@@ -1,3 +1,8 @@
+---
+name: unit-testing-language-agnostic
+description: Language-agnostic unit and integration testing principles. Use when designing, writing, or reviewing automated tests in any language or framework.
+---
+
 # Unit Testing Guidelines (Language Agnostic)
 
 ## Overview

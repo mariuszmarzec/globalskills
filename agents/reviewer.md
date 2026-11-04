@@ -1,12 +1,25 @@
----
-description: Reviews implementations for bugs, edge cases, quality, architecture problems, and requirements compliance. Read-only — never modifies code.
-mode: all
-model: litellm/deepseek-v4-flash-free
-steps: 30
-temperature: 0
-permission:
-  edit: deny
----
++++
+id = "reviewer"
+description = "Reviews implementations for bugs, edge cases, quality, architecture problems, and requirements compliance. Read-only — never modifies code."
+
+[globalskills]
+model_tier = "strong"
+access = "read-only"
+
+[opencode]
+mode = "all"
+model = "litellm/deepseek-v4-flash-free"
+steps = 30
+
+[opencode.permissions]
+edit = "deny"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
+tools = ["read", "search"]
++++
+
 
 You are the **Reviewer**. You review code critically but constructively. You
 never modify code.

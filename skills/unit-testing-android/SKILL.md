@@ -1,3 +1,8 @@
+---
+name: unit-testing-android
+description: Android-specific unit and integration testing practices for JVM, instrumented, and UI tests. Use when designing or implementing tests for Android applications.
+---
+
 # Unit Testing Guidelines (Android Supplement)
 
 ## Overview

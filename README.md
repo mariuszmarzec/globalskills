@@ -1,8 +1,9 @@
 # Global Skills Repository
 
-Shared skills and OpenCode agents for the multi-agent orchestration system.
-Each skill lives in its own folder with a `SKILL.md` definition file; each
-agent lives in `agents/<name>.md`.
+Shared Agent Skills and canonical multi-runtime agent definitions.
+Each skill lives in its own folder with a `SKILL.md` definition file. Each agent
+has one canonical `agents/<name>.md` source; the installer generates native
+OpenCode and GitHub Copilot agent files from that source.
 
 ## Quick Install
 
@@ -10,24 +11,49 @@ agent lives in `agents/<name>.md`.
 wget -qO /tmp/install-globalskills.sh https://raw.githubusercontent.com/mariuszmarzec/globalskills/master/install.sh && bash /tmp/install-globalskills.sh
 ```
 
-This clones/updates `~/.globalskills` and the standalone Manul source at `~/.manul-repo`, prepares the Manul runtime under `~/.manul`, and symlinks:
+This clones/updates `~/.globalskills`, installs native skills and generates
+agents for OpenCode, GitHub Copilot, and Manul, then prepares the standalone Manul
+source at `~/.manul-repo` and runtime under `~/.manul`.
 
-- `~/.agents/skills -> ~/.globalskills/skills`
-- `~/.config/opencode/agents -> ~/.globalskills/agents`
-- `~/.aicode/aicode -> ~/.globalskills/aicode/aicode` (the installer backs up an existing launcher instead of overwriting it)
-- `~/.manul-repo` — standalone Manul source; runtime state, configuration, database, logs, and workspaces remain under `~/.manul`
+Native install destinations:
 
-Skills are loaded by OpenCode via `skills.paths` in `~/.config/opencode/opencode.json`.
-Agents are discovered from `~/.config/opencode/agents/` (the symlink above).
+- `~/.agents/skills` — one shared skills copy discovered by OpenCode, GitHub Copilot in VS Code, and Manul.
+- `~/.config/opencode/agents` — generated OpenCode agent files.
+- `~/.copilot/agents` — generated GitHub Copilot agent files.
+- `~/.agents/agents` — generated YAML-frontmatter role files consumed by Manul's OpenClaw, Codex, and Claude Code adapters.
+- `~/.local/bin/globalskills` — CLI entry point (single-file symlink).
+- `~/.aicode/aicode` — maintained launcher (single-file symlink; existing launchers are backed up).
+- `~/.manul-repo` — standalone Manul source; runtime state, configuration, database, logs, and workspaces remain under `~/.manul`.
+
+Skills are copied as complete directories, including scripts and references.
+Agents are generated from one canonical source file into each runtime's native
+Markdown format. Manul receives YAML-frontmatter role files at `~/.agents/agents`,
+which its adapters strip before using the shared prompt body. Installed resources are tracked in
+`~/.local/state/globalskills/manifest.json` (or
+`$XDG_STATE_HOME/globalskills/manifest.json`).
+
+Add the CLI directory to your shell PATH once:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## Updating
 
 ```bash
-bash ~/.globalskills/install.sh
+globalskills update --check
+globalskills update
+globalskills status
+globalskills rollback skill:my-skill --runtime all
+globalskills rollback agent:reviewer --runtime all
 ```
 
-This updates both source repositories and refreshes Manul's runtime symlinks
-without deleting the existing `~/.manul` database or task data.
+Updates fast-forward the Globalskills source checkout when upstream changes
+are available. Managed resources are updated only when their installed hashes
+still match the previous manifest. Local edits and unmanaged files are
+preserved; collisions are reported instead of overwritten. Previous managed
+versions are backed up for rollback. The installer never changes Manul's
+runtime database or task data.
 
 ## macOS runtime prerequisites
 
@@ -169,25 +195,33 @@ Both adapters preserve Todo's returned subtask order and pass the whole nested t
 
 | Skill | Description |
 |-------|-------------|
-| `agent-orchestration` | Rules for the OpenCode multi-agent orchestration system. Use when running as the orchestrator agent, deciding which role agent to dispatch, which model tier fits a task, when to escalate, or how to produce the routing report. |
+| `agent-orchestration` | Rules for the Globalskills multi-agent orchestration system across OpenCode, GitHub Copilot, and Manul. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles. |
 | `ai-commit-attribution` | Preserve the human developer as the Git commit author and add a Co-authored-by trailer to every AI-created commit. Use whenever creating a Git commit. Never change Git author config, never use --author, and always append the OpenCode <opencode@ai.local> trailer (or the identity of the active agent outside OpenCode). |
-| `feature-branching-strategy` | Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch. |
-| `pr-description-management` | Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update descriptions when pushing changes. Uses gh CLI for all PR operations. Follows feature-branching-strategy for branch naming. |
-| `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). |
-| `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
-| `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Consults Caracal RAG's indexed QuickMVI README for documented usage; verify exact behavior against source and tests. |
-| `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI and auth features. Use when setting up LiteLLM database support or fixing LiteLLM database connection issues. |
-| `unit-testing-language-agnostic` | Universal unit-testing principles, including whole-value assertions when equality is meaningful |
-| `manul-github-bot` | Operate the standalone Manul task orchestrator and understand its host integrations with global agent roles, project aliases, aicode, and Todo MCP. Runtime implementation and tests live in `mariuszmarzec/manul`. |
+| `android-clean-architecture` | Android clean architecture patterns for layered applications using Kotlin, coroutines, caching strategies, MVI state management, and reactive programming. |
 | `chatgpt-supervised-workflow` | Enforce an evidence-driven execution workflow for tasks originating from ChatGPT. Use when a task contains a ChatGPT chatId or explicitly identifies ChatGPT as the supervisor. Focus on preserving task context, making small verifiable changes, independently validating results, and never claiming completion without evidence. |
-| `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode compatible), including isolated Caracal RAG installation, authenticated MCP startup after LiteLLM, hardware-aware model selection, healthchecks, and multi-model LiteLLM routing. |
-| `freellmapi-environment` | Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`). |
-| `fiteo-access` | Connect to the Fiteo backend using the current `FITEO_BASE_URL`, `FITEO_MANUL_USERNAME`, and `FITEO_MANUL_PASSWORD` environment variables. Never hardcode or print their values. |
-| `fiteo-backend-api` | Use for Fiteo backend endpoint/API contract questions and related implementation or review work. Search Caracal RAG's `fiteo-docs` source first; verify current code/tests before claiming implementation behavior. |
+| `feature-branching-strategy` | Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch. |
+| `fiteo-access` | Use whenever an agent needs to connect to a running Fiteo backend, determine its runtime base URL, use the Manul account, or make authenticated Fiteo HTTP requests. Runtime settings come from environment variables; never hardcode or disclose their values. |
+| `fiteo-backend-api` | Use whenever the user asks about Fiteo backend API endpoints or contracts, including routes, HTTP methods, request/response payloads, DTOs, query/path parameters, authentication, validation, status codes, pagination, or implementing/reviewing code that calls or exposes a Fiteo endpoint. Before answering, search the indexed Fiteo API documentation through the caracal-rag MCP server. |
+| `freellmapi-environment` | Configure and operate a local FreeLLMAPI environment with LiteLLM and related tools. Use when aggregating local cloud-provider APIs behind a single OpenAI-compatible endpoint. |
+| `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle. |
+| `globalskills-repository` | Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository. |
+| `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
+| `kotlin-code-formatting` | Code formatting and style rules for Kotlin. Use when writing, editing, or reviewing Kotlin code in an Android/Gradle project that enforces these rules via detekt (config/detekt/detekt.yml) and Kotlin official style. Run ./gradlew detekt to verify. |
+| `litellm-db-setup` | Configure LiteLLM to use a local PostgreSQL database for its UI/auth features. Use when setting up LiteLLM with database support, fixing LiteLLM database connection issues, or initializing the litellm PostgreSQL user and database. |
+| `manul-github-bot` | Operate Manul, the standalone GitHub task orchestrator. Use this skill for Manul commands, status, task submission, configuration, runtime troubleshooting, and integration with globalskills agents, aicode, and Todo MCP. |
+| `navigation-setup` | Implement and configure application navigation using NavigationStore, NavigationHost, Router, NavigationEntry, and nested navigation flows. |
+| `openclaw-knowledge` | OpenClaw general knowledge + current known-good setup. Use before making changes to avoid incorrect assumptions about OpenClaw, authentication, Gateway lifecycle, systemd, plugins, and state separation. |
+| `pr-description-management` | Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update descriptions when pushing changes. Uses gh CLI for all PR operations. Follows feature-branching-strategy for branch naming. |
+| `quickmvi-usage-testing` | QuickMVI usage and testing guidelines for Kotlin Multiplatform MVI applications. Based on QuickMVI library patterns, testing utilities, and best practices extracted from the QuickMVI project. |
+| `review-strategy` | Shared methodology for high-quality code review. Defines how reviewers understand requirements, inspect implementation, test behavior, identify risks, and produce evidence-based findings. |
+| `unit-testing-android` | Android-specific unit and integration testing practices for JVM, instrumented, and UI tests. Use when designing or implementing tests for Android applications. |
+| `unit-testing-language-agnostic` | Language-agnostic unit and integration testing principles. Use when designing, writing, or reviewing automated tests in any language or framework. |
+| `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop), hardware-aware model selection, strict healthchecks, self-healing, multi-model LiteLLM routing, local Ollama, and Caracal RAG MCP integration. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, OpenClaw, and Caracal RAG. |
+| `yt-dlp-downloader` | Robust YouTube downloading and audio extraction via yt-dlp with anti-bot bypass flags (--user-agent, --extractor-args, --no-check-certificates) and oEmbed fallback search. Use when downloading videos or MP3s from YouTube URLs with yt-dlp to guarantee success. |
 
 ## Agents (multi-agent orchestration)
 
-OpenCode agents in `agents/`. Roles define WHAT to do; model tiers define how much reasoning power. Full routing rules, model mapping, and escalation are in the `agent-orchestration` skill.
+Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native OpenCode V2, Copilot custom-agent, and Manul YAML-frontmatter files; Manul adapters strip the YAML frontmatter and prepend the same prompt body. Never edit generated files directly. OpenCode agents use the V2 frontmatter schema, including ordered `permissions` rules; deprecated V1 `permission` and per-agent `temperature` fields are not emitted. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|

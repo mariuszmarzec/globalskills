@@ -6,7 +6,7 @@ agents_dir="$ROOT_DIR/agents"
 failed=0
 for agent in "$agents_dir"/*.md; do
   name="$(basename "$agent")"
-  mode="$(sed -n 's/^mode: *//p' "$agent" | head -n 1)"
+  mode="$(sed -n 's/^mode = "\(.*\)"$/\1/p' "$agent" | head -n 1)"
   if [ "$name" = "orchestrator.md" ]; then
     if [ "$mode" != "primary" ]; then
       echo "FAIL: orchestrator.md must remain primary (got $mode)"

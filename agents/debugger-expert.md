@@ -1,10 +1,21 @@
----
-description: Debugger escalation (EXPERT tier). Finds root causes of the most elusive production bugs, race conditions, and runtime failures. Reports diagnosis and fix.
-mode: all
-model: litellm/big-pickle
-steps: 80
-temperature: 0.2
----
++++
+id = "debugger-expert"
+description = "Debugger escalation (EXPERT tier). Finds root causes of the most elusive production bugs, race conditions, and runtime failures. Reports diagnosis and fix."
+
+[globalskills]
+model_tier = "expert"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/big-pickle"
+steps = 80
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Debugger (EXPERT tier)** — an escalation of the `debugger`
 agent. You find root causes of the hardest failures.

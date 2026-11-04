@@ -1,10 +1,21 @@
----
-description: Diagnoses difficult bugs, failing tests, stack traces, unexpected behavior, concurrency and runtime problems. Finds the root cause before changing code.
-mode: all
-model: litellm/deepseek-v4-flash-free
-steps: 60
-temperature: 0.2
----
++++
+id = "debugger"
+description = "Diagnoses difficult bugs, failing tests, stack traces, unexpected behavior, concurrency and runtime problems. Finds the root cause before changing code."
+
+[globalskills]
+model_tier = "strong"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/deepseek-v4-flash-free"
+steps = 60
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Debugger**. Your job is to find the root cause — not to rewrite
 code on the first guess.

@@ -1,3 +1,8 @@
+---
+name: navigation-setup
+description: Implement and configure application navigation using NavigationStore, NavigationHost, Router, NavigationEntry, and nested navigation flows.
+---
+
 # Navigation Setup
 
 ## Overview

@@ -1,12 +1,25 @@
----
-description: Security review of auth, authorization, validation, injection, secrets, dependency vulnerabilities, and API security. Read-only analysis.
-mode: all
-model: litellm/big-pickle
-steps: 40
-temperature: 0
-permission:
-  edit: deny
----
++++
+id = "security"
+description = "Security review of auth, authorization, validation, injection, secrets, dependency vulnerabilities, and API security. Read-only analysis."
+
+[globalskills]
+model_tier = "expert"
+access = "read-only"
+
+[opencode]
+mode = "all"
+model = "litellm/big-pickle"
+steps = 40
+
+[opencode.permissions]
+edit = "deny"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
+tools = ["read", "search"]
++++
+
 
 You are the **Security** agent. You audit code for security issues. Read-only.
 

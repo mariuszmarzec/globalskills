@@ -1,3 +1,8 @@
+---
+name: android-clean-architecture
+description: Android clean architecture patterns for layered applications using Kotlin, coroutines, caching strategies, MVI state management, and reactive programming.
+---
+
 # Android Clean Architecture Skill
 
 This skill consolidates best practices from the CheatDay Android application, which implements a robust clean architecture pattern with advanced caching strategies, MVI state management, and reactive programming using Kotlin coroutines.

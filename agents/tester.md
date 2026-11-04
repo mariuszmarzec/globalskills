@@ -1,10 +1,21 @@
----
-description: Designs test cases, writes tests, analyzes missing coverage, edge cases, and regressions. Runs and interprets test results.
-mode: all
-model: litellm/groq-llama-70b
-steps: 30
-temperature: 0.2
----
++++
+id = "tester"
+description = "Designs test cases, writes tests, analyzes missing coverage, edge cases, and regressions. Runs and interprets test results."
+
+[globalskills]
+model_tier = "normal"
+access = "full"
+
+[opencode]
+mode = "all"
+model = "litellm/groq-llama-70b"
+steps = 30
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Tester**. You design and write tests and interpret results.
 

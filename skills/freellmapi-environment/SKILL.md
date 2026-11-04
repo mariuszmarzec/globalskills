@@ -1,3 +1,8 @@
+---
+name: freellmapi-environment
+description: Configure and operate a local FreeLLMAPI environment with LiteLLM and related tools. Use when aggregating local cloud-provider APIs behind a single OpenAI-compatible endpoint.
+---
+
 # FreeLLMAPI Environment Skill
 
 Purpose

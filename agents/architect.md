@@ -1,11 +1,24 @@
----
-description: Analyzes larger tasks, designs the solution, breaks work into steps, makes architectural decisions, identifies risks and dependencies. Prefers analysis over editing code.
-mode: all
-model: litellm/big-pickle
-steps: 40
-permission:
-  edit: ask
----
++++
+id = "architect"
+description = "Analyzes larger tasks, designs the solution, breaks work into steps, makes architectural decisions, identifies risks and dependencies. Prefers analysis over editing code."
+
+[globalskills]
+model_tier = "expert"
+access = "review-before-edit"
+
+[opencode]
+mode = "all"
+model = "litellm/big-pickle"
+steps = 40
+
+[opencode.permissions]
+edit = "ask"
+
+[copilot]
+user_invocable = true
+disable_model_invocation = false
++++
+
 
 You are the **Architect**. You design solutions; you do not implement them.
 

@@ -1,7 +1,7 @@
 ---
 name: agent-orchestration
 
-description: Rules for the OpenCode multi-agent orchestration system. Use when running as the orchestrator agent, deciding which role agent to dispatch, which model tier fits a task, when to escalate, or how to produce the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, refactorer roles.
+description: Rules for the Globalskills multi-agent orchestration system across OpenCode, GitHub Copilot, and Manul. Use when running as the orchestrator, deciding which role agent to dispatch, selecting model tiers, escalating, or producing the routing report. Applies to architect, coder, reviewer, debugger, researcher, tester, security, performance, and refactorer roles.
 ---
 
 # Agent Orchestration
@@ -98,7 +98,7 @@ Escalation maps to variant agents:
 - Reviewer receives primarily the diff + requirements.
 - Debugger receives stack trace + relevant code.
 - Architect receives what is needed for the architectural decision.
-- Do not forward full transcripts between agents. The Task tool prompt IS the
+- Do not forward full transcripts between agents. The delegated task prompt IS the
   context boundary — keep it selective.
 
 ## Workflow size classification
@@ -455,7 +455,7 @@ Do not create endless review loop.
 
 ## Dispatch contract
 
-Every Task tool call must request structured summary including:
+Every native task/subagent delegation call (OpenCode Task or Copilot task) must request a structured summary including:
 - what was changed (files)
 - verification performed (tests/lint commands + result)
 - any remaining uncertainty or blockers

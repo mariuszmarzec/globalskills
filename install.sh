@@ -9,8 +9,6 @@ MANUL_CANONICAL_DIR="$MANUL_REPO_DIR/skills/manul-github-bot"
 MANUL_BRANCH="master"
 SKILLS_DIR="$REPO_DIR/skills"
 AGENTS_DIR="$REPO_DIR/agents"
-SKILLS_LINK="$HOME/.agents/skills"
-AGENTS_LINK="$HOME/.config/opencode/agents"
 
 # Resolve files and directories without GNU readlink -f (not available on macOS).
 resolve_path() {
@@ -70,28 +68,34 @@ else
   bash "$MANUL_CANONICAL_DIR/install-manul.sh" --init-state
 fi
 
-mkdir -p "$HOME/.agents"
-mkdir -p "$HOME/.config/opencode"
+echo "Installing native skills and agents for OpenCode and GitHub Copilot..."
+python3 "$REPO_DIR/installer/globalskills.py" --source "$REPO_DIR" install --runtime all
 
-if [ -L "$SKILLS_LINK" ]; then
-  echo "Symlink already exists: $SKILLS_LINK -> $(readlink "$SKILLS_LINK")"
-elif [ -d "$SKILLS_LINK" ]; then
-  echo "WARNING: $SKILLS_LINK is a directory, not a symlink. Skipping."
-  echo "Remove it manually if you want the symlink: rm -rf $SKILLS_LINK"
+# Install a single-file CLI symlink. Runtime resource directories are copied,
+# never linked, so the two tools cannot interfere with one another.
+LOCAL_BIN="$HOME/.local/bin"
+CLI_LINK="$LOCAL_BIN/globalskills"
+CLI_SOURCE="$REPO_DIR/bin/globalskills"
+mkdir -p "$LOCAL_BIN"
+if [ -L "$CLI_LINK" ]; then
+  CLI_LINK_REAL="$(resolve_path "$CLI_LINK" 2>/dev/null || true)"
+  CLI_SOURCE_REAL="$(resolve_path "$CLI_SOURCE" 2>/dev/null || true)"
+  if [ -n "$CLI_LINK_REAL" ] && [ "$CLI_LINK_REAL" = "$CLI_SOURCE_REAL" ]; then
+    echo "Globalskills CLI already points to the maintained launcher."
+  else
+    CLI_BACKUP="$CLI_LINK.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    while [ -e "$CLI_BACKUP" ] || [ -L "$CLI_BACKUP" ]; do CLI_BACKUP="$CLI_BACKUP.$"; done
+    mv -- "$CLI_LINK" "$CLI_BACKUP"
+    ln -s "$CLI_SOURCE" "$CLI_LINK"
+    echo "Preserved previous CLI link at $CLI_BACKUP"
+  fi
+elif [ -e "$CLI_LINK" ]; then
+  echo "WARNING: preserving existing non-symlink CLI at $CLI_LINK"
 else
-  ln -s "$SKILLS_DIR" "$SKILLS_LINK"
-  echo "Created symlink: $SKILLS_LINK -> $SKILLS_DIR"
+  ln -s "$CLI_SOURCE" "$CLI_LINK"
+  echo "Linked Globalskills CLI: $CLI_LINK -> $CLI_SOURCE"
 fi
 
-if [ -L "$AGENTS_LINK" ]; then
-  echo "Symlink already exists: $AGENTS_LINK -> $(readlink "$AGENTS_LINK")"
-elif [ -d "$AGENTS_LINK" ]; then
-  echo "WARNING: $AGENTS_LINK is a directory, not a symlink. Skipping."
-  echo "Remove it manually if you want the symlink: rm -rf $AGENTS_LINK"
-else
-  ln -s "$AGENTS_DIR" "$AGENTS_LINK"
-  echo "Created symlink: $AGENTS_LINK -> $AGENTS_DIR"
-fi
 
 
 # Install the maintained aicode launcher as a symlink so global-skills updates
@@ -137,5 +141,8 @@ if [ -f "$AICODE_SOURCE" ]; then
   fi
 fi
 
-echo "Done. Skills available at: $SKILLS_LINK"
-echo "Done. Agents available at: $AGENTS_LINK"
+echo "Done. Shared skills (OpenCode, Copilot, Manul): $HOME/.agents/skills"
+echo "Done. OpenCode agents: $HOME/.config/opencode/agents"
+echo "Done. Copilot agents: $HOME/.copilot/agents"
+echo "Done. Manul role definitions: $HOME/.agents/agents"
+echo "Run 'globalskills status' to inspect installed resources."
