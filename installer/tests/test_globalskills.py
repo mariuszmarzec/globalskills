@@ -45,7 +45,6 @@ access = "review-before-edit"
 mode = "all"
 model = "litellm/deepseek-v4-flash-free"
 steps = 30
-temperature = 0
 
 [opencode.permissions]
 edit = "deny"
