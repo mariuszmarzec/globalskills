@@ -45,7 +45,7 @@ opencode_wait_for_mcp_connected() {
         # Do not require a zero exit code: unrelated optional MCP servers may
         # be offline while the required Caracal server is already connected.
         if printf '%s\n' "$last_output" |
-            grep -Eiq "(^|[[:space:]])$server_name[[:space:]]+connected([[:space:]]|$|\()|(^|[[:space:]])connected[[:space:]]+$server_name([[:space:]]|$)"; then
+            grep -Eiq "(^|[[:space:]])$server_name[[:space:]]+connected([[:space:]]|$|\()"; then
             return 0
         fi
 
