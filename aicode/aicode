@@ -17,6 +17,14 @@ done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
+OPENCODE_MCP_READINESS_HELPER="$AICODE_SOURCE_DIR/opencode-mcp-readiness.sh"
+if [ ! -r "$OPENCODE_MCP_READINESS_HELPER" ]; then
+    echo "ERROR: OpenCode MCP readiness helper is missing: $OPENCODE_MCP_READINESS_HELPER" >&2
+    exit 1
+fi
+# shellcheck source=aicode/opencode-mcp-readiness.sh
+. "$OPENCODE_MCP_READINESS_HELPER"
+
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 MANUL_CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.manul-repo}"
 MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-master}"
@@ -473,7 +481,7 @@ ensure_opencode_caracal_config() {
         echo "OpenCode Caracal MCP config updated (backup retained when replacing an existing file)."
     fi
 
-    local mcp_output opencode_cli mcp_list_rc=0
+    local mcp_output opencode_cli
     if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
         opencode_cli="$OPENCODE_BIN"
     else
@@ -483,14 +491,14 @@ ensure_opencode_caracal_config() {
         echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
         return 1
     fi
-    mcp_output="$(python3 "$AICODE_SOURCE_DIR/run-with-timeout.py" 45 "$opencode_cli" mcp list 2>&1)" || mcp_list_rc=$?
-    # The command can return non-zero when an optional server (for example
-    # Fiteo) is offline. Require Caracal's explicit connected status, rather
-    # than treating every server failure as a global MCP preflight failure.
-    if ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
-        echo "ERROR: OpenCode does not report caracal-rag as connected (mcp list exit $mcp_list_rc); see the output of 'opencode mcp list'. No agent runtime will start." >&2
+    # Caracal can answer HTTP before OpenCode completes its MCP initialize.
+    # Retry the actual OpenCode registry check instead of failing on that race.
+    # A non-zero aggregate exit is acceptable when an unrelated optional MCP
+    # (for example Fiteo) is offline; Caracal's own connected status is decisive.
+    if ! opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"; then
         return 1
     fi
+    mcp_output="$OPENCODE_MCP_LAST_OUTPUT"
     echo "OpenCode reports caracal-rag connected."
     if [ "$TODO_LOCAL_MCP_CONNECTED" = "1" ] &&
        ! printf '%s\n' "$mcp_output" | grep -Eiq 'todo-local[[:space:]].*connected|connected.*todo-local'; then

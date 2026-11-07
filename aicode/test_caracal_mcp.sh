@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AICODE="$ROOT/aicode/aicode"
 ACP_WRAPPER="$ROOT/aicode/opencode-acp-caracal.sh"
+READINESS_HELPER="$ROOT/aicode/opencode-mcp-readiness.sh"
 MANUL="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -18,6 +19,7 @@ contains() {
 }
 
 bash -n "$AICODE" || fail "aicode shell syntax"
+bash -n "$READINESS_HELPER" || fail "OpenCode MCP readiness helper shell syntax"
 bash -n "$ACP_WRAPPER" || fail "OpenCode ACP wrapper shell syntax"
 bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
@@ -42,10 +44,14 @@ contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "caracal_rag_*"' "Caracal
 contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "fiteo_*"' "Fiteo tools receive V2 permission rules"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "Caracal bearer token is environment-backed"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:FITEO_PAT}' "Fiteo bearer token is environment-backed"
-contains "$AICODE" 'opencode mcp list' "aicode probes the live OpenCode MCP registry"
-contains "$AICODE" 'OpenCode does not report caracal-rag as connected' "aicode fails closed if Caracal is disconnected"
+contains "$AICODE" '. "$OPENCODE_MCP_READINESS_HELPER"' "aicode loads the tested OpenCode MCP readiness helper"
+contains "$AICODE" 'opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"' "aicode waits for Caracal's live OpenCode connection"
+contains "$READINESS_HELPER" '"$opencode_cli" mcp list' "readiness helper probes the live OpenCode MCP registry"
+contains "$READINESS_HELPER" 'OPENCODE_MCP_WAIT_TIMEOUT' "Caracal MCP connection wait has a bounded timeout"
+contains "$READINESS_HELPER" 'OPENCODE_MCP_RETRY_INTERVAL' "Caracal MCP connection retries use a configurable interval"
+contains "$READINESS_HELPER" 'OpenCode does not report %s as connected' "readiness helper fails closed with diagnostics if Caracal stays disconnected"
 contains "$ACP_WRAPPER" 'load_fiteo_mcp_environment' "ACP refreshes Fiteo credentials for long-lived Gateway sessions"
-contains "$AICODE" 'mcp_list_rc=0' "aicode does not trust the aggregate MCP-list exit status when optional Fiteo is offline"
+contains "$READINESS_HELPER" 'Do not require a zero exit code' "Caracal readiness ignores unrelated optional MCP failures"
 contains "$ROOT/README.md" 'FITEO_MANUL_PAT' "README documents the dedicated Manul Fiteo PAT"
 contains "$ROOT/README.md" 'FITEO_MANUL_SHARE_USER_ID' "README documents the Manul share recipient"
 contains "$ROOT/skills/fiteo-access/SKILL.md" 'Never substitute `FITEO_PAT`' "Fiteo access skill forbids operator PAT fallback"
@@ -130,6 +136,51 @@ contains "$ROOT/aicode/opencode-config-v2.jq" "OpenCode's" "the shared V2 jq pro
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+
+# Exercise the real retry helper with a fake OpenCode CLI. The first probe is
+# disconnected; the second connects but exits non-zero because an unrelated
+# optional MCP is offline. Caracal must still pass the required preflight.
+fake_opencode="$tmp_dir/fake-opencode"
+cat > "$fake_opencode" <<'FAKE_OPENCODE'
+#!/usr/bin/env bash
+count=0
+if [ -f "${FAKE_MCP_CALLS:?}" ]; then
+  read -r count < "$FAKE_MCP_CALLS" || count=0
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$FAKE_MCP_CALLS"
+if [ "$FAKE_MCP_MODE" = "delayed" ] && (( count >= 2 )); then
+  echo "caracal-rag connected"
+  echo "fiteo disconnected"
+  exit 1
+fi
+echo "caracal-rag disconnected"
+echo "last probe diagnostic"
+exit 1
+FAKE_OPENCODE
+chmod +x "$fake_opencode"
+# shellcheck source=aicode/opencode-mcp-readiness.sh
+. "$READINESS_HELPER"
+
+export FAKE_MCP_MODE=delayed FAKE_MCP_CALLS="$tmp_dir/delayed-calls"
+export OPENCODE_MCP_WAIT_TIMEOUT=5 OPENCODE_MCP_PROBE_TIMEOUT=2 OPENCODE_MCP_RETRY_INTERVAL=1
+opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >/dev/null 2>"$tmp_dir/delayed.log" ||
+  fail "Caracal readiness did not recover after a delayed MCP connection"
+[ "$(cat "$FAKE_MCP_CALLS")" = "2" ] || fail "Caracal readiness did not retry exactly until the delayed connection"
+[ "$OPENCODE_MCP_LAST_STATUS" -eq 1 ] || fail "Caracal readiness incorrectly relied on the aggregate mcp list exit code"
+ok "Caracal readiness retries delayed connections and tolerates unrelated MCP failures"
+
+export FAKE_MCP_MODE=disconnected FAKE_MCP_CALLS="$tmp_dir/disconnected-calls"
+export OPENCODE_MCP_WAIT_TIMEOUT=2 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
+if opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >/dev/null 2>"$tmp_dir/disconnected.log"; then
+  fail "Caracal readiness accepted a server that remained disconnected"
+fi
+grep -Fq 'OpenCode does not report caracal-rag as connected after' "$tmp_dir/disconnected.log" ||
+  fail "Caracal readiness failure did not report the final connection state"
+grep -Fq 'last probe diagnostic' "$tmp_dir/disconnected.log" ||
+  fail "Caracal readiness failure omitted the last mcp list diagnostic"
+ok "Caracal readiness fails closed with the final MCP diagnostic after its timeout"
+
 
 # The launcher must follow the exact same runtime precedence as Manul:
 # automation.agentRuntime=opencode means no OpenClaw Gateway/ACPX setup,
