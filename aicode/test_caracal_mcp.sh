@@ -148,7 +148,7 @@ if [ -f "${FAKE_MCP_CALLS:?}" ]; then
   read -r count < "$FAKE_MCP_CALLS" || count=0
 fi
 count=$((count + 1))
-printf '%s\\n' "$count" > "$FAKE_MCP_CALLS"
+printf '%s\n' "$count" > "$FAKE_MCP_CALLS"
 if [ "$FAKE_MCP_MODE" = "delayed" ] && (( count >= 2 )); then
   echo "caracal-rag connected"
   echo "fiteo disconnected"
