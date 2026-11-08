@@ -8,7 +8,6 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 CLIENT_PATH = Path(__file__).with_name("todo-mcp-client.py")
 SPEC = importlib.util.spec_from_file_location("todo_mcp_client", CLIENT_PATH)
 CLIENT = importlib.util.module_from_spec(SPEC)
@@ -22,14 +21,22 @@ class McpHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         payload = json.loads(body or b"{}")
         self.requests.append((payload, dict(self.headers)))
-        if payload.get("method") == "initialize":
-            response = {"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": CLIENT.PROTOCOL_VERSION, "capabilities": {}, "serverInfo": {"name": "fixture", "version": "1"}}}
-        elif payload.get("method") == "tools/list":
+        method = payload.get("method")
+        if method == "initialize":
+            response = {
+                "jsonrpc": "2.0", "id": payload["id"],
+                "result": {
+                    "protocolVersion": CLIENT.PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "serverInfo": {"name": "fixture", "version": "1"},
+                },
+            }
+        elif method == "tools/list":
             response = {"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": [{"name": "todo_list_tasks"}]}}
-        elif payload.get("method") == "tools/call":
-            response = {"jsonrpc": "2.0", "id": payload["id"], "result": {"content": [{"type": "text", "text": "ok"}]}}
+        elif method == "tools/call":
+            response = {"jsonrpc": "2.0", "id": payload["id"], "result": {"content": [{"type": "text", "text": "[]"}]}}
         else:
-            response = {"jsonrpc": "2.0", "id": payload["id"], "result": {}}
+            response = {"jsonrpc": "2.0", "id": payload.get("id"), "result": {}}
         data = json.dumps(response).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -58,8 +65,12 @@ class TodoMcpClientTests(unittest.TestCase):
         cls.thread.join(timeout=2)
 
     def test_client_initializes_lists_and_calls_allowlisted_tool(self):
-        result = CLIENT.call_tool(self.url, None, "todo_list_tasks", {}, timeout=2)
-        self.assertIsNotNone(result)
+        client = CLIENT.StreamableHttpClient(self.url, None, 2)
+        client.initialize()
+        self.assertEqual("fixture-session", client.session_id)
+        self.assertEqual([{"name": "todo_list_tasks"}], client.list_tools())
+        result = client.call_tool("todo_list_tasks", {})
+        self.assertEqual([], result)
         methods = [payload.get("method") for payload, _ in McpHandler.requests]
         self.assertIn("initialize", methods)
         self.assertIn("notifications/initialized", methods)
@@ -68,13 +79,15 @@ class TodoMcpClientTests(unittest.TestCase):
 
     def test_client_refuses_non_allowlisted_tool_before_network_call(self):
         before = len(McpHandler.requests)
+        client = CLIENT.StreamableHttpClient(self.url, None, 2)
         with self.assertRaises(CLIENT.McpClientError):
-            CLIENT.call_tool(self.url, None, "delete_everything", {}, timeout=2)
+            client.call_tool("delete_everything", {})
         self.assertEqual(before, len(McpHandler.requests))
 
-    def test_external_endpoint_requires_token(self):
-        with self.assertRaises(CLIENT.McpAuthenticationError):
-            CLIENT.ensure_auth_policy("https://example.invalid/mcp", None)
+    def test_client_rejects_missing_authentication_for_external_endpoint(self):
+        client = CLIENT.StreamableHttpClient("https://example.invalid/mcp", None, 2)
+        with self.assertRaises(CLIENT.McpClientError):
+            client.probe()
 
     def test_localhost_is_loopback(self):
         self.assertTrue(CLIENT.is_loopback_url("http://127.0.0.1:8765/mcp"))
