@@ -703,9 +703,10 @@ MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
 MANUL_ENV_HELPER="$MANUL_CANONICAL_DIR/manul-env.sh"
 
-# Refresh the Caracal endpoint/token pair before any installer, repairer or
-# existing daemon can load a stale ~/.manul/.env. This update is atomic and
-# preserves unrelated operator-owned values.
+# Refresh only the supported provider/runtime values needed by unattended
+# Manul tasks. The Manul environment helper deliberately removes obsolete
+# Caracal values; Caracal remains owned by aicode/OpenCode and is never
+# persisted as a Manul dependency.
 if [ ! -r "$MANUL_ENV_HELPER" ]; then
     echo "ERROR: Manul environment helper is missing: $MANUL_ENV_HELPER" >&2
     exit 1
@@ -716,7 +717,7 @@ source "$MANUL_ENV_HELPER" || {
     exit 1
 }
 if ! manul_env_bootstrap "$MANUL_RUNTIME" >/dev/null; then
-    echo "ERROR: could not persist the current Caracal MCP endpoint/token for Manul." >&2
+    echo "ERROR: could not persist supported Manul runtime environment values." >&2
     exit 1
 fi
 
