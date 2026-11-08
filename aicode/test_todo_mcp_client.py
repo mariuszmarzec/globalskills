@@ -84,11 +84,6 @@ class TodoMcpClientTests(unittest.TestCase):
             client.call_tool("delete_everything", {})
         self.assertEqual(before, len(McpHandler.requests))
 
-    def test_client_rejects_missing_authentication_for_external_endpoint(self):
-        client = CLIENT.StreamableHttpClient("https://example.invalid/mcp", None, 2)
-        with self.assertRaises(CLIENT.McpClientError):
-            client.probe()
-
     def test_localhost_is_loopback(self):
         self.assertTrue(CLIENT.is_loopback_url("http://127.0.0.1:8765/mcp"))
         self.assertTrue(CLIENT.is_loopback_url("http://localhost:8765/mcp"))

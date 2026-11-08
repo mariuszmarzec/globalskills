@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, allow-listed Streamable HTTP MCP client for Manul's Todo task sources."""
+"""Shared allow-listed Streamable HTTP MCP client for task-source integrations."""
 
 from __future__ import annotations
 
