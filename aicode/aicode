@@ -42,9 +42,17 @@ elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
     exit 1
 fi
 
-TODO_LOCAL_MCP_URL_HELPER="$MANUL_CANONICAL_DIR/todo-local-mcp-url.sh"
+TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"
+
+# Shared Streamable HTTP Todo MCP client owned by globalskills/aicode.
+# Keep the legacy Manul fallback temporarily for staggered repository updates.
+TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$AICODE_SOURCE_DIR/todo-mcp-client.py}"
+if [ ! -r "$TODO_MCP_CLIENT" ] && [ -r "$MANUL_CANONICAL_DIR/todo-mcp-client.py" ]; then
+    TODO_MCP_CLIENT="$MANUL_CANONICAL_DIR/todo-mcp-client.py"
+fi
+export TODO_MCP_CLIENT
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
-    # shellcheck source=~/.manul-repo/skills/manul-github-bot/todo-local-mcp-url.sh
+    # shellcheck source=aicode/todo-local-mcp-url.sh
     . "$TODO_LOCAL_MCP_URL_HELPER"
 else
     echo "WARNING: shared Todo MCP endpoint helper is missing; Todo MCP will be disabled." >&2
