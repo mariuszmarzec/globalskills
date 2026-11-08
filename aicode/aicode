@@ -44,12 +44,10 @@ fi
 
 TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"
 
-# Shared Streamable HTTP Todo MCP client owned by globalskills/aicode.
-# Keep the legacy Manul fallback temporarily for staggered repository updates.
+# Shared Streamable HTTP Todo MCP client and endpoint resolver are owned
+# by globalskills/aicode. If unavailable, Manul treats Todo providers as
+# optional; the launcher never falls back into the Manul runtime checkout.
 TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$AICODE_SOURCE_DIR/todo-mcp-client.py}"
-if [ ! -r "$TODO_MCP_CLIENT" ] && [ -r "$MANUL_CANONICAL_DIR/todo-mcp-client.py" ]; then
-    TODO_MCP_CLIENT="$MANUL_CANONICAL_DIR/todo-mcp-client.py"
-fi
 export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
     # shellcheck source=aicode/todo-local-mcp-url.sh
