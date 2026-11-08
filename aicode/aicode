@@ -50,7 +50,7 @@ TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$AICODE_SOURCE_DIR/todo-mcp-client.py}"
 if [ ! -r "$TODO_MCP_CLIENT" ] && [ -r "$MANUL_CANONICAL_DIR/todo-mcp-client.py" ]; then
     TODO_MCP_CLIENT="$MANUL_CANONICAL_DIR/todo-mcp-client.py"
 fi
-export TODO_MCP_CLIENT
+export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
     # shellcheck source=aicode/todo-local-mcp-url.sh
     . "$TODO_LOCAL_MCP_URL_HELPER"
