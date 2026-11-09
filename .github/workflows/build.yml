@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mariuszmarzec/manul
-          ref: test/opencode-task-overlay-mock-diagnostics
+          ref: master
           path: manul-repo
       - name: Install macOS runtime dependencies
         run: brew install bash coreutils util-linux jq sqlite gh
