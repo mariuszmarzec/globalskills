@@ -105,11 +105,11 @@ contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul environment migrat
 if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
   fail "Manul environment helper must not declare or persist Caracal credentials"
 fi
-if grep -Fq 'CARACAL_MCP_URL' "$AICODE"; then
-  fail "aicode launcher must not pass Caracal credentials into Manul"
-else
-  ok "aicode keeps Caracal credentials outside the standalone Manul environment"
+if grep -Fq 'persist the current Caracal MCP endpoint/token for Manul' "$AICODE"; then
+  fail "aicode must not describe Caracal credentials as Manul-owned runtime values"
 fi
+contains "$AICODE" 'Manul environment helper deliberately removes obsolete' "aicode documents the Caracal cleanup boundary during Manul bootstrap"
+contains "$AICODE" 'could not persist supported Manul runtime environment values' "aicode reports only supported Manul bootstrap values"
 
 # The shared jq transformer is stored as a tracked source file, so comments
 # with apostrophes are safe and the launcher executes that exact file.
