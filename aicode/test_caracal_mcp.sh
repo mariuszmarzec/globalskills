@@ -57,7 +57,9 @@ contains "$ROOT/README.md" 'FITEO_MANUL_SHARE_USER_ID' "README documents the Man
 contains "$ROOT/skills/fiteo-access/SKILL.md" 'Never substitute `FITEO_PAT`' "Fiteo access skill forbids operator PAT fallback"
 contains "$ROOT/skills/fiteo-access/SKILL.md" 'FITEO_MANUL_PAT' "Fiteo access skill documents the dedicated Manul PAT"
 contains "$ACP_WRAPPER" 'mcp_list_rc=0' "ACP does not fail just because optional Fiteo is offline"
-contains "$MANUL/opencode-adapter.sh" "failure from an unrelated MCP must not block this task" "Manul treats Fiteo as an optional live dependency"
+contains "$MANUL/opencode-adapter.sh" 'if fiteo_url and fiteo_pat:' "Manul injects its dedicated Fiteo MCP only when both endpoint and PAT are available"
+contains "$MANUL/opencode-adapter.sh" 'tools["fiteo_todo_create_task"] = False' "Manul denies operator-identity Fiteo task creation"
+contains "$MANUL/opencode-adapter.sh" 'skipping optional Manul Fiteo MCP' "Manul skips Fiteo MCP when its task overlay cannot be safely constructed"
 
 # The OpenClaw snapshot reader must be shared with its unit test, must use
 # the file hash for config.patch concurrency, and must not blindly drop stdout's first line.
