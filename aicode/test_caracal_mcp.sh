@@ -57,7 +57,10 @@ contains "$ROOT/README.md" 'FITEO_MANUL_SHARE_USER_ID' "README documents the Man
 contains "$ROOT/skills/fiteo-access/SKILL.md" 'Never substitute `FITEO_PAT`' "Fiteo access skill forbids operator PAT fallback"
 contains "$ROOT/skills/fiteo-access/SKILL.md" 'FITEO_MANUL_PAT' "Fiteo access skill documents the dedicated Manul PAT"
 contains "$ACP_WRAPPER" 'mcp_list_rc=0' "ACP does not fail just because optional Fiteo is offline"
-contains "$MANUL/opencode-adapter.sh" "failure from an unrelated MCP must not block this task" "Manul treats Fiteo as an optional live dependency"
+contains "$MANUL/opencode-adapter.sh" 'if fiteo_url and fiteo_pat:' "Manul injects its dedicated Fiteo MCP only when both endpoint and PAT are available"
+contains "$MANUL/opencode-adapter.sh" 'tools = {"fiteo_todo_create_task": False}' "Manul denies operator-identity Fiteo task creation"
+contains "$MANUL/opencode-adapter.sh" 'Never permit the raw operator Fiteo create tool' "Manul documents the dedicated-identity boundary for Fiteo task creation"
+contains "$MANUL/opencode-adapter.sh" 'skipping optional Manul Fiteo MCP' "Manul skips Fiteo MCP when its task overlay cannot be safely constructed"
 
 # The OpenClaw snapshot reader must be shared with its unit test, must use
 # the file hash for config.patch concurrency, and must not blindly drop stdout's first line.
@@ -82,52 +85,34 @@ contains "$ACP_WRAPPER" '"$opencode_bin" mcp list' "ACP wrapper checks the effec
 contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
 contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caracal credentials from the Caracal provider"
 
-# Manul must preserve a current endpoint/token for unattended tasks and must
-# make a task-local config plus a live MCP preflight before running OpenCode.
-contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL' "Manul persists the Caracal endpoint"
-contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN' "Manul persists the Caracal token"
-contains "$MANUL/manul-env.sh" 'MANUL_HOST_SKILLS_DIR' "Manul persists the host project skills path for unattended tasks"
-contains "$MANUL/todo-task-source-utils.sh" 'skills_dir="$HOME/.agents/skills"' "Manul reads mapped project skills from the canonical ~/.agents/skills directory"
-contains "$AICODE" 'MANUL_HOST_SKILLS_DIR="${MANUL_HOST_SKILLS_DIR:-$HOME/.agents/skills}"' "aicode exposes the shared installed skills directory to standalone Manul"
-contains "$AICODE" 'MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-master}"' "aicode uses Manul default branch master"
-contains "$AICODE" 'manul_env_bootstrap "$MANUL_RUNTIME"' "aicode refreshes Manul's Caracal environment before repair/startup"
-bootstrap_line="$(grep -nF 'manul_env_bootstrap "$MANUL_RUNTIME"' "$AICODE" | head -n 1 | cut -d: -f1)"
-repair_line="$(grep -nF '"$MANUL_REPAIRER" >/dev/null' "$AICODE" | head -n 1 | cut -d: -f1)"
-[ -n "$bootstrap_line" ] && [ -n "$repair_line" ] && [ "$bootstrap_line" -lt "$repair_line" ] || fail "Caracal environment refresh must happen before Manul repair"
-ok "Manul's stored Caracal environment is refreshed before repair"
-if grep -Fq 'disabled:false' "$MANUL/opencode-adapter.sh"; then
-  contains "$MANUL/opencode-adapter.sh" 'mcp.servers' "Manul injects V2 MCP servers into its task-local config"
-  contains "$MANUL/opencode-adapter.sh" 'disabled:false' "Manul task MCP uses V2 disabled semantics"
-else
-  contains "$MANUL/opencode-adapter.sh" '"caracal-rag": {' "legacy Manul injects Caracal into task-local OpenCode config"
-  contains "$MANUL/opencode-adapter.sh" '"fiteo": {' "legacy Manul injects Fiteo into task-local OpenCode config"
+# Standalone Manul no longer owns Caracal credentials or requires Caracal MCP.
+# This integration suite checks the Manul master runtime checked out by CI.
+# The OpenCode adapter fixture compares canonical workspace paths on macOS.
+# The shared transport implementation itself is covered by aicode's unit test.
+# The aicode ACP path remains responsible for configuring and checking Caracal;
+# native Manul tasks must start with no Caracal env and keep Fiteo optional.
+contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul migration removes stale Caracal endpoint values"
+contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul migration removes stale Caracal tokens"
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
+  fail "Manul must not persist Caracal endpoint/token values"
 fi
-# Keep the integration test compatible while the standalone Manul PR is in review.
-# Once the dedicated-token branch is merged, assert the stricter token boundary.
-if grep -Fq 'Bearer {env:FITEO_MANUL_PAT}' "$MANUL/opencode-adapter.sh"; then
-  contains "$MANUL/opencode-adapter.sh" 'Bearer {env:FITEO_MANUL_PAT}' "Manul task config resolves its dedicated Fiteo PAT"
-  contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul persists its dedicated Fiteo PAT for unattended tasks"
-  if grep -qE '^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=' "$MANUL/manul-env.sh"; then
-    fail "Manul runtime must not persist the operator FITEO_PAT"
-  fi
-else
-  contains "$MANUL/opencode-adapter.sh" 'Bearer {env:FITEO_PAT}' "legacy Manul task config resolves its Fiteo PAT"
-  contains "$MANUL/manul-env.sh" 'FITEO_PAT' "legacy Manul persists the Fiteo PAT for unattended tasks"
+contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul supports its dedicated Fiteo identity for unattended tasks"
+contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes dedicated Fiteo credentials when available"
+contains "$MANUL/opencode-adapter.sh" 'optional Manul Fiteo MCP' "Manul documents the optional Fiteo MCP overlay"
+contains "$MANUL/opencode-adapter.sh" 'could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP' "Manul skips optional Fiteo injection when config cannot be inspected"
+if grep -Eq 'CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|caracal-rag' "$MANUL/opencode-adapter.sh"; then
+  fail "Manul OpenCode adapter must not configure or depend on Caracal"
 fi
-contains "$MANUL/manul-env.sh" 'FITEO_BASE_URL' "Manul persists the Fiteo backend base URL"
-contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes Fiteo credentials from disk for each task"
-if grep -Fq '.mcp.servers["todo-local"]' "$MANUL/opencode-adapter.sh"; then
-  contains "$MANUL/opencode-adapter.sh" '.mcp.servers["todo-local"]' "Manul injects Todo local MCP into the task-local V2 config when available"
-  contains "$MANUL/opencode-adapter.sh" 'env.TODO_LOCAL_MCP_AVAILABLE' "Manul only injects Todo MCP after endpoint discovery"
-else
-  contains "$MANUL/opencode-adapter.sh" '"todo-local": {' "legacy Manul injects Todo local MCP into the task-local OpenCode config when available"
+contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul environment migration recognizes the legacy Caracal URL"
+contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul environment migration recognizes the legacy Caracal token"
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
+  fail "Manul environment helper must not declare or persist Caracal credentials"
 fi
-contains "$MANUL/opencode-adapter.sh" 'todo_local_mcp_preflight' "Manul verifies Todo local MCP before starting an enabled task"
-contains "$MANUL/opencode-adapter.sh" 'unset TODO_LOCAL_MCP_TOKEN' "Manul never loads or forwards the legacy Todo token"
-contains "$MANUL/opencode-adapter.sh" 'ProcessRunner.run --timeout 45' "Manul checks the live OpenCode MCP registry"
-contains "$MANUL/opencode-adapter.sh" 'task was not started' "Manul refuses to start a task without a live Caracal connection"
-contains "$MANUL/test_adapters.sh" 'test_opencode_caracal_mcp' "adapter tests cover connected and disconnected Caracal states"
-contains "$MANUL/test_manul_environment.sh" 'Bootstrap refreshes Caracal URL/token' "environment tests cover Caracal endpoint/token refresh"
+if grep -Fq 'persist the current Caracal MCP endpoint/token for Manul' "$AICODE"; then
+  fail "aicode must not describe Caracal credentials as Manul-owned runtime values"
+fi
+contains "$AICODE" 'Manul environment helper deliberately removes obsolete' "aicode documents the Caracal cleanup boundary during Manul bootstrap"
+contains "$AICODE" 'could not persist supported Manul runtime environment values' "aicode reports only supported Manul bootstrap values"
 
 # The shared jq transformer is stored as a tracked source file, so comments
 # with apostrophes are safe and the launcher executes that exact file.
@@ -249,7 +234,9 @@ contains "$AICODE" 'todo_local_mcp_probe_status' "aicode uses the shared MCP han
 contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
-contains "$MANUL/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
+contains "$AICODE" 'TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"' "aicode resolves the Todo endpoint helper from its own repository"
+contains "$AICODE" 'export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER' "aicode exports the shared Todo client and resolver paths to Manul"
+contains "$MANUL/todo-task-source-utils.sh" 'TODO_MCP_CLIENT' "Manul consumes the shared Todo MCP client through the exported path"
 if grep -Fq 'TODO_LOCAL_MCP_TOKEN' "$ROOT/aicode/opencode-config-v2.jq"; then
   fail "OpenCode Todo config must not contain a token reference"
 else

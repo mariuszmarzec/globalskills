@@ -116,8 +116,6 @@ jobs:
             echo "bash -n $script"
             bash -n "$script"
           done
-      - name: Run Todo MCP client unit tests
-        run: python3 "$MANUL_CANONICAL_DIR/test_todo_mcp_client.py"
       - name: Run configured globalskills integration tests
         env:
           REQUESTED_TESTS: ${{ inputs.tests }}
