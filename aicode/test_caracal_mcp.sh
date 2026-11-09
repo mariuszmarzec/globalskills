@@ -231,7 +231,9 @@ contains "$AICODE" 'todo_local_mcp_probe_status' "aicode uses the shared MCP han
 contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
-contains "$MANUL/todo-local-mcp-url.sh" 'todo_local_mcp_resolve_url' "aicode and Manul share Todo endpoint discovery"
+contains "$AICODE" 'TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"' "aicode resolves the Todo endpoint helper from its own repository"
+contains "$AICODE" 'export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER' "aicode exports the shared Todo client and resolver paths to Manul"
+contains "$MANUL/todo-task-source-utils.sh" 'TODO_MCP_CLIENT' "Manul consumes the shared Todo MCP client through the exported path"
 if grep -Fq 'TODO_LOCAL_MCP_TOKEN' "$ROOT/aicode/opencode-config-v2.jq"; then
   fail "OpenCode Todo config must not contain a token reference"
 else
