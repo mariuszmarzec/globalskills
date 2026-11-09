@@ -100,8 +100,10 @@ contains "$MANUL/opencode-adapter.sh" 'could not safely inspect all OpenCode con
 if grep -Eq 'CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|caracal-rag' "$MANUL/opencode-adapter.sh"; then
   fail "Manul OpenCode adapter must not configure or depend on Caracal"
 fi
-if grep -Eq 'CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN' "$MANUL/manul-env.sh"; then
-  fail "Manul environment helper must not load or persist Caracal credentials"
+contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul environment migration recognizes the legacy Caracal URL"
+contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul environment migration recognizes the legacy Caracal token"
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
+  fail "Manul environment helper must not declare or persist Caracal credentials"
 fi
 if grep -Fq 'CARACAL_MCP_URL' "$AICODE"; then
   fail "aicode launcher must not pass Caracal credentials into Manul"
