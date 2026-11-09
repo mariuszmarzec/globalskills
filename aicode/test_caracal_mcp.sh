@@ -86,6 +86,8 @@ contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches Op
 contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caracal credentials from the Caracal provider"
 
 # Standalone Manul no longer owns Caracal credentials or requires Caracal MCP.
+# This integration suite checks the Manul master runtime checked out by CI.
+# The shared transport implementation itself is covered by aicode's unit test.
 # The aicode ACP path remains responsible for configuring and checking Caracal;
 # native Manul tasks must start with no Caracal env and keep Fiteo optional.
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul migration removes stale Caracal endpoint values"
