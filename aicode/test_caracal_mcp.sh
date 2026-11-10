@@ -234,9 +234,12 @@ contains "$AICODE" 'todo_local_mcp_probe_status' "aicode uses the shared MCP han
 contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "{env:TODO_LOCAL_MCP_URL}"' "OpenCode uses the platform-resolved Todo MCP endpoint"
 contains "$AICODE" 'http://127.0.0.1:8765/mcp' "aicode probes Todo Desktop's native loopback endpoint first"
 contains "$AICODE" 'todo_local_mcp_is_wsl' "aicode only starts the Windows bridge inside WSL"
-contains "$AICODE" 'TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"' "aicode resolves the Todo endpoint helper from its own repository"
-contains "$AICODE" 'export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER' "aicode exports the shared Todo client and resolver paths to Manul"
-contains "$MANUL/todo-task-source-utils.sh" 'TODO_MCP_CLIENT' "Manul consumes the shared Todo MCP client through the exported path"
+contains "$AICODE" 'TODO_LOCAL_MCP_URL_HELPER="$MANUL_CANONICAL_DIR/todo-local-mcp-url.sh"' "aicode resolves the Todo endpoint helper from standalone Manul"
+contains "$AICODE" 'TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$MANUL_CANONICAL_DIR/todo-mcp-client.py}"' "aicode uses the bundled Manul Todo MCP client"
+contains "$AICODE" 'ensure_todo_mcp_bridge' "aicode retains only the optional WSL/Windows bridge lifecycle"
+contains "$MANUL/todo-task-source-utils.sh" 'TODO_TASK_SOURCE_DIR/todo-mcp-client.py' "Manul uses its bundled Todo MCP client without external path exports"
+contains "$MANUL/task-source.sh" 'task_source_preflight' "Manul preflights enabled task sources at daemon startup"
+contains "$MANUL/test_todo_mcp_client.py" 'TodoMcpClientTests' "Manul owns and tests the standalone Streamable HTTP transport"
 if grep -Fq 'TODO_LOCAL_MCP_TOKEN' "$ROOT/aicode/opencode-config-v2.jq"; then
   fail "OpenCode Todo config must not contain a token reference"
 else
