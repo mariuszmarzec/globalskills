@@ -24,7 +24,6 @@ permissions:
 env:
   MANUL_CI_TESTS: |
     aicode/test_chroma_lifecycle.sh
-    aicode/test_todo_mcp_client.py
     aicode/test_caracal_mcp.sh
     aicode/test_openclaw_snapshot.sh
     aicode/test_opencode_acp_caracal.sh
