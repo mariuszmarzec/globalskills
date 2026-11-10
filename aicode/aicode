@@ -42,18 +42,17 @@ elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
     exit 1
 fi
 
-TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"
-
-# Shared Streamable HTTP Todo MCP client and endpoint resolver are owned
-# by globalskills/aicode. If unavailable, Manul treats Todo providers as
-# optional; the launcher never falls back into the Manul runtime checkout.
-TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$AICODE_SOURCE_DIR/todo-mcp-client.py}"
+# Todo transport and endpoint discovery are owned by standalone Manul. Aicode
+# supplies only the optional WSL/Windows bridge lifecycle; native hosts use the
+# same Manul resolver without installing globalskills-specific MCP helpers.
+TODO_LOCAL_MCP_URL_HELPER="$MANUL_CANONICAL_DIR/todo-local-mcp-url.sh"
+TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$MANUL_CANONICAL_DIR/todo-mcp-client.py}"
 export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
 if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
     # shellcheck source=aicode/todo-local-mcp-url.sh
     . "$TODO_LOCAL_MCP_URL_HELPER"
 else
-    echo "WARNING: shared Todo MCP endpoint helper is missing; Todo MCP will be disabled." >&2
+    echo "WARNING: Manul Todo MCP endpoint resolver is missing at $TODO_LOCAL_MCP_URL_HELPER; local Todo polling will report an error." >&2
 fi
 
 if [ -f "$HOME/.config/opencode/opencode.env" ]; then
@@ -745,12 +744,12 @@ elif [ -x "$MANUL_INSTALLER" ]; then
 fi
 
 if [ -x "$MANUL_SCRIPT" ]; then
-    if timeout 5 "$MANUL_SCRIPT" start >"$MANUL_LOG" 2>&1; then
-        echo "Manul daemon ready."
+    if timeout 15 "$MANUL_SCRIPT" start >"$MANUL_LOG" 2>&1; then
+        echo "Manul daemon start request completed. Check ~/.manul/logs/daemon.log for task-source preflight results."
     else
         rc=$?
         if [ "$rc" -eq 124 ]; then
-            echo "WARNING: Manul daemon startup timed out after 5s; continuing with OpenCode."
+            echo "WARNING: Manul daemon startup timed out after 15s; continuing with OpenCode."
         else
             echo "WARNING: Manul daemon startup failed (exit $rc); continuing with OpenCode."
         fi
