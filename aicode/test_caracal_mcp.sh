@@ -92,6 +92,10 @@ contains "$AICODE" 'args: [$wrapper, "acp"]' "ACPX launches the OpenCode ACP wra
 contains "$AICODE" 'OpenClaw ACP OpenCode harness configured' "aicode verifies the ACP wrapper configuration"
 contains "$ACP_WRAPPER" '"$opencode_bin" mcp list' "ACP wrapper checks the effective OpenCode MCP registry"
 contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
+contains "$ACP_WRAPPER" 'caracal-rag[[:space:]]+connected' "ACP matches an explicit connected status, not a substring"
+if grep -Fq 'caracal-rag[[:space:]].*connected' "$ACP_WRAPPER"; then
+  fail "ACP must not accept disconnected as a connected status"
+fi
 contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caracal credentials from the Caracal provider"
 
 # Manul's OpenCode adapter refreshes Caracal process credentials from the
@@ -221,9 +225,6 @@ TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge
 jq -e '.mcp.servers | has("todo-local") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo MCP was not removed"
 jq -e 'any(.permissions[]; .action == "todo_local_*") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo permissions were not removed"
 ok "shared jq converter migrates legacy MCP entries and preserves native config"
-# Execute the extracted read-only verification function with mocked OpenCode
-# readiness. The static operator JSONC must remain byte-identical, and an
-# unavailable optional Todo server must never make the function fail.
 # Static guard: the launcher must verify, not rewrite, the operator config.
 # The source-level checks above ensure the only OpenCode action here is mcp list.
 if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
