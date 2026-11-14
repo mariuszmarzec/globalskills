@@ -141,6 +141,10 @@ if [ -f "${FAKE_MCP_CALLS:?}" ]; then
 fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$FAKE_MCP_CALLS"
+if [ "$FAKE_MCP_MODE" = "invalid-url" ]; then
+  echo '✗ caracal-rag failed: Invalid MCP URL for "caracal-rag"'
+  exit 1
+fi
 if [ "$FAKE_MCP_MODE" = "delayed" ] && (( count >= 2 )); then
   echo "caracal-rag connected"
   echo "fiteo disconnected"
@@ -154,6 +158,7 @@ chmod +x "$fake_opencode"
 # shellcheck source=aicode/opencode-mcp-readiness.sh
 . "$READINESS_HELPER"
 
+export CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
 export FAKE_MCP_MODE=delayed FAKE_MCP_CALLS="$tmp_dir/delayed-calls"
 export OPENCODE_MCP_WAIT_TIMEOUT=5 OPENCODE_MCP_PROBE_TIMEOUT=2 OPENCODE_MCP_RETRY_INTERVAL=1
 opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >/dev/null 2>"$tmp_dir/delayed.log" ||
@@ -271,3 +276,26 @@ contains "$AICODE" '--reverse-listen-host' "aicode binds the reverse listener to
 contains "$AICODE" 'Starting the WSL-side Todo MCP reverse relay' "aicode starts the WSL listener before the Windows connector"
 
 python3 "$ROOT/aicode/test_todo_mcp_bridge.py"
+
+# A malformed/unresolved Caracal URL is rejected before OpenCode is called.
+export CARACAL_MCP_URL='not-a-url'
+export FAKE_MCP_MODE=invalid-url FAKE_MCP_CALLS="$tmp_dir/invalid-url-calls"
+export OPENCODE_MCP_WAIT_TIMEOUT=30 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
+if opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >"$tmp_dir/invalid-url.out" 2>"$tmp_dir/invalid-url.log"; then
+  fail "Caracal readiness accepted a malformed endpoint"
+fi
+[ ! -f "$FAKE_MCP_CALLS" ] || fail "OpenCode was called with a malformed Caracal endpoint"
+grep -Fq 'CARACAL_MCP_URL is missing or is not an absolute HTTP(S) URL' "$tmp_dir/invalid-url.log" ||
+  fail "Caracal URL validation did not explain the configuration error"
+ok "Caracal readiness rejects an invalid endpoint before starting OpenCode"
+
+# OpenCode's deterministic Invalid MCP URL error is not retried for 60 seconds.
+export CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
+export FAKE_MCP_MODE=invalid-url FAKE_MCP_CALLS="$tmp_dir/invalid-url-calls"
+if opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >"$tmp_dir/invalid-url.out" 2>"$tmp_dir/invalid-url.log"; then
+  fail "Caracal readiness accepted an OpenCode Invalid MCP URL error"
+fi
+[ "$(cat "$FAKE_MCP_CALLS")" = "1" ] || fail "Caracal readiness retried a deterministic Invalid MCP URL error"
+grep -Fq 'OpenCode rejected the Caracal MCP URL http://127.0.0.1:3510/mcp' "$tmp_dir/invalid-url.log" ||
+  fail "Caracal readiness did not report the resolved, non-secret endpoint"
+ok "Caracal readiness fails immediately with the resolved endpoint on Invalid MCP URL"
