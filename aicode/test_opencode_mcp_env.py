@@ -95,6 +95,9 @@ def main():
 
     try:
         with tempfile.TemporaryDirectory(prefix="globalskills-opencode-mcp-") as home:
+            workspace = Path(home) / "workspace"
+            workspace.mkdir()
+            subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
             config_path = Path(home) / ".config" / "opencode" / "opencode.json"
             config_path.parent.mkdir(parents=True)
             config = {
@@ -129,7 +132,7 @@ def main():
             }
             result = subprocess.run(
                 [str(opencode), "mcp", "list"],
-                cwd=home,
+                cwd=workspace,
                 env=env,
                 text=True,
                 capture_output=True,
@@ -142,7 +145,7 @@ def main():
             ):
                 debug = subprocess.run(
                     [str(opencode), "debug", "config"],
-                    cwd=home,
+                    cwd=workspace,
                     env=env,
                     text=True,
                     capture_output=True,
