@@ -37,27 +37,6 @@ function Test-IPv4Address([string]$Value) {
     return $private
 }
 
-function Test-TodoDesktopMcpEndpoint {
-    $probe = $null
-    try {
-        $probe = New-Object System.Net.Sockets.TcpClient
-        $pending = $probe.BeginConnect([System.Net.IPAddress]::Loopback, 8765, $null, $null)
-        if (-not $pending.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds(2))) {
-            throw "connection timed out"
-        }
-        $probe.EndConnect($pending)
-    }
-    catch {
-        $reason = $_.Exception.GetBaseException().Message
-        throw "Todo Desktop MCP endpoint 127.0.0.1:8765 is not reachable from Windows: $reason. Start Todo Desktop and enable todo.localMcpServer."
-    }
-    finally {
-        if ($probe) {
-            $probe.Close()
-        }
-    }
-}
-
 function Get-ManagedConnectorProcesses([string]$TargetRelayAddress, [int]$TargetRelayPort) {
     $addressPattern = '["]?-RelayAddress["]?\s+["]?' + [regex]::Escape($TargetRelayAddress) + '["]?'
     $portPattern = '["]?-RelayPort["]?\s+["]?' + [regex]::Escape([string]$TargetRelayPort) + '["]?'
@@ -330,9 +309,6 @@ public static class TodoMcpWindowsBridge
 if (-not (Test-IPv4Address $RelayAddress)) {
     throw "The reverse relay address must be a concrete private IPv4 address."
 }
-# Validate Todo Desktop before ensuring a pool of idle reverse TCP channels.
-# This keeps a missing local MCP listener from looking like a WSL transport failure.
-Test-TodoDesktopMcpEndpoint
 if (-not $SourceHash) {
     $SourceHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
 }

@@ -146,6 +146,10 @@ if [ "$FAKE_MCP_MODE" = "invalid-url" ]; then
   echo '✗ caracal-rag failed: Invalid MCP URL for "caracal-rag"'
   exit 1
 fi
+if [ "$FAKE_MCP_MODE" = "connected" ]; then
+  echo "caracal-rag connected"
+  exit 0
+fi
 if [ "$FAKE_MCP_MODE" = "delayed" ] && (( count >= 2 )); then
   echo "caracal-rag connected"
   echo "fiteo disconnected"
@@ -158,6 +162,84 @@ FAKE_OPENCODE
 chmod +x "$fake_opencode"
 # shellcheck source=aicode/opencode-mcp-readiness.sh
 . "$READINESS_HELPER"
+
+# An explicitly supplied URL may be a shell variable without an export
+# attribute. aicode must pass that same endpoint to OpenCode children.
+ensure_caracal_definition="$(
+  awk '
+    /^ensure_caracal_mcp\(\) \{/ { copying = 1 }
+    copying { print }
+    copying && /^}$/ { exit }
+  ' "$AICODE"
+)"
+[ -n "$ensure_caracal_definition" ] || fail "Could not load the production Caracal startup function"
+(
+  eval "$ensure_caracal_definition"
+  unset CARACAL_MCP_URL
+  CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
+  CARACAL_ACCESS_TOKEN='test-caracal-token'
+  export CARACAL_ACCESS_TOKEN
+  caracal_http_ready() { return 0; }
+  ensure_caracal_mcp >/dev/null
+  [ "$(bash -c 'printf %s "${CARACAL_MCP_URL:-}"')" = 'http://127.0.0.1:3510/mcp' ]
+) || fail "aicode did not export the explicit Caracal URL to child processes"
+ok "aicode exports an explicitly configured Caracal URL to OpenCode"
+
+# A missing Windows Todo endpoint must leave the optional Todo MCP disabled
+# while allowing the required Caracal readiness check to continue.
+ensure_todo_definition="$(
+  awk '
+    /^ensure_todo_mcp_bridge\(\) \{/ { copying = 1 }
+    copying { print }
+    copying && /^}$/ { exit }
+  ' "$AICODE"
+)"
+[ -n "$ensure_todo_definition" ] || fail "Could not load the production Todo startup function"
+optional_todo_bin="$tmp_dir/optional-todo-bin"
+mkdir -p "$optional_todo_bin"
+real_python3="$(command -v python3)"
+cat > "$optional_todo_bin/python3" <<'OPTIONAL_TODO_PYTHON'
+#!/usr/bin/env bash
+if [[ "${1:-}" == */run-with-timeout.py ]]; then
+  exec "$REAL_PYTHON3" "$@"
+fi
+exit 0
+OPTIONAL_TODO_PYTHON
+cat > "$optional_todo_bin/powershell.exe" <<'OPTIONAL_TODO_POWERSHELL'
+#!/usr/bin/env bash
+exit 0
+OPTIONAL_TODO_POWERSHELL
+chmod +x "$optional_todo_bin/python3" "$optional_todo_bin/powershell.exe"
+(
+  eval "$ensure_todo_definition"
+  export AICODE_SOURCE_DIR="$ROOT/aicode"
+  export REAL_PYTHON3="$real_python3"
+  PATH="$optional_todo_bin:$PATH"
+  export PATH
+  todo_local_mcp_is_wsl() { return 0; }
+  todo_local_mcp_probe_status() { printf '000'; }
+  ip() {
+    if [ "$*" = "-4 route show default" ]; then
+      printf '%s\n' 'default via 172.24.0.1 dev eth0'
+    elif [ "$*" = "-4 route get 172.24.0.1" ]; then
+      printf '%s\n' '172.24.0.1 dev eth0 src 172.24.0.2'
+    else
+      return 1
+    fi
+  }
+  wslpath() { printf '%s\n' 'C:\globalskills\todo-mcp-bridge.ps1'; }
+  if ! ensure_todo_mcp_bridge >/dev/null 2>"$tmp_dir/optional-todo.log"; then
+    cat "$tmp_dir/optional-todo.log" >&2
+    exit 1
+  fi
+  [ "$TODO_LOCAL_MCP_AVAILABLE" = "0" ] || exit 1
+  export CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
+  export FAKE_MCP_MODE=connected FAKE_MCP_CALLS="$tmp_dir/optional-todo-calls"
+  export OPENCODE_MCP_WAIT_TIMEOUT=5 OPENCODE_MCP_PROBE_TIMEOUT=2 OPENCODE_MCP_RETRY_INTERVAL=1
+  opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >/dev/null 2>&1
+  [ "$(cat "$FAKE_MCP_CALLS")" = "1" ]
+) || fail "unavailable optional Todo MCP blocked Caracal/OpenCode startup"
+ok "unavailable Todo MCP does not block Caracal/OpenCode startup"
 
 export CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
 export FAKE_MCP_MODE=delayed FAKE_MCP_CALLS="$tmp_dir/delayed-calls"
