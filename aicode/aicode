@@ -453,10 +453,10 @@ verify_opencode_caracal_config() {
     # by the CLI that will launch the session.
     if [ -z "${OPENCODE_CONFIG:-}" ]; then
         local config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-        if [ -r "$config_root/opencode.json" ]; then
-            OPENCODE_CONFIG="$config_root/opencode.json"
-        elif [ -r "$config_root/opencode.jsonc" ]; then
+        if [ -r "$config_root/opencode.jsonc" ]; then
             OPENCODE_CONFIG="$config_root/opencode.jsonc"
+        elif [ -r "$config_root/opencode.json" ]; then
+            OPENCODE_CONFIG="$config_root/opencode.json"
         else
             OPENCODE_CONFIG="$config_root/opencode.json"
         fi
