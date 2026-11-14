@@ -38,6 +38,8 @@ contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded at
 # the live Caracal status but must never rewrite the global JSON/JSONC file.
 contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
 contains "$AICODE" 'Using static OpenCode config: $OPENCODE_CONFIG.' "aicode reports the effective operator-owned OpenCode config path"
+contains "$AICODE" 'if [ -r "$config_root/opencode.jsonc" ]; then' "aicode prefers the operator's JSONC config"
+contains "$ACP_WRAPPER" 'if [ -r "$config_root/opencode.jsonc" ]; then' "ACP wrapper prefers the operator's JSONC config"
 contains "$AICODE" 'operator config left unchanged' "aicode documents read-only OpenCode MCP verification"
 if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
    grep -Fq 'mv -- "$tmp" "$OPENCODE_CONFIG"' "$AICODE" ||
@@ -52,7 +54,12 @@ contains "$ROOT/aicode/opencode-config-v2.jq" 'servers:' "MCP entries are nested
 contains "$ROOT/aicode/opencode-config-v2.jq" 'disabled: false' "V2 MCP uses disabled=false"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "caracal_rag_*"' "Caracal tools receive V2 permission rules"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "fiteo_*"' "Fiteo tools receive V2 permission rules"
+contains "$ROOT/aicode/opencode-config-v2.jq" 'url: "http://127.0.0.1:3500/mcp"' "Caracal default endpoint is a static loopback URL"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:CARACAL_ACCESS_TOKEN}' "Caracal bearer token is environment-backed"
+if grep -Fq 'CARACAL_MCP_URL is missing or is not an absolute HTTP(S) URL' "$READINESS_HELPER"; then
+  fail "readiness must allow the operator-owned hardcoded Caracal URL"
+fi
+ok "Caracal readiness delegates URL validation to OpenCode's resolved config"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:FITEO_PAT}' "Fiteo bearer token is environment-backed"
 contains "$AICODE" '. "$OPENCODE_MCP_READINESS_HELPER"' "aicode loads the tested OpenCode MCP readiness helper"
 contains "$AICODE" 'opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"' "aicode waits for Caracal's live OpenCode connection"
@@ -142,6 +149,10 @@ if [ -f "${FAKE_MCP_CALLS:?}" ]; then
 fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$FAKE_MCP_CALLS"
+if [ "$FAKE_MCP_MODE" = "static-url" ]; then
+  echo "caracal-rag connected"
+  exit 0
+fi
 if [ "$FAKE_MCP_MODE" = "invalid-url" ]; then
   echo '✗ caracal-rag failed: Invalid MCP URL for "caracal-rag"'
   exit 1
@@ -215,7 +226,7 @@ merge_input="$tmp_dir/input.json"
 merge_output="$tmp_dir/output.json"
 printf '%s\n' '{"mcp":{"timeout":{"catalog":5000},"legacy":{"type":"local","command":["node","server.js"],"enabled":true,"timeout":12000},"legacy-disabled":{"type":"local","command":["node","disabled.js"],"enabled":false},"servers":{"native-existing":{"type":"remote","url":"https://native.example/mcp","disabled":true}}},"experimental":{"mcp_timeout":15000},"tools":{"foo":true},"agent":{"coder":{"tools":{"*":true}},"chat":{"tools":{"*":false}}}}' > "$merge_input"
 TODO_LOCAL_MCP_AVAILABLE=1 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge_input" > "$merge_output" || fail "V2 MCP merge failed"
-jq -e '.mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}" and .mcp.servers["caracal-rag"].disabled == false' "$merge_output" >/dev/null || fail "Caracal V2 server missing or disabled"
+jq -e '.mcp.servers["caracal-rag"].url == "http://127.0.0.1:3500/mcp" and .mcp.servers["caracal-rag"].disabled == false' "$merge_output" >/dev/null || fail "Caracal V2 server missing or disabled"
 jq -e '.mcp.servers.fiteo.url == "{env:FITEO_BASE_URL}/mcp" and .mcp.servers.fiteo.headers.Authorization == "Bearer {env:FITEO_PAT}" and .mcp.servers.fiteo.disabled == false' "$merge_output" >/dev/null || fail "Fiteo V2 server missing or disabled"
 jq -e '.mcp.servers.legacy.disabled == false and .mcp.servers.legacy.timeout.catalog == 12000 and .mcp.servers.legacy.timeout.execution == 12000' "$merge_output" >/dev/null || fail "legacy MCP entry was not migrated"
 jq -e '(.mcp | has("legacy") | not) and (.mcp | has("legacy-disabled") | not)' "$merge_output" >/dev/null || fail "legacy MCP entries remain at the V1 mcp root"
@@ -230,7 +241,15 @@ jq -e '.agent.coder.tools["fiteo_*"] == true and .agent.chat.tools."*" == false'
 TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge_output" > "$tmp_dir/output-no-todo.json" || fail "V2 merge with Todo disabled failed"
 jq -e '.mcp.servers | has("todo-local") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo MCP was not removed"
 jq -e 'any(.permissions[]; .action == "todo_local_*") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo permissions were not removed"
-ok "shared jq converter migrates legacy MCP entries and preserves native config"
+jq -e '.mcp.servers["caracal-rag"].url == "http://127.0.0.1:3500/mcp"' "$tmp_dir/output-no-todo.json" >/dev/null || fail "disabling optional Todo removed or rewrote Caracal MCP"
+
+# An operator-defined hardcoded Caracal URL must survive a later config migration.
+jq '.mcp.servers["caracal-rag"].url = "http://127.0.0.1:3500/mcp"' "$merge_output" > "$tmp_dir/hardcoded-caracal.json"
+TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$tmp_dir/hardcoded-caracal.json" > "$tmp_dir/preserved-caracal.json" ||
+  fail "V2 merge with an existing hardcoded Caracal URL failed"
+jq -e '.mcp.servers["caracal-rag"].url == "http://127.0.0.1:3500/mcp" and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"' "$tmp_dir/preserved-caracal.json" >/dev/null ||
+  fail "config migration overwrote the operator's Caracal endpoint or bearer header"
+ok "shared jq converter preserves operator-defined Caracal MCP while removing optional Todo"
 # Static guard: the launcher must verify, not rewrite, the operator config.
 # The source-level checks above ensure the only OpenCode action here is mcp list.
 if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
@@ -278,25 +297,22 @@ contains "$AICODE" 'Starting the WSL-side Todo MCP reverse relay' "aicode starts
 
 python3 "$ROOT/aicode/test_todo_mcp_bridge.py"
 
-# A malformed/unresolved Caracal URL is rejected before OpenCode is called.
-export CARACAL_MCP_URL='not-a-url'
-export FAKE_MCP_MODE=invalid-url FAKE_MCP_CALLS="$tmp_dir/invalid-url-calls"
-export OPENCODE_MCP_WAIT_TIMEOUT=30 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
-if opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >"$tmp_dir/invalid-url.out" 2>"$tmp_dir/invalid-url.log"; then
-  fail "Caracal readiness accepted a malformed endpoint"
+# A hardcoded global Caracal URL does not require CARACAL_MCP_URL interpolation.
+unset CARACAL_MCP_URL
+export FAKE_MCP_MODE=static-url FAKE_MCP_CALLS="$tmp_dir/static-url-calls"
+export OPENCODE_MCP_WAIT_TIMEOUT=5 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
+if ! opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >"$tmp_dir/static-url.out" 2>"$tmp_dir/static-url.log"; then
+  fail "Caracal readiness rejected a connected MCP with a hardcoded config URL"
 fi
-[ ! -f "$FAKE_MCP_CALLS" ] || fail "OpenCode was called with a malformed Caracal endpoint"
-grep -Fq 'CARACAL_MCP_URL is missing or is not an absolute HTTP(S) URL' "$tmp_dir/invalid-url.log" ||
-  fail "Caracal URL validation did not explain the configuration error"
-ok "Caracal readiness rejects an invalid endpoint before starting OpenCode"
+[ "$(cat "$FAKE_MCP_CALLS")" = "1" ] || fail "Caracal readiness did not probe OpenCode with a hardcoded URL"
+ok "Caracal readiness supports the operator's hardcoded global MCP URL"
 
-# OpenCode's deterministic Invalid MCP URL error is not retried for 60 seconds.
-export CARACAL_MCP_URL='http://127.0.0.1:3510/mcp'
+# OpenCode's deterministic Invalid MCP URL error is not retried.
 export FAKE_MCP_MODE=invalid-url FAKE_MCP_CALLS="$tmp_dir/invalid-url-calls"
 if opencode_wait_for_mcp_connected "$ROOT/aicode" "$fake_opencode" "caracal-rag" >"$tmp_dir/invalid-url.out" 2>"$tmp_dir/invalid-url.log"; then
   fail "Caracal readiness accepted an OpenCode Invalid MCP URL error"
 fi
 [ "$(cat "$FAKE_MCP_CALLS")" = "1" ] || fail "Caracal readiness retried a deterministic Invalid MCP URL error"
-grep -Fq 'OpenCode rejected the Caracal MCP URL http://127.0.0.1:3510/mcp' "$tmp_dir/invalid-url.log" ||
-  fail "Caracal readiness did not report the resolved, non-secret endpoint"
-ok "Caracal readiness fails immediately with the resolved endpoint on Invalid MCP URL"
+grep -Fq 'OpenCode rejected the Caracal MCP URL from its resolved configuration' "$tmp_dir/invalid-url.log" ||
+  fail "Caracal readiness did not explain the resolved-config URL failure"
+ok "Caracal readiness fails immediately when OpenCode rejects its configured URL"
