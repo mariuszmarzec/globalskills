@@ -10,7 +10,7 @@ trap 'rm -rf "$TMP"' EXIT
 HOME_DIR="$TMP/home"
 BIN="$TMP/bin"
 CARACAL="$HOME_DIR/.caracal"
-OPENCODE_CONFIG="$HOME_DIR/.config/opencode/opencode.json"
+OPENCODE_CONFIG="$HOME_DIR/.config/opencode/opencode.jsonc"
 mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.manul" "$CARACAL/bin" "$CARACAL/venv/bin" "$CARACAL/config" "$BIN"
 chmod 700 "$HOME_DIR" "$HOME_DIR/.manul" "$CARACAL" "$CARACAL/config"
 cat >"$HOME_DIR/.manul/.env" <<'ENV'
@@ -103,7 +103,7 @@ cat >"$OPENCODE_CONFIG" <<'JSON'
     "servers": {
       "caracal-rag": {
         "type": "remote",
-        "url": "{env:CARACAL_MCP_URL}",
+        "url": "http://127.0.0.1:3510/mcp",
         "oauth": false,
         "disabled": false,
         "headers": {
@@ -150,7 +150,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] || exit 74
   [ "${FITEO_PAT:-}" = "operator-fiteo-pat" ] || exit 75
   jq -e '
-    .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    .mcp.servers["caracal-rag"].url == "http://127.0.0.1:3510/mcp"
     and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
     and .mcp.servers["caracal-rag"].disabled == false
     and .mcp.servers.fiteo.url == "{env:FITEO_BASE_URL}/mcp"
