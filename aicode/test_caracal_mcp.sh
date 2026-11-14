@@ -37,6 +37,7 @@ contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded at
 # OpenCode MCP configuration is static and operator-owned. aicode verifies
 # the live Caracal status but must never rewrite the global JSON/JSONC file.
 contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
+contains "$AICODE" 'Using static OpenCode config: $OPENCODE_CONFIG.' "aicode reports the effective operator-owned OpenCode config path"
 contains "$AICODE" 'operator config left unchanged' "aicode documents read-only OpenCode MCP verification"
 if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
    grep -Fq 'mv -- "$tmp" "$OPENCODE_CONFIG"' "$AICODE" ||
