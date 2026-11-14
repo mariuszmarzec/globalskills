@@ -34,8 +34,17 @@ contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness wait has a bounded t
 contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
 contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded attempt count"
 
-# OpenCode V2 uses mcp.servers and ordered MCP permission rules.
-contains "$AICODE" 'opencode-config-v2.jq' "aicode uses the shared OpenCode V2 config merger"
+# OpenCode MCP configuration is static and operator-owned. aicode verifies
+# the live Caracal status but must never rewrite the global JSON/JSONC file.
+contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
+contains "$AICODE" 'operator config left unchanged' "aicode documents read-only OpenCode MCP verification"
+if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
+   grep -Fq 'mv -- "$tmp" "$OPENCODE_CONFIG"' "$AICODE" ||
+   grep -Fq 'cp -p -- "$OPENCODE_CONFIG"' "$AICODE"; then
+  fail "aicode must not rewrite, back up, or replace the operator OpenCode config"
+fi
+ok "aicode keeps operator OpenCode JSON/JSONC byte-for-byte unchanged"
+# The V2 converter remains a standalone migration utility, but is not run at startup.
 contains "$ROOT/aicode/opencode-config-v2.jq" '"caracal-rag": {' "V2 merger registers Caracal"
 contains "$ROOT/aicode/opencode-config-v2.jq" '"fiteo": {' "V2 merger registers Fiteo"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'servers:' "MCP entries are nested under mcp.servers"
@@ -85,12 +94,9 @@ contains "$ACP_WRAPPER" '"$opencode_bin" mcp list' "ACP wrapper checks the effec
 contains "$ACP_WRAPPER" 'exec "$opencode_bin" acp "$@"' "ACP wrapper launches OpenCode over ACP only after the MCP check"
 contains "$ACP_WRAPPER" '. "$CARACAL_HOME/env.sh"' "ACP wrapper refreshes Caracal credentials from the Caracal provider"
 
-# Standalone Manul no longer owns Caracal credentials or requires Caracal MCP.
-# This integration suite checks the Manul master runtime checked out by CI.
-# The OpenCode adapter fixture compares canonical workspace paths on macOS.
-# The shared transport implementation itself is covered by aicode's unit test.
-# The aicode ACP path remains responsible for configuring and checking Caracal;
-# native Manul tasks must start with no Caracal env and keep Fiteo optional.
+# Manul's OpenCode adapter refreshes Caracal process credentials from the
+# operator-owned provider only when its static config enables caracal-rag.
+# Caracal secrets must never be persisted to Manul's runtime .env.
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul migration removes stale Caracal endpoint values"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul migration removes stale Caracal tokens"
 if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
@@ -100,9 +106,8 @@ contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul supports its dedicated F
 contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes dedicated Fiteo credentials when available"
 contains "$MANUL/opencode-adapter.sh" 'optional Manul Fiteo MCP' "Manul documents the optional Fiteo MCP overlay"
 contains "$MANUL/opencode-adapter.sh" 'could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP' "Manul skips optional Fiteo injection when config cannot be inspected"
-if grep -Eq 'CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|caracal-rag' "$MANUL/opencode-adapter.sh"; then
-  fail "Manul OpenCode adapter must not configure or depend on Caracal"
-fi
+# The adapter may now consume Caracal process-local credentials; it must not
+# persist them. Persistence boundaries are asserted against manul-env.sh above.
 contains "$MANUL/manul-env.sh" 'CARACAL_MCP_URL=' "Manul environment migration recognizes the legacy Caracal URL"
 contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul environment migration recognizes the legacy Caracal token"
 if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
@@ -114,10 +119,8 @@ fi
 contains "$AICODE" 'Manul environment helper deliberately removes obsolete' "aicode documents the Caracal cleanup boundary during Manul bootstrap"
 contains "$AICODE" 'could not persist supported Manul runtime environment values' "aicode reports only supported Manul bootstrap values"
 
-# The shared jq transformer is stored as a tracked source file, so comments
-# with apostrophes are safe and the launcher executes that exact file.
-contains "$AICODE" 'jq -s -f "$jq_program"' "aicode feeds the shared V2 jq program from a file"
-contains "$ROOT/aicode/opencode-config-v2.jq" "OpenCode's" "the shared V2 jq program retains readable comments"
+# The standalone migration helper remains available for explicit migration.
+contains "$ROOT/aicode/opencode-config-v2.jq" "OpenCode's" "the standalone V2 migration helper retains readable comments"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
