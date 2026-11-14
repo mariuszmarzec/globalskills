@@ -29,21 +29,22 @@ def migrate_mcp_server:
         servers: (
           ($legacyServers + $nativeServers)
           | with_entries(.value |= migrate_mcp_server)
-          + {
-              "caracal-rag": {
+          | . as $servers
+          | $servers + {
+              "caracal-rag": ($servers["caracal-rag"] // {
                 type: "remote",
-                url: "{env:CARACAL_MCP_URL}",
+                url: "http://127.0.0.1:3500/mcp",
                 oauth: false,
                 disabled: false,
                 headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-              },
-              "fiteo": {
+              }),
+              "fiteo": ($servers.fiteo // {
                 type: "remote",
                 url: "{env:FITEO_BASE_URL}/mcp",
                 oauth: false,
                 disabled: false,
                 headers: {Authorization: "Bearer {env:FITEO_PAT}"}
-              }
+              })
             }
         )
       }
