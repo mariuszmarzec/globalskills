@@ -446,47 +446,29 @@ ensure_todo_mcp_bridge() {
     return 0
 }
 
-ensure_opencode_caracal_config() {
-    OPENCODE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
-    export OPENCODE_CONFIG
-    local config_dir tmp config_input
-    config_dir="$(dirname "$OPENCODE_CONFIG")"
-    mkdir -p "$config_dir" || return 1
-    if [ -L "$OPENCODE_CONFIG" ]; then
-        echo "ERROR: refusing symlinked OpenCode config path: $OPENCODE_CONFIG" >&2
-        return 1
-    fi
-    tmp="$(mktemp "$config_dir/.opencode-caracal.XXXXXX")" || return 1
-    if [ -f "$OPENCODE_CONFIG" ]; then
-        config_input="$OPENCODE_CONFIG"
-    else
-        config_input="/dev/null"
-    fi
-    local jq_program="$AICODE_SOURCE_DIR/opencode-config-v2.jq"
-    if [ ! -r "$jq_program" ]; then
-        rm -f -- "$tmp"
-        echo "ERROR: OpenCode V2 config merger is missing: $jq_program" >&2
-        return 1
-    fi
-    if ! jq -s -f "$jq_program" "$config_input" > "$tmp"; then
-        rm -f -- "$tmp"
-        echo "ERROR: unable to migrate/merge OpenCode V2 MCP config." >&2
-        return 1
-    fi
-    if [ -f "$OPENCODE_CONFIG" ] && cmp -s "$tmp" "$OPENCODE_CONFIG"; then
-        rm -f -- "$tmp"
-    else
-        if [ -f "$OPENCODE_CONFIG" ]; then
-            cp -p -- "$OPENCODE_CONFIG" "$OPENCODE_CONFIG.bak.$(date +%Y%m%d-%H%M%S)" || { rm -f -- "$tmp"; return 1; }
-            chmod --reference="$OPENCODE_CONFIG" "$tmp" 2>/dev/null || true
+verify_opencode_caracal_config() {
+    # OpenCode MCP configuration is operator-owned and static. aicode must
+    # never rewrite, migrate, back up, or synthesize the global opencode.json.
+    # Resolve the existing config only so the same operator config is checked
+    # by the CLI that will launch the session.
+    if [ -z "${OPENCODE_CONFIG:-}" ]; then
+        local config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+        if [ -r "$config_root/opencode.json" ]; then
+            OPENCODE_CONFIG="$config_root/opencode.json"
+        elif [ -r "$config_root/opencode.jsonc" ]; then
+            OPENCODE_CONFIG="$config_root/opencode.jsonc"
         else
-            chmod 0600 "$tmp"
+            OPENCODE_CONFIG="$config_root/opencode.json"
         fi
-        mv -- "$tmp" "$OPENCODE_CONFIG" || { rm -f -- "$tmp"; return 1; }
-        echo "OpenCode Caracal MCP config updated (backup retained when replacing an existing file)."
+    fi
+    export OPENCODE_CONFIG
+    if [ ! -r "$OPENCODE_CONFIG" ]; then
+        echo "ERROR: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG" >&2
+        echo "Configure the required mcp.servers.caracal-rag entry in the operator-owned config; aicode will not rewrite it." >&2
+        return 1
     fi
 
-    local mcp_output opencode_cli
+    local opencode_cli mcp_output
     if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
         opencode_cli="$OPENCODE_BIN"
     else
@@ -496,23 +478,24 @@ ensure_opencode_caracal_config() {
         echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
         return 1
     fi
-    # Caracal can answer HTTP before OpenCode completes its MCP initialize.
-    # Retry the actual OpenCode registry check instead of failing on that race.
-    # A non-zero aggregate exit is acceptable when an unrelated optional MCP
-    # (for example Fiteo) is offline; Caracal's own connected status is decisive.
+
+    # Verify the static Caracal entry with the exact CLI/config/env used for
+    # this session. An unrelated optional MCP (for example Fiteo) may be down.
     if ! opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"; then
         return 1
     fi
     mcp_output="$OPENCODE_MCP_LAST_OUTPUT"
-    echo "OpenCode reports caracal-rag connected."
-    if [ "$TODO_LOCAL_MCP_CONNECTED" = "1" ] &&
-       ! printf '%s\n' "$mcp_output" | grep -Eiq 'todo-local[[:space:]].*connected|connected.*todo-local'; then
-        echo "ERROR: the verified Todo MCP bridge is not connected in OpenCode; no OpenCode session will start." >&2
-        return 1
+    echo "OpenCode reports caracal-rag connected; operator config left unchanged."
+
+    # Todo Desktop is always optional. A Todo bridge that completed its own
+    # handshake is useful context, but its later OpenCode status never blocks
+    # startup of an otherwise healthy session.
+    if [ "${TODO_LOCAL_MCP_AVAILABLE:-0}" = "1" ] &&
+       ! printf '%s\n' "$mcp_output" |
+           grep -Eiq '(^|[[:space:]])todo-local[[:space:]]+connected([[:space:]]|$|\()'; then
+        echo "WARNING: optional todo-local MCP is not connected in OpenCode; continuing without Todo tools." >&2
     fi
-    if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
-        echo "OpenCode reports todo-local connected."
-    fi
+    return 0
 }
 
 configure_openclaw_opencode_acp() {
@@ -642,7 +625,7 @@ if ! ensure_caracal_mcp; then
     exit 1
 fi
 ensure_todo_mcp_bridge
-if ! ensure_opencode_caracal_config; then
+if ! verify_opencode_caracal_config; then
     exit 1
 fi
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then

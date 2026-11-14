@@ -74,7 +74,7 @@ fi
 # only Caracal's explicit connected status gates the ACP session.
 mcp_list_rc=0
 mcp_output="$(timeout 45 "$opencode_bin" mcp list 2>&1)" || mcp_list_rc=$?
-if ! printf '%s\n' "$mcp_output" | grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag'; then
+if ! printf '%s\n' "$mcp_output" | grep -Eiq '(^|[[:space:]])caracal-rag[[:space:]]+connected([[:space:]]|$|\()'; then
     log "OpenCode did not report caracal-rag as connected (mcp list exit $mcp_list_rc); refusing the ACP session"
     exit 78
 fi
