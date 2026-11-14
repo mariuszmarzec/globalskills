@@ -140,8 +140,21 @@ def main():
             if result.returncode != 0 or not re.search(
                 r"caracal-rag\s+connected", output, re.IGNORECASE
             ):
+                debug = subprocess.run(
+                    [str(opencode), "debug", "config"],
+                    cwd=home,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=45,
+                    check=False,
+                )
                 raise AssertionError(
-                    "OpenCode did not connect with env-backed URL and bearer header:\n" + output
+                    "OpenCode did not connect with env-backed URL and bearer header:\n"
+                    + output
+                    + "\nOpenCode debug config:\n"
+                    + debug.stdout
+                    + debug.stderr
                 )
             if EXPECTED_AUTHORIZATION not in McpHandler.seen_authorization:
                 raise AssertionError("MCP server did not receive the env-backed bearer header")
