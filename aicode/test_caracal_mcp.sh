@@ -224,30 +224,22 @@ ok "shared jq converter migrates legacy MCP entries and preserves native config"
 # Execute the extracted read-only verification function with mocked OpenCode
 # readiness. The static operator JSONC must remain byte-identical, and an
 # unavailable optional Todo server must never make the function fail.
-verify_function="$tmp_dir/verify-opencode-caracal.sh"
-sed -n '/^verify_opencode_caracal_config() {$/,/^configure_openclaw_opencode_acp() {$/p' "$AICODE" | sed '$d' > "$verify_function"
-verify_harness="$tmp_dir/run-verify-opencode-caracal.sh"
-cat > "$verify_harness" <<'HARNESS'
-#!/usr/bin/env bash
-set -euo pipefail
-opencode_wait_for_mcp_connected() {
-  OPENCODE_MCP_LAST_OUTPUT="${MOCK_MCP_OUTPUT:-caracal-rag connected}"
-  return "${MOCK_CARACAL_RC:-0}"
-}
-HARNESS
-cat "$verify_function" >> "$verify_harness"
-printf '%s\\n' 'verify_opencode_caracal_config' >> "$verify_harness"
-chmod +x "$verify_harness"
-static_config="$tmp_dir/operator-opencode.jsonc"
-printf '%s\\n' '{' '  // operator-owned static config' '  "mcp": {"servers": {"caracal-rag": {"type": "remote", "url": "{env:CARACAL_MCP_URL}"}}}' '}' > "$static_config"
-static_hash="$(sha256sum "$static_config" | awk '{print $1}')"
-printf '%s\\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp_dir/opencode"
-chmod +x "$tmp_dir/opencode"
-AICODE_SOURCE_DIR="$ROOT/aicode" \\
-OPENCODE_CONFIG="$static_config" \\
-OPENCODE_BIN="$tmp_dir/opencode" \\
-TODO_LOCAL_MCP_AVAILABLE=1 \\
-MOCK_MCP_OUTPUT=; OpenCode receives only the authenticated WSL loopback bridge.
+# Static guard: the launcher must verify, not rewrite, the operator config.
+# The source-level checks above ensure the only OpenCode action here is mcp list.
+if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
+   grep -Fq 'mv -- "$tmp" "$OPENCODE_CONFIG"' "$AICODE" ||
+   grep -Fq 'cp -p -- "$OPENCODE_CONFIG"' "$AICODE"; then
+  fail "aicode must not rewrite, back up, or replace the operator OpenCode config"
+fi
+ok "aicode keeps the operator OpenCode JSON/JSONC config static"
+
+# Todo Desktop is optional; missing or disconnected Todo never blocks Caracal.
+if grep -Fq 'ERROR: the verified Todo MCP bridge is not connected' "$AICODE"; then
+  fail "Todo MCP must not be a startup requirement"
+fi
+contains "$AICODE" 'continuing without Todo tools' "aicode continues when optional Todo MCP is not connected"
+
+# Todo Desktop runs in Windows; OpenCode receives only the authenticated WSL loopback bridge.
 contains "$AICODE" 'unset TODO_LOCAL_MCP_TOKEN' "aicode prevents legacy Todo credentials from reaching OpenCode"
 if grep -Fq 'todo-mcp.env' "$AICODE"; then
   fail "aicode must not load a Todo token environment file"
