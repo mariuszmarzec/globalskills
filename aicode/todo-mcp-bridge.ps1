@@ -37,6 +37,27 @@ function Test-IPv4Address([string]$Value) {
     return $private
 }
 
+function Test-TodoDesktopMcpEndpoint {
+    $probe = $null
+    try {
+        $probe = New-Object System.Net.Sockets.TcpClient
+        $pending = $probe.BeginConnect([System.Net.IPAddress]::Loopback, 8765, $null, $null)
+        if (-not $pending.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds(2))) {
+            throw "connection timed out"
+        }
+        $probe.EndConnect($pending)
+    }
+    catch {
+        $reason = $_.Exception.GetBaseException().Message
+        throw "Todo Desktop MCP endpoint 127.0.0.1:8765 is not reachable from Windows: $reason. Start Todo Desktop and enable todo.localMcpServer."
+    }
+    finally {
+        if ($probe) {
+            $probe.Close()
+        }
+    }
+}
+
 function Get-ManagedConnectorProcesses([string]$TargetRelayAddress, [int]$TargetRelayPort) {
     $addressPattern = '["]?-RelayAddress["]?\s+["]?' + [regex]::Escape($TargetRelayAddress) + '["]?'
     $portPattern = '["]?-RelayPort["]?\s+["]?' + [regex]::Escape([string]$TargetRelayPort) + '["]?'
@@ -183,14 +204,18 @@ public static class TodoMcpWindowsBridge
     private static void HandleChannel(TcpClient channel, string logPath)
     {
         TcpClient upstream = null;
+        string stage = "read HTTP request headers from the WSL relay";
         try
         {
             NetworkStream channelStream = channel.GetStream();
             byte[] requestHeader = ReadRequestHeader(channelStream);
 
+            stage = "connect to Todo Desktop MCP at 127.0.0.1:8765";
             upstream = new TcpClient(AddressFamily.InterNetwork);
             upstream.Connect(IPAddress.Loopback, 8765);
             NetworkStream upstreamStream = upstream.GetStream();
+
+            stage = "rewrite and forward the HTTP request";
             byte[] rewrittenHeader = RewriteRequestHeader(requestHeader);
             upstreamStream.Write(rewrittenHeader, 0, rewrittenHeader.Length);
 
@@ -199,12 +224,20 @@ public static class TodoMcpWindowsBridge
             // Do not wait for requestPump: an HTTP client may keep its request
             // socket open after sending Content-Length bytes.
             Task requestPump = channelStream.CopyToAsync(upstreamStream);
+            stage = "read and forward the Todo Desktop MCP response";
             Task responsePump = upstreamStream.CopyToAsync(channelStream);
             responsePump.GetAwaiter().GetResult();
         }
         catch (Exception error)
         {
-            Log(logPath, "Reverse channel request failed: " + error.GetType().Name);
+            string detail = error.Message;
+            SocketException socketError = error as SocketException;
+            if (socketError != null)
+            {
+                detail = socketError.SocketErrorCode + ": " + socketError.Message;
+            }
+            Log(logPath, "Reverse channel " + stage + " failed: " +
+                error.GetType().Name + ": " + detail);
         }
         finally
         {
@@ -297,6 +330,9 @@ public static class TodoMcpWindowsBridge
 if (-not (Test-IPv4Address $RelayAddress)) {
     throw "The reverse relay address must be a concrete private IPv4 address."
 }
+# Validate Todo Desktop before ensuring a pool of idle reverse TCP channels.
+# This keeps a missing local MCP listener from looking like a WSL transport failure.
+Test-TodoDesktopMcpEndpoint
 if (-not $SourceHash) {
     $SourceHash = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
 }

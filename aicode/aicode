@@ -462,6 +462,7 @@ verify_opencode_caracal_config() {
         fi
     fi
     export OPENCODE_CONFIG
+    echo "Using static OpenCode config: $OPENCODE_CONFIG."
     if [ ! -r "$OPENCODE_CONFIG" ]; then
         echo "ERROR: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG" >&2
         echo "Configure the required mcp.servers.caracal-rag entry in the operator-owned config; aicode will not rewrite it." >&2
