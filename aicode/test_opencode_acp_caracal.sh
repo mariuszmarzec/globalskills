@@ -166,7 +166,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     fi
     exit 0
   fi
-  printf '%s\n' 'caracal-rag failed'
+  printf '%s\n' 'caracal-rag disconnected'
   exit 1
 fi
 if [ "${1:-}" = "acp" ]; then
