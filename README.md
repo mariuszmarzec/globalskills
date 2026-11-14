@@ -128,10 +128,13 @@ the WSL address or bridge code changes.
 
 ## Fiteo backend MCP (remote)
 
-`aicode` always registers the remote `fiteo` MCP server in the global OpenCode
-config. This is the interactive/operator connection and uses `FITEO_BASE_URL`
-plus `FITEO_PAT`. It is independent of credentials used by standalone Manul
-task workers.
+The operator-owned OpenCode JSON/JSONC config contains the static remote
+`fiteo` MCP server entry. `aicode` loads the operator environment and verifies
+required Caracal readiness, but does not generate, migrate, back up, or rewrite
+the global OpenCode config at startup. This interactive/operator connection
+uses `FITEO_BASE_URL` plus `FITEO_PAT`; it is independent of credentials used
+by standalone Manul task workers. Keep the static server URL and bearer header
+environment-backed rather than placing credential values in the config.
 
 Keep the operator variables exported in your existing `~/.zshrc`:
 
