@@ -32,6 +32,43 @@ env:
     installer/test_globalskills.sh
 
 jobs:
+  verify-opencode-caracal-env:
+    name: Verify OpenCode Caracal env substitution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout globalskills
+        uses: actions/checkout@v4
+      - name: Download OpenCode 2.2.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="https://github.com/anomalyco/opencode/releases/download/v2.2.5"
+          curl -fsSLo "$RUNNER_TEMP/opencode-linux-x64.tar.gz" "$release/opencode-linux-x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/SHA256SUMS" "$release/SHA256SUMS"
+          cd "$RUNNER_TEMP"
+          grep '  opencode-linux-x64.tar.gz$' SHA256SUMS | sha256sum --check -
+          mkdir -p "$RUNNER_TEMP/opencode"
+          tar -xzf "$RUNNER_TEMP/opencode-linux-x64.tar.gz" -C "$RUNNER_TEMP/opencode"
+          opencode_bin="$(find "$RUNNER_TEMP/opencode" -type f -name opencode -print -quit)"
+          test -n "$opencode_bin"
+          chmod +x "$opencode_bin"
+          version="$("$opencode_bin" --version)"
+          printf '%s\n' "$version"
+          [[ "$version" == *2.2.5* ]]
+          echo "OPENCODE_BIN=$opencode_bin" >> "$GITHUB_ENV"
+      - name: Verify env-backed URL and bearer header
+        run: python3 aicode/test_opencode_mcp_env.py "$OPENCODE_BIN"
+
+  verify-todo-windows:
+    name: Verify optional Windows Todo MCP bridge
+    runs-on: windows-latest
+    steps:
+      - name: Checkout globalskills
+        uses: actions/checkout@v4
+      - name: Verify bridge startup without Todo Desktop
+        shell: powershell
+        run: .\aicode\test_todo_bridge_optional.ps1
+
   verify-macos:
     name: Verify native macOS Manul and aicode integration
     runs-on: macos-latest

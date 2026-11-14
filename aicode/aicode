@@ -240,7 +240,7 @@ ensure_caracal_mcp() {
             echo "ERROR: explicitly configured Caracal MCP endpoint is not reachable." >&2
             return 1
         fi
-        export CARACAL_MCP_REQUIRED=1
+        export CARACAL_MCP_URL CARACAL_MCP_REQUIRED=1
         echo "Using the explicitly configured, reachable Caracal MCP endpoint."
         return 0
     fi
