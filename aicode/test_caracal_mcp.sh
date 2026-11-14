@@ -57,8 +57,8 @@ if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
 fi
 ok "aicode keeps operator OpenCode JSON/JSONC byte-for-byte unchanged"
 # The V2 converter remains a standalone migration utility, but is not run at startup.
-contains "$ROOT/aicode/opencode-config-v2.jq" '"caracal-rag": {' "V2 merger registers Caracal"
-contains "$ROOT/aicode/opencode-config-v2.jq" '"fiteo": {' "V2 merger registers Fiteo"
+contains "$ROOT/aicode/opencode-config-v2.jq" '"caracal-rag": (' "V2 merger registers Caracal"
+contains "$ROOT/aicode/opencode-config-v2.jq" '"fiteo": (' "V2 merger registers Fiteo"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'servers:' "MCP entries are nested under mcp.servers"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'disabled: false' "V2 MCP uses disabled=false"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'action: "caracal_rag_*"' "Caracal tools receive V2 permission rules"
