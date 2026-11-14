@@ -130,8 +130,23 @@ def main():
                 "NO_COLOR": "1",
                 "CI": "true",
             }
+            debug = subprocess.run(
+                [str(opencode), "debug", "config"],
+                cwd=workspace,
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
+            if debug.returncode != 0:
+                raise AssertionError(
+                    "OpenCode could not load the isolated test configuration:\n"
+                    + debug.stdout
+                    + debug.stderr
+                )
             result = subprocess.run(
-                [str(opencode), "--standalone", "mcp", "list"],
+                [str(opencode), "mcp", "list"],
                 cwd=workspace,
                 env=env,
                 text=True,
@@ -143,15 +158,6 @@ def main():
             if result.returncode != 0 or not re.search(
                 r"caracal-rag\s+connected", output, re.IGNORECASE
             ):
-                debug = subprocess.run(
-                    [str(opencode), "--standalone", "debug", "config"],
-                    cwd=workspace,
-                    env=env,
-                    text=True,
-                    capture_output=True,
-                    timeout=45,
-                    check=False,
-                )
                 raise AssertionError(
                     "OpenCode did not connect with env-backed URL and bearer header:\n"
                     + output
