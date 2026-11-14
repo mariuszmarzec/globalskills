@@ -127,6 +127,7 @@ def main():
                 "CARACAL_ACCESS_TOKEN": "ci-caracal-token",
                 "NO_COLOR": "1",
                 "CI": "true",
+                "OPENCODE_PRINT_LOGS": "1",
             }
             debug = subprocess.run(
                 [str(opencode), "debug", "config"],
