@@ -95,6 +95,8 @@ def main():
 
     try:
         with tempfile.TemporaryDirectory(prefix="globalskills-opencode-mcp-") as home:
+            config_path = Path(home) / ".config" / "opencode" / "opencode.json"
+            config_path.parent.mkdir(parents=True)
             config = {
                 "mcp": {
                     "servers": {
@@ -110,6 +112,7 @@ def main():
                     }
                 }
             }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
             env = {
                 "PATH": os.environ.get("PATH", ""),
                 "HOME": home,
@@ -118,7 +121,6 @@ def main():
                 "XDG_CACHE_HOME": str(Path(home) / ".cache"),
                 "XDG_DATA_HOME": str(Path(home) / ".local" / "share"),
                 "XDG_STATE_HOME": str(Path(home) / ".local" / "state"),
-                "OPENCODE_CONFIG_CONTENT": json.dumps(config),
                 "CARACAL_MCP_URL": f"http://127.0.0.1:{server.server_port}/mcp",
                 "CARACAL_ACCESS_TOKEN": "ci-caracal-token",
                 "NO_COLOR": "1",
