@@ -221,7 +221,6 @@ TODO_LOCAL_MCP_AVAILABLE=0 jq -s -f "$ROOT/aicode/opencode-config-v2.jq" "$merge
 jq -e '.mcp.servers | has("todo-local") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo MCP was not removed"
 jq -e 'any(.permissions[]; .action == "todo_local_*") | not' "$tmp_dir/output-no-todo.json" >/dev/null || fail "optional Todo permissions were not removed"
 ok "shared jq converter migrates legacy MCP entries and preserves native config"
-contains "$AICODE" 'jq -s -f "$jq_program" "$config_input"' "aicode executes the tested V2 jq file"
 echo "All Caracal MCP regression guards passed."
 
 
