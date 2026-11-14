@@ -98,7 +98,9 @@ def main():
             workspace = Path(home) / "workspace"
             workspace.mkdir()
             subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
-            config_path = workspace / "opencode.json"
+            config_dir = Path(home) / ".config" / "opencode"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "opencode.json"
             config = {
                 "mcp": {
                     "servers": {
