@@ -47,7 +47,7 @@ opencode_wait_for_mcp_connected() {
         OPENCODE_MCP_LAST_STATUS="$last_rc"
 
         # Deterministic config errors will not resolve by retrying. Fail immediately
-        # and show the exact non-secret endpoint passed to this OpenCode process.
+        # and point to the selected operator-owned JSON/JSONC configuration.
         if printf '%s\n' "$last_output" | grep -Eiq 'invalid MCP URL|invalid URL for'; then
             if [ "$server_name" = "caracal-rag" ]; then
                 echo "ERROR: OpenCode rejected the Caracal MCP URL from its resolved configuration. Check mcp.servers.caracal-rag.url in the selected JSON/JSONC config." >&2
