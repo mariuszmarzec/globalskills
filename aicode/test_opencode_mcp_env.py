@@ -121,6 +121,7 @@ def main():
                 "XDG_CACHE_HOME": str(Path(home) / ".cache"),
                 "XDG_DATA_HOME": str(Path(home) / ".local" / "share"),
                 "XDG_STATE_HOME": str(Path(home) / ".local" / "state"),
+                "OPENCODE_CONFIG_DIR": str(config_path.parent),
                 "CARACAL_MCP_URL": f"http://127.0.0.1:{server.server_port}/mcp",
                 "CARACAL_ACCESS_TOKEN": "ci-caracal-token",
                 "NO_COLOR": "1",
