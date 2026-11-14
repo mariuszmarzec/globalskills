@@ -191,6 +191,80 @@ and aliases current as repositories/projects are added.
 
 Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. MCP credentials are persisted only in the mode-600 `~/.manul/.env` for unattended runs; never put token values in the config or repository.
 
+## Specification-Driven Development (SDD)
+
+SDD makes the **approved specification the contract for implementation**. The
+human decides what the product should do; AI agents turn that decision into a
+versioned specification, and only then implement it. The same canonical SDD
+agent and skill work locally in OpenCode and remotely through Manul.
+
+### The workflow
+
+```mermaid
+flowchart TD
+    A["Feature request"] --> B{"Repository has<br/>.specification/config.yaml?"}
+    B -->|No| C["Stop: SDD is not initialized"]
+    C --> D["Explicit bootstrap only"]
+    D --> E["Baseline audit: compare code and docs"]
+    E --> F["Baseline PR: specification + config"]
+    F --> G{"Human approves and merges?"}
+    G -->|No| H["Revise or stop"]
+    G -->|Yes| I["SDD enabled"]
+    B -->|Yes| I
+    I --> J["SDD Agent clarifies desired behavior"]
+    J --> K["Existing Orchestrator delegates analysis"]
+    K --> L["Specification PR: requirements, criteria, decisions"]
+    L --> M{"Human approves and merges?"}
+    M -->|No| J
+    M -->|Yes| N["Implementation task pinned to approved spec commit"]
+    N --> O["Existing Orchestrator delegates implementation"]
+    O --> P["Coder, tests and requirements-focused review"]
+    P --> Q["Implementation PR"]
+    Q --> R{"Human accepts result?"}
+    R -->|No| O
+    R -->|Yes| S["Merge: delivered"]
+```
+
+### Explicit commands
+
+- `/manul sdd bootstrap` — explicitly initialize SDD in a repository that
+  does not yet have the configuration. It audits the current code and docs,
+  resolves material ambiguities with the human, and opens a Baseline PR.
+- `/manul sdd <request>` — run an SDD change in an already initialized
+  repository. It **fails when the configuration is absent**; it never
+  bootstraps implicitly.
+- An ordinary Manul task in a repository with a valid SDD configuration is
+  routed through the SDD agent automatically. Functional changes cannot
+  bypass specification approval by selecting a coding role directly.
+
+The bootstrap configuration is committed at
+`/.specification/config.yaml` only in the Baseline PR and becomes effective
+after that PR is merged. Repositories without this file continue to use the
+ordinary workflow.
+
+### Two independent human approval gates
+
+1. **Specification PR** — describes desired behavior, stable requirement IDs,
+   acceptance criteria, edge cases and relevant decisions. It does not contain
+   the product-code implementation.
+2. **Implementation PR** — references the approved specification commit and
+   requirement IDs, contains code and tests, and reports requirement coverage.
+
+The existing Orchestrator remains responsible for agent selection, model
+tiers, delegation, verification and escalation. The SDD agent owns the
+specification lifecycle and invokes the existing Orchestrator for bounded
+analysis, implementation and review work. This avoids a second orchestration
+system and keeps the standard workflow unchanged for non-SDD repositories.
+
+### One agent, two execution environments
+
+`agents/sdd.md` and
+`skills/specification-driven-development/SKILL.md` are the shared canonical
+sources. Globalskills installs them for local OpenCode use and generates the
+same role definition for Manul. SDD does not depend on an OpenCode-only
+session or memory: durable progress is represented by approved commits,
+Issues/PRs and workflow checkpoints, so work can resume in another runtime.
+
 ## Skills
 
 | Skill | Description |
@@ -225,7 +299,8 @@ Canonical agent definitions live in `agents/<name>.md`. Each file contains one s
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|
-| `orchestrator` | primary | EXPERT | `litellm/big-pickle` | no |
+| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/big-pickle` | no |
+| `sdd` | all | EXPERT | `litellm/big-pickle` | no |
 | `architect` | all | EXPERT | `litellm/big-pickle` | edit: ask |
 | `coder-cheap` | all | CHEAP | `litellm/groq-llama-8b` | no |
 | `coder` | all | NORMAL | `litellm/groq-llama-70b` | no |
@@ -237,6 +312,7 @@ Canonical agent definitions live in `agents/<name>.md`. Each file contains one s
 | `debugger-expert` | all | EXPERT | `litellm/big-pickle` | no |
 | `researcher` | all | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
 | `tester` | all | NORMAL | `litellm/groq-llama-70b` | no |
+| `specification-driven-development` | Specification-first workflow: baseline audits, human-approved requirement changes, traceable implementation handoffs, and requirements-focused verification. |
 | `security` | all | EXPERT | `litellm/big-pickle` | edit: deny |
 | `performance` | all | STRONG | `litellm/gemini-3.6-flash` | edit: ask |
 | `refactorer` | all | NORMAL | `litellm/groq-qwen3` | no |
