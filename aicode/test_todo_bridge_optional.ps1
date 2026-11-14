@@ -68,7 +68,7 @@ try {
     $listener.Start()
     $listenerStarted = $true
     $relayPort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
-    $result = & $bridgeScript `
+    $result = . $bridgeScript `
         -Action Ensure `
         -RelayAddress $relayAddress `
         -RelayPort $relayPort `

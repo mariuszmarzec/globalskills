@@ -95,28 +95,21 @@ def main():
 
     try:
         with tempfile.TemporaryDirectory(prefix="globalskills-opencode-mcp-") as home:
-            config = Path(home) / "opencode.json"
-            config.write_text(
-                json.dumps(
-                    {
-                        "mcp": {
-                            "servers": {
-                                "caracal-rag": {
-                                    "type": "remote",
-                                    "url": "{env:CARACAL_MCP_URL}",
-                                    "oauth": False,
-                                    "disabled": False,
-                                    "headers": {
-                                        "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
-                                    },
-                                }
+            config = {
+                "mcp": {
+                    "servers": {
+                        "caracal-rag": {
+                            "type": "remote",
+                            "url": "{env:CARACAL_MCP_URL}",
+                            "oauth": False,
+                            "disabled": False,
+                            "headers": {
+                                "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
                             }
                         }
                     }
-                ),
-                encoding="utf-8",
-            )
-
+                }
+            }
             env = {
                 "PATH": os.environ.get("PATH", ""),
                 "HOME": home,
@@ -125,7 +118,7 @@ def main():
                 "XDG_CACHE_HOME": str(Path(home) / ".cache"),
                 "XDG_DATA_HOME": str(Path(home) / ".local" / "share"),
                 "XDG_STATE_HOME": str(Path(home) / ".local" / "state"),
-                "OPENCODE_CONFIG": str(config),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(config),
                 "CARACAL_MCP_URL": f"http://127.0.0.1:{server.server_port}/mcp",
                 "CARACAL_ACCESS_TOKEN": "ci-caracal-token",
                 "NO_COLOR": "1",
