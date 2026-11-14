@@ -491,8 +491,8 @@ verify_opencode_caracal_config() {
     # handshake is useful context, but its later OpenCode status never blocks
     # startup of an otherwise healthy session.
     if [ "${TODO_LOCAL_MCP_AVAILABLE:-0}" = "1" ] &&
-       ! printf '%s\\n' "$mcp_output" |
-           grep -Eiq '(^|[[:space:]])todo-local[[:space:]]+connected([[:space:]]|$|\\()'; then
+       ! printf '%s\n' "$mcp_output" |
+           grep -Eiq '(^|[[:space:]])todo-local[[:space:]]+connected([[:space:]]|$|\()'; then
         echo "WARNING: optional todo-local MCP is not connected in OpenCode; continuing without Todo tools." >&2
     fi
     return 0
