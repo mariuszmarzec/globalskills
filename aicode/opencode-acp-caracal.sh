@@ -50,7 +50,14 @@ log() {
 if [ -n "${OPENCODE_CONFIG:-}" ]; then
     export OPENCODE_CONFIG
 else
-    OPENCODE_CONFIG="$HOME/.config/opencode/opencode.json"
+    config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+    if [ -r "$config_root/opencode.jsonc" ]; then
+        OPENCODE_CONFIG="$config_root/opencode.jsonc"
+    elif [ -r "$config_root/opencode.json" ]; then
+        OPENCODE_CONFIG="$config_root/opencode.json"
+    else
+        OPENCODE_CONFIG="$config_root/opencode.jsonc"
+    fi
     export OPENCODE_CONFIG
 fi
 if [ ! -r "$OPENCODE_CONFIG" ]; then
