@@ -10,6 +10,7 @@
     "wsl-ai-dev-autopilot-multi-device": "Complex multi-device environment automation with host-wide side effects; requires a dedicated, environment-aware benchmark.",
     "android-clean-architecture": "Broad architecture guidance with project-dependent assumptions; requires a dedicated project fixture and evaluation criteria.",
     "agent-orchestration": "Complex orchestration/routing behavior spanning multiple agents and model tiers; requires a dedicated multi-agent evaluation harness.",
-    "review-strategy": "Context-heavy review workflow with project-specific judgment; requires a dedicated review fixture and quality rubric."
+    "review-strategy": "Context-heavy review workflow with project-specific judgment; requires a dedicated review fixture and quality rubric.",
+    "specification-driven-development": "Multi-phase human-approved GitHub workflow with external PR/issue state and delegated agents; validated by isolated Manul E2E tests rather than the single-agent fixture runner."
   }
 }

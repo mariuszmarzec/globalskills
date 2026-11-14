@@ -8,11 +8,11 @@ for agent in "$agents_dir"/*.md; do
   name="$(basename "$agent")"
   mode="$(sed -n 's/^mode = "\(.*\)"$/\1/p' "$agent" | head -n 1)"
   if [ "$name" = "orchestrator.md" ]; then
-    if [ "$mode" != "primary" ]; then
-      echo "FAIL: orchestrator.md must remain primary (got $mode)"
+    if [ "$mode" != "all" ]; then
+      echo "FAIL: orchestrator.md must remain primary-invokable and delegatable (mode=all, got $mode)"
       failed=1
     else
-      echo "PASS: orchestrator remains primary"
+      echo "PASS: orchestrator remains primary-invokable and delegatable"
     fi
   elif [ "$mode" != "all" ]; then
     echo "FAIL: $name must use mode: all for direct CLI and subagent use (got $mode)"
@@ -21,4 +21,18 @@ for agent in "$agents_dir"/*.md; do
     echo "PASS: $name uses mode: all"
   fi
 done
+
+if [ ! -f "$agents_dir/sdd.md" ]; then
+  echo "FAIL: canonical SDD agent definition is missing"
+  failed=1
+else
+  sdd_mode="$(sed -n 's/^mode = "\(.*\)"$/\1/p' "$agents_dir/sdd.md" | head -n 1)"
+  if [ "$sdd_mode" != "all" ]; then
+    echo "FAIL: sdd.md must use mode: all (got $sdd_mode)"
+    failed=1
+  else
+    echo "PASS: SDD agent is directly invokable and delegatable"
+  fi
+fi
+
 exit "$failed"
