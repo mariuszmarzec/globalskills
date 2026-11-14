@@ -131,7 +131,7 @@ def main():
                 "CI": "true",
             }
             result = subprocess.run(
-                [str(opencode), "mcp", "list"],
+                [str(opencode), "--standalone", "mcp", "list"],
                 cwd=workspace,
                 env=env,
                 text=True,
@@ -144,7 +144,7 @@ def main():
                 r"caracal-rag\s+connected", output, re.IGNORECASE
             ):
                 debug = subprocess.run(
-                    [str(opencode), "debug", "config"],
+                    [str(opencode), "--standalone", "debug", "config"],
                     cwd=workspace,
                     env=env,
                     text=True,
