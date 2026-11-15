@@ -221,31 +221,9 @@ ensure_caracal_mcp() {
         return 1
     fi
 
-    # An explicitly configured URL opts into an externally managed endpoint.
-    # It still must be reachable here and pass real authenticated probes below.
-    if [ -n "${CARACAL_MCP_URL:-}" ] &&
-       [[ "${CARACAL_MCP_URL:-}" != "http://127.0.0.1:0/mcp" ]]; then
-        case "$CARACAL_MCP_URL" in
-            http://*|https://*) ;;
-            *)
-                echo "ERROR: CARACAL_MCP_URL must be an absolute HTTP(S) URL." >&2
-                return 1
-                ;;
-        esac
-        if [[ "$CARACAL_MCP_URL" == *[$'\r\n\"']* ]]; then
-            echo "ERROR: CARACAL_MCP_URL contains unsupported control/quote characters." >&2
-            return 1
-        fi
-        if ! caracal_http_ready "$CARACAL_MCP_URL"; then
-            echo "ERROR: explicitly configured Caracal MCP endpoint is not reachable." >&2
-            return 1
-        fi
-        export CARACAL_MCP_REQUIRED=1
-        echo "Using the explicitly configured, reachable Caracal MCP endpoint."
-        return 0
-    fi
-
-    # Keep the configuration visibly disconnected until local startup is proven.
+    # aicode always owns the local Caracal MCP lifecycle. Ignore any
+    # inherited/stale CARACAL_MCP_URL; resolve the real local endpoint from
+    # "caracal-rag check" and start/reuse the matching process below.
     export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"
     if [ ! -x "$CARACAL_CLI" ]; then
         echo "ERROR: Caracal is not installed at $CARACAL_CLI; refusing to start an agent without MCP." >&2
@@ -609,17 +587,15 @@ configure_openclaw_opencode_acp() {
     echo "OpenClaw ACP OpenCode harness configured with the Caracal-verifying wrapper."
 }
 
-# Chroma is a separate local database service; Caracal's check needs it reachable.
-# An explicit CARACAL_MCP_URL means the MCP endpoint is externally managed, so
-# do not start a local Chroma instance for that mode.
-if [ -z "${CARACAL_MCP_URL:-}" ]; then
-    if [ -r "$AICODE_SOURCE_DIR/chroma-lifecycle.sh" ]; then
-        # shellcheck source=aicode/chroma-lifecycle.sh
-        . "$AICODE_SOURCE_DIR/chroma-lifecycle.sh"
-        ensure_chroma_server "$CARACAL_HOME" || true
-    else
-        echo "WARNING: Chroma lifecycle helper is missing next to aicode; automatic Chroma startup is skipped."
-    fi
+# Chroma must be available before the local Caracal healthcheck. Always
+# run its lifecycle helper after LiteLLM; it reuses a healthy configured
+# endpoint and starts the local service when the active config points to loopback.
+if [ -r "$AICODE_SOURCE_DIR/chroma-lifecycle.sh" ]; then
+    # shellcheck source=aicode/chroma-lifecycle.sh
+    . "$AICODE_SOURCE_DIR/chroma-lifecycle.sh"
+    ensure_chroma_server "$CARACAL_HOME" || true
+else
+    echo "WARNING: Chroma lifecycle helper is missing next to aicode; automatic Chroma startup is skipped."
 fi
 
 if ! ensure_caracal_mcp; then
