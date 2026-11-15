@@ -34,6 +34,26 @@ contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness wait has a bounded t
 contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
 contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded attempt count"
 
+# Caracal is always a local service owned by aicode. A stale/inherited URL
+# must never switch startup into an external-endpoint mode or skip Chroma.
+if grep -Fq 'An explicitly configured URL opts into an externally managed endpoint.' "$AICODE" ||
+   grep -Fq 'ERROR: explicitly configured Caracal MCP endpoint is not reachable.' "$AICODE"; then
+  fail "aicode must not treat CARACAL_MCP_URL as an externally managed endpoint"
+fi
+if grep -Fq 'if [ -z "${CARACAL_MCP_URL:-}" ]; then' "$AICODE"; then
+  fail "aicode must not skip Chroma startup when CARACAL_MCP_URL is inherited"
+fi
+contains "$AICODE" 'export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"' "aicode discards inherited Caracal URLs before resolving its local endpoint"
+contains "$AICODE" 'ensure_chroma_server "$CARACAL_HOME" || true' "aicode always runs the Chroma lifecycle before Caracal startup"
+litellm_start_line="$(grep -nF 'echo "Starting LiteLLM..."' "$AICODE" | head -n 1 | cut -d: -f1)"
+chroma_start_line="$(grep -nF 'ensure_chroma_server "$CARACAL_HOME" || true' "$AICODE" | cut -d: -f1)"
+caracal_start_line="$(grep -nF 'if ! ensure_caracal_mcp; then' "$AICODE" | cut -d: -f1)"
+[ -n "$litellm_start_line" ] && [ -n "$chroma_start_line" ] && [ -n "$caracal_start_line" ] &&
+  [ "$litellm_start_line" -lt "$chroma_start_line" ] &&
+  [ "$chroma_start_line" -lt "$caracal_start_line" ] ||
+  fail "startup order must be LiteLLM, Chroma lifecycle, then local Caracal MCP"
+ok "aicode always starts/reuses local Caracal MCP after LiteLLM, regardless of inherited URL"
+
 # OpenCode MCP configuration is static and operator-owned. aicode verifies
 # the live Caracal status but must never rewrite the global JSON/JSONC file.
 contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
