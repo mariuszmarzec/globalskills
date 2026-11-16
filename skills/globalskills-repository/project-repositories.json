@@ -26,6 +26,14 @@
       ]
     },
     {
+      "name": "mariuszmarzec/test-manul-e2e",
+      "aliases": [
+        "test-manul-e2e"
+      ],
+      "description": "Isolated end-to-end test repository for validating Manul task execution.",
+      "skills": []
+    },
+    {
       "name": "mariuszmarzec/interview-subjects",
       "aliases": [
         "interview subjects",
