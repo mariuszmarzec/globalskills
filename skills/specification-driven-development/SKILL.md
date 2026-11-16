@@ -121,7 +121,7 @@ Only after the Specification PR is merged:
      `.specification/implementation-status.md`, or add an implementation
      record to each affected requirement document. Reuse the existing
      convention; do not create competing tracking documents.
-   - For every implemented requirement ID, record the link/number of the
+   - For every requirement ID in the implementation scope, record the link/number of the
      source task or issue, the implementation task, the Implementation PR,
      the approved specification commit SHA, the relevant code/files, and the
      tests or other evidence mapped to its acceptance criteria.
