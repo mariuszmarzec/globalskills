@@ -395,7 +395,7 @@ ensure_todo_mcp_bridge() {
         --reverse-listen-host "$wsl_client_ip" \
         --reverse-listen-port 18766 \
         --allowed-reverse-client "$windows_host_ip" \
-        --channel-count 4 \
+        --channel-count 8 \
         --listen-port 8766 \
         --state-dir "$HOME/.cache/globalskills/todo-mcp-bridge"; then
         echo "WARNING: WSL Todo MCP reverse relay could not start; see ~/.cache/globalskills/todo-mcp-bridge/bridge.log." >&2
@@ -404,7 +404,7 @@ ensure_todo_mcp_bridge() {
 
     echo "Ensuring the Windows Todo MCP bridge opens outbound channels to WSL..."
     if ! powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$windows_script" \
-        -Action Ensure -RelayAddress "$wsl_client_ip" -RelayPort 18766 -ChannelCount 4; then
+        -Action Ensure -RelayAddress "$wsl_client_ip" -RelayPort 18766 -ChannelCount 8; then
         echo "WARNING: Windows Todo MCP reverse bridge could not connect; check %LOCALAPPDATA%\GlobalSkills\TodoMcpBridge\bridge-error.log." >&2
         return 0
     fi
