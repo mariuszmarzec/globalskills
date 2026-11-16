@@ -107,11 +107,45 @@ Only after the Specification PR is merged:
 5. Have the existing review workflow check both code quality and conformance
    to the approved requirements. Do not add a duplicate review pipeline merely
    because SDD is active.
-6. The Implementation PR must include a requirement-to-implementation-to-test
-   coverage table, the approved spec commit SHA, verification results, and
-   any justified limitations.
-7. Keep the implementation PR separate from the Specification PR. Human
-   acceptance of the implementation remains the final delivery gate.
+6. The Implementation PR must include:
+   - a requirement-to-implementation-to-test coverage table for every
+     in-scope requirement and acceptance criterion;
+   - the immutable approved specification commit SHA;
+   - verification results and links to tests/CI evidence; and
+   - any justified limitations or criteria that remain unverified.
+7. The Implementation PR MUST also update the repository's durable
+   specification documentation. Updating only the PR description, issue
+   comments, agent memory, or Manul's workflow database is insufficient.
+   - Prefer the repository's existing requirement implementation/status
+     registry. If none exists, add a concise registry such as
+     `.specification/implementation-status.md`, or add an implementation
+     record to each affected requirement document. Reuse the existing
+     convention; do not create competing tracking documents.
+   - For every requirement ID in the implementation scope, record the link/number of the
+     source task or issue, the implementation task, the Implementation PR,
+     the approved specification commit SHA, the relevant code/files, and the
+     tests or other evidence mapped to its acceptance criteria.
+   - In the Implementation PR, set the implementation state to
+     `in_progress` and link the task and PR. Do not label the requirement
+     `implemented` or `delivered` while its Implementation PR is still open.
+8. After the Implementation PR is merged, the SDD workflow MUST finalize the
+   durable documentation on the target branch before declaring the task
+   complete:
+   - update each affected requirement's state to `implemented`;
+   - record the merged Implementation PR and merge commit SHA, while retaining
+     the source task, approved specification SHA, code references, and
+     acceptance-criterion/test mapping;
+   - keep verification `pending` (or `failed`) for any criterion that has not
+     been demonstrated. Change the state to `verified` only when every
+     acceptance criterion has concrete passing evidence.
+   This post-merge record update may be performed by repository automation or
+   by a small follow-up documentation-only commit/PR, according to the
+   repository's contribution policy. It is a required SDD close-out step, not
+   optional bookkeeping.
+9. Keep the implementation PR separate from the Specification PR. Human
+   acceptance of the implementation remains the final delivery gate. The
+   implementation task MUST NOT be reported complete until the post-merge
+   documentation update above is present.
 
 ## Requirement format
 
