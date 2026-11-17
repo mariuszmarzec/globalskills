@@ -1,6 +1,6 @@
 ---
 name: feature-branching-strategy
-description: Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch.
+description: Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo). Create a dedicated branch with a natural, task-focused name that follows repository conventions, without exposing internal task sources or automation metadata.
 license: MIT
 ---
 
@@ -29,39 +29,22 @@ Every change pushed by an AI agent must live on a dedicated branch, never on the
 
 ## Branch naming
 
-### Feature changes
+Choose a branch name that describes the requested code change, not the way the work was dispatched or the tool that performs it.
 
-```
-feature/<ISSUE_NUMBER>-<DESCRIPTION>
-```
-
-Use `feature/` for new features, improvements, refactors, and chores.
-
-- `<ISSUE_NUMBER>` — the GitHub issue/PR number if one exists. Omit it when there is no associated issue.
-- `<DESCRIPTION>` — short, kebab-case (lowercase, dash-separated) description of the change.
+- Follow an established naming convention already used by the repository.
+- When the repository has no naming convention, use a short, natural, lowercase kebab-case description. Add a type prefix only when it is normal for that repository (for example, `feature/`, `bugfix/`, `refactor/`, or `chore/`).
+- Describe the outcome or behavior being changed, using a few meaningful words. Avoid generic names such as `feature`, `fix`, or `work`.
+- Do not add task-source/provider names, orchestration/tool names, runtime or agent names, MCP server names, internal IDs, comment IDs, attempt numbers, or other execution metadata. In particular, names such as `manul`, `todo`, `mcp`, `opencode`, `openclaw`, `codex`, or `claude-code` must not appear when they only describe the internal execution path. They are valid only when genuinely part of the requested product/domain change.
+- Do not copy Todo task IDs or other provider-generated identifiers into branch names. Include a GitHub issue number only when the repository's established convention explicitly requires it.
+- If a branch name already exists, add a plain numeric suffix such as `-2` or `-3` until it is unique. Never use task IDs or attempt metadata to make a branch unique.
 
 Examples:
 
 ```
-feature/42-google-login
-feature/23-dark-mode
-feature/update-README
-```
-
-### Bug fixes
-
-```
-bugfix/<ISSUE_NUMBER>-<DESCRIPTION>
-```
-
-Use `bugfix/` when the change fixes a bug. Same naming rules as `feature/`.
-
-Examples:
-
-```
-bugfix/17-login-crash
-bugfix/89-null-pointer-in-cart
-bugfix/fix-ci-build
+improve-session-renewal
+fix-empty-search-state
+refactor-token-refresh
+feature/add-offline-sync
 ```
 
 ## Workflow
@@ -81,13 +64,13 @@ bugfix/fix-ci-build
 4. Create the new branch from the up-to-date base branch:
 
    ```bash
-   git checkout -b feature/<ISSUE_NUMBER>-<DESCRIPTION>
+   git checkout -b <BRANCH_NAME>
    ```
 
 5. Make changes, commit, and push:
 
    ```bash
-   git push -u origin feature/<ISSUE_NUMBER>-<DESCRIPTION>
+   git push -u origin <BRANCH_NAME>
    ```
 
 6. For a new standalone task, do NOT reuse a branch left by a previous task attempt unless that branch is already tied to a live PR for this exact task. If the requested branch name already exists without such a PR, create a unique task branch (for example, append a short task/attempt suffix) and use that branch for the new work.
@@ -121,7 +104,7 @@ Determine the correct base branch before creating the PR:
 Once the branch is pushed, open a PR with the GitHub CLI (`gh`):
 
 ```bash
-gh pr create --base <parent-branch> --head feature/<ISSUE_NUMBER>-<DESCRIPTION> \
+gh pr create --base <parent-branch> --head <BRANCH_NAME> \
   --title "<short, descriptive title>" --body "<meaningful description>"
 ```
 
