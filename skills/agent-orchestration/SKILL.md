@@ -18,17 +18,21 @@ models here (or in the LiteLLM config) without rebuilding the agents.
 
 ## Model tiers (audit of LiteLLM @ localhost:4000, 2026-08-10)
 
-All 19 models in the LiteLLM model_list respond successfully and are **free**
-(no paid model is configured — OpenCode Zen is used only for its free models:
-`big-pickle`, `deepseek-v4-flash-free`). Tiers are based on measured latency,
-context window, cost, and known capability.
+The tier names below are logical LiteLLM aliases used by the shared agent
+definitions. For Manul, aliases such as `big-pickle` (EXPERT) and
+`deepseek-v4-flash-free` (STRONG) must resolve to verified models through the
+FreeLLMAPI-backed `free-cloud` route. They must not call the OpenCode Zen API.
+Keep the agent-facing aliases stable where possible; choose upstream model IDs
+from the live FreeLLMAPI `/v1/models` catalogue and verify their capabilities
+before mapping. Direct provider models may remain as deliberate alternatives
+or fallbacks, but must not precede the FreeLLMAPI primary route for Manul.
 
 | Tier | Default model | Rationale | Alternatives |
 |------|---------------|-----------|--------------|
 | CHEAP | `litellm/groq-llama-8b` | free, 128k ctx, adequate for trivial single-file edits | `litellm/gemini-3.1-flash-lite` (1M ctx), `litellm/deepseek-v4-flash-free` |
 | NORMAL | `litellm/groq-llama-70b` | free, 70B, solid general coding | `litellm/groq-qwen3`, `litellm/cerebras-gpt-oss-120b`, `litellm/gemini-3.5-flash`, `litellm/mistral-large` |
-| STRONG | `litellm/deepseek-v4-flash-free` | free, fast, strong reasoning (Zen free tier) | `litellm/gemini-3.6-flash`, `litellm/mistral-codestral`, `litellm/cerebras-gpt-oss-120b` |
-| EXPERT | `litellm/big-pickle` | free, strongest reasoning (Zen stealth model) | `litellm/deepseek-v4-flash-free` |
+| STRONG | `litellm/deepseek-v4-flash-free` | FreeLLMAPI-backed STRONG alias; verify its actual catalogue target | `litellm/gemini-3.6-flash`, `litellm/mistral-codestral`, `litellm/cerebras-gpt-oss-120b` |
+| EXPERT | `litellm/big-pickle` | FreeLLMAPI-backed EXPERT alias; verify its actual catalogue target | `litellm/deepseek-v4-flash-free` |
 
 Every model is free. Escalate only when the current tier demonstrably fails.
 
