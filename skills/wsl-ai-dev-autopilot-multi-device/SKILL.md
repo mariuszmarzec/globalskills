@@ -7,7 +7,7 @@ description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compat
 
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing 20+ models to OpenCode and OpenClaw, installs Caracal RAG into its isolated runtime under ~/.caracal, and configures the authenticated loopback HTTP MCP endpoint for OpenCode. In this deployment, OpenClaw invokes OpenCode through ACPX, so the aicode launcher configures the ACPX opencode harness to use a wrapper that refreshes Caracal credentials and checks the live MCP connection before starting opencode acp. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
+This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing models to OpenCode and OpenClaw, with FreeLLMAPI (`free-cloud`) as the primary upstream for Manul model traffic. Manul must not route through the OpenCode Zen API. Existing agent-facing LiteLLM aliases are retained for compatibility but must resolve to verified FreeLLMAPI model IDs. The skill also installs Caracal RAG into its isolated runtime under ~/.caracal and configures the authenticated loopback HTTP MCP endpoint for OpenCode. In this deployment, OpenClaw invokes OpenCode through ACPX, so the aicode launcher configures the ACPX opencode harness to use a wrapper that refreshes Caracal credentials and checks the live MCP connection before starting opencode acp. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
 
 ## Architecture
 
@@ -18,30 +18,15 @@ OpenCode Client        OpenClaw Gateway (Port 18789)
                     ▼
 LiteLLM (Router & Proxy - Port 4000)
         │
-        ├── Free Cloud Models (via API keys)
-        │   ├── Groq (fastest, ~320 tok/s)
-        │   │   ├── groq-llama-70b (Llama 3.3 70B)
-        │   │   ├── groq-qwen3 (Qwen3.6 27B)
-        │   │   └── groq-llama-8b (Llama 3.1 8B)
-        │   ├── Cerebras (~2600 tok/s)
-        │   │   ├── cerebras-gpt-oss-120b
-        │   │   ├── cerebras-gemma-31b (Gemma 4 31B)
-        │   │   └── cerebras-glm-4.7 (GLM 4.7)
-        │   ├── Google Gemini (free tier)
-        │   │   ├── gemini-3.6-flash (3.6 Flash, 20 RPD)
-        │   │   ├── gemini-3.5-flash (3.5 Flash, 20 RPD)
-        │   │   ├── gemini-3.5-flash-lite (500 RPD)
-        │   │   ├── gemini-3.1-flash-lite (500 RPD)
-        │   │   ├── gemma-4-31b (Gemma 4 31B, 14.4K RPD)
-        │   │   └── gemma-4-26b (Gemma 4 26B, 14.4K RPD)
-        │   ├── Mistral (1B tokens/month)
-        │   │   ├── mistral-large (Mistral Large)
-        │   │   └── mistral-codestral (Codestral, code-specialized)
-        │   ├── OpenRouter (Free Models Router)
-        │   │   └── or-free (auto-routes to live :free models)
-        │   └── OpenCode Zen (Cloud)
-        │       ├── big-pickle (Free)
-        │       └── deepseek-v4-flash-free (Free)
+        ├── FreeLLMAPI (`free-cloud`) — primary upstream for Manul
+        │   └── Model IDs verified from the live FreeLLMAPI `/v1/models` catalogue
+        │
+        ├── Optional direct LiteLLM routes (only deliberate alternatives/fallbacks)
+        │   ├── Groq
+        │   ├── Cerebras
+        │   ├── Google Gemini
+        │   ├── Mistral
+        │   └── OpenRouter
         │
         └── Local Ollama Models
             ├── gemma4 (gemma4:12b)
@@ -139,8 +124,10 @@ Exact bash commands or WAITING.
 ## Agent Decision Policy
 
 * Agent selects the best local model based on the hardware profile.
-* Agent configures LiteLLM to expose multiple models: free cloud models (Groq, Cerebras, Gemini, Mistral, OpenRouter) + OpenCode Zen cloud models + local Ollama models.
-* Default model is `litellm/big-pickle` (OpenCode Zen, free). Small model is `litellm/groq-llama-8b` (free). Fallback chain: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
+* Configure LiteLLM with FreeLLMAPI (`free-cloud`) as the primary upstream for Manul, with verified direct-provider routes and local Ollama available only as deliberate alternatives/fallbacks.
+* Preserve the Globalskills-facing aliases `big-pickle` (EXPERT) and `deepseek-v4-flash-free` (STRONG) where the agent definitions depend on them, but map them to actual model IDs confirmed by the live FreeLLMAPI `/v1/models` catalogue. Never point these aliases at `https://opencode.ai/zen/v1`.
+* Manul's default/EXPERT request must reach FreeLLMAPI on its first attempt. OpenCode Zen must not be its primary model or a preceding fallback. A separate interactive OpenCode Zen provider/key may remain optional, but must not be referenced by LiteLLM routes used by Manul.
+* The small model remains `litellm/groq-llama-8b` only when a direct Groq route is intentionally retained. Fallback chain for the FreeLLMAPI-backed EXPERT alias: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
 
 ## Multi-Device Sync Policy (Desktop Push to Remote)
 
@@ -294,6 +281,8 @@ Create file: `~/litellm/.env`
 
 ```bash
 LITELLM_MASTER_KEY=sk-12345678
+FREELLMAPI_API_KEY=<YOUR_FREELLMAPI_KEY>
+# Optional: only for a separate interactive OpenCode Zen provider; never reference from LiteLLM/Manul routes.
 OPENCODE_API_KEY=<YOUR_ZEN_KEY>
 GROQ_API_KEY=<YOUR_GROQ_KEY>
 CEREBRAS_API_KEY=<YOUR_CEREBRAS_KEY>
@@ -312,21 +301,24 @@ Create file: `~/litellm/config.yaml`
 model_list:
 
   # ============================================================
-  # OpenCode Zen Models
+  # FreeLLMAPI — primary upstream for Manul
   # ============================================================
+  # First inspect the live upstream catalogue:
+  # curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models
+  # Keep these public LiteLLM model_name aliases stable for agent compatibility.
+  # Replace the example upstream IDs below with exact IDs confirmed in that catalogue.
 
   - model_name: big-pickle
     litellm_params:
-      model: openai/big-pickle
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
-      reasoning_effort: none
+      model: openai/<VERIFIED_EXPERT_MODEL_ID_FROM_FREELLMAPI>
+      api_base: http://127.0.0.1:3001/v1
+      api_key: os.environ/FREELLMAPI_API_KEY
 
   - model_name: deepseek-v4-flash-free
     litellm_params:
-      model: openai/deepseek-v4-flash-free
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/OPENCODE_API_KEY
+      model: openai/<VERIFIED_STRONG_MODEL_ID_FROM_FREELLMAPI>
+      api_base: http://127.0.0.1:3001/v1
+      api_key: os.environ/FREELLMAPI_API_KEY
 
   # ============================================================
   # Groq (fastest free tier, ~320 tok/s)
@@ -783,7 +775,7 @@ through the stable `~/.agents/skills` path.
       "name": "LiteLLM Proxy",
       "models": {
         "big-pickle": {
-          "name": "Big Pickle (via LiteLLM)",
+          "name": "EXPERT alias (FreeLLMAPI via LiteLLM)",
           "cost": {
             "input": 0,
             "output": 0
@@ -806,7 +798,7 @@ through the stable `~/.agents/skills` path.
           }
         },
         "deepseek-v4-flash-free": {
-          "name": "DeepSeek V4 Flash Free (via LiteLLM)",
+          "name": "STRONG alias (FreeLLMAPI via LiteLLM)",
           "cost": {
             "input": 0,
             "output": 0
@@ -1232,10 +1224,10 @@ through the stable `~/.agents/skills` path.
 
 
 *Note: This configuration provides three providers:*
-- *`opencode/` - Direct access to OpenCode Zen cloud models*
-- *`litellm/` - Models routed through the LiteLLM proxy*
+- *`opencode/` - Optional direct OpenCode Zen access for interactive sessions only; it is not used by Manul and is not a LiteLLM upstream*
+- *`litellm/` - Models routed through the LiteLLM proxy; Manul's agent aliases are backed by FreeLLMAPI*
 - *`ollama/` - Direct access to local Ollama models*
-- *Default model: `litellm/big-pickle`. The LiteLLM catalog below retains each model's configured capabilities, context limits, and token costs.*
+- *Default model: `litellm/big-pickle`. The alias resolves through the FreeLLMAPI-backed LiteLLM route, not OpenCode Zen.*
 
 **Healthcheck:**
 Execute a test prompt to verify the selected model, tool calling, and Caracal MCP connectivity.
@@ -1266,8 +1258,8 @@ Create `~/.openclaw/openclaw.json` (JSON5). The provider id is `litellm`, pointi
         api: "openai-completions",
         timeoutSeconds: 300,
         models: [
-          { id: "big-pickle", name: "Big Pickle (Zen, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
-          { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free (Zen)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
+          { id: "big-pickle", name: "EXPERT alias (FreeLLMAPI via LiteLLM)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
+          { id: "deepseek-v4-flash-free", name: "STRONG alias (FreeLLMAPI via LiteLLM)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
           { id: "groq-llama-70b", name: "Llama 3.3 70B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
           { id: "groq-qwen3", name: "Qwen3.6 27B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
           { id: "groq-llama-8b", name: "Llama 3.1 8B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
@@ -1353,11 +1345,11 @@ Verify:
 
 * Ollama responds.
 * LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder).
-* OpenCode shows all three providers (opencode, litellm, ollama).
+* OpenCode shows the configured providers; any direct `opencode/` provider is optional and not part of Manul's LiteLLM model route.
 * OpenClaw Gateway responds on ws://127.0.0.1:18789, lists 23 `litellm/` models, and answers an agent turn through LiteLLM.
-* Primary routing works (big-pickle via LiteLLM).
-* Fallback routing works: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
-* Startup script loads all API keys from `~/litellm/.env`.
+* Primary Manul routing works: `big-pickle` reaches its FreeLLMAPI-backed model through LiteLLM on the first attempt.
+* Fallback routing works: FreeLLMAPI-backed `big-pickle` → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
+* Startup script loads LiteLLM/FreeLLMAPI keys from `~/litellm/.env`; `OPENCODE_API_KEY` is optional and must not be referenced by LiteLLM routes used by Manul.
 * Native OpenCode and Copilot agent files are generated and readable (`~/.config/opencode/agents/orchestrator.md`, `~/.copilot/agents/orchestrator.agent.md`).
 * Skills are installed as native copies for OpenCode/Manul (`~/.agents/skills/`) and Copilot (`~/.copilot/skills/`).
 * Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
@@ -1368,4 +1360,4 @@ Verify:
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM from 6 providers (Groq, Cerebras, Gemini, Mistral, OpenRouter, OpenCode Zen) plus local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b` (free); OpenCode's default remains `litellm/big-pickle` (free). Fallback chain ensures free models are used if Zen is unavailable. Multi-agent orchestration (orchestrator + 14 subagents) is installed and free-only. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
+> Installation completed successfully. You have 20+ models available via LiteLLM, with FreeLLMAPI as Manul's primary cloud upstream, configured provider fallbacks, and local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b`; OpenCode's default remains `litellm/big-pickle`, whose LiteLLM alias is backed by FreeLLMAPI. Fallbacks are used only after the FreeLLMAPI-backed primary model fails. Multi-agent orchestration (orchestrator + 14 subagents) is installed. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
