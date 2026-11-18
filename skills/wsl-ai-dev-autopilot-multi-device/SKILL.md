@@ -303,10 +303,18 @@ model_list:
   # ============================================================
   # FreeLLMAPI — primary upstream for Manul
   # ============================================================
-  # First inspect the live upstream catalogue:
+  # Before writing this config, inspect the live upstream catalogue:
   # curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models
-  # Keep these public LiteLLM model_name aliases stable for agent compatibility.
-  # Replace the example upstream IDs below with exact IDs confirmed in that catalogue.
+  # These are examples, not copy-ready model IDs. Replace every <VERIFIED_...>
+  # placeholder with an exact ID returned by that catalogue; never deploy
+  # a literal placeholder or guess an upstream model name.
+  # Keep the public LiteLLM model_name aliases stable for agent compatibility.
+
+  - model_name: free-cloud
+    litellm_params:
+      model: openai/<VERIFIED_DEFAULT_MODEL_ID_FROM_FREELLMAPI>
+      api_base: http://127.0.0.1:3001/v1
+      api_key: os.environ/FREELLMAPI_API_KEY
 
   - model_name: big-pickle
     litellm_params:
