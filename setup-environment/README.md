@@ -24,6 +24,18 @@ Use this skill to:
 - Set up model providers
 - Maintain system health
 
+## LiteLLM / Manul model routing
+
+For LiteLLM and FreeLLMAPI setup, follow the maintained
+[`freellmapi-environment`](../skills/freellmapi-environment/SKILL.md) and
+[`wsl-ai-dev-autopilot-multi-device`](../skills/wsl-ai-dev-autopilot-multi-device/SKILL.md)
+skills.
+
+Manul must use the FreeLLMAPI-backed `free-cloud` route directly through
+LiteLLM. Do not configure OpenCode Zen (`https://opencode.ai/zen/v1`) as a
+LiteLLM upstream for Manul. Preserve Globalskills agent-facing model aliases
+only when they resolve to verified FreeLLMAPI catalogue models.
+
 ## Files
 
 This skill provides scripts for:
