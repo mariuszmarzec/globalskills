@@ -42,8 +42,10 @@ Security & ops best practices
 
 Routing considerations
 ---------------------
-- Prefer routing to `free-cloud` as the primary fallback in `litellm` so OpenCode and other clients talk only to LiteLLM.
-- Keep direct provider entries in `config.yaml` until you have fully verified feature parity in FreeLLMAPI; remove them in a staged manner.
+- For Manul, use the FreeLLMAPI-backed `free-cloud` route as the primary/default LiteLLM upstream. It must be selected directly; do not route to OpenCode Zen first and treat FreeLLMAPI only as a fallback.
+- Do not configure `https://opencode.ai/zen/v1` or `OPENCODE_API_KEY` as a LiteLLM upstream for Manul. The key may exist for a separate interactive OpenCode setup, but Manul's LiteLLM model path must not depend on it.
+- Keep model names consumed by Globalskills/Manul stable when possible. If aliases such as `big-pickle` or `deepseek-v4-flash-free` are still requested by agent definitions, map them to verified model IDs from the FreeLLMAPI `/v1/models` catalogue. Do not leave dangling aliases or point them at OpenCode Zen.
+- Keep direct provider entries in `config.yaml` only as deliberate alternatives/fallbacks after verifying their health and compatibility; they must not precede the FreeLLMAPI route for Manul.
 
 Troubleshooting
 ---------------
