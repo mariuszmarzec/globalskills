@@ -31,7 +31,7 @@ OpenClaw is an **AI Gateway** that enables AI model providers to work with **age
 - Backend services that actually execute AI models (OpenAI, Anthropic, Groq, etc.)
 - **Provider IDs** like `openai`, `anthropic`, `groq`
 - **Model IDs** like `gpt-4`, `claude-3-5-sonnet`, `llama-3.3-70b-versatile`
-- Referenced as `provider/model` (e.g., `litellm/groq-llama-70b`)
+- Referenced as `provider/model` (e.g., `litellm/free-cloud`)
 
 **Channels**
 - Communication endpoints for specific purposes
@@ -84,7 +84,7 @@ main agent
 ↓
 LiteLLM 127.0.0.1:4000
 ↓
-litellm/groq-llama-70b
+litellm/free-cloud
 ↓
 Groq
 ```
@@ -103,15 +103,15 @@ Groq
 - **Provider:** `litellm`
 - **Base URL:** `http://127.0.0.1:4000/v1`
 - **API:** `openai-completions`
-- **Default model:** `litellm/groq-llama-70b`
+- **Default model:** `litellm/free-cloud`
 
 **LiteLLM mapping:**
 ```
-litellm/groq-llama-70b
-→ groq/llama-3.3-70b-versatile
+litellm/free-cloud
+→ FreeLLMAPI (openai/auto) via LiteLLM
 ```
 
-**IMPORTANT:** The Groq API key belongs to LiteLLM and must NOT be copied into OpenClaw. OpenClaw uses the local LiteLLM API key.
+**IMPORTANT:** Upstream provider credentials belong in FreeLLMAPI and must NOT be copied into OpenClaw or exposed to LiteLLM clients. OpenClaw uses only the local LiteLLM proxy key.
 
 ## PART 3 — KNOWN-GOOD AUTHENTICATION STATE
 ========================================
@@ -129,7 +129,7 @@ openclaw gateway call openclaw.setup.verify --json
 
 **Expected output:**
 ```json
-{"ok":true,"modelRef":"litellm/groq-llama-70b"}
+{"ok":true,"modelRef":"litellm/free-cloud"}
 ```
 
 **IMPORTANT:** Do NOT document a fictional `openclaw models auth sync` command. It does not exist in the user's OpenClaw `2026.8.2` CLI.
@@ -289,7 +289,7 @@ When command/config differs by version:
 4. Ensure it does not recommend `--dev` startup
 5. Ensure it does not recommend blindly `pkill` OpenClaw
 6. Ensure no nonexistent CLI commands
-7. Ensure known-good model path is exactly: `litellm/groq-llama-70b`
+7. Ensure known-good model path is exactly: `litellm/free-cloud`
 8. Ensure LiteLLM remains: `127.0.0.1:4000`
 9. Ensure Gateway remains: `127.0.0.1:18789`
 10. Ensure state remains under: `/mnt/f/ubuntu-workspace/.openclaw/state`

@@ -8,7 +8,7 @@ access = "full"
 
 [opencode]
 mode = "all"
-model = "litellm/big-pickle"
+model = "litellm/free-cloud"
 steps = 200
 
 [copilot]

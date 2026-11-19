@@ -279,7 +279,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `feature-branching-strategy` | Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch. |
 | `fiteo-access` | Use whenever an agent needs to connect to a running Fiteo backend, determine its runtime base URL, use the Manul account, or make authenticated Fiteo HTTP requests. Runtime settings come from environment variables; never hardcode or disclose their values. |
 | `fiteo-backend-api` | Use whenever the user asks about Fiteo backend API endpoints or contracts, including routes, HTTP methods, request/response payloads, DTOs, query/path parameters, authentication, validation, status codes, pagination, or implementing/reviewing code that calls or exposes a Fiteo endpoint. Before answering, search the indexed Fiteo API documentation through the caracal-rag MCP server. |
-| `freellmapi-environment` | Configure and operate a local FreeLLMAPI environment with LiteLLM and related tools. Use when aggregating local cloud-provider APIs behind a single OpenAI-compatible endpoint. |
+| `freellmapi-environment` | Configure the single FreeLLMAPI-backed LiteLLM model group `free-cloud`; no aliases or fallback providers. |
 | `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle. |
 | `globalskills-repository` | Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository. |
 | `karpathy-guidelines` | Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. |
@@ -293,7 +293,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `review-strategy` | Shared methodology for high-quality code review. Defines how reviewers understand requirements, inspect implementation, test behavior, identify risks, and produce evidence-based findings. |
 | `unit-testing-android` | Android-specific unit and integration testing practices for JVM, instrumented, and UI tests. Use when designing or implementing tests for Android applications. |
 | `unit-testing-language-agnostic` | Language-agnostic unit and integration testing principles. Use when designing, writing, or reviewing automated tests in any language or framework. |
-| `wsl-ai-dev-autopilot-multi-device` | Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop), hardware-aware model selection, strict healthchecks, self-healing, multi-model LiteLLM routing, local Ollama, and Caracal RAG MCP integration. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, OpenClaw, and Caracal RAG. |
+| `wsl-ai-dev-autopilot-multi-device` | Install a WSL2 AI environment using only LiteLLM `free-cloud` backed by FreeLLMAPI, with OpenCode, OpenClaw, Manul, and optional Caracal RAG MCP integration. |
 | `yt-dlp-downloader` | Robust YouTube downloading and audio extraction via yt-dlp with anti-bot bypass flags (--user-agent, --extractor-args, --no-check-certificates) and oEmbed fallback search. Use when downloading videos or MP3s from YouTube URLs with yt-dlp to guarantee success. |
 
 ## Agents (multi-agent orchestration)
@@ -302,23 +302,23 @@ Canonical agent definitions live in `agents/<name>.md`. Each file contains one s
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|
-| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/big-pickle` | no |
-| `sdd` | all | EXPERT | `litellm/big-pickle` | no |
-| `architect` | all | EXPERT | `litellm/big-pickle` | edit: ask |
-| `coder-cheap` | all | CHEAP | `litellm/groq-llama-8b` | no |
-| `coder` | all | NORMAL | `litellm/groq-llama-70b` | no |
-| `coder-strong` | all | STRONG | `litellm/deepseek-v4-flash-free` | no |
-| `coder-expert` | all | EXPERT | `litellm/big-pickle` | no |
-| `reviewer` | all | STRONG | `litellm/deepseek-v4-flash-free` | edit: deny |
-| `reviewer-expert` | all | EXPERT | `litellm/big-pickle` | edit: deny |
-| `debugger` | all | STRONG | `litellm/deepseek-v4-flash-free` | no |
-| `debugger-expert` | all | EXPERT | `litellm/big-pickle` | no |
-| `researcher` | all | CHEAP | `litellm/gemini-3.1-flash-lite` | edit: deny |
-| `tester` | all | NORMAL | `litellm/groq-llama-70b` | no |
+| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/free-cloud` | no |
+| `sdd` | all | EXPERT | `litellm/free-cloud` | no |
+| `architect` | all | EXPERT | `litellm/free-cloud` | edit: ask |
+| `coder-cheap` | all | CHEAP | `litellm/free-cloud` | no |
+| `coder` | all | NORMAL | `litellm/free-cloud` | no |
+| `coder-strong` | all | STRONG | `litellm/free-cloud` | no |
+| `coder-expert` | all | EXPERT | `litellm/free-cloud` | no |
+| `reviewer` | all | STRONG | `litellm/free-cloud` | edit: deny |
+| `reviewer-expert` | all | EXPERT | `litellm/free-cloud` | edit: deny |
+| `debugger` | all | STRONG | `litellm/free-cloud` | no |
+| `debugger-expert` | all | EXPERT | `litellm/free-cloud` | no |
+| `researcher` | all | CHEAP | `litellm/free-cloud` | edit: deny |
+| `tester` | all | NORMAL | `litellm/free-cloud` | no |
 | `specification-driven-development` | Specification-first workflow: baseline audits, human-approved requirement changes, traceable implementation handoffs, and requirements-focused verification. |
-| `security` | all | EXPERT | `litellm/big-pickle` | edit: deny |
-| `performance` | all | STRONG | `litellm/gemini-3.6-flash` | edit: ask |
-| `refactorer` | all | NORMAL | `litellm/groq-qwen3` | no |
+| `security` | all | EXPERT | `litellm/free-cloud` | edit: deny |
+| `performance` | all | STRONG | `litellm/free-cloud` | edit: ask |
+| `refactorer` | all | NORMAL | `litellm/free-cloud` | no |
 
 Set `default_agent: "orchestrator"` in `~/.config/opencode/opencode.json` to
 route every new session through the orchestrator.

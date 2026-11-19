@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/gemini-3.1-flash-lite"
+model = "litellm/free-cloud"
 steps = 20
 
 [opencode.permissions]

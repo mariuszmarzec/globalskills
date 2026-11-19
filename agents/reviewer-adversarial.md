@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/deepseek-v4-flash-free"
+model = "litellm/free-cloud"
 steps = 40
 
 [opencode.permissions]
@@ -71,10 +71,9 @@ modified state.
 
 ## Model selection
 
-Default to **STRONG** (`litellm/deepseek-v4-flash-free`). Use **EXPERT**
-(`litellm/big-pickle`) for complex concurrency, distributed systems, or
-sophisticated attack scenarios.
-
+Always use `litellm/free-cloud`. The task's risk and the adversarial review
+approach determine review depth; there is no separate model or backend.
+ 
 ## Output
 
 Return exactly one of:

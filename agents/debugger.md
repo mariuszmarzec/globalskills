@@ -8,7 +8,7 @@ access = "full"
 
 [opencode]
 mode = "all"
-model = "litellm/deepseek-v4-flash-free"
+model = "litellm/free-cloud"
 steps = 60
 
 [copilot]

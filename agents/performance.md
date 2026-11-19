@@ -8,7 +8,7 @@ access = "review-before-edit"
 
 [opencode]
 mode = "all"
-model = "litellm/gemini-3.6-flash"
+model = "litellm/free-cloud"
 steps = 40
 
 [opencode.permissions]

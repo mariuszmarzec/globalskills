@@ -1,58 +1,107 @@
 ---
 name: freellmapi-environment
-description: Configure and operate a local FreeLLMAPI environment with LiteLLM and related tools. Use when aggregating local cloud-provider APIs behind a single OpenAI-compatible endpoint.
+description: Set up the single FreeLLMAPI-backed LiteLLM model group free-cloud. Use when installing, configuring, or troubleshooting the local FreeLLMAPI-to-LiteLLM chat route.
 ---
 
-# FreeLLMAPI Environment Skill
+# FreeLLMAPI + LiteLLM (single-model setup)
 
-Purpose
--------
-Document how to configure and operate a local FreeLLMAPI-based environment for use with LiteLLM and related tools.
+## Goal
 
-When to use
------------
-- When LiteLLM is routed to a local FreeLLMAPI (router/dashboard) running on the same host.
-- When you want a single unified, local provider that aggregates paid/free cloud providers behind one API.
+Expose exactly one chat model to local clients:
 
-Quick setup steps
------------------
-1. Install and run FreeLLMAPI (recommended via the project's docker-compose). Bind it to localhost only (127.0.0.1:3001).
-2. In the FreeLLMAPI dashboard, add provider keys you control (Gemini, Mistral, Groq, etc.).
-3. Generate a unified API key in the FreeLLMAPI dashboard and copy it.
-4. Store the key locally and never commit it to git. Example (workspace-local):
+`OpenCode / OpenClaw / Manul → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
 
-   - File: `~/litellm/.env`
-   - Add: `FREELLMAPI_API_KEY=freellmapi-<your-key>`
+LiteLLM must publish only the model group `free-cloud`. Do not add aliases, direct provider entries, local models, or fallback chains. FreeLLMAPI may manage its upstream provider pool internally; LiteLLM clients still see only `free-cloud`.
 
-5. Update `~/litellm/config.yaml` to include the `free-cloud` provider entry pointing at `http://127.0.0.1:3001/v1` and set `api_key` to `os.environ/FREELLMAPI_API_KEY`.
-6. Start or restart LiteLLM with the environment loaded: `set -a; source ~/litellm/.env; set +a; litellm --config ~/litellm/config.yaml --host 127.0.0.1 --port 4000`.
+## Prerequisites
 
-Verification
-------------
-- `curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models` should return a JSON catalog.
-- `curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://127.0.0.1:4000/v1/models` should list `free-cloud` in the returned list.
-- Run a quick chat through LiteLLM using `model: free-cloud` and confirm a completion.
+- FreeLLMAPI is running locally and bound to loopback at `127.0.0.1:3001`.
+- The FreeLLMAPI dashboard has its upstream provider pool configured.
+- A unified FreeLLMAPI API key is available.
+- LiteLLM is installed and uses port `4000`.
 
-Security & ops best practices
------------------------------
-- Bind FreeLLMAPI to loopback (127.0.0.1) to avoid external exposure.
-- Keep provider keys and the FreeLLMAPI unified key in local `.env` files outside git; add to `.gitignore` if necessary.
-- Do not commit any keys or secrets. If a secret was accidentally committed, rotate it immediately.
-- Consider adding a local firewall rule to prevent accidental binding to 0.0.0.0.
+## Secrets
 
-Routing considerations
----------------------
-- For Manul, use the FreeLLMAPI-backed `free-cloud` route as the primary/default LiteLLM upstream. It must be selected directly; do not route to OpenCode Zen first and treat FreeLLMAPI only as a fallback.
-- Do not configure `https://opencode.ai/zen/v1` or `OPENCODE_API_KEY` as a LiteLLM upstream for Manul. The key may exist for a separate interactive OpenCode setup, but Manul's LiteLLM model path must not depend on it.
-- Keep model names consumed by Globalskills/Manul stable when possible. If aliases such as `big-pickle` or `deepseek-v4-flash-free` are still requested by agent definitions, map them to verified model IDs from the FreeLLMAPI `/v1/models` catalogue. Do not leave dangling aliases or point them at OpenCode Zen.
-- Keep direct provider entries in `config.yaml` only as deliberate alternatives/fallbacks after verifying their health and compatibility; they must not precede the FreeLLMAPI route for Manul.
+Store only these two values in `~/litellm/.env`:
 
-Troubleshooting
----------------
-- If LiteLLM `/v1/models` returns an empty list after restart: ensure the `FREELLMAPI_API_KEY` is exported in the same environment used to start the `litellm` process, and check `litellm` logs for errors.
-- If FreeLLMAPI container can't be pulled due to registry permissions, use the installation script or pre-downloaded image that the environment maintainer supplied.
+```bash
+LITELLM_MASTER_KEY=<generate-a-long-random-key>
+FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+```
 
-Notes for globalskills
----------------------
-- This skill documents the recommended local-only setup using FreeLLMAPI. It is intended for personal/workspace skills (not public cloud instructions).
-- Keep this skill concise and operational: how to start, configure, verify, and keep secrets safe.
+Protect the file with `chmod 600 ~/litellm/.env`. Never commit keys, paste them into repository files, or print them in logs.
+
+## LiteLLM configuration
+
+Use this as the complete `~/litellm/config.yaml` model configuration:
+
+```yaml
+model_list:
+  - model_name: free-cloud
+    litellm_params:
+      model: openai/auto
+      api_base: http://127.0.0.1:3001/v1
+      api_key: os.environ/FREELLMAPI_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 2
+  set_verbose: true
+  cache: true
+  cache_params:
+    type: disk
+    disk_cache_dir: /tmp/litellm-cache
+    ttl: 3600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: "postgresql://litellm:litellm@127.0.0.1:5432/litellm"
+```
+
+Do not add `router_settings.fallbacks`, `completion_model`, aliases, or additional `model_list` entries. If PostgreSQL is not part of the local LiteLLM deployment, omit `database_url` rather than creating an unrelated dependency.
+
+## Start and verify
+
+Load the environment in the same process that starts LiteLLM:
+
+```bash
+set -a
+source ~/litellm/.env
+set +a
+litellm --config ~/litellm/config.yaml --host 127.0.0.1 --port 4000
+```
+
+For a managed service, update its configuration and reload that service instead of starting a second process.
+
+Verify upstream and proxy:
+
+```bash
+curl -fsS http://127.0.0.1:3001/v1/models \
+  -H "Authorization: Bearer $FREELLMAPI_API_KEY"
+
+curl -fsS http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+```
+
+The LiteLLM response must contain exactly one model ID: `free-cloud`. Then send a chat completion with `model: free-cloud` and verify a response.
+
+## Routing rules
+
+- OpenCode's main model and small model: `litellm/free-cloud`.
+- OpenClaw's default model: `litellm/free-cloud`.
+- All Globalskills agent roles and Manul workers: `litellm/free-cloud`.
+- Do not use aliases such as `big-pickle` or `deepseek-v4-flash-free`.
+- Do not configure Groq, Cerebras, Gemini, Mistral, OpenRouter, Ollama, or OpenCode Zen as LiteLLM model routes.
+- LiteLLM retries must retry the same `free-cloud` model group; they must not switch to another provider or model group.
+
+## Troubleshooting
+
+- If FreeLLMAPI `/v1/models` fails, check the process, loopback binding, unified API key, and upstream provider pool.
+- If LiteLLM `/v1/models` does not show exactly `free-cloud`, check the active config path and the environment inherited by the LiteLLM process.
+- If LiteLLM reports "no healthy deployments", test FreeLLMAPI directly and inspect both services' logs. Do not work around the error by adding aliases or fallback models.
+- If tool calls fail, verify the FreeLLMAPI auto pool selects models that support tool calling.
+
+## Embeddings
+
+Caracal RAG embeddings are configured separately in `~/.caracal/config/sources.yaml`. Do not add an embedding model to LiteLLM's chat `model_list`.

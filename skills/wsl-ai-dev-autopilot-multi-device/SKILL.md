@@ -1,39 +1,33 @@
 ---
 name: wsl-ai-dev-autopilot-multi-device
-description: Fully automated WSL2 AI dev environment (OpenCode + OpenClaw compatible). Supports multi-device installation (PC + laptop), hardware-aware model selection, strict healthchecks, self-healing, multi-model LiteLLM routing, local Ollama, and Caracal RAG MCP integration. Use when setting up or repairing a WSL2 AI dev environment with Ollama, LiteLLM, OpenCode, OpenClaw, and Caracal RAG.
+description: Simple WSL2 AI development environment using one LiteLLM model group (free-cloud) backed by FreeLLMAPI, with OpenCode, OpenClaw, Manul, and optional Caracal RAG MCP integration. Use when installing or repairing this single-model setup.
 ---
 
 # WSL AI Dev Autopilot Skill
 
+
 # Purpose
 
-This skill guides an AI agent through the complete installation and validation of an AI development environment on WSL2. It configures LiteLLM as a proxy exposing models to OpenCode and OpenClaw, with FreeLLMAPI (`free-cloud`) as the primary upstream for Manul model traffic. Manul must not route through the OpenCode Zen API. Existing agent-facing LiteLLM aliases are retained for compatibility but must resolve to verified FreeLLMAPI model IDs. The skill also installs Caracal RAG into its isolated runtime under ~/.caracal and configures the authenticated loopback HTTP MCP endpoint for OpenCode. In this deployment, OpenClaw invokes OpenCode through ACPX, so the aicode launcher configures the ACPX opencode harness to use a wrapper that refreshes Caracal credentials and checks the live MCP connection before starting opencode acp. Caracal's embeddings endpoint and vector database remain separately configured dependencies; do not assume the LiteLLM chat model list provides an embedding model.
+Install and validate a WSL2 AI development environment using one chat-model route:
+
+`OpenCode / OpenClaw / Manul → LiteLLM → FreeLLMAPI → openai/auto`
+
+LiteLLM exposes **exactly one model group: `free-cloud`**. Every client and every Globalskills agent requests `litellm/free-cloud`. Do not create aliases, per-role model groups, direct provider routes, fallback chains, or local chat-model routes.
+
+FreeLLMAPI may manage its upstream provider pool internally. From the perspective of LiteLLM, OpenCode, OpenClaw, and Manul, the only model is `free-cloud`.
+
+Caracal RAG is a separate service. Its embeddings endpoint is configured in `~/.caracal/config/sources.yaml`; do not add an embedding model to LiteLLM's chat `model_list`. Keep its authenticated MCP listener loopback-only and pass its bearer token through the launcher environment, never through repository files.
 
 ## Architecture
 
 ```text
-OpenCode Client        OpenClaw Gateway (Port 18789)
-        │                       │
-        └───────────┬───────────┘
-                    ▼
-LiteLLM (Router & Proxy - Port 4000)
-        │
-        ├── FreeLLMAPI (`free-cloud`) — primary upstream for Manul
-        │   └── Model IDs verified from the live FreeLLMAPI `/v1/models` catalogue
-        │
-        ├── Optional direct LiteLLM routes (only deliberate alternatives/fallbacks)
-        │   ├── Groq
-        │   ├── Cerebras
-        │   ├── Google Gemini
-        │   ├── Mistral
-        │   └── OpenRouter
-        │
-        └── Local Ollama Models
-            ├── gemma4 (gemma4:12b)
-            └── local-coder (Fallback)
-```
+OpenCode ─┐
+OpenClaw ─┼──> LiteLLM :4000 ──> FreeLLMAPI :3001/v1 (openai/auto)
+Manul ────┘        exposes only "free-cloud"
 
-The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> configured Chroma collection. Caracal computes query embeddings through the explicit FreeLLMAPI-compatible endpoint in ~/.caracal/config/sources.yaml. Keep the MCP listener loopback-only; the bearer token is passed to OpenCode through the launcher environment and is never committed to this repository.
+OpenCode ──> authenticated Caracal MCP :3500 ──> Chroma
+                       (embeddings configured separately)
+```
 
 # Execution Rules
 
@@ -51,31 +45,30 @@ The local RAG path is: OpenCode -> authenticated Caracal MCP on 127.0.0.1 -> con
 
 * Never overwrite an existing working configuration without creating a backup.
 
+
 # Success Criteria
 
-* WSL2 operational
-* Ubuntu packages installed
-* Node.js installed
-* Python installed
-* Ollama installed and responding
-* LiteLLM installed and responding with multiple models available
-* Local models installed
-* OpenCode configured to see all LiteLLM proxy models
-* OpenClaw Gateway installed, connected to LiteLLM, and responding to agent turns
-* Test prompt succeeds
-* Fallback routing verified
-* Caracal RAG installed into ~/.caracal with its own Python virtual environment; the source checkout remains at ~/.caracal-rag
-* Caracal has an explicit embedding family, private API key/access token, valid Chroma settings, and a passing `caracal-rag check`
-* Both configured knowledge sources (`fiteo-docs` and `quickmvi-readme`) are indexed successfully
-* `aicode` starts the authenticated Caracal HTTP MCP after LiteLLM; `opencode mcp list` verifies the connection, and OpenClaw's ACPX `opencode` target points to `~/.globalskills/aicode/opencode-acp-caracal.sh` which repeats the MCP check before starting each ACP harness
+- WSL2 and required Ubuntu packages are operational.
+- Node.js, Python, and OpenCode are installed.
+- FreeLLMAPI responds on its configured loopback endpoint.
+- LiteLLM exposes exactly one model group: `free-cloud`.
+- A chat completion succeeds through LiteLLM using `model: free-cloud`.
+- OpenCode uses `litellm/free-cloud` for both its main and small model.
+- OpenClaw and Manul use only `litellm/free-cloud`.
+- No other LiteLLM model groups, aliases, direct providers, or fallback routes are configured.
+- Caracal RAG is installed under `~/.caracal` with its own Python virtual environment; source remains at `~/.caracal-rag`.
+- Caracal credentials, embedding endpoint, Chroma settings, and `caracal-rag check` are valid.
+- The configured knowledge sources `fiteo-docs` and `quickmvi-readme` are indexed successfully.
+- `aicode` validates LiteLLM and Caracal; `opencode mcp list` confirms Caracal MCP connectivity.
+
 
 # User Interaction Policy
 
-Before installation ask:
-
-1. Which machine is being configured? (Desktop or Laptop)
-
-Do not continue until answered. Detect everything else automatically.
+- Detect the current machine and installed components automatically.
+- Do not ask whether the machine is Desktop or Laptop; model configuration is identical.
+- Ask only for information that cannot be discovered safely, such as a missing FreeLLMAPI key or unknown endpoint.
+- Never request secrets in plain text chat when a local hidden prompt or secure environment file can be used.
+- Inspect existing configuration before changing it. Back up working files and preserve unrelated MCP servers, permissions, and runtime settings.
 
 # Communication Protocol for OpenCode
 
@@ -93,71 +86,37 @@ Exact bash commands or WAITING.
 
 ```
 
-# Hardware Profiles
-
-## Desktop
-
-* CPU: AMD Ryzen 9 5900X
-* RAM: 32 GB
-* GPU: RTX 3070 8 GB
-* Recommended local model:
-* `qwen3-coder:14b`
-* `qwen3:14b`
 
 
-
-## Laptop
-
-* CPU: Intel i7-7700HQ
-* RAM: 16 GB
-* GPU: GTX 1050 Ti 4 GB
-* Recommended local model:
-* `qwen2.5-coder:7b`
-* `qwen2.5:7b`
-
-
-
-> Never install 14B models on the laptop unless explicitly requested.
 
 # Policies
 
-## Agent Decision Policy
+## Single-model policy
 
-* Agent selects the best local model based on the hardware profile.
-* Configure LiteLLM with FreeLLMAPI (`free-cloud`) as the primary upstream for Manul, with verified direct-provider routes and local Ollama available only as deliberate alternatives/fallbacks.
-* Preserve the Globalskills-facing aliases `big-pickle` (EXPERT) and `deepseek-v4-flash-free` (STRONG) where the agent definitions depend on them, but map them to actual model IDs confirmed by the live FreeLLMAPI `/v1/models` catalogue. Never point these aliases at `https://opencode.ai/zen/v1`.
-* Manul's default/EXPERT request must reach FreeLLMAPI on its first attempt. OpenCode Zen must not be its primary model or a preceding fallback. A separate interactive OpenCode Zen provider/key may remain optional, but must not be referenced by LiteLLM routes used by Manul.
-* The small model remains `litellm/groq-llama-8b` only when a direct Groq route is intentionally retained. Fallback chain for the FreeLLMAPI-backed EXPERT alias: big-pickle → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
-
-## Multi-Device Sync Policy (Desktop Push to Remote)
-
-When configuring the **Desktop**, the agent MUST push the working LiteLLM configuration to the Laptop (remote):
-
-```bash
-# Push config from Desktop to Laptop
-scp ~/litellm/config.yaml <laptop-user>@<laptop-ip>:~/litellm/config.yaml
-scp ~/litellm/.env <laptop-user>@<laptop-ip>:~/litellm/.env
-```
-
-* Desktop is the **source of truth** for LiteLLM config.
-* Laptop receives the config but adjusts local model names to match its hardware profile (7B instead of 14B).
-* After pushing, always verify the remote LiteLLM instance restarts and healthcheck passes.
-* Never push 14B model references to laptop — agent must substitute with 7B equivalents before push.
-* All API keys (Groq, Cerebras, Gemini, Mistral, OpenRouter) are shared via `.env` — same keys work on both devices.
+- The only LiteLLM model group is `free-cloud`, backed by FreeLLMAPI `openai/auto`.
+- OpenCode, OpenClaw, Manul, and every generated role agent use `litellm/free-cloud`.
+- Do not add aliases such as `big-pickle` or `deepseek-v4-flash-free`.
+- Do not add direct Groq, Cerebras, Gemini, Mistral, OpenRouter, Ollama, or OpenCode Zen chat routes.
+- Do not configure `router_settings.fallbacks` or `completion_model`.
+- LiteLLM retries may retry the same `free-cloud` model group but must never fail over to another group.
+- LiteLLM needs only `FREELLMAPI_API_KEY` and `LITELLM_MASTER_KEY`; provider credentials stay in FreeLLMAPI.
 
 ## Detection Policy
 
-Automatically detect:
+Automatically detect CPU, RAM, disk space, WSL/Ubuntu, Node.js, Python, OpenCode, FreeLLMAPI, LiteLLM, PostgreSQL, and Caracal. Hardware detection is informational; it must not select or install local model weights.
 
-* CPU, RAM, GPU, Disk space
-* WSL version, Ubuntu version
-* Node, Python, Ollama, LiteLLM
+## Idempotency & Safety
 
-Ask the user only if automatic detection is impossible.
+- Inspect first; repair only what is missing or invalid.
+- Execute sequentially and verify every step.
+- If a healthcheck still fails after bounded retries, stop and report the cause.
+- Never overwrite a working configuration without a backup.
+- Never restart a service while it handles active work.
+- Do not print secrets or place them in command-line arguments, logs, or repository files.
 
-## Idempotency & Self-Healing
+## Multi-device setup
 
-* Safe to rerun. Verify first. Repair only if necessary. Retry failed steps up to 3 times.
+Use the same LiteLLM and OpenCode model configuration on every device. Each device must reach its configured FreeLLMAPI endpoint. Do not substitute model names or providers based on hardware.
 
 # Installation Steps
 
@@ -208,307 +167,44 @@ opencode --help
 
 ```
 
-## Step 4 — Install Ollama
 
-```bash
-curl -fsSL [https://ollama.com/install.sh](https://ollama.com/install.sh) | sh
-
-```
-
-**Healthcheck:**
-
-```bash
-ollama --version
-
-```
-
-## Step 5 — Start Ollama
-
-```bash
-ollama serve
-
-```
-
-**Healthcheck:**
-
-```bash
-curl http://localhost:11434/api/tags
-
-```
-
-## Step 6 — Install Local Models
-
-Desktop:
-
-```bash
-ollama pull qwen3-coder:14b
-
-```
-
-Laptop:
-
-```bash
-ollama pull qwen2.5-coder:7b
-
-```
-
-**Healthcheck:**
-
-```bash
-ollama list
-
-```
-
-## Step 7 — Install LiteLLM
+## Step 4 — Install LiteLLM
 
 ```bash
 pip3 install litellm
-
 ```
 
-**Healthcheck:**
+**Healthcheck**
 
 ```bash
 litellm --help
-
 ```
 
-## Step 8 — Configure LiteLLM
 
-*Agent Note: Adjust the `local-coder` and `gemma4` model names in the YAML below based on the downloaded model from Step 6.*
+## Step 5 — Configure LiteLLM
 
-Create file: `~/litellm/.env`
+Create `~/litellm/free-cloud`:
 
 ```bash
-LITELLM_MASTER_KEY=sk-12345678
-FREELLMAPI_API_KEY=<YOUR_FREELLMAPI_KEY>
-# Optional: only for a separate interactive OpenCode Zen provider; never reference from LiteLLM/Manul routes.
-OPENCODE_API_KEY=<YOUR_ZEN_KEY>
-GROQ_API_KEY=<YOUR_GROQ_KEY>
-CEREBRAS_API_KEY=<YOUR_CEREBRAS_KEY>
-GEMINI_API_KEY=<YOUR_GEMINI_KEY>
-MISTRAL_API_KEY=<YOUR_MISTRAL_KEY>
-OPENROUTER_API_KEY=<YOUR_OPENROUTER_KEY>
+LITELLM_MASTER_KEY=<generate-a-long-random-key>
+FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
 ```
 
-*Free API keys (no credit card): Groq (console.groq.com), Cerebras (cloud.cerebras.ai), Gemini (aistudio.google.com), Mistral (console.mistral.ai), OpenRouter (openrouter.ai)*
+Protect it:
 
-> **Privacy note:** Gemini free tier may use your prompts for training — fine for public/research work, wrong for anything with client or personal data. Groq and Cerebras do not train on your data, so route sensitive work there or to local Ollama models.
+```bash
+chmod 600 ~/litellm/free-cloud
+```
 
-Create file: `~/litellm/config.yaml`
+Create `~/litellm/free-cloud`. This is the complete configuration; do not append other models or aliases:
 
 ```yaml
 model_list:
-
-  # ============================================================
-  # FreeLLMAPI — primary upstream for Manul
-  # ============================================================
-  # Before writing this config, inspect the live upstream catalogue:
-  # curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models
-  # These are examples, not copy-ready model IDs. Replace every <VERIFIED_...>
-  # placeholder with an exact ID returned by that catalogue; never deploy
-  # a literal placeholder or guess an upstream model name.
-  # Keep the public LiteLLM model_name aliases stable for agent compatibility.
-
   - model_name: free-cloud
     litellm_params:
-      model: openai/<VERIFIED_DEFAULT_MODEL_ID_FROM_FREELLMAPI>
+      model: openai/auto
       api_base: http://127.0.0.1:3001/v1
       api_key: os.environ/FREELLMAPI_API_KEY
-
-  - model_name: big-pickle
-    litellm_params:
-      model: openai/<VERIFIED_EXPERT_MODEL_ID_FROM_FREELLMAPI>
-      api_base: http://127.0.0.1:3001/v1
-      api_key: os.environ/FREELLMAPI_API_KEY
-
-  - model_name: deepseek-v4-flash-free
-    litellm_params:
-      model: openai/<VERIFIED_STRONG_MODEL_ID_FROM_FREELLMAPI>
-      api_base: http://127.0.0.1:3001/v1
-      api_key: os.environ/FREELLMAPI_API_KEY
-
-  # ============================================================
-  # Groq (fastest free tier, ~320 tok/s)
-  # ============================================================
-
-  - model_name: groq-llama-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-      max_tokens: 32768
-
-  - model_name: groq-qwen3
-    litellm_params:
-      model: groq/qwen/qwen3.6-27b
-      api_key: os.environ/GROQ_API_KEY
-      max_tokens: 32768
-
-  - model_name: groq-llama-8b
-    litellm_params:
-      model: groq/llama-3.1-8b-instant
-      api_key: os.environ/GROQ_API_KEY
-      max_tokens: 8192
-
-  # ============================================================
-  # Cerebras (fastest inference, ~2600 tok/s)
-  # ============================================================
-
-  - model_name: cerebras-gpt-oss-120b
-    litellm_params:
-      model: cerebras/gpt-oss-120b
-      api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
-
-  - model_name: cerebras-gemma-31b
-    litellm_params:
-      model: cerebras/gemma-4-31b
-      api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
-
-  - model_name: cerebras-glm-4.7
-    litellm_params:
-      model: cerebras/zai-glm-4.7
-      api_key: os.environ/CEREBRAS_API_KEY
-      max_tokens: 8192
-
-  # ============================================================
-  # Google Gemini (free tier, per-project limits)
-  #   Flash: 5 RPM / 20 RPD | Flash Lite: 15 RPM / 500 RPD
-  #   Gemma 4: 30 RPM / 14.4K RPD
-  # ============================================================
-
-  - model_name: gemini-3.6-flash
-    litellm_params:
-      model: gemini/gemini-3.6-flash
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemini-3.5-flash
-    litellm_params:
-      model: gemini/gemini-3.5-flash
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemini-3.5-flash-lite
-    litellm_params:
-      model: gemini/gemini-3.5-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemini-3.1-flash-lite
-    litellm_params:
-      model: gemini/gemini-3.1-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemma-4-31b
-    litellm_params:
-      model: gemini/gemma-4-31b-it
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  - model_name: gemma-4-26b
-    litellm_params:
-      model: gemini/gemma-4-26b-a4b-it
-      api_key: os.environ/GEMINI_API_KEY
-      max_tokens: 8192
-
-  # ============================================================
-  # Mistral (huge monthly quota, Codestral for code)
-  # ============================================================
-
-  - model_name: mistral-large
-    litellm_params:
-      model: mistral/mistral-large-latest
-      api_key: os.environ/MISTRAL_API_KEY
-
-  - model_name: mistral-codestral
-    litellm_params:
-      model: mistral/codestral-latest
-      api_key: os.environ/MISTRAL_API_KEY
-
-  # ============================================================
-  # OpenRouter (Free Models Router - auto-picks live :free models)
-  # ============================================================
-
-  - model_name: or-free
-    litellm_params:
-      model: openrouter/openrouter/free
-      api_key: os.environ/OPENROUTER_API_KEY
-
-  # ============================================================
-  # Local Ollama Models
-  # ============================================================
-
-  - model_name: gemma4
-    litellm_params:
-      model: ollama/gemma4:12b
-      api_base: http://localhost:11434
-      api_key: ollama-local
-      extra_body:
-        num_ctx: 131072
-
-  - model_name: local-coder
-    litellm_params:
-      model: ollama/gemma4:12b
-      api_base: http://localhost:11434
-      api_key: ollama-local
-      extra_body:
-        num_ctx: 131072
-
-# ============================================================
-# Router / Fallback
-# ============================================================
-
-router_settings:
-  fallbacks:
-    - big-pickle:
-        - groq-llama-70b
-        - cerebras-gpt-oss-120b
-        - gemini-3.5-flash-lite
-        - mistral-large
-        - or-free
-        - local-coder
-    - deepseek-v4-flash-free:
-        - groq-llama-70b
-        - mistral-codestral
-        - or-free
-        - local-coder
-    - groq-llama-70b:
-        - groq-qwen3
-        - cerebras-gpt-oss-120b
-        - gemini-3.5-flash-lite
-        - mistral-large
-        - or-free
-        - local-coder
-    - groq-qwen3:
-        - groq-llama-70b
-        - cerebras-gpt-oss-120b
-        - gemini-3.5-flash-lite
-        - or-free
-        - local-coder
-    - groq-llama-8b:
-        - gemini-3.1-flash-lite
-        - gemma-4-26b
-        - local-coder
-    - gemini-3.1-flash-lite:
-        - groq-llama-8b
-        - gemma-4-26b
-        - or-free
-        - local-coder
-    - gemini-3.6-flash:
-        - gemini-3.5-flash
-        - groq-llama-70b
-        - cerebras-gpt-oss-120b
-        - mistral-large
-        - or-free
-        - local-coder
-  allowed_fails: 3
-
-# ============================================================
-# LiteLLM Server
-# ============================================================
 
 litellm_settings:
   drop_params: true
@@ -521,56 +217,36 @@ litellm_settings:
     disk_cache_dir: /tmp/litellm-cache
     ttl: 3600
 
-# ============================================================
-# Proxy
-# ============================================================
-
 general_settings:
-  master_key: sk-12345678
+  master_key: os.environ/LITELLM_MASTER_KEY
   database_url: "postgresql://litellm:litellm@127.0.0.1:5432/litellm"
-  completion_model: big-pickle
 ```
 
-**Healthcheck:**
+Do not add `router_settings`, fallbacks, `completion_model`, or `default_embedding_models`. Caracal embeddings are configured separately, not in this chat-model list.
+
+Load the environment into the LiteLLM service process. Reload the existing service using its normal service manager; do not start a second proxy process.
+
+**Healthchecks**
 
 ```bash
-# Load env vars and start LiteLLM
-cd ~/litellm && set -a && source .env && set +a
-litellm --config ~/litellm/config.yaml --port 4000 &
-sleep 5
+set -a
+source ~/litellm/free-cloud
+set +a
 
-# Verify models are registered
-curl -s http://localhost:4000/v1/models -H "Authorization: Bearer sk-12345678" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(m['id']) for m in d['data']]"
+curl -fsS http://127.0.0.1:3001/v1/models \
+  -H "Authorization: Bearer $FREELLMAPI_API_KEY"
+
+curl -fsS http://127.0.0.1:4000/v1/models \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 ```
 
-*Verify that all models are returned: big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder.*
+The LiteLLM response must contain exactly one model ID: `free-cloud`. Then send one chat-completion request with `model: free-cloud`. If it fails, inspect FreeLLMAPI and LiteLLM logs; do not add fallback providers.
 
-### Step 8b — Desktop: Push Config to Remote (Laptop)
+### Multi-device
 
-**IMPORTANT: Desktop is the source of truth.** When configuring the Desktop, push the LiteLLM config to the Laptop before proceeding:
+Repeat the same setup on each device. Use `127.0.0.1:3001` only when FreeLLMAPI runs on that same device.
 
-```bash
-# Ensure laptop ~/litellm directory exists
-ssh <laptop-user>@<laptop-ip> "mkdir -p ~/litellm"
-
-# Push config and env
-scp ~/litellm/config.yaml <laptop-user>@<laptop-ip>:~/litellm/config.yaml
-scp ~/litellm/.env <laptop-user>@<laptop-ip>:~/litellm/.env
-
-# IMPORTANT: Before pushing, substitute 14B model refs with 7B for laptop
-# The agent MUST edit the remote config to use qwen2.5-coder:7b instead of qwen3-coder:14b
-ssh <laptop-user>@<laptop-ip> "sed -i 's/qwen3-coder:14b/qwen2.5-coder:7b/g; s/qwen3:14b/qwen2.5:7b/g' ~/litellm/config.yaml"
-
-# Restart LiteLLM on laptop
-ssh <laptop-user>@<laptop-ip> "pkill -f litellm; nohup litellm --config ~/litellm/config.yaml --port 4000 >/tmp/litellm.log 2>&1 &"
-
-# Verify remote healthcheck
-ssh <laptop-user>@<laptop-ip> "curl -s http://localhost:4000/v1/models -H 'Authorization: Bearer sk-12345678'"
-```
-
-*Skip this step when configuring the Laptop directly.*
-
-### Step 8c — Install globalskills (agents + skills)
+## Step 6 — Install globalskills (agents + skills)
 
 The environment ships with shared skills (`~/.globalskills/skills`) and OpenCode agents (`~/.globalskills/agents`). OpenCode only reads agents from `~/.config/opencode/agents/`, so they must be symlinked — `install.sh` does this automatically. This must run on **every** machine (Desktop and Laptop) before configuring OpenCode.
 
@@ -597,7 +273,7 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
 *If SSH fails on a fresh machine (no key deployed), fall back to the HTTPS clone URL shown above.*
 
 
-### Step 8d — Install and configure Caracal RAG (Desktop and Laptop)
+## Step 7 — Install and configure Caracal RAG
 
 Caracal is installed on each machine using its repository installer. This creates an isolated environment under `~/.caracal` and preserves existing configuration, secrets, and index state. Do not use a system-wide `pip install`.
 
@@ -656,669 +332,111 @@ Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at
 
 The authenticated MCP server is launched by `aicode` after LiteLLM. Keep `mcp.host: 127.0.0.1`; never expose the token-authenticated listener on a public interface. The launcher tracks only its own PID in `~/.caracal/run/mcp.pid`, logs to `/tmp/caracal-mcp.log`, and does not kill an unknown process that happens to use the configured port.
 
-## Step 9 — Configure OpenCode 2
 
-OpenCode 2 uses native V2 configuration for providers, agents, MCP servers,
-permissions and skill paths. V1 compatibility remains available, but this
-example writes the V2 forms directly. GlobalSkills exposes installed skills
-through the stable `~/.agents/skills` path.
+## Step 8 — Configure OpenCode
 
-`~/.config/opencode/opencode.json`
+Use `litellm/free-cloud` for both main and small requests. Merge the following settings into the existing `~/.config/opencode/opencode.json`; do not replace existing MCP servers, permissions, or unrelated settings.
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "litellm/big-pickle",
-  "skills": [
-    "~/.agents/skills"
-  ],
-  "mcp": {
-    "servers": {
-      "caracal-rag": {
-        "type": "remote",
-        "url": "{env:CARACAL_MCP_URL}",
-        "oauth": false,
-        "disabled": false,
-        "headers": {
-          "Authorization": "Bearer {env:CARACAL_ACCESS_TOKEN}"
-        }
-      }
-    }
-  },
-  "permission": {
-    "external_directory": {
-      "~/litellm/**": "allow",
-      "~/.config/opencode/**": "allow",
-      "~/.globalskills/**": "allow"
-    }
-  },
-  "permissions": [
-    {
-      "action": "external_directory",
-      "resource": "~/litellm/*",
-      "effect": "allow"
-    },
-    {
-      "action": "external_directory",
-      "resource": "~/.config/opencode/*",
-      "effect": "allow"
-    },
-    {
-      "action": "external_directory",
-      "resource": "~/.agents/skills/*",
-      "effect": "allow"
-    },
-    {
-      "action": "caracal_rag_*",
-      "resource": "*",
-      "effect": "allow"
-    },
-    {
-      "action": "fiteo_*",
-      "resource": "*",
-      "effect": "allow"
-    }
-  ],
-  "agents": {
-    "chat": {
-      "description": "Standard conversational chat without tools",
-      "mode": "primary",
-      "system": "You are a helpful AI coding assistant. Respond directly in natural language and standard Markdown. Do not attempt to use any tools, and do NOT format your responses as JSON.",
-      "permissions": [
-        {
-          "action": "*",
-          "resource": "*",
-          "effect": "deny"
-        },
-        {
-          "action": "*",
-          "resource": "*",
-          "effect": "deny"
-        }
-      ]
-    },
-    "title": {
-      "model": "litellm/groq-llama-8b"
-    }
+  "model": "litellm/free-cloud",
+  "small_model": "litellm/free-cloud",
+  "default_agent": "orchestrator",
+  "skills": {
+    "paths": ["~/.agents/skills"]
   },
   "providers": {
-    "opencode": {
-      "settings": {
-        "apiKey": "{env:OPENCODE_API_KEY}"
-      }
-    },
-    "ollama": {
-      "name": "Ollama Local",
-      "models": {
-        "gemma4:12b": {
-          "name": "Gemma 4 12B (Ollama)",
-          "family": "gemma",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 32768,
-            "output": 32768
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        }
-      },
-      "settings": {
-        "baseURL": "http://localhost:11434/v1"
-      }
-    },
     "litellm": {
       "name": "LiteLLM Proxy",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "{env:LITELLM_MASTER_KEY}"
+      },
       "models": {
-        "big-pickle": {
-          "name": "EXPERT alias (FreeLLMAPI via LiteLLM)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 65536
-          },
+        "free-cloud": {
+          "modelID": "free-cloud",
+          "name": "FreeLLMAPI auto (via LiteLLM)",
           "capabilities": {
             "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "deepseek-v4-flash-free": {
-          "name": "STRONG alias (FreeLLMAPI via LiteLLM)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 65536
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "groq-llama-70b": {
-          "name": "Llama 3.3 70B (Groq, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "groq-qwen3": {
-          "name": "Qwen3.6 27B (Groq, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "groq-llama-8b": {
-          "name": "Llama 3.1 8B (Groq, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "cerebras-gpt-oss-120b": {
-          "name": "GPT-OSS 120B (Cerebras, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 8192,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "cerebras-gemma-31b": {
-          "name": "Gemma 4 31B (Cerebras, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 8192,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "cerebras-glm-4.7": {
-          "name": "GLM 4.7 (Cerebras, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 8192,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemini-3.6-flash": {
-          "name": "Gemini 3.6 Flash (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 1048576,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemini-3.5-flash": {
-          "name": "Gemini 3.5 Flash (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 1048576,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemini-3.5-flash-lite": {
-          "name": "Gemini 3.5 Flash Lite (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 1048576,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemini-3.1-flash-lite": {
-          "name": "Gemini 3.1 Flash Lite (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 1048576,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemma-4-31b": {
-          "name": "Gemma 4 31B (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemma-4-26b": {
-          "name": "Gemma 4 26B (Google, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "mistral-large": {
-          "name": "Mistral Large (Mistral, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 128000,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "mistral-codestral": {
-          "name": "Codestral (Mistral, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 256000,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "or-free": {
-          "name": "Free Models Router (OpenRouter, free)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 200000,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "gemma4": {
-          "name": "Gemma 4 12B Local (via LiteLLM)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 131072,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
-          }
-        },
-        "local-coder": {
-          "name": "Local Coder (via LiteLLM)",
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "limit": {
-            "context": 131072,
-            "output": 32000
-          },
-          "capabilities": {
-            "tools": true,
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ],
-            "reasoning": {
-              "supported": false
-            }
+            "input": ["text"],
+            "output": ["text"]
           }
         }
-      },
-      "settings": {
-        "baseURL": "http://localhost:4000/v1",
-        "apiKey": "sk-12345678"
-      },
-      "package": "@opencode/ai/providers/openai-compatible"
+      }
     }
   }
 }
 ```
 
+Keep only the `free-cloud` entry under the LiteLLM provider. Remove stale model aliases and direct chat providers from this model configuration. Preserve existing Caracal, Fiteo, and Todo MCP servers and permissions.
 
-*Note: This configuration provides three providers:*
-- *`opencode/` - Optional direct OpenCode Zen access for interactive sessions only; it is not used by Manul and is not a LiteLLM upstream*
-- *`litellm/` - Models routed through the LiteLLM proxy; Manul's agent aliases are backed by FreeLLMAPI*
-- *`ollama/` - Direct access to local Ollama models*
-- *Default model: `litellm/big-pickle`. The alias resolves through the FreeLLMAPI-backed LiteLLM route, not OpenCode Zen.*
+**Healthcheck:** run a short OpenCode task that invokes a tool and verify it completes through `litellm/free-cloud`. If the FreeLLMAPI auto pool cannot handle tool calls, fix that pool; do not add another LiteLLM model.
 
-**Healthcheck:**
-Execute a test prompt to verify the selected model, tool calling, and Caracal MCP connectivity.
 
-## Step 10 — Install & Configure OpenClaw
+## Step 9 — Install & Configure OpenClaw
 
-OpenClaw is the open-source personal AI assistant gateway (https://openclaw.ai). It runs one Gateway process that serves a Control UI dashboard, a TUI/CLI, and optional chat channels (Telegram, WhatsApp, Slack, Discord, etc.). It connects to LiteLLM as a custom OpenAI-compatible provider, so all LiteLLM models are available. Requires Node 22.22.3+, 24.15+, or 25.9+.
+Install OpenClaw:
 
 ```bash
 npm install -g openclaw@latest
 openclaw --version
 ```
 
-**Healthcheck:**
-```bash
-openclaw --version
-```
-
-Create `~/.openclaw/openclaw.json` (JSON5). The provider id is `litellm`, pointing at the local proxy. Model metadata (contextWindow/maxTokens) should mirror the model's real limits; `reasoning: false` unless the model supports it.
+Configure one LiteLLM provider and one model in `~/.openclaw/openclaw.json` (JSON5). Insert the actual `LITELLM_MASTER_KEY` from `~/litellm/free-cloud`; protect the config file and never commit it.
 
 ```json5
 {
   models: {
     providers: {
       litellm: {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "sk-12345678", // LITELLM_MASTER_KEY from ~/litellm/.env
+        baseUrl: "http://127.0.0.1:4000/v1",
+        apiKey: "<LITELLM_MASTER_KEY>",
         api: "openai-completions",
         timeoutSeconds: 300,
         models: [
-          { id: "big-pickle", name: "EXPERT alias (FreeLLMAPI via LiteLLM)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
-          { id: "deepseek-v4-flash-free", name: "STRONG alias (FreeLLMAPI via LiteLLM)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 65536 },
-          { id: "groq-llama-70b", name: "Llama 3.3 70B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
-          { id: "groq-qwen3", name: "Qwen3.6 27B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
-          { id: "groq-llama-8b", name: "Llama 3.1 8B (Groq, free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
-          { id: "cerebras-gpt-oss-120b", name: "GPT-OSS 120B (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
-          { id: "cerebras-gemma-31b", name: "Gemma 4 31B (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
-          { id: "cerebras-glm-4.7", name: "GLM 4.7 (Cerebras, free)", reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 8192 },
-          { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
-          { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
-          { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
-          { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite (Google, free)", reasoning: true, input: ["text"], contextWindow: 1048576, maxTokens: 8192 },
-          { id: "gemma-4-31b", name: "Gemma 4 31B (Google, free)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 8192 },
-          { id: "gemma-4-26b", name: "Gemma 4 26B (Google, free)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 8192 },
-          { id: "mistral-large", name: "Mistral Large (free)", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
-          { id: "mistral-codestral", name: "Codestral (free)", reasoning: false, input: ["text"], contextWindow: 256000, maxTokens: 8192 },
-          { id: "or-free", name: "Free Models Router (OpenRouter)", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 65536 },
-          { id: "gemma4", name: "Gemma 4 12B Local (Ollama)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096 },
-          { id: "local-coder", name: "Local Coder (Ollama)", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096 },
+          {
+            id: "free-cloud",
+            name: "FreeLLMAPI auto (via LiteLLM)",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 8192
+          }
         ],
       },
     },
   },
   agents: {
     defaults: {
-      model: { primary: "litellm/groq-llama-70b" },
+      model: { primary: "litellm/free-cloud" },
     },
   },
 }
 ```
 
-Configure local Gateway mode + a persistent auth token (avoids the runtime-generated token that breaks WS probes):
+Keep advertised context/output limits at or below actual FreeLLMAPI auto-pool capabilities. Do not add other model IDs or fallback providers.
+
+Configure local Gateway mode and validate:
 
 ```bash
 openclaw config set gateway.mode local
 openclaw config set gateway.auth.mode token
-openclaw config set gateway.auth.token sk-openclaw-local
 openclaw config validate
 ```
 
-**Healthcheck:**
+**Healthchecks**
+
 ```bash
-nohup openclaw gateway --force --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
-sleep 8
-openclaw gateway status | grep -i connectivity   # expect: ok
-openclaw models list                              # expect: 23 litellm/ models listed
-# IMPORTANT: use a dedicated --session-key. Routing to --agent main hangs while
-# the main session is busy (the turn just queues). A separate session answers instantly:
-openclaw agent --agent main --session-key healthcheck -m "Reply with exactly: LiteLLM connection OK" --model litellm/groq-llama-70b
-# expect reply: LiteLLM connection OK
+openclaw gateway status
+openclaw models list
+openclaw agent --agent main --session-key healthcheck \
+  -m "Reply with exactly: LiteLLM connection OK" \
+  --model litellm/free-cloud
 ```
 
-*Note: If the gateway blocks on `missing gateway.mode`, set `gateway.mode=local` as above. Use `openclaw dashboard` for the browser UI and `openclaw chat` for the terminal TUI.*
+The model list must show only `litellm/free-cloud` from this provider, and the test turn must succeed.
 
 # Daily Startup Script
 
@@ -1333,39 +451,39 @@ source ~/.bashrc
 aicode
 ```
 
+
 # FreeLLMAPI integration
 
-This skill supports using FreeLLMAPI as a local unified cloud-provider router for LiteLLM. Use this when you want to aggregate multiple cloud providers behind a single local API to simplify routing and key management.
+FreeLLMAPI is the only upstream used by LiteLLM for chat completions.
 
-- Deploy FreeLLMAPI locally (Docker / docker-compose) and bind it to loopback only (`127.0.0.1:3001`).
-- Add provider keys in the FreeLLMAPI dashboard and generate the unified `FREELLMAPI_API_KEY`.
-- Store the unified key in `~/litellm/.env` as `FREELLMAPI_API_KEY` and load it into the environment when starting `litellm` (use `set -a; source ~/litellm/.env; set +a`).
-- Add a `free-cloud` provider entry in `~/litellm/config.yaml` that points at `http://127.0.0.1:3001/v1` and uses `api_key: os.environ/FREELLMAPI_API_KEY`.
-- Verification quickchecks:
-  - `curl -H "Authorization: Bearer $FREELLMAPI_API_KEY" http://127.0.0.1:3001/v1/models` — confirm FreeLLMAPI catalog.
-  - Start or restart LiteLLM with the env loaded and confirm `curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://127.0.0.1:4000/v1/models` lists `free-cloud`.
+1. Run FreeLLMAPI locally and bind it to loopback (`127.0.0.1:3001`).
+2. Configure the upstream provider pool and unified API key inside the FreeLLMAPI dashboard.
+3. Store the unified key only in `~/litellm/free-cloud` as `FREELLMAPI_API_KEY`.
+4. Configure exactly one LiteLLM model group: `free-cloud`, with `model: openai/auto`.
+5. Configure OpenCode, OpenClaw, and Manul to request `litellm/free-cloud`.
 
-See the dedicated skill for operational guidance and security best practices: `~/.globalskills/skills/freellmapi-environment/SKILL.md`.
+The FreeLLMAPI catalogue may contain multiple upstream models; this does not mean LiteLLM should expose multiple model groups. Keep LiteLLM's `model_list` limited to `free-cloud`.
+
 
 # Final Validation
 
 Verify:
 
-* Ollama responds.
-* LiteLLM responds and exposes all models (big-pickle, deepseek-v4-flash-free, groq-llama-70b, groq-qwen3, groq-llama-8b, cerebras-gpt-oss-120b, cerebras-gemma-31b, cerebras-glm-4.7, gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b, gemma-4-26b, mistral-large, mistral-codestral, or-free, gemma4, local-coder).
-* OpenCode shows the configured providers; any direct `opencode/` provider is optional and not part of Manul's LiteLLM model route.
-* OpenClaw Gateway responds on ws://127.0.0.1:18789, lists 23 `litellm/` models, and answers an agent turn through LiteLLM.
-* Primary Manul routing works: `big-pickle` reaches its FreeLLMAPI-backed model through LiteLLM on the first attempt.
-* Fallback routing works: FreeLLMAPI-backed `big-pickle` → groq-llama-70b → cerebras-gpt-oss-120b → gemini-3.5-flash-lite → mistral-large → or-free → local-coder.
-* Startup script loads LiteLLM/FreeLLMAPI keys from `~/litellm/.env`; `OPENCODE_API_KEY` is optional and must not be referenced by LiteLLM routes used by Manul.
-* Native OpenCode and Copilot agent files are generated and readable (`~/.config/opencode/agents/orchestrator.md`, `~/.copilot/agents/orchestrator.agent.md`).
-* Skills are installed as native copies for OpenCode/Manul (`~/.agents/skills/`) and Copilot (`~/.copilot/skills/`).
-* Caracal `check` and Fiteo source indexing succeed; the authenticated MCP responds on the configured loopback URL.
-* `opencode mcp list` reports `caracal-rag` connected when launched through `aicode`.
-* The OpenClaw ACPX config points the `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`.
-* The ACP wrapper verifies Caracal using the current secret and effective OpenCode config, then starts `opencode acp`; a disconnected MCP must prevent ACP startup.
-* The Manul OpenCode adapter injects Caracal into its task-local config and refuses to start the task if `opencode mcp list` does not report a live connection.
+- FreeLLMAPI responds at its loopback `/v1/models` endpoint.
+- LiteLLM responds on port 4000 and `/v1/models` contains exactly one model group: `free-cloud`.
+- A chat completion succeeds through LiteLLM with `model: free-cloud`.
+- OpenCode uses `litellm/free-cloud` for main and small model.
+- Every generated Globalskills OpenCode agent uses `litellm/free-cloud`.
+- OpenClaw's default model is `litellm/free-cloud` and a test turn succeeds.
+- Manul role execution uses the same single model route; no role may request an old alias.
+- No fallback chain, direct LiteLLM provider, local model group, or OpenCode Zen model is required.
+- PostgreSQL/LiteLLM database health is verified when `database_url` is configured.
+- Caracal `check` and source indexing succeed; authenticated MCP responds on loopback.
+- `opencode mcp list` reports Caracal connected when launched through `aicode`.
+- OpenClaw ACPX points the `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh`.
+- The ACP wrapper verifies Caracal with the current secret, then starts `opencode acp`.
+- Manul's OpenCode adapter injects Caracal into its task-local config and requires the MCP to be connected.
 
 Only then report:
 
-> Installation completed successfully. You have 20+ models available via LiteLLM, with FreeLLMAPI as Manul's primary cloud upstream, configured provider fallbacks, and local Ollama models. OpenClaw's default model is `litellm/groq-llama-70b`; OpenCode's default remains `litellm/big-pickle`, whose LiteLLM alias is backed by FreeLLMAPI. Fallbacks are used only after the FreeLLMAPI-backed primary model fails. Multi-agent orchestration (orchestrator + 14 subagents) is installed. Switch models anytime in the OpenCode UI or the OpenClaw Control UI.
+> Installation completed successfully. LiteLLM exposes only `free-cloud`, backed by FreeLLMAPI `openai/auto`. OpenCode, OpenClaw, and every Globalskills agent use `litellm/free-cloud`. Caracal RAG is configured separately for embeddings and MCP access.

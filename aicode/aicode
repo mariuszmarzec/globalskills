@@ -62,10 +62,6 @@ if [ -f "$HOME/.config/opencode/opencode.env" ]; then
 fi
 unset TODO_LOCAL_MCP_TOKEN
 
-if [ -z "${OPENCODE_API_KEY:-}" ]; then
-    echo "WARNING: OPENCODE_API_KEY is not set; OpenCode Zen will be unavailable."
-fi
-
 # Resolve Manul's automatic agent runtime before touching OpenClaw. Use the
 # same config/env precedence as Manul itself; selecting OpenCode means this
 # launcher must not start, query, or configure an OpenClaw Gateway.
@@ -91,44 +87,6 @@ if [ "$AGENT_RUNTIME" = "openclaw" ]; then
 else
     echo "Manul agentRuntime=$AGENT_RUNTIME; skipping OpenClaw Gateway and ACPX setup."
 fi
-
-# Ensure Ollama's HTTP API is actually ready before anything that may use
-# local models starts. A process check is insufficient: Ollama can exist while
-# its server is still loading, and an existing but not-yet-ready process must
-# also be awaited.
-OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-OLLAMA_READY_TIMEOUT="${OLLAMA_READY_TIMEOUT:-45}"
-
-ollama_http_ready() {
-    curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 \
-        "${OLLAMA_BASE_URL%/}/api/tags" >/dev/null 2>&1
-}
-
-if ! ollama_http_ready; then
-    if ! pgrep -x "ollama" >/dev/null; then
-        echo "Starting Ollama..."
-        nohup ollama serve >/tmp/ollama.log 2>&1 &
-    fi
-
-    if ! [[ "$OLLAMA_READY_TIMEOUT" =~ ^[0-9]{1,3}$ ]] ||
-       (( OLLAMA_READY_TIMEOUT < 1 || OLLAMA_READY_TIMEOUT > 300 )); then
-        OLLAMA_READY_TIMEOUT=45
-    fi
-    echo "Waiting for Ollama API at ${OLLAMA_BASE_URL} (timeout ${OLLAMA_READY_TIMEOUT}s)..."
-    ollama_ready=0
-    for ((ollama_second = 0; ollama_second < OLLAMA_READY_TIMEOUT; ollama_second++)); do
-        if ollama_http_ready; then
-            ollama_ready=1
-            break
-        fi
-        sleep 1
-    done
-    if [ "$ollama_ready" -ne 1 ]; then
-        echo "ERROR: Ollama API did not become ready at ${OLLAMA_BASE_URL}; see /tmp/ollama.log." >&2
-        exit 1
-    fi
-fi
-echo "Ollama API is ready at ${OLLAMA_BASE_URL}."
 
 # Ensure PostgreSQL is available for LiteLLM UI/auth
 if command -v pg_isready >/dev/null 2>&1; then
@@ -719,14 +677,8 @@ else
     echo "WARNING: Manul daemon script not found/executable: $MANUL_SCRIPT"
 fi
 
-# Launch OpenCode
-if [ -n "${OPENCODE_API_KEY:-}" ]; then
-    echo "OpenCode Zen API key detected; all Zen models available."
-else
-    echo "No OPENCODE_API_KEY detected; Zen models unavailable."
-fi
-
-echo "Local model via LiteLLM: litellm/local-coder (Gemma 4 12B)"
+# All chat roles use the single FreeLLMAPI-backed LiteLLM model group.
+echo "Chat model via LiteLLM: litellm/free-cloud"
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
 else

@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/big-pickle"
+model = "litellm/free-cloud"
 steps = 40
 
 [opencode.permissions]

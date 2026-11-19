@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/deepseek-v4-flash-free"
+model = "litellm/free-cloud"
 steps = 30
 
 [opencode.permissions]

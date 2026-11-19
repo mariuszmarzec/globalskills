@@ -8,7 +8,7 @@ access = "full"
 
 [opencode]
 mode = "all"
-model = "litellm/groq-qwen3"
+model = "litellm/free-cloud"
 steps = 40
 
 [copilot]

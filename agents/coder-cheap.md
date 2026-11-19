@@ -8,7 +8,7 @@ access = "full"
 
 [opencode]
 mode = "all"
-model = "litellm/groq-llama-8b"
+model = "litellm/free-cloud"
 steps = 20
 
 [copilot]
