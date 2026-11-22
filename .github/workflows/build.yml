@@ -130,6 +130,7 @@ jobs:
             python3 "$MANUL_CANONICAL_DIR/$test"
           done
 
+          # Validate the linked Manul feature branch (including current Team coordinator fixes).
           # Manul tests resolve their support files relative to the repository root.
           cd "$MANUL_CANONICAL_ROOT"
 
