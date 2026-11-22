@@ -194,9 +194,9 @@ ensure_caracal_mcp() {
        (( check_attempts < 1 || check_attempts > 60 )); then
         check_attempts=15
     fi
-    # Embedding providers and local models can take longer than the Ollama
-    # server itself to warm up. Retry the real Caracal embedding probe briefly
-    # before failing, preserving the final diagnostic output.
+    # Embedding providers can take time to become healthy. Caracal owns
+    # provider selection and connectivity; retry its real health probe rather
+    # than duplicating provider-specific readiness logic in this launcher.
     for ((check_attempt = 1; check_attempt <= check_attempts; check_attempt++)); do
         if check_output="$("$CARACAL_CLI" check 2>&1)"; then
             check_succeeded=1
