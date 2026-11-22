@@ -25,14 +25,17 @@ bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 ok "Caracal runtime scripts have valid shell syntax"
 
-# Ollama startup must wait for the HTTP API, not just the process or a fixed sleep.
-contains "$AICODE" 'OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"' "aicode supports the configured Ollama API base URL"
-contains "$AICODE" 'ollama_http_ready' "aicode probes Ollama's actual HTTP readiness"
-contains "$AICODE" '/api/tags' "aicode waits for Ollama's HTTP API endpoint"
-contains "$AICODE" 'Waiting for Ollama API' "aicode reports waiting for Ollama readiness"
-contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness wait has a bounded timeout"
+# Embedding providers (including locally hosted models when configured) belong to
+# Caracal. aicode waits for Caracal's own healthcheck instead of managing a
+# second provider-specific readiness loop.
+contains "$AICODE" 'check_output="$("$CARACAL_CLI" check 2>&1)"' "aicode delegates embedding readiness to Caracal"
 contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
-contains "$AICODE" 'check_attempts' "Caracal embedding retries have a bounded attempt count"
+contains "$AICODE" 'CARACAL_CHECK_ATTEMPTS:-15' "Caracal embedding retries have a bounded configurable attempt count"
+contains "$AICODE" 'Caracal healthcheck failed after $check_attempts attempts' "aicode fails closed when Caracal embedding health never recovers"
+if grep -Eq 'OLLAMA_BASE_URL|ollama_http_ready|/api/tags' "$AICODE"; then
+  fail "aicode must not manage Ollama readiness independently of Caracal"
+fi
+ok "embedding provider lifecycle and health belong to Caracal, not aicode"
 
 # Caracal is always a local service owned by aicode. A stale/inherited URL
 # must never switch startup into an external-endpoint mode or skip Chroma.
