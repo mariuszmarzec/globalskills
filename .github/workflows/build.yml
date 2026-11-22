@@ -130,6 +130,9 @@ jobs:
             python3 "$MANUL_CANONICAL_DIR/$test"
           done
 
+          # Manul tests resolve their support files relative to the repository root.
+          cd "$MANUL_CANONICAL_ROOT"
+
           while IFS= read -r test; do
             case "$(basename "$test")" in
               test_agent_modes.sh|test_manul_pr_workflow.sh|test_concurrency_impl.sh)
