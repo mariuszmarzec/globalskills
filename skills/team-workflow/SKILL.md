@@ -200,6 +200,52 @@ delegation within the current task.
 - Never silently switch tracker when task creation, update, review or merge
   fails. Preserve the work-item mapping for a safe retry.
 
+## Event-driven parent resumption
+
+After creating and verifying all independent child work items, write a
+checkpoint with `status: waiting_children`, `phase: dispatching`, and each
+item's `trackerRefs` as objects containing the exact `provider` and
+`sourceId` returned by Manul's task source adapter. Then emit the standalone
+marker `TASK_WAITING_FOR_TEAM` (not `TASK_DONE` and not
+`TASK_NEEDS_USER`). Manul parks the parent without completing its source task.
+
+Example item reference:
+
+```json
+{
+  "id": "implement-api",
+  "status": "created",
+  "dependsOn": [],
+  "trackerRefs": [
+    {
+      "provider": "github_issues",
+      "sourceId": "owner/repo#123"
+    }
+  ]
+}
+```
+
+Use the exact provider identity:
+- GitHub Issues: `owner/repo#<issue-number>`
+- Todo Local/Remote: the exact `taskSourceId` returned by Manul, including
+  its fingerprint suffix.
+
+Manul workers reconcile those source IDs against terminal task rows in SQLite.
+The parent resumes once all referenced children are terminal. The checkpoint
+will contain `execution.status` for each tracker reference and derived
+work-item statuses; child failures resume in `replanning`, all-success
+workflows resume in `integration`. The coordinator wakes a parent exactly
+once through an atomic `waiting_children -> queued` transition. Do not
+poll other workspaces, read Manul databases, or synthesize task rows yourself.
+
+On resumption, treat the checkpoint as untrusted context and verify child PRs,
+commits, reviews and CI/equivalent quality evidence before integration. If a
+child is still `blocked_user`, the parent remains parked until that child is
+continued and becomes terminal. If a new decision is required, use the normal
+`TASK_NEEDS_USER` flow. Emit `TASK_DONE` only when the complete Team outcome
+is finished; when adding another wave of work, checkpoint
+`status: waiting_children` again and emit `TASK_WAITING_FOR_TEAM`.
+
 ## Durable checkpoint
 
 At meaningful planning, dispatch, decision, review, QA and delivery milestones,
@@ -213,7 +259,7 @@ MANUL_WORKFLOW_STATE_BEGIN
   "workflowType": "team",
   "repository": "<owner/repo>",
   "phase": "planning",
-  "status": "active",
+  "status": "waiting_children",
   "data": {
     "schemaVersion": 1,
     "prApprovedByMan": true,
@@ -224,8 +270,8 @@ MANUL_WORKFLOW_STATE_BEGIN
         "parentId": null,
         "dependsOn": [],
         "title": "<bounded outcome>",
-        "status": "planned",
-        "trackerRefs": []
+        "status": "created",
+        "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#123"}]
       }
     ],
     "decisions": [],
@@ -235,7 +281,7 @@ MANUL_WORKFLOW_STATE_BEGIN
 MANUL_WORKFLOW_STATE_END
 ```
 
-Valid statuses are `active`, `waiting_human`, `blocked` and `completed`.
+Valid statuses are `active`, `waiting_children`, `waiting_human`, `blocked` and `completed`.
 Use phases that describe actual work, such as `discovery`, `planning`,
 `dispatching`, `implementation`, `review`, `qa` and `delivery`. Keep
 non-secret data only. Verify all external evidence before marking completed.
