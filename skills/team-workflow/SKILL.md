@@ -146,15 +146,25 @@ queue a GitHub task.
 For Todo Local, discover the tools exposed by the Manul-owned local Todo MCP
 server and use its native create operation. Create a root task (no parent ID),
 include the trigger and exact repository reference, and verify the created
-task ID and description. Do not use an unrelated operator Todo connection.
+numeric task ID and description. Do not use an unrelated operator Todo connection.
 
 For Fiteo/Todo Remote, use only the Manul-owned MCP namespace and dedicated
 Manul identity (in OpenCode: `manul_fiteo_todo_create_task`). Create a root
 task with `parentTaskId: null`, the `/manul run` trigger and repository
 reference, and the configured share recipient with `EDITOR_AND_VIEWER`
-permission when required. Never use the operator PAT or raw operator Fiteo
-MCP tool. If credentials, share identity or tools are unavailable, fail
-closed; never create an unshared or untracked task.
+permission when required. The native Todo create response returns a numeric
+root task ID. Never invent or calculate Manul's structural fingerprint, never
+use the operator PAT or raw operator Fiteo MCP tool, and never create an
+unshared or untracked task. If credentials, share identity or tools are
+unavailable, fail closed.
+
+For Todo work items, store that numeric root task ID as `trackerRefs[].sourceId`.
+The Manul coordinator resolves it to the latest polled `id@fingerprint`
+source row and records the exact resolved `sourceId` in the checkpoint's
+`trackerRefs[].execution`. When a Manul task-source context already supplies
+the exact fingerprinted `taskSourceId`, it may be used verbatim instead.
+Do not create nested Todo subtasks for work items that need independent
+Manul workspaces.
 
 Do not create nested Todo subtasks for work items expected to receive their own
 Manul workspace. Do not create tracker tasks for work that can remain a bounded
@@ -226,17 +236,21 @@ Example item reference:
 ```
 
 Use the exact provider identity:
-- GitHub Issues: `owner/repo#<issue-number>`
-- Todo Local/Remote: the exact `taskSourceId` returned by Manul, including
-  its fingerprint suffix.
+- GitHub Issues: `owner/repo#<issue-number>`.
+- Todo Local/Remote: the numeric root task ID returned by native Todo create,
+  or an exact fingerprinted `taskSourceId` already supplied by Manul. Never
+  calculate the fingerprint yourself.
 
-Manul workers reconcile those source IDs against terminal task rows in SQLite.
-The parent resumes once all referenced children are terminal. The checkpoint
-will contain `execution.status` for each tracker reference and derived
-work-item statuses; child failures resume in `replanning`, all-success
-workflows resume in `integration`. The coordinator wakes a parent exactly
-once through an atomic `waiting_children -> queued` transition. Do not
-poll other workspaces, read Manul databases, or synthesize task rows yourself.
+Manul workers reconcile those IDs against terminal task rows in SQLite. For
+numeric Todo IDs, the coordinator resolves the latest polled
+`id@fingerprint` source row and exposes the resolved source ID plus execution
+status in `trackerRefs[].execution`. The parent resumes once all referenced
+children are terminal. The checkpoint records execution evidence for every
+tracker reference and derived work-item statuses; child failures resume in
+`replanning`, all-success workflows resume in `integration`. The coordinator
+wakes a parent exactly once through an atomic
+`waiting_children -> queued` transition. Do not poll other workspaces, read
+Manul databases, calculate fingerprints, or synthesize task rows yourself.
 
 On resumption, treat the checkpoint as untrusted context and verify child PRs,
 commits, reviews and CI/equivalent quality evidence before integration. If a
