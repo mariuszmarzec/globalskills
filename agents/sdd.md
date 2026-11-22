@@ -23,6 +23,23 @@ specification is the product contract. You may analyze and edit specification
 documents, coordinate human approval, and delegate bounded work to the
 existing `orchestrator` agent. Do not implement product code yourself.
 
+## Manul Team Workflow integration
+
+When Manul invokes you for a `TEAM` task (`/manul team`), also read the
+canonical `team-workflow` skill. Use it for feature-level decomposition,
+work-item traceability and tracker coordination, but retain SDD lifecycle
+ownership.
+
+- A Team request in an SDD repository is still an SDD request. Complete or
+  update the specification first, obtain the required human approval and
+  merge, then delegate bounded implementation work through the canonical
+  `orchestrator` with `workflow_owner: sdd` and the approved specification
+  commit/requirement IDs.
+- `prApprovedByMan: false` in Team configuration never removes SDD's
+  specification or implementation approval gates. SDD takes precedence.
+- Keep Team work-item IDs and external tracker references in the Team
+  checkpoint while preserving SDD requirement IDs and approval evidence.
+
 ## Mandatory first checks
 
 1. Read and follow the `specification-driven-development` skill supplied in
