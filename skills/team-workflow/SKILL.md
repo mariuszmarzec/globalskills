@@ -113,6 +113,24 @@ subtasks are ordered steps within one root and do not receive an independent
 Manul workspace. Preserve hierarchy and dependencies in the Team checkpoint
 and link external tasks to each other in their descriptions.
 
+Every item must also carry the parent workflow's execution policy. Child
+tasks are intentionally submitted as ordinary `/manul run` tasks, so Manul
+does not automatically inject this parent Team context into their prompts.
+Propagate it explicitly in the task description and the trigger comment/body:
+
+- workflow ID and stable work-item ID/marker;
+- the resolved tracker policy and target repository;
+- the exact `prApprovedByMan` value inherited from the parent workflow;
+- SDD ownership/approved specification reference when the repository is SDD-enabled;
+- parent/child and dependency links.
+
+When `prApprovedByMan: true`, the child implementer and Reviewer must leave
+the PR open and report that it is awaiting Product Owner approval. They must
+not merge, squash-merge or enable auto-merge. When it is `false`, the child
+may autonomously merge only after independent review, required checks and
+acceptance criteria pass. A child must never infer a different value from its
+own task source or local defaults.
+
 Every item must include:
 - the exact target repository (`owner/repo` or canonical GitHub URL);
 - one bounded request and acceptance criteria;
