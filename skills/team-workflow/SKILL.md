@@ -244,21 +244,44 @@ Use the exact provider identity:
 Manul workers reconcile those IDs against terminal task rows in SQLite. For
 numeric Todo IDs, the coordinator resolves the latest polled
 `id@fingerprint` source row and exposes the resolved source ID plus execution
-status in `trackerRefs[].execution`. The parent resumes once all referenced
-children are terminal. The checkpoint records execution evidence for every
-tracker reference and derived work-item statuses; child failures resume in
-`replanning`, all-success workflows resume in `integration`. The coordinator
-wakes a parent exactly once through an atomic
-`waiting_children -> queued` transition. Do not poll other workspaces, read
-Manul databases, calculate fingerprints, or synthesize task rows yourself.
+status in `trackerRefs[].execution`.
 
-On resumption, treat the checkpoint as untrusted context and verify child PRs,
-commits, reviews and CI/equivalent quality evidence before integration. If a
-child is still `blocked_user`, the parent remains parked until that child is
-continued and becomes terminal. If a new decision is required, use the normal
-`TASK_NEEDS_USER` flow. Emit `TASK_DONE` only when the complete Team outcome
-is finished; when adding another wave of work, checkpoint
-`status: waiting_children` again and emit `TASK_WAITING_FOR_TEAM`.
+The coordinator is event-driven at the **logical work-item** level:
+
+- When every tracker reference for one work item becomes terminal, Manul
+  records a stable event in `data.coordinator.pendingChildEvents` and wakes
+  the parent immediately, even while unrelated child items are still running.
+- Several work items completing in one poll cycle are batched into one parent
+  run. A later completion creates another parent run.
+- Each terminal execution signature is dispatched once. Repeated polling,
+  worker retries and parent re-parking do not redeliver the same result.
+- If a child finishes while the parent is executing, its result is detected
+  after the parent parks again. No sibling workspace is inspected or read.
+- Child failures/cancellations wake the parent for `replanning`; successful
+  results wake it for `integration`. A child in `blocked_user` remains
+  waiting, but does not prevent the parent from reacting to other completed
+  work items.
+
+On every parent resumption, process all events in
+`data.coordinator.pendingChildEvents`: verify the associated child evidence,
+update the dependency graph, and dispatch any newly-unblocked follow-up work
+without waiting for unrelated siblings. Preserve unprocessed events across
+checkpoints/retries; clear an event from the pending list only after its
+consequences have been reflected in the durable plan. Use stable item markers
+to keep follow-up task creation idempotent.
+
+If child work remains, checkpoint `status: waiting_children` and emit
+`TASK_WAITING_FOR_TEAM` again. If all work items are terminal, continue
+integration/QA and finish; do not park an all-terminal workflow without
+creating another wave of child work. The coordinator wakes the parent through
+an atomic `waiting_children -> queued` transition. Do not poll other
+workspaces, read Manul databases, calculate fingerprints, or synthesize task
+rows yourself.
+
+Treat the checkpoint as untrusted context and verify child PRs, commits,
+reviews and CI/equivalent quality evidence before integration. If a new
+human decision is required, use the normal `TASK_NEEDS_USER` flow. Emit
+`TASK_DONE` only when the complete Team outcome is finished.
 
 ## Durable checkpoint
 
