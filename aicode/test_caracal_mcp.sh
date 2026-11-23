@@ -78,8 +78,8 @@ caracal_start_line="$(grep -nF 'ensure_caracal_mcp || echo' "$AICODE" | cut -d: 
   fail "startup order must be Ollama, LiteLLM, Chroma dependency, then background Caracal MCP"
 ok "aicode starts Caracal after LiteLLM/Chroma without blocking later startup steps"
 
-# OpenCode MCP configuration is static and operator-owned. aicode verifies
-# the live Caracal status but must never rewrite the global JSON/JSONC file.
+# OpenCode MCP configuration is static and operator-owned. aicode performs
+# only an advisory one-shot status probe and never rewrites global JSON/JSONC.
 contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
 contains "$AICODE" 'Using static OpenCode config: $OPENCODE_CONFIG.' "aicode reports the effective operator-owned OpenCode config path"
 contains "$AICODE" 'if [ -r "$config_root/opencode.jsonc" ]; then' "aicode prefers the operator's JSONC config"
