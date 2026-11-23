@@ -7,7 +7,7 @@ ensure_user_executable() {
         echo "ERROR: expected a regular launcher file: $target" >&2
         return 1
     fi
-    chmod u+x -- "$target"
+    chmod u+x "$target"
 }
 
 normalize_lf_file() {
