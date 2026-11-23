@@ -104,6 +104,14 @@ AICODE_SOURCE="$REPO_DIR/aicode/aicode"
 AICODE_DIR="$HOME/.aicode"
 
 if [ -f "$AICODE_SOURCE" ]; then
+  # Git attributes prevent future CRLF checkouts; normalize existing checkouts
+  # too, because changing .gitattributes does not rewrite every working file.
+  # shellcheck source=installer/line-endings.sh
+  . "$REPO_DIR/installer/line-endings.sh"
+  if ! normalize_lf_file "$AICODE_SOURCE"; then
+    echo "ERROR: could not normalize the maintained aicode launcher to LF: $AICODE_SOURCE" >&2
+    exit 1
+  fi
   # Do not mutate AICODE_SOURCE when ~/.aicode is an alias of the repository's
   # aicode directory. In that layout AICODE_LINK and AICODE_SOURCE are the same
   # filesystem path, so moving it aside and linking it back creates a self-link
