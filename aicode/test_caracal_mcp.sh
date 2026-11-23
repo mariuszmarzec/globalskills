@@ -66,7 +66,8 @@ fi
 if grep -Fq 'if [ -z "${CARACAL_MCP_URL:-}" ]; then' "$AICODE"; then
   fail "aicode must not skip Chroma startup when CARACAL_MCP_URL is inherited"
 fi
-contains "$AICODE" 'export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"' "aicode discards inherited Caracal URLs before resolving its local endpoint"
+contains "$AICODE" 'unset CARACAL_MCP_URL' "aicode discards inherited Caracal URLs before loading the Caracal provider"
+contains "$AICODE" 'configured_url="${CARACAL_MCP_URL:-http://127.0.0.1:3500/mcp}"' "aicode uses the provider URL or the configured loopback default"
 contains "$AICODE" 'ensure_chroma_server "$CARACAL_HOME" || true' "aicode always runs the Chroma lifecycle before Caracal startup"
 litellm_start_line="$(grep -nF 'echo "Starting LiteLLM..."' "$AICODE" | head -n 1 | cut -d: -f1)"
 chroma_start_line="$(grep -nF 'ensure_chroma_server "$CARACAL_HOME" || true' "$AICODE" | cut -d: -f1)"
