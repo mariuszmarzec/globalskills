@@ -267,8 +267,10 @@ On every parent resumption, process all events in
 update the dependency graph, and dispatch any newly-unblocked follow-up work
 without waiting for unrelated siblings. Preserve unprocessed events across
 checkpoints/retries; clear an event from the pending list only after its
-consequences have been reflected in the durable plan. Use stable item markers
-to keep follow-up task creation idempotent.
+consequences have been reflected in the durable plan. Preserve each item's
+`lastDispatchedEventKey` and the coordinator's wake sequence verbatim across
+checkpoints so the same child result is never delivered again. Use stable item
+markers to keep follow-up task creation idempotent.
 
 If child work remains, checkpoint `status: waiting_children` and emit
 `TASK_WAITING_FOR_TEAM` again. If all work items are terminal, continue
