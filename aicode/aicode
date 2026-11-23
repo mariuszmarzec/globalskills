@@ -212,7 +212,7 @@ ensure_caracal_mcp() {
         return 0
     fi
 
-    local configured_url mcp_host mcp_port mcp_path mcp_url
+    local configured_url mcp_host mcp_port mcp_port_number mcp_path mcp_url
     configured_url="${CARACAL_MCP_URL:-http://127.0.0.1:3500/mcp}"
     if [[ "$configured_url" =~ ^http://(127\.0\.0\.1):([0-9]{1,5})(/[A-Za-z0-9/_-]+)$ ]]; then
         mcp_host="${BASH_REMATCH[1]}"
@@ -222,10 +222,12 @@ ensure_caracal_mcp() {
         echo "WARNING: Caracal MCP URL must be a loopback HTTP URL; refusing to launch it: $configured_url" >&2
         return 0
     fi
-    if (( mcp_port < 1 || mcp_port > 65535 )); then
+    mcp_port_number=$((10#$mcp_port))
+    if (( mcp_port_number < 1 || mcp_port_number > 65535 )); then
         echo "WARNING: Caracal MCP port is invalid ($mcp_port); continuing without Caracal MCP." >&2
         return 0
     fi
+    mcp_port="$mcp_port_number"
 
     CARACAL_MCP_HOST="$mcp_host"
     CARACAL_MCP_PORT="$mcp_port"
