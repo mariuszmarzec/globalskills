@@ -17,14 +17,6 @@ done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
 
-OPENCODE_MCP_READINESS_HELPER="$AICODE_SOURCE_DIR/opencode-mcp-readiness.sh"
-if [ ! -r "$OPENCODE_MCP_READINESS_HELPER" ]; then
-    echo "ERROR: OpenCode MCP readiness helper is missing: $OPENCODE_MCP_READINESS_HELPER" >&2
-    exit 1
-fi
-# shellcheck source=aicode/opencode-mcp-readiness.sh
-. "$OPENCODE_MCP_READINESS_HELPER"
-
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 MANUL_CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.manul-repo}"
 MANUL_CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-master}"
@@ -87,6 +79,42 @@ if [ "$AGENT_RUNTIME" = "openclaw" ]; then
 else
     echo "Manul agentRuntime=$AGENT_RUNTIME; skipping OpenClaw Gateway and ACPX setup."
 fi
+
+# Start Ollama first. LiteLLM and Caracal may use local models, so wait
+# for the HTTP API rather than treating an existing process as ready.
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+OLLAMA_READY_TIMEOUT="${OLLAMA_READY_TIMEOUT:-45}"
+
+ollama_http_ready() {
+    curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 \
+        "${OLLAMA_BASE_URL%/}/api/tags" >/dev/null 2>&1
+}
+
+if ! ollama_http_ready; then
+    if ! pgrep -x "ollama" >/dev/null; then
+        echo "Starting Ollama..."
+        nohup ollama serve >/tmp/ollama.log 2>&1 &
+    fi
+
+    if ! [[ "$OLLAMA_READY_TIMEOUT" =~ ^[0-9]{1,3}$ ]] ||
+       (( OLLAMA_READY_TIMEOUT < 1 || OLLAMA_READY_TIMEOUT > 300 )); then
+        OLLAMA_READY_TIMEOUT=45
+    fi
+    echo "Waiting for Ollama API at ${OLLAMA_BASE_URL} (timeout ${OLLAMA_READY_TIMEOUT}s)..."
+    ollama_ready=0
+    for ((ollama_second = 0; ollama_second < OLLAMA_READY_TIMEOUT; ollama_second++)); do
+        if ollama_http_ready; then
+            ollama_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$ollama_ready" -ne 1 ]; then
+        echo "ERROR: Ollama API did not become ready at ${OLLAMA_BASE_URL}; see /tmp/ollama.log." >&2
+        exit 1
+    fi
+fi
+echo "Ollama API is ready at ${OLLAMA_BASE_URL}."
 
 # Ensure PostgreSQL is available for LiteLLM UI/auth
 if command -v pg_isready >/dev/null 2>&1; then
@@ -161,139 +189,109 @@ caracal_pid_matches() {
        "$command_line" == *"--path $CARACAL_MCP_PATH"* ]]
 }
 
-# Load the Caracal bearer token from the single Caracal provider.
-# The provider (~/.caracal/env.sh) reads secrets.yaml, validates the token,
-# and (optionally) resolves the live loopback URL. aicode sources it without
-# CARACAL_RESOLVE_LIVE=1 because ensure_caracal_mcp manages the live URL and
-# Caracal service startup itself.
-# shellcheck source=~/.caracal/env.sh
-. "$CARACAL_HOME/env.sh"
-
+# Load the Caracal token and configured URL from its single provider.
+# Ignore inherited values first, then let ~/.caracal/env.sh provide the
+# operator's configured endpoint. The MCP launch itself does not wait for
+# embedding readiness; Caracal can finish warming up while Manul/OpenCode start.
+unset CARACAL_MCP_URL
+if [ -r "$CARACAL_HOME/env.sh" ]; then
+    # shellcheck source=~/.caracal/env.sh
+    . "$CARACAL_HOME/env.sh"
+else
+    echo "WARNING: Caracal environment provider is missing: $CARACAL_HOME/env.sh" >&2
+fi
 ensure_caracal_mcp() {
-    # Token is already loaded and validated by the Caracal provider
-    # (~/.caracal/env.sh). The provider exports CARACAL_ACCESS_TOKEN.
-    # aicode sources it without CARACAL_RESOLVE_LIVE=1 because this function
-    # manages the live URL and Caracal service startup itself.
+    # Caracal startup is deliberately non-blocking. The embedding provider may
+    # still be warming up; that must not delay Manul or OpenCode startup.
     if [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
-        echo "ERROR: Caracal access token is unavailable; no agent runtime will start." >&2
-        return 1
+        echo "WARNING: Caracal access token is unavailable; continuing without Caracal MCP." >&2
+        return 0
     fi
-
-    # aicode always owns the local Caracal MCP lifecycle. Ignore any
-    # inherited/stale CARACAL_MCP_URL; resolve the real local endpoint from
-    # "caracal-rag check" and start/reuse the matching process below.
-    export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"
     if [ ! -x "$CARACAL_CLI" ]; then
-        echo "ERROR: Caracal is not installed at $CARACAL_CLI; refusing to start an agent without MCP." >&2
-        return 1
+        echo "WARNING: Caracal CLI is not executable at $CARACAL_CLI; continuing without Caracal MCP." >&2
+        return 0
     fi
 
-    local check_output="" mcp_host mcp_port mcp_path mcp_url check_attempt check_succeeded=0
-    local check_attempts="${CARACAL_CHECK_ATTEMPTS:-15}"
-    if ! [[ "$check_attempts" =~ ^[0-9]{1,3}$ ]] ||
-       (( check_attempts < 1 || check_attempts > 60 )); then
-        check_attempts=15
+    local configured_url mcp_host mcp_port mcp_path mcp_url
+    configured_url="${CARACAL_MCP_URL:-http://127.0.0.1:3500/mcp}"
+    if [[ "$configured_url" =~ ^http://(127\.0\.0\.1):([0-9]{1,5})(/[A-Za-z0-9/_-]+)$ ]]; then
+        mcp_host="${BASH_REMATCH[1]}"
+        mcp_port="${BASH_REMATCH[2]}"
+        mcp_path="${BASH_REMATCH[3]}"
+    else
+        echo "WARNING: Caracal MCP URL must be a loopback HTTP URL; refusing to launch it: $configured_url" >&2
+        return 0
     fi
-    # Embedding providers can take time to become healthy. Caracal owns
-    # provider selection and connectivity; retry its real health probe rather
-    # than duplicating provider-specific readiness logic in this launcher.
-    for ((check_attempt = 1; check_attempt <= check_attempts; check_attempt++)); do
-        if check_output="$("$CARACAL_CLI" check 2>&1)"; then
-            check_succeeded=1
-            break
-        fi
-        if (( check_attempt < check_attempts )); then
-            echo "Caracal embedding healthcheck not ready (attempt $check_attempt/$check_attempts); retrying in 2s..."
-            sleep 2
-        fi
-    done
-    if [ "$check_succeeded" -ne 1 ]; then
-        echo "ERROR: Caracal healthcheck failed after $check_attempts attempts; MCP was not started." >&2
-        printf '%s\n' "$check_output" | tail -n 8 >&2
-        return 1
+    if (( mcp_port < 1 || mcp_port > 65535 )); then
+        echo "WARNING: Caracal MCP port is invalid ($mcp_port); continuing without Caracal MCP." >&2
+        return 0
     fi
 
-    mcp_host="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_host=\([^ ]*\).*/\1/p' | tail -n 1)"
-    mcp_port="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_port=\([^ ]*\).*/\1/p' | tail -n 1)"
-    mcp_path="$(printf '%s\n' "$check_output" | sed -n 's/.*mcp_path=\([^ ]*\).*/\1/p' | tail -n 1)"
-
-    if [ "$mcp_host" != "127.0.0.1" ] ||
-       ! [[ "$mcp_port" =~ ^[0-9]{1,5}$ ]] ||
-       (( mcp_port < 1 || mcp_port > 65535 )) ||
-       ! [[ "$mcp_path" =~ ^/[A-Za-z0-9/_-]+$ ]]; then
-        echo "ERROR: Caracal must use loopback HTTP with a valid port and absolute MCP path." >&2
-        return 1
-    fi
-
+    CARACAL_MCP_HOST="$mcp_host"
     CARACAL_MCP_PORT="$mcp_port"
     CARACAL_MCP_PATH="$mcp_path"
-    mcp_url="http://127.0.0.1:$mcp_port$mcp_path"
+    mcp_url="http://$mcp_host:$mcp_port$mcp_path"
 
     if [ -L "$CARACAL_RUN_DIR" ] || [ -L "$CARACAL_PID_FILE" ]; then
-        echo "ERROR: refusing symlinked Caracal runtime/PID path; inspect $CARACAL_RUN_DIR." >&2
-        return 1
+        echo "WARNING: refusing symlinked Caracal runtime/PID path; inspect $CARACAL_RUN_DIR. Continuing without Caracal MCP." >&2
+        return 0
     fi
-    mkdir -p "$CARACAL_RUN_DIR" || return 1
-    chmod 0700 "$CARACAL_RUN_DIR"
+    if ! mkdir -p "$CARACAL_RUN_DIR"; then
+        echo "WARNING: unable to create Caracal runtime directory $CARACAL_RUN_DIR; continuing without Caracal MCP." >&2
+        return 0
+    fi
+    chmod 0700 "$CARACAL_RUN_DIR" || {
+        echo "WARNING: unable to protect Caracal runtime directory; continuing without Caracal MCP." >&2
+        return 0
+    }
 
     if [ -e "$CARACAL_PID_FILE" ]; then
         if [ ! -f "$CARACAL_PID_FILE" ]; then
-            echo "ERROR: refusing unexpected Caracal PID path: $CARACAL_PID_FILE" >&2
-            return 1
+            echo "WARNING: unexpected Caracal PID path: $CARACAL_PID_FILE; continuing without Caracal MCP." >&2
+            return 0
         fi
         local old_pid
         IFS= read -r old_pid < "$CARACAL_PID_FILE" || old_pid=""
         if caracal_pid_matches "$old_pid"; then
-            for _ in $(seq 1 20); do
-                if caracal_http_ready "$mcp_url"; then
-                    export CARACAL_MCP_URL="$mcp_url" CARACAL_MCP_REQUIRED=1
-                    echo "Caracal MCP already running at $mcp_url (PID $old_pid)."
-                    return 0
-                fi
-                if ! kill -0 "$old_pid" 2>/dev/null; then
-                    break
-                fi
-                sleep 1
-            done
-            echo "ERROR: tracked Caracal MCP process is not responding; see $CARACAL_LOG." >&2
-            return 1
+            export CARACAL_MCP_URL="$mcp_url"
+            if caracal_http_ready "$mcp_url"; then
+                echo "Caracal MCP already running at $mcp_url (PID $old_pid)."
+            else
+                echo "Caracal MCP process is already starting at $mcp_url (PID $old_pid); continuing without waiting."
+            fi
+            return 0
         fi
+        # Never kill an unverified process whose PID may have been reused.
         rm -f -- "$CARACAL_PID_FILE"
     fi
 
     if caracal_http_ready "$mcp_url"; then
-        echo "ERROR: $mcp_url responds but is not owned by a valid Caracal PID file; refusing to attach credentials." >&2
-        return 1
+        echo "WARNING: $mcp_url responds but is not owned by a valid Caracal PID file; refusing to attach credentials. Continuing without Caracal MCP." >&2
+        return 0
     fi
 
     umask 077
-    touch "$CARACAL_LOG" || return 1
+    if ! touch "$CARACAL_LOG"; then
+        echo "WARNING: unable to create Caracal log $CARACAL_LOG; continuing without Caracal MCP." >&2
+        umask 022
+        return 0
+    fi
     chmod 0600 "$CARACAL_LOG"
-    echo "Starting Caracal MCP after LiteLLM..."
-    nohup "$CARACAL_CLI" mcp --transport http --host 127.0.0.1 --port "$mcp_port" --path "$mcp_path" \
+    echo "Starting Caracal MCP at $mcp_url (non-blocking)..."
+    nohup "$CARACAL_CLI" mcp --transport http --host "$mcp_host" --port "$mcp_port" --path "$mcp_path" \
         </dev/null >>"$CARACAL_LOG" 2>&1 &
     local caracal_pid=$!
-    printf '%s\n' "$caracal_pid" > "$CARACAL_PID_FILE" || return 1
+    if ! printf '%s\n' "$caracal_pid" > "$CARACAL_PID_FILE"; then
+        echo "WARNING: unable to record Caracal MCP PID; inspect $CARACAL_LOG. Continuing startup." >&2
+        umask 022
+        return 0
+    fi
     chmod 0600 "$CARACAL_PID_FILE"
     umask 022
 
-    for _ in $(seq 1 20); do
-        if caracal_http_ready "$mcp_url" && caracal_pid_matches "$caracal_pid"; then
-            export CARACAL_MCP_URL="$mcp_url" CARACAL_MCP_REQUIRED=1
-            echo "Caracal MCP ready at $mcp_url."
-            return 0
-        fi
-        if ! kill -0 "$caracal_pid" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-
-    echo "ERROR: Caracal MCP did not become ready; see $CARACAL_LOG. No agent runtime will start." >&2
-    if ! kill -0 "$caracal_pid" 2>/dev/null; then
-        rm -f -- "$CARACAL_PID_FILE"
-    fi
-    return 1
+    export CARACAL_MCP_URL="$mcp_url"
+    echo "Caracal MCP launch requested at $mcp_url (PID $caracal_pid); continuing without readiness wait."
+    return 0
 }
 
 ensure_todo_mcp_bridge() {
@@ -383,10 +381,8 @@ ensure_todo_mcp_bridge() {
 }
 
 verify_opencode_caracal_config() {
-    # OpenCode MCP configuration is operator-owned and static. aicode must
-    # never rewrite, migrate, back up, or synthesize the global opencode.json.
-    # Resolve the existing config only so the same operator config is checked
-    # by the CLI that will launch the session.
+    # Keep using the operator-owned static config, but do not make Caracal
+    # connectivity a prerequisite for launching Manul/OpenCode.
     if [ -z "${OPENCODE_CONFIG:-}" ]; then
         local config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
         if [ -r "$config_root/opencode.jsonc" ]; then
@@ -399,34 +395,37 @@ verify_opencode_caracal_config() {
     fi
     export OPENCODE_CONFIG
     echo "Using static OpenCode config: $OPENCODE_CONFIG."
-    if [ ! -r "$OPENCODE_CONFIG" ]; then
-        echo "ERROR: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG" >&2
-        echo "Configure the required mcp.servers.caracal-rag entry in the operator-owned config; aicode will not rewrite it." >&2
-        return 1
-    fi
 
-    local opencode_cli mcp_output
+    local opencode_cli mcp_output mcp_status=0 probe_timeout
+    if [ ! -r "$OPENCODE_CONFIG" ]; then
+        echo "WARNING: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG; continuing without Caracal connectivity verification." >&2
+        return 0
+    fi
     if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
         opencode_cli="$OPENCODE_BIN"
     else
         opencode_cli="$(command -v opencode 2>/dev/null || true)"
     fi
     if [ -z "$opencode_cli" ] || [ ! -x "$opencode_cli" ]; then
-        echo "ERROR: OpenCode CLI is not executable; cannot verify Caracal MCP." >&2
-        return 1
+        echo "WARNING: OpenCode CLI is not executable; skipping the optional Caracal MCP startup probe." >&2
+        return 0
     fi
 
-    # Verify the static Caracal entry with the exact CLI/config/env used for
-    # this session. An unrelated optional MCP (for example Fiteo) may be down.
-    if ! opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"; then
-        return 1
+    probe_timeout="${CARACAL_MCP_PROBE_TIMEOUT:-2}"
+    if ! [[ "$probe_timeout" =~ ^[0-9]{1,2}$ ]] || (( probe_timeout < 1 || probe_timeout > 10 )); then
+        probe_timeout=2
     fi
-    mcp_output="$OPENCODE_MCP_LAST_OUTPUT"
-    echo "OpenCode reports caracal-rag connected; operator config left unchanged."
+    mcp_output="$(timeout "$probe_timeout" "$opencode_cli" mcp list 2>&1)" || mcp_status=$?
+    if printf '%s\n' "$mcp_output" |
+        grep -Eiq '(^|[[:space:]])caracal-rag[[:space:]]+connected([[:space:]]|$|\()'; then
+        echo "OpenCode reports caracal-rag connected; operator config left unchanged."
+    else
+        echo "WARNING: Caracal MCP is not connected yet (mcp list exit $mcp_status); continuing startup without waiting." >&2
+        if [ -n "$mcp_output" ]; then
+            printf '%s\n' "$mcp_output" | tail -n 6 >&2
+        fi
+    fi
 
-    # Todo Desktop is always optional. A Todo bridge that completed its own
-    # handshake is useful context, but its later OpenCode status never blocks
-    # startup of an otherwise healthy session.
     if [ "${TODO_LOCAL_MCP_AVAILABLE:-0}" = "1" ] &&
        ! printf '%s\n' "$mcp_output" |
            grep -Eiq '(^|[[:space:]])todo-local[[:space:]]+connected([[:space:]]|$|\()'; then
@@ -545,9 +544,8 @@ configure_openclaw_opencode_acp() {
     echo "OpenClaw ACP OpenCode harness configured with the Caracal-verifying wrapper."
 }
 
-# Chroma must be available before the local Caracal healthcheck. Always
-# run its lifecycle helper after LiteLLM; it reuses a healthy configured
-# endpoint and starts the local service when the active config points to loopback.
+# Chroma is a Caracal dependency. Start/reuse it after LiteLLM and before
+# launching Caracal's MCP process; embedding readiness is intentionally async.
 if [ -r "$AICODE_SOURCE_DIR/chroma-lifecycle.sh" ]; then
     # shellcheck source=aicode/chroma-lifecycle.sh
     . "$AICODE_SOURCE_DIR/chroma-lifecycle.sh"
@@ -556,13 +554,9 @@ else
     echo "WARNING: Chroma lifecycle helper is missing next to aicode; automatic Chroma startup is skipped."
 fi
 
-if ! ensure_caracal_mcp; then
-    exit 1
-fi
+ensure_caracal_mcp || echo "WARNING: Caracal MCP startup failed; continuing with Manul/OpenCode." >&2
 ensure_todo_mcp_bridge
-if ! verify_opencode_caracal_config; then
-    exit 1
-fi
+verify_opencode_caracal_config
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     # The ACP wrapper loads current Caracal credentials directly when each
     # OpenCode harness starts, so no Gateway restart is needed just to refresh them.
