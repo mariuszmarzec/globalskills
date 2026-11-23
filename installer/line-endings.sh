@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Helpers for keeping executable shell entry points in Unix LF format.
 
+ensure_user_executable() {
+    local target="${1:?Usage: ensure_user_executable PATH}"
+    if [ ! -f "$target" ]; then
+        echo "ERROR: expected a regular launcher file: $target" >&2
+        return 1
+    fi
+    chmod u+x -- "$target"
+}
+
 normalize_lf_file() {
     local target="${1:?Usage: normalize_lf_file PATH}"
     local carriage_return temporary_file grep_status
