@@ -43,4 +43,14 @@ grep -Fq '. "$REPO_DIR/installer/line-endings.sh"' "$ROOT_DIR/install.sh"
 grep -Fq 'normalize_lf_file "$AICODE_SOURCE"' "$ROOT_DIR/install.sh"
 grep -Fq 'ensure_user_executable "$AICODE_SOURCE"' "$ROOT_DIR/install.sh"
 
-echo "PASS: aicode launcher line endings are normalized and executable."
+# The repository must preserve the executable bit as well; GitHub's contents
+# API can otherwise leave shell launchers at mode 100644 after text updates.
+if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    tracked_mode="$(git -C "$ROOT_DIR" ls-files --stage -- aicode/aicode | awk 'NR == 1 { print $1 }')"
+    [ "$tracked_mode" = "100755" ] || {
+        echo "FAIL: aicode/aicode must be tracked as executable (Git mode $tracked_mode)." >&2
+        exit 1
+    }
+fi
+
+echo "PASS: aicode launcher is LF-normalized, user-executable, and tracked as executable."
