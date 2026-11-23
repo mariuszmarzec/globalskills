@@ -193,7 +193,7 @@ caracal_pid_matches() {
 # Ignore inherited values first, then let ~/.caracal/env.sh provide the
 # operator's configured endpoint. The MCP launch itself does not wait for
 # embedding readiness; Caracal can finish warming up while Manul/OpenCode start.
-unset CARACAL_MCP_URL
+unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
 if [ -r "$CARACAL_HOME/env.sh" ]; then
     # shellcheck source=~/.caracal/env.sh
     . "$CARACAL_HOME/env.sh"
