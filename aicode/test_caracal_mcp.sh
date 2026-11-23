@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test_caracal_mcp.sh — regression guards for mandatory Caracal MCP access.
+# test_caracal_mcp.sh — regression guards for non-blocking Caracal MCP startup.
 # These checks are offline and never read or mutate the user's runtime config.
 
 set -euo pipefail
@@ -25,17 +25,37 @@ bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 ok "Caracal runtime scripts have valid shell syntax"
 
-# Embedding providers (including locally hosted models when configured) belong to
-# Caracal. aicode waits for Caracal's own healthcheck instead of managing a
-# second provider-specific readiness loop.
-contains "$AICODE" 'check_output="$("$CARACAL_CLI" check 2>&1)"' "aicode delegates embedding readiness to Caracal"
-contains "$AICODE" 'Caracal embedding healthcheck not ready' "aicode retries transient Caracal embedding failures"
-contains "$AICODE" 'CARACAL_CHECK_ATTEMPTS:-15' "Caracal embedding retries have a bounded configurable attempt count"
-contains "$AICODE" 'Caracal healthcheck failed after $check_attempts attempts' "aicode fails closed when Caracal embedding health never recovers"
-if grep -Eq 'OLLAMA_BASE_URL|ollama_http_ready|/api/tags' "$AICODE"; then
-  fail "aicode must not manage Ollama readiness independently of Caracal"
+# Ollama starts first and must be reachable before LiteLLM starts.
+contains "$AICODE" 'OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"' "aicode supports the configured Ollama API base URL"
+contains "$AICODE" 'ollama_http_ready' "aicode checks Ollama HTTP readiness"
+contains "$AICODE" '/api/tags' "aicode probes Ollama's HTTP API"
+contains "$AICODE" 'OLLAMA_READY_TIMEOUT' "Ollama readiness has a bounded timeout"
+contains "$AICODE" 'echo "Ollama API is ready at ${OLLAMA_BASE_URL}."' "aicode confirms Ollama readiness before later services"
+if grep -Fq 'OLLAMA_BASE_URL' "$AICODE" && grep -Fq 'ollama_http_ready' "$AICODE"; then
+  ollama_ready_line="$(grep -nF 'echo "Ollama API is ready at ${OLLAMA_BASE_URL}."' "$AICODE" | head -n 1 | cut -d: -f1)"
+  litellm_start_line="$(grep -nF 'echo "Starting LiteLLM..."' "$AICODE" | head -n 1 | cut -d: -f1)"
+  [ -n "$ollama_ready_line" ] && [ -n "$litellm_start_line" ] && [ "$ollama_ready_line" -lt "$litellm_start_line" ] ||
+    fail "Ollama must become ready before LiteLLM startup"
 fi
-ok "embedding provider lifecycle and health belong to Caracal, not aicode"
+
+# Caracal must be launched in the background without waiting for embedding or MCP readiness.
+if grep -Fq '"$CARACAL_CLI" check' "$AICODE" ||
+   grep -Fq 'CARACAL_CHECK_ATTEMPTS' "$AICODE" ||
+   grep -Fq 'Caracal embedding healthcheck not ready' "$AICODE"; then
+  fail "aicode must not wait for the Caracal embedding healthcheck"
+fi
+if grep -Fq 'opencode_wait_for_mcp_connected' "$AICODE"; then
+  fail "aicode must not wait for Caracal's OpenCode MCP connection"
+fi
+contains "$AICODE" 'echo "Starting Caracal MCP at $mcp_url (non-blocking)..."' "aicode starts Caracal MCP asynchronously"
+contains "$AICODE" 'continuing without readiness wait' "Caracal startup explicitly proceeds without waiting"
+contains "$AICODE" 'timeout "$probe_timeout" "$opencode_cli" mcp list' "OpenCode performs only one bounded advisory Caracal probe"
+contains "$AICODE" 'continuing startup without waiting' "a disconnected Caracal MCP does not block startup"
+caracal_fn="$(sed -n '/^ensure_caracal_mcp() {/,/^ensure_todo_mcp_bridge()/p' "$AICODE")"
+if printf '%s\n' "$caracal_fn" | grep -Eq 'sleep[[:space:]]|CARACAL_CHECK_ATTEMPTS|"$CARACAL_CLI"[[:space:]]+check'; then
+  fail "Caracal lifecycle function must not contain readiness waits or a healthcheck loop"
+fi
+ok "Ollama starts before LiteLLM and Caracal startup is non-blocking"
 
 # Caracal is always a local service owned by aicode. A stale/inherited URL
 # must never switch startup into an external-endpoint mode or skip Chroma.
@@ -50,12 +70,12 @@ contains "$AICODE" 'export CARACAL_MCP_URL="http://127.0.0.1:0/mcp"' "aicode dis
 contains "$AICODE" 'ensure_chroma_server "$CARACAL_HOME" || true' "aicode always runs the Chroma lifecycle before Caracal startup"
 litellm_start_line="$(grep -nF 'echo "Starting LiteLLM..."' "$AICODE" | head -n 1 | cut -d: -f1)"
 chroma_start_line="$(grep -nF 'ensure_chroma_server "$CARACAL_HOME" || true' "$AICODE" | cut -d: -f1)"
-caracal_start_line="$(grep -nF 'if ! ensure_caracal_mcp; then' "$AICODE" | cut -d: -f1)"
+caracal_start_line="$(grep -nF 'ensure_caracal_mcp || echo' "$AICODE" | cut -d: -f1)"
 [ -n "$litellm_start_line" ] && [ -n "$chroma_start_line" ] && [ -n "$caracal_start_line" ] &&
   [ "$litellm_start_line" -lt "$chroma_start_line" ] &&
   [ "$chroma_start_line" -lt "$caracal_start_line" ] ||
-  fail "startup order must be LiteLLM, Chroma lifecycle, then local Caracal MCP"
-ok "aicode always starts/reuses local Caracal MCP after LiteLLM, regardless of inherited URL"
+  fail "startup order must be Ollama, LiteLLM, Chroma dependency, then background Caracal MCP"
+ok "aicode starts Caracal after LiteLLM/Chroma without blocking later startup steps"
 
 # OpenCode MCP configuration is static and operator-owned. aicode verifies
 # the live Caracal status but must never rewrite the global JSON/JSONC file.
@@ -93,8 +113,10 @@ if grep -Fq 'CARACAL_MCP_URL is missing or is not an absolute HTTP(S) URL' "$REA
 fi
 ok "Caracal readiness delegates URL validation to OpenCode's resolved config"
 contains "$ROOT/aicode/opencode-config-v2.jq" 'Bearer {env:FITEO_PAT}' "Fiteo bearer token is environment-backed"
-contains "$AICODE" '. "$OPENCODE_MCP_READINESS_HELPER"' "aicode loads the tested OpenCode MCP readiness helper"
-contains "$AICODE" 'opencode_wait_for_mcp_connected "$AICODE_SOURCE_DIR" "$opencode_cli" "caracal-rag"' "aicode waits for Caracal's live OpenCode connection"
+if grep -Fq 'OPENCODE_MCP_READINESS_HELPER' "$AICODE"; then
+  fail "aicode startup must not source or invoke a blocking Caracal readiness helper"
+fi
+ok "aicode startup is independent from the retrying Caracal readiness helper"
 contains "$READINESS_HELPER" '"$opencode_cli" mcp list' "readiness helper probes the live OpenCode MCP registry"
 contains "$READINESS_HELPER" 'OPENCODE_MCP_WAIT_TIMEOUT' "Caracal MCP connection wait has a bounded timeout"
 contains "$READINESS_HELPER" 'OPENCODE_MCP_RETRY_INTERVAL' "Caracal MCP connection retries use a configurable interval"
