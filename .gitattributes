@@ -1,0 +1,5 @@
+# Keep executable Unix entry points usable on Linux, WSL and macOS.
+*.sh text eol=lf
+aicode/aicode text eol=lf
+bin/globalskills text eol=lf
+install.sh text eol=lf
