@@ -28,7 +28,7 @@ load_environment_fallback() {
             if (match(candidate, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
                 name = substr(candidate, 1, index(candidate, "=") - 1)
             }
-            if (name == "PATH" || (name != "" && name in inherited)) next
+            if (name == "" || name == "PATH" || name in inherited) next
             print
         }
     ' "$env_file")
