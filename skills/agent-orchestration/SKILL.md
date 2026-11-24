@@ -18,12 +18,15 @@ models here (or in the LiteLLM config) without rebuilding the agents.
 
 ## Model tiers (single backend)
 
-The deployment intentionally has one LiteLLM model group. Every role and
-logical tier uses `litellm/freeLLMAPI`. Tier labels classify task complexity
-and help choose an appropriate role/workflow; they do not select a different
-provider, model alias, or fallback.
+The deployment intentionally has one LiteLLM chat model group:
+`free-cloud`. OpenCode agent roles select it through the catalog ID
+`litellm/freeLLMAPI`; the provider model key is `freeLLMAPI`, while the
+upstream `modelID` remains `free-cloud`. Manul does not inject a model
+override and inherits the operator's OpenCode `model` / `small_model`;
+Copilot uses the VS Code model picker. Tier labels classify task complexity
+and workflow, not a separate provider or backend.
 
-| Tier | Model | Meaning |
+| Tier | OpenCode selector | Meaning |
 |------|-------|---------|
 | CHEAP | `litellm/freeLLMAPI` | Small, obvious, low-risk tasks |
 | NORMAL | `litellm/freeLLMAPI` | Regular feature work and standard debugging |
