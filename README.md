@@ -284,7 +284,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `feature-branching-strategy` | Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch. |
 | `fiteo-access` | Use whenever an agent needs to connect to a running Fiteo backend, determine its runtime base URL, use the Manul account, or make authenticated Fiteo HTTP requests. Runtime settings come from environment variables; never hardcode or disclose their values. |
 | `fiteo-backend-api` | Use whenever the user asks about Fiteo backend API endpoints or contracts, including routes, HTTP methods, request/response payloads, DTOs, query/path parameters, authentication, validation, status codes, pagination, or implementing/reviewing code that calls or exposes a Fiteo endpoint. Before answering, search the indexed Fiteo API documentation through the caracal-rag MCP server. |
-| `freellmapi-environment` | Configure the single FreeLLMAPI-backed LiteLLM chat group `free-cloud` and the separate local Ollama embedding alias for Caracal RAG. |
+| `freellmapi-environment` | Configure the single FreeLLMAPI-backed LiteLLM chat group free-cloud and the separate local Ollama embedding alias used by Caracal RAG. |
 | `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle. |
 | `globalskills-repository` | Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository. |
 | `human-readable-code` | Language-agnostic guidance for code that is easy for people to read, understand, maintain, and change. Use when writing, reviewing, or refactoring software in any language. |
@@ -300,7 +300,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `testable-design` | Language-agnostic guidance for designing code that is straightforward to test without test-driven overengineering. Use when shaping logic, dependencies, side-effect boundaries, or test seams. |
 | `unit-testing-android` | Android-specific unit and integration testing practices for JVM, instrumented, and UI tests. Use when designing or implementing tests for Android applications. |
 | `unit-testing-language-agnostic` | Language-agnostic unit and integration testing principles. Use when designing, writing, or reviewing automated tests in any language or framework. |
-| `wsl-ai-dev-autopilot-multi-device` | Install WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat group, a separate Ollama embedding alias for Caracal, and a shared Zsh environment for OpenCode and Manul. |
+| `wsl-ai-dev-autopilot-multi-device` | Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat group (free-cloud), a separate local Ollama embedding alias for Caracal RAG, and a shared Zsh environment for OpenCode and Manul. |
 | `yt-dlp-downloader` | Robust YouTube downloading and audio extraction via yt-dlp with anti-bot bypass flags (--user-agent, --extractor-args, --no-check-certificates) and oEmbed fallback search. Use when downloading videos or MP3s from YouTube URLs with yt-dlp to guarantee success. |
 
 ## Agents (multi-agent orchestration)
