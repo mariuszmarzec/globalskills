@@ -1,8 +1,39 @@
 #!/usr/bin/env bash
 # aicode - Start AI dev environment and launch OpenCode
 
-export PATH="$HOME/.opencode/bin:$PATH"
+# PATH and shell-wide tool configuration come from the operator's ~/.zshrc.
+# Do not maintain a second PATH list in this launcher.
 unset TODO_LOCAL_MCP_TOKEN
+
+# Dedicated service env files are compatibility fallbacks only. Values already
+# exported by the operator's Zsh session win and PATH is never loaded from them.
+load_environment_fallback() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+    if ! bash -n "$env_file" >/dev/null 2>&1; then
+        echo "WARNING: ignoring invalid environment fallback: $env_file" >&2
+        return 0
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    . <(awk '
+        BEGIN {
+            for (name in ENVIRON) inherited[name] = 1
+        }
+        {
+            candidate = $0
+            sub(/^[[:space:]]*/, "", candidate)
+            sub(/^export[[:space:]]+/, "", candidate)
+            name = ""
+            if (match(candidate, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+                name = substr(candidate, 1, index(candidate, "=") - 1)
+            }
+            if (name == "PATH" || (name != "" && name in inherited)) next
+            print
+        }
+    ' "$env_file")
+    set +a
+}
 
 # Resolve symlinks using POSIX tools (macOS readlink has no -f option).
 AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
@@ -47,11 +78,7 @@ else
     echo "WARNING: Manul Todo MCP endpoint resolver is missing at $TODO_LOCAL_MCP_URL_HELPER; local Todo polling will report an error." >&2
 fi
 
-if [ -f "$HOME/.config/opencode/opencode.env" ]; then
-    set -a
-    . "$HOME/.config/opencode/opencode.env"
-    set +a
-fi
+load_environment_fallback "$HOME/.config/opencode/opencode.env"
 unset TODO_LOCAL_MCP_TOKEN
 
 # Resolve Manul's automatic agent runtime before touching OpenClaw. Use the
@@ -144,11 +171,7 @@ fi
 
 # Ensure LiteLLM is running
 if ! pgrep -f '[l]itellm' >/dev/null; then
-    if [ -f "$HOME/litellm/.env" ]; then
-        set -a
-        . "$HOME/litellm/.env"
-        set +a
-    fi
+    load_environment_fallback "$HOME/litellm/.env"
     echo "Starting LiteLLM..."
     if [ -x /home/marzec/.local/bin/litellm ]; then
         nohup python3.12 /home/marzec/.local/bin/litellm \
@@ -618,10 +641,11 @@ MANUL_SCRIPT="$MANUL_RUNTIME/manul-daemon.sh"
 MANUL_LOG="/tmp/manul-daemon.log"
 MANUL_ENV_HELPER="$MANUL_CANONICAL_DIR/manul-env.sh"
 
-# Refresh only the supported provider/runtime values needed by unattended
-# Manul tasks. The Manul environment helper deliberately removes obsolete
-# Caracal values; Caracal remains owned by aicode/OpenCode and is never
-# persisted as a Manul dependency.
+# Prepare the Manul-specific integration fallback file. Exported shell/provider
+# settings come from ~/.zshrc and are inherited by the daemon/watchdog through
+# Manul's Zsh bootstrap; this helper does not copy them into ~/.manul/.env.
+# Caracal remains owned by aicode/OpenCode and is never persisted as a Manul
+# dependency.
 if [ ! -r "$MANUL_ENV_HELPER" ]; then
     echo "ERROR: Manul environment helper is missing: $MANUL_ENV_HELPER" >&2
     exit 1
@@ -632,7 +656,7 @@ source "$MANUL_ENV_HELPER" || {
     exit 1
 }
 if ! manul_env_bootstrap "$MANUL_RUNTIME" >/dev/null; then
-    echo "ERROR: could not persist supported Manul runtime environment values." >&2
+    echo "ERROR: could not prepare Manul integration fallbacks." >&2
     exit 1
 fi
 
