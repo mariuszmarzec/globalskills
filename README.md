@@ -214,7 +214,7 @@ included in the task context. Unknown, ambiguous, or disallowed targets are
 not queued; there is no static repository fallback. Keep the project catalog
 and aliases current as repositories/projects are added.
 
-Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. Manul-specific integration credentials (including the dedicated Manul Fiteo PAT) may be persisted in the mode-600 `~/.manul/.env` for unattended runs. PATH, OpenCode configuration and provider API keys come from the operator's `~/.zshrc`; do not place them in Manul's fallback file. Never put token values in the config or repository.
+Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. Manul-specific integration credentials (including the dedicated Manul Fiteo PAT) may be persisted in the mode-600 `~/.manul/.env` for unattended runs. PATH, provider settings, OpenCode model choices and provider API keys remain in the operator's `~/.zshrc` and OpenCode config. The non-secret `OPENCODE_CONFIG` file path may be kept in Manul's fallback file when the shell does not export it. Never put token values in the config or repository.
 
 ## Specification-Driven Development (SDD)
 
@@ -327,23 +327,23 @@ Canonical agent definitions live in `agents/<name>.md`. Each file contains one s
 
 | Agent | Mode | Default tier | Model | Read-only |
 |-------|------|-------------|-------|-----------|
-| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/free-cloud` | no |
-| `sdd` | all | EXPERT | `litellm/free-cloud` | no |
-| `architect` | all | EXPERT | `litellm/free-cloud` | edit: ask |
-| `coder-cheap` | all | CHEAP | `litellm/free-cloud` | no |
-| `coder` | all | NORMAL | `litellm/free-cloud` | no |
-| `coder-strong` | all | STRONG | `litellm/free-cloud` | no |
-| `coder-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `reviewer` | all | STRONG | `litellm/free-cloud` | edit: deny |
-| `reviewer-expert` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `debugger` | all | STRONG | `litellm/free-cloud` | no |
-| `debugger-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `researcher` | all | CHEAP | `litellm/free-cloud` | edit: deny |
-| `tester` | all | NORMAL | `litellm/free-cloud` | no |
+| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/freeLLMAPI` | no |
+| `sdd` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `architect` | all | EXPERT | `litellm/freeLLMAPI` | edit: ask |
+| `coder-cheap` | all | CHEAP | `litellm/freeLLMAPI` | no |
+| `coder` | all | NORMAL | `litellm/freeLLMAPI` | no |
+| `coder-strong` | all | STRONG | `litellm/freeLLMAPI` | no |
+| `coder-expert` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `reviewer` | all | STRONG | `litellm/freeLLMAPI` | edit: deny |
+| `reviewer-expert` | all | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `debugger` | all | STRONG | `litellm/freeLLMAPI` | no |
+| `debugger-expert` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `researcher` | all | CHEAP | `litellm/freeLLMAPI` | edit: deny |
+| `tester` | all | NORMAL | `litellm/freeLLMAPI` | no |
 | `specification-driven-development` | Specification-first workflow: baseline audits, human-approved requirement changes, traceable implementation handoffs, and requirements-focused verification. |
-| `security` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `performance` | all | STRONG | `litellm/free-cloud` | edit: ask |
-| `refactorer` | all | NORMAL | `litellm/free-cloud` | no |
+| `security` | all | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `performance` | all | STRONG | `litellm/freeLLMAPI` | edit: ask |
+| `refactorer` | all | NORMAL | `litellm/freeLLMAPI` | no |
 
 Set `default_agent: "orchestrator"` in `~/.config/opencode/opencode.json` to
 route every new session through the orchestrator.
