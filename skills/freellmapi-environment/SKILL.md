@@ -40,7 +40,14 @@ Zsh-managed WSL setup, export them in the operator's existing `~/.zshrc`:
 ```bash
 export LITELLM_MASTER_KEY=<generate-a-long-random-key>
 export FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+
+# Keep this only when the operator OpenCode config uses providers.opencode.
+export OPENCODE_API_KEY=<your-OpenCode-Console-key>
 ```
+
+The `OPENCODE_API_KEY` value is OpenCode Console authentication. It does not
+select OpenCode Go; keep the `providers.opencode` config and its environment
+reference intact whenever that provider is configured.
 
 The `aicode` launcher starts LiteLLM as a child of the initialized operator
 shell, so the service inherits these exports. Keep credentials out of
