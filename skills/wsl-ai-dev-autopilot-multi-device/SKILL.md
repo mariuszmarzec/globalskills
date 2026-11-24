@@ -233,18 +233,19 @@ litellm --help
 
 ## Step 5 — Configure LiteLLM
 
-Create or preserve the private LiteLLM service environment file
-`~/litellm/.env` with the two service credentials:
+Export the LiteLLM service credentials in the operator's existing
+`~/.zshrc` (do not create a second environment file containing duplicate
+values):
 
 ```bash
-LITELLM_MASTER_KEY=<generate-a-long-random-key>
-FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+export LITELLM_MASTER_KEY=<generate-a-long-random-key>
+export FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
 ```
 
-Protect it with `chmod 600 ~/litellm/.env`. This file supplies credentials to
-the LiteLLM service process only; do not store PATH or general shell/provider
-configuration in it. The operator's `~/.zshrc` remains the source of shell
-exports consumed by OpenCode and Manul.
+The `aicode` launcher starts LiteLLM as a child process and passes these
+exports through. Keep the existing shell file private and never print these
+values. A separately managed systemd service would need its own service
+environment, but that is not the local aicode-managed setup described here.
 
 Create or update `~/litellm/config.yaml` with the following model entries.
 The chat group is `free-cloud`; the local embedding alias is optional and
@@ -295,10 +296,6 @@ LiteLLM embeddings endpoint, while chat clients continue to select only
 **Healthchecks**
 
 ```bash
-set -a
-source ~/litellm/.env
-set +a
-
 curl -fsS http://127.0.0.1:3001/v1/models \
   -H "Authorization: Bearer $FREELLMAPI_API_KEY"
 
@@ -571,7 +568,7 @@ FreeLLMAPI is the only upstream used by LiteLLM for chat completions.
 
 1. Run FreeLLMAPI locally and bind it to loopback (`127.0.0.1:3001`).
 2. Configure the upstream provider pool and unified API key inside the FreeLLMAPI dashboard.
-3. Store the unified key in the private LiteLLM service environment file `~/litellm/.env` as `FREELLMAPI_API_KEY`.
+3. Export the unified key as `FREELLMAPI_API_KEY` in the operator's existing `~/.zshrc`.
 4. Configure the only LiteLLM chat group: `free-cloud`, with
    `model: openai/auto`.
 5. Configure OpenCode, OpenClaw and Manul to request
