@@ -9,7 +9,11 @@ description: Configure the single FreeLLMAPI-backed LiteLLM chat group free-clou
 
 Keep one chat-completion route for local clients:
 
-`OpenCode / OpenClaw / Manul → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
+`OpenCode / OpenClaw → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
+
+Manul is the task orchestrator, not a separate model client. It uses the
+selected runtime's configuration; for OpenCode tasks, model selection remains
+in the operator-owned OpenCode config and selected agent.
 
 The only LiteLLM chat model group is `free-cloud`. This is the model name
 sent to LiteLLM; client-side selector IDs depend on each client's own model
