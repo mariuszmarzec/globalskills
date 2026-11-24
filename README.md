@@ -325,25 +325,25 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 
 Canonical agent definitions live in `agents/<name>.md`. Each file contains one shared prompt body, Globalskills metadata, and separate `[opencode]` / `[copilot]` configuration tables. The installer generates native OpenCode V2, Copilot custom-agent, and Manul YAML-frontmatter files; Manul adapters strip the YAML frontmatter and prepend the same prompt body. Never edit generated files directly. OpenCode agents use the V2 frontmatter schema, including ordered `permissions` rules; deprecated V1 `permission` and per-agent `temperature` fields are not emitted. OpenCode keeps its configured LiteLLM model mapping. Copilot agents inherit the model selected in VS Code unless a Copilot-specific model is explicitly configured. Roles define WHAT to do; model tiers and runtime adapters define HOW to execute them.
 
-| Agent | Mode | Default tier | Model | Read-only |
+| Agent | Mode | Default tier | OpenCode selector | Read-only |
 |-------|------|-------------|-------|-----------|
-| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/free-cloud` | no |
-| `sdd` | all | EXPERT | `litellm/free-cloud` | no |
-| `architect` | all | EXPERT | `litellm/free-cloud` | edit: ask |
-| `coder-cheap` | all | CHEAP | `litellm/free-cloud` | no |
-| `coder` | all | NORMAL | `litellm/free-cloud` | no |
-| `coder-strong` | all | STRONG | `litellm/free-cloud` | no |
-| `coder-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `reviewer` | all | STRONG | `litellm/free-cloud` | edit: deny |
-| `reviewer-expert` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `debugger` | all | STRONG | `litellm/free-cloud` | no |
-| `debugger-expert` | all | EXPERT | `litellm/free-cloud` | no |
-| `researcher` | all | CHEAP | `litellm/free-cloud` | edit: deny |
-| `tester` | all | NORMAL | `litellm/free-cloud` | no |
+| `orchestrator` | all (primary + subagent) | EXPERT | `litellm/freeLLMAPI` | no |
+| `sdd` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `architect` | all | EXPERT | `litellm/freeLLMAPI` | edit: ask |
+| `coder-cheap` | all | CHEAP | `litellm/freeLLMAPI` | no |
+| `coder` | all | NORMAL | `litellm/freeLLMAPI` | no |
+| `coder-strong` | all | STRONG | `litellm/freeLLMAPI` | no |
+| `coder-expert` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `reviewer` | all | STRONG | `litellm/freeLLMAPI` | edit: deny |
+| `reviewer-expert` | all | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `debugger` | all | STRONG | `litellm/freeLLMAPI` | no |
+| `debugger-expert` | all | EXPERT | `litellm/freeLLMAPI` | no |
+| `researcher` | all | CHEAP | `litellm/freeLLMAPI` | edit: deny |
+| `tester` | all | NORMAL | `litellm/freeLLMAPI` | no |
 | `specification-driven-development` | Specification-first workflow: baseline audits, human-approved requirement changes, traceable implementation handoffs, and requirements-focused verification. |
-| `security` | all | EXPERT | `litellm/free-cloud` | edit: deny |
-| `performance` | all | STRONG | `litellm/free-cloud` | edit: ask |
-| `refactorer` | all | NORMAL | `litellm/free-cloud` | no |
+| `security` | all | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `performance` | all | STRONG | `litellm/freeLLMAPI` | edit: ask |
+| `refactorer` | all | NORMAL | `litellm/freeLLMAPI` | no |
 
 Set `default_agent: "orchestrator"` in `~/.config/opencode/opencode.json` to
 route every new session through the orchestrator.

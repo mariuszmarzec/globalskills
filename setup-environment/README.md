@@ -31,14 +31,17 @@ For LiteLLM and FreeLLMAPI setup, follow the maintained
 [`wsl-ai-dev-autopilot-multi-device`](../skills/wsl-ai-dev-autopilot-multi-device/SKILL.md)
 skills.
 
-Manul and every generated Globalskills role must use the OpenCode model
-selector `litellm/free-cloud`, backed by the single FreeLLMAPI chat group.
-Do not configure OpenCode Zen (`https://opencode.ai/zen/v1`) as a LiteLLM
-upstream or introduce agent-specific chat aliases. Preserve the separate
+OpenCode and every generated Globalskills OpenCode role use
+`litellm/freeLLMAPI` for the main and small model. In the OpenCode
+`providers.litellm.models` catalog, the model key is `freeLLMAPI`, while its
+upstream `modelID` remains `free-cloud` and matches LiteLLM's single chat
+group. Keep the LiteLLM group name `free-cloud`; do not add agent-specific
+chat aliases or configure OpenCode Zen (`https://opencode.ai/zen/v1`) as a
+LiteLLM upstream. OpenClaw continues to select `litellm/free-cloud`.
+Manul does not inject a model override; its OpenCode workers inherit the
+operator's configured `model` and `small_model`. Preserve the separate
 `multilingual-e5-base` embedding-only LiteLLM alias for Caracal when local
-Ollama embeddings are enabled; it is not a chat route. The OpenCode provider
-key and model key are `litellm` and `free-cloud` respectively, and the
-upstream `modelID` is also `free-cloud`.
+Ollama embeddings are enabled; it is not a chat route.
 
 ## Files
 

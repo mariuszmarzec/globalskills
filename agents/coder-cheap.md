@@ -8,7 +8,7 @@ access = "full"
 
 [opencode]
 mode = "all"
-model = "litellm/free-cloud"
+model = "litellm/freeLLMAPI"
 steps = 20
 
 [copilot]

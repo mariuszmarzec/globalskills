@@ -13,8 +13,12 @@ Keep one chat-completion route for local clients:
 
 The only LiteLLM chat model group is `free-cloud`. Do not add chat aliases,
 per-role model groups, direct chat providers, or fallback chains. FreeLLMAPI may
-manage its upstream provider pool internally; clients select the one chat route
-as `litellm/free-cloud`.
+manage its upstream provider pool internally.
+
+OpenCode and OpenClaw use different client-side model selectors for this same
+LiteLLM route. OpenCode uses `litellm/freeLLMAPI`; its provider catalog key is
+`freeLLMAPI` and its upstream `modelID` remains `free-cloud`. OpenClaw keeps
+using `litellm/free-cloud`.
 
 Caracal also uses a separate, embedding-only LiteLLM alias backed by local
 Ollama. That alias is not a second chat model, is not a fallback, and must never
@@ -145,13 +149,20 @@ check Ollama and the embedding endpoint independently.
 
 ## Routing rules
 
-- OpenCode's main model and small model: `litellm/free-cloud`.
-- OpenClaw's default model: `litellm/free-cloud`.
-- All Globalskills agent roles and Manul workers: `litellm/free-cloud`.
-- OpenCode's selectable model ID must be constructed from provider key
-  `litellm` and model key `free-cloud`: `litellm/free-cloud`.
-- The corresponding OpenCode model entry uses upstream `modelID: "free-cloud"`.
-  The OpenCode model key is the selectable ID; `modelID` is sent upstream.
+- OpenCode's main model and small model: `litellm/freeLLMAPI`.
+- Every Globalskills OpenCode agent profile uses the same selector:
+  `litellm/freeLLMAPI`.
+- In OpenCode's `providers.litellm.models`, the model key is
+  `freeLLMAPI`; therefore the selectable ID is
+  `litellm/freeLLMAPI`.
+- That OpenCode model entry must keep upstream `modelID: "free-cloud"`.
+  The catalog key determines the OpenCode selector; `modelID` is sent to
+  LiteLLM and must match the LiteLLM `model_name`.
+- OpenClaw's default model remains `litellm/free-cloud`; its provider model ID
+  is still `free-cloud`.
+- Manul does not own or override model selection. Its OpenCode adapter uses the
+  operator's configured `model` and `small_model` and does not pass a
+  `--model` argument.
 - Caracal embeddings may use the separate LiteLLM alias
   `multilingual-e5-base`; it is not a chat model.
 - Do not use chat aliases such as `big-pickle` or
@@ -182,9 +193,8 @@ check Ollama and the embedding endpoint independently.
 
 Manul leaves the operator's OpenCode model/provider selection untouched. It
 does not inject a model, provider or fallback into the task configuration.
-Its OpenCode adapter uses `opencode run --standalone`, and standalone mode for
-agent discovery and Caracal MCP preflight, so task processes do not reuse an
-already-running OpenCode server with stale environment variables.
+Its OpenCode adapter runs `opencode run` without a `--model` override; model
+and small-model selection remain in the operator's OpenCode config.
 
 Keep the operator's `OPENCODE_API_KEY` and any configured OpenCode Console
 provider authentication intact. `OPENCODE_API_KEY` does not select OpenCode

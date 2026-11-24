@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/free-cloud"
+model = "litellm/freeLLMAPI"
 steps = 40
 
 [opencode.permissions]
@@ -71,8 +71,10 @@ modified state.
 
 ## Model selection
 
-Always use `litellm/free-cloud`. The task's risk and the adversarial review
-approach determine review depth; there is no separate model or backend.
+Use the active runtime's configured model. In OpenCode, the selectable ID is
+`litellm/freeLLMAPI` (LiteLLM's upstream model ID remains `free-cloud`). The
+task's risk and adversarial review approach determine review depth; there is
+no separate model or backend.
  
 ## Output
 

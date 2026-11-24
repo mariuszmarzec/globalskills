@@ -677,7 +677,7 @@ def parse_args() -> argparse.Namespace:
         choices=("with-skill", "without-skill", "both"),
         default="with-skill",
     )
-    parser.add_argument("--model", default=None, help="OpenCode model, e.g. litellm/free-cloud.")
+    parser.add_argument("--model", default=None, help="OpenCode model, e.g. litellm/freeLLMAPI.")
     parser.add_argument("--timeout", type=int, default=None)
     parser.add_argument(
         "--artifacts",
