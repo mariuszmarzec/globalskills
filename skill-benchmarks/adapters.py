@@ -52,8 +52,6 @@ class OpenCodeAdapter:
             self.binary,
             "run",
             "--auto",
-            "--dir",
-            str(workspace),
         ]
         if model:
             command.extend(["--model", model])
