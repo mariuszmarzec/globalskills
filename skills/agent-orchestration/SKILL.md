@@ -18,37 +18,41 @@ models here (or in the LiteLLM config) without rebuilding the agents.
 
 ## Model tiers (single backend)
 
-The deployment intentionally has one LiteLLM model group. Every role and
-logical tier uses `litellm/free-cloud`. Tier labels classify task complexity
-and help choose an appropriate role/workflow; they do not select a different
-provider, model alias, or fallback.
+The deployment intentionally has one LiteLLM chat model group named
+`free-cloud`. The OpenCode selector for its configured catalog entry is
+`litellm/freeLLMAPI` (provider key `litellm`, model key `freeLLMAPI`,
+upstream `modelID: "free-cloud"`). The table below describes OpenCode role
+configs; it is not a Manul-owned model setting. Manul leaves selection to the
+active runtime. Tier labels classify task complexity and help choose an
+appropriate role/workflow; they do not select a different provider, alias or
+fallback.
 
 | Tier | Model | Meaning |
 |------|-------|---------|
-| CHEAP | `litellm/free-cloud` | Small, obvious, low-risk tasks |
-| NORMAL | `litellm/free-cloud` | Regular feature work and standard debugging |
-| STRONG | `litellm/free-cloud` | Complex multi-module work and non-trivial debugging |
-| EXPERT | `litellm/free-cloud` | Architecture, concurrency, security, or high-uncertainty work |
+| CHEAP | `litellm/freeLLMAPI` | Small, obvious, low-risk tasks |
+| NORMAL | `litellm/freeLLMAPI` | Regular feature work and standard debugging |
+| STRONG | `litellm/freeLLMAPI` | Complex multi-module work and non-trivial debugging |
+| EXPERT | `litellm/freeLLMAPI` | Architecture, concurrency, security, or high-uncertainty work |
 
 ## Role agents
 
 | Agent | Default tier | Model | Read-only |
 |-------|--------------|-------|-----------|
-| `architect` | EXPERT | `litellm/free-cloud` | edit: ask |
-| `coder-cheap` | CHEAP | `litellm/free-cloud` | no |
-| `coder` | NORMAL | `litellm/free-cloud` | no |
-| `coder-strong` | STRONG | `litellm/free-cloud` | no |
-| `coder-expert` | EXPERT | `litellm/free-cloud` | no |
-| `reviewer` | STRONG | `litellm/free-cloud` | edit: deny |
-| `reviewer-expert` | EXPERT | `litellm/free-cloud` | edit: deny |
-| `reviewer-adversarial` | STRONG / EXPERT | `litellm/free-cloud` | edit: deny |
-| `debugger` | STRONG | `litellm/free-cloud` | no |
-| `debugger-expert` | EXPERT | `litellm/free-cloud` | no |
-| `researcher` | CHEAP | `litellm/free-cloud` | edit: deny |
-| `tester` | NORMAL | `litellm/free-cloud` | no |
-| `security` | EXPERT | `litellm/free-cloud` | edit: deny |
-| `performance` | STRONG | `litellm/free-cloud` | edit: deny |
-| `refactorer` | NORMAL | `litellm/free-cloud` | no |
+| `architect` | EXPERT | `litellm/freeLLMAPI` | edit: ask |
+| `coder-cheap` | CHEAP | `litellm/freeLLMAPI` | no |
+| `coder` | NORMAL | `litellm/freeLLMAPI` | no |
+| `coder-strong` | STRONG | `litellm/freeLLMAPI` | no |
+| `coder-expert` | EXPERT | `litellm/freeLLMAPI` | no |
+| `reviewer` | STRONG | `litellm/freeLLMAPI` | edit: deny |
+| `reviewer-expert` | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `reviewer-adversarial` | STRONG / EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `debugger` | STRONG | `litellm/freeLLMAPI` | no |
+| `debugger-expert` | EXPERT | `litellm/freeLLMAPI` | no |
+| `researcher` | CHEAP | `litellm/freeLLMAPI` | edit: deny |
+| `tester` | NORMAL | `litellm/freeLLMAPI` | no |
+| `security` | EXPERT | `litellm/freeLLMAPI` | edit: deny |
+| `performance` | STRONG | `litellm/freeLLMAPI` | edit: deny |
+| `refactorer` | NORMAL | `litellm/freeLLMAPI` | no |
 
 ## Complexity classification
 
