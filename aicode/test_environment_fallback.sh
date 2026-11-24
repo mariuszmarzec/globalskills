@@ -62,14 +62,17 @@ ok "Unexported legacy values remain available only as fallback"
 cat > "$TMP/untrusted.env" <<ENV
 SHOULD_NOT_BE_SET=ok
 touch "$TMP/command-executed"
+BAD_ASSIGNMENT=inline; touch "$TMP/inline-command-executed"
 ENV
-env -u SHOULD_NOT_BE_SET bash -c '
+env -u SHOULD_NOT_BE_SET -u BAD_ASSIGNMENT bash -c '
   set -euo pipefail
   . "$1"
   aicode_load_environment_fallback "$2"
   [ "${SHOULD_NOT_BE_SET:-}" = "ok" ]
-' _ "$HELPER" "$TMP/untrusted.env" || fail "simple fallback assignment was not loaded"
+  [ -z "${BAD_ASSIGNMENT:-}" ]
+' _ "$HELPER" "$TMP/untrusted.env" || fail "simple fallback assignment was not loaded or inline command was accepted"
 [ ! -e "$TMP/command-executed" ] || fail "fallback loader executed an arbitrary shell command"
-ok "Fallback loader ignores command lines and sources only simple environment assignments"
+[ ! -e "$TMP/inline-command-executed" ] || fail "fallback loader executed a command after an inline assignment"
+ok "Fallback loader ignores command lines and assignments containing shell operators"
 
 echo "All environment fallback tests passed."
