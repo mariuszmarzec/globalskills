@@ -175,7 +175,7 @@ Use the same LiteLLM and OpenCode model configuration on every device. Each devi
 **Command**
 
 ```bash
-sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip python3-venv
+sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip python3-venv zsh
 
 ```
 
@@ -323,8 +323,13 @@ The environment ships with shared skills (`~/.globalskills/skills`) and OpenCode
 
 ```bash
 # Existing installation: update the source and all managed native skill/agent copies.
-if [ -d ~/.globalskills ] && command -v globalskills >/dev/null 2>&1; then
-  globalskills update
+if [ -d ~/.globalskills ]; then
+  if command -v globalskills >/dev/null 2>&1; then
+    globalskills update
+  else
+    git -C ~/.globalskills pull --ff-only
+    bash ~/.globalskills/install.sh
+  fi
 else
   git clone git@github.com:mariuszmarzec/globalskills.git ~/.globalskills \
     || git clone https://github.com/mariuszmarzec/globalskills.git ~/.globalskills
@@ -340,6 +345,12 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
 ```
 
 *If SSH fails on a fresh machine (no key deployed), fall back to the HTTPS clone URL shown above.*
+
+Globalskills and the standalone Manul runtime are updated independently. On an
+existing Manul installation, run `manul --update` after `globalskills update`
+to update the daemon, adapters and Manul environment bootstrap from the
+standalone `mariuszmarzec/manul` repository. No manual runtime symlink edits
+or direct installer invocation are required.
 
 
 ## Step 7 — Install and configure Caracal RAG
@@ -375,7 +386,16 @@ Configure Caracal interactively so credentials are entered into hidden prompts, 
 "$HOME/.caracal/bin/caracal-rag" setup
 ```
 
-During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and includes both knowledge sources:
+For this environment, Caracal embeddings use the local LiteLLM alias
+`multilingual-e5-base`, which routes to Ollama's
+`qllama/multilingual-e5-base` model on port `11434`. Configure Caracal's
+embedding client to call the local LiteLLM OpenAI-compatible endpoint on
+`127.0.0.1:4000/v1` with model `multilingual-e5-base`. Do not select
+FreeLLMAPI's cloud embedding catalogue or `auto` for this local route. The
+Caracal key and MCP access token are stored in
+`~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm
+`~/.caracal/config/sources.yaml` points to the intended embedding endpoint,
+Chroma host/port/collection, and includes both knowledge sources:
 
 - `fiteo-docs` — API Markdown documents from `mariuszmarzec/fiteo/docs/api/` on `master`.
 - `quickmvi-readme` — `https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md`, covering QuickMVI library usage at README level.
@@ -388,7 +408,12 @@ The installer preserves an existing `sources.yaml`; updating `config/sources.exa
     url: https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md
 ```
 
-Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+Defaults in the template include FreeLLMAPI at `http://127.0.0.1:3001/v1`,
+LiteLLM at `http://127.0.0.1:4000/v1`, Ollama at
+`http://127.0.0.1:11434`, Chroma at `127.0.0.1:3400`, and MCP at
+`127.0.0.1:3500/mcp`; change them only when the deployment really uses
+different endpoints. Caracal embeddings use the separate LiteLLM
+`multilingual-e5-base` alias; chat continues to use `free-cloud`.
 
 ```bash
 "$HOME/.caracal/bin/caracal-rag" check
