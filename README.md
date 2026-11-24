@@ -32,28 +32,46 @@ which its adapters strip before using the shared prompt body. Installed resource
 `~/.local/state/globalskills/manifest.json` (or
 `$XDG_STATE_HOME/globalskills/manifest.json`).
 
-Add the CLI directory to your shell PATH once:
+Add the CLI directory to the operator's existing `~/.zshrc` once, then
+reload that same shell configuration:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qF 'export PATH="$HOME/.local/bin:$PATH"' ~/.zshrc || \
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 ```
+
+Do not create a separate `.zshenv`, `.bashrc`, or Manul PATH configuration.
+The existing `~/.zshrc` is the source of truth for the operator's exported
+PATH, provider settings and tool locations. Manul's direct/unattended runtime
+loads that same file through its Zsh bootstrap.
 
 ## Updating
 
+Update the shared resources and standalone Manul runtime independently:
+
+```bash
+globalskills update
+manul --update
+globalskills status
+```
+
+`globalskills update` fast-forwards the Globalskills source checkout and
+synchronizes managed skills and generated agents. `manul --update` updates
+the separate standalone Manul checkout and runtime scripts. Both updates
+preserve Manul's task database and task data. Managed Globalskills resources
+are replaced only when their installed hashes still match the previous
+manifest; local edits and unmanaged files are preserved and collisions are
+reported instead of overwritten. Previous managed versions are backed up for
+rollback.
+
+Additional inspection/rollback commands:
+
 ```bash
 globalskills update --check
-globalskills update
-globalskills status
 globalskills rollback skill:my-skill --runtime all
 globalskills rollback agent:reviewer --runtime all
 ```
-
-Updates fast-forward the Globalskills source checkout when upstream changes
-are available. Managed resources are updated only when their installed hashes
-still match the previous manifest. Local edits and unmanaged files are
-preserved; collisions are reported instead of overwritten. Previous managed
-versions are backed up for rollback. The installer never changes Manul's
-runtime database or task data.
 
 ## macOS runtime prerequisites
 
