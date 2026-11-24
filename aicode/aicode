@@ -5,36 +5,6 @@
 # Do not maintain a second PATH list in this launcher.
 unset TODO_LOCAL_MCP_TOKEN
 
-# Dedicated service env files are compatibility fallbacks only. Values already
-# exported by the operator's Zsh session win and PATH is never loaded from them.
-load_environment_fallback() {
-    local env_file="$1"
-    [ -f "$env_file" ] || return 0
-    if ! bash -n "$env_file" >/dev/null 2>&1; then
-        echo "WARNING: ignoring invalid environment fallback: $env_file" >&2
-        return 0
-    fi
-    set -a
-    # shellcheck disable=SC1090
-    . <(awk '
-        BEGIN {
-            for (name in ENVIRON) inherited[name] = 1
-        }
-        {
-            candidate = $0
-            sub(/^[[:space:]]*/, "", candidate)
-            sub(/^export[[:space:]]+/, "", candidate)
-            name = ""
-            if (match(candidate, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
-                name = substr(candidate, 1, index(candidate, "=") - 1)
-            }
-            if (name == "" || name == "PATH" || name in inherited) next
-            print
-        }
-    ' "$env_file")
-    set +a
-}
-
 # Resolve symlinks using POSIX tools (macOS readlink has no -f option).
 AICODE_SOURCE_PATH="${BASH_SOURCE[0]}"
 while [ -L "$AICODE_SOURCE_PATH" ]; do
@@ -47,6 +17,14 @@ while [ -L "$AICODE_SOURCE_PATH" ]; do
 done
 AICODE_SOURCE_DIR="$(cd -P "$(dirname "$AICODE_SOURCE_PATH")" && pwd)"
 AICODE_SOURCE_PATH="$AICODE_SOURCE_DIR/$(basename "$AICODE_SOURCE_PATH")"
+
+ENV_FALLBACK_HELPER="$AICODE_SOURCE_DIR/environment-fallback.sh"
+if [ ! -r "$ENV_FALLBACK_HELPER" ]; then
+    echo "ERROR: environment fallback helper is missing: $ENV_FALLBACK_HELPER" >&2
+    exit 1
+fi
+# shellcheck source=aicode/environment-fallback.sh
+. "$ENV_FALLBACK_HELPER"
 
 MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 MANUL_CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.manul-repo}"
@@ -78,7 +56,7 @@ else
     echo "WARNING: Manul Todo MCP endpoint resolver is missing at $TODO_LOCAL_MCP_URL_HELPER; local Todo polling will report an error." >&2
 fi
 
-load_environment_fallback "$HOME/.config/opencode/opencode.env"
+aicode_load_environment_fallback "$HOME/.config/opencode/opencode.env"
 unset TODO_LOCAL_MCP_TOKEN
 
 # Resolve Manul's automatic agent runtime before touching OpenClaw. Use the
@@ -171,7 +149,7 @@ fi
 
 # Ensure LiteLLM is running
 if ! pgrep -f '[l]itellm' >/dev/null; then
-    load_environment_fallback "$HOME/litellm/.env"
+    aicode_load_environment_fallback "$HOME/litellm/.env"
     echo "Starting LiteLLM..."
     if [ -x /home/marzec/.local/bin/litellm ]; then
         nohup python3.12 /home/marzec/.local/bin/litellm \
