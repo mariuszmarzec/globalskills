@@ -49,6 +49,9 @@ The `OPENCODE_API_KEY` value is OpenCode Console authentication. It does not
 select OpenCode Go; keep the `providers.opencode` config and its environment
 reference intact whenever that provider is configured.
 
+After editing `~/.zshrc`, load the updated exports into the current terminal
+with `source ~/.zshrc`. Manul's unattended bootstrap loads the same file itself.
+
 The `aicode` launcher starts LiteLLM as a child of the initialized operator
 shell, so the service inherits these exports. Keep credentials out of
 repository files, command-line arguments and logs. Do not create a second
