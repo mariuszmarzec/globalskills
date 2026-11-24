@@ -51,12 +51,14 @@ if [ -n "${OPENCODE_CONFIG:-}" ]; then
     export OPENCODE_CONFIG
 else
     config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-    if [ -r "$config_root/opencode.jsonc" ]; then
-        OPENCODE_CONFIG="$config_root/opencode.jsonc"
-    elif [ -r "$config_root/opencode.json" ]; then
+    # Match aicode: prefer the canonical JSON config over a neighbouring
+    # JSONC template, then fall back to JSONC when JSON is absent.
+    if [ -r "$config_root/opencode.json" ]; then
         OPENCODE_CONFIG="$config_root/opencode.json"
-    else
+    elif [ -r "$config_root/opencode.jsonc" ]; then
         OPENCODE_CONFIG="$config_root/opencode.jsonc"
+    else
+        OPENCODE_CONFIG="$config_root/opencode.json"
     fi
     export OPENCODE_CONFIG
 fi
