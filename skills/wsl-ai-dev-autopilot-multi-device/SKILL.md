@@ -11,7 +11,11 @@ description: Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat 
 Install and validate a WSL2 AI development environment using one chat-completion
 route:
 
-`OpenCode / OpenClaw / Manul → LiteLLM → FreeLLMAPI → openai/auto`
+`OpenCode / OpenClaw → LiteLLM → FreeLLMAPI → openai/auto`
+
+Manul is an orchestrator, not a separate model client; it relies on the selected
+runtime's existing configuration. Its OpenCode adapter does not override the
+operator's model or provider selection.
 
 LiteLLM exposes exactly one chat model group: `free-cloud`. OpenCode and its
 generated agent roles select it through the catalog ID `litellm/freeLLMAPI`;
@@ -31,9 +35,12 @@ token only to the Caracal process that needs it, never through repository files.
 ## Architecture
 
 ```text
-OpenCode ─┐
-OpenClaw ─┼──> LiteLLM :4000 ──> FreeLLMAPI :3001/v1 (openai/auto)
-Manul ────┘        one chat group: "free-cloud"
+OpenCode ──> LiteLLM :4000 (selector: "litellm/freeLLMAPI") ──┐
+OpenClaw ──> LiteLLM :4000 (selector: "litellm/free-cloud") ──┴─>
+                 one chat group: "free-cloud"
+                 FreeLLMAPI :3001/v1 (openai/auto)
+
+Manul ──> selected runtime (no model override)
 
 Caracal embeddings ──> LiteLLM :4000 ("multilingual-e5-base")
                                   └──> Ollama :11434
@@ -136,8 +143,9 @@ Exact bash commands or WAITING.
 The operator's existing `~/.zshrc` is the single source of truth for exported
 shell settings used by interactive tools and unattended Manul tasks. Keep
 `PATH`, OpenCode binary/config selection, provider variables and tool paths
-there. Do not duplicate them in `~/.zshenv`, `~/.bashrc` or
-`~/.manul/.env`.
+there. Do not duplicate provider settings in `~/.zshenv` or `~/.bashrc`.
+The only OpenCode-specific value allowed in `~/.manul/.env` is the non-secret
+`OPENCODE_CONFIG` path as an unattended fallback; a shell-exported value wins.
 
 Manul's installed Zsh integration is sourced from `~/.zshrc`. Interactive
 commands inherit that environment directly. Direct and unattended entrypoints,
@@ -146,10 +154,11 @@ including cron/watchdog and the daemon, use the canonical
 `~/.zshrc` before executing the Bash runtime. The readiness marker prevents
 nested Zsh shells for already initialized interactive commands.
 
-`~/.manul/.env` is not a second shell/provider configuration. It is reserved
-for Manul-specific integration fallbacks such as the dedicated Manul Fiteo
-credential. The Manul installer removes obsolete provider paths/configuration
-and provider API keys from that file. Shell-exported values always win.
+`~/.manul/.env` is not a second shell/provider configuration. It may hold
+Manul-specific integration fallbacks (such as the dedicated Manul Fiteo
+credential) and the non-secret `OPENCODE_CONFIG` path for unattended runs.
+It must not contain provider API keys, model choices or copies of provider
+configuration. Shell-exported values always win.
 
 A service-specific environment file may still supply credentials to the
 service process that owns them (for example, LiteLLM's private service

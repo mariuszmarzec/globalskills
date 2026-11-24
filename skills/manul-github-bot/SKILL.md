@@ -27,18 +27,31 @@ PATH, OpenCode binary/config selection, provider environment and tool paths.
 Manul's interactive shell integration is sourced there. Direct and unattended
 entrypoints (including cron/watchdog and daemon startup) use
 `manul-zsh-bootstrap.sh` to run `zsh -ic` and then execute the Bash runtime.
-Do not maintain a second copy of these settings in `~/.zshenv`,
-`~/.bashrc` or `~/.manul/.env`.
+Do not maintain a second copy of these settings in `~/.zshenv` or
+`~/.bashrc`; only the non-secret `OPENCODE_CONFIG` path may be retained in
+`~/.manul/.env` as a fallback when Zsh does not export it.
 
-The mode-600 `~/.manul/.env` is only for Manul-specific integration fallback
-credentials (for example, the dedicated Manul Fiteo PAT) and is not a provider
-or shell configuration file. Manul's installer removes legacy provider paths,
-OpenCode configuration and provider API keys from that file; values exported
-from Zsh take precedence.
+The mode-600 `~/.manul/.env` is not a provider or shell configuration file.
+It may contain Manul-specific integration fallback credentials (for example,
+the dedicated Manul Fiteo PAT) and the non-secret `OPENCODE_CONFIG` file path
+as an unattended fallback. A value exported from `~/.zshrc` takes precedence.
+Do not store provider API keys, model choices or copies of the OpenCode config
+in this file.
 
 The runtime source checkout and runtime data are independent. Updating or
 reinstalling Manul source must not delete the runtime database, task artifacts,
 logs, locks, or workspaces.
+
+## OpenCode model ownership
+
+When Manul uses its OpenCode adapter, model/provider selection remains owned by
+the operator's OpenCode config and the selected OpenCode agent. Manul does not
+have a model setting of its own and must not pass `--model` to `opencode run`.
+Use regular OpenCode commands without `--standalone` for task execution, agent
+discovery and Caracal MCP preflight. Keep OpenCode catalog selectors in the
+Globalskills agent definitions aligned with the actual key under
+`providers.litellm.models`; the current setup uses
+`litellm/freeLLMAPI` with upstream `modelID: "free-cloud"`.
 
 ## Installation and updates
 
