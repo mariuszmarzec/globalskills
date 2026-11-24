@@ -240,7 +240,14 @@ values):
 ```bash
 export LITELLM_MASTER_KEY=<generate-a-long-random-key>
 export FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+
+# Keep this only when the operator OpenCode config uses providers.opencode.
+export OPENCODE_API_KEY=<your-OpenCode-Console-key>
 ```
+
+`OPENCODE_API_KEY` is OpenCode Console authentication, not an OpenCode Go
+selector. Keep the operator's `providers.opencode` section and its
+`{env:OPENCODE_API_KEY}` reference intact when that provider is configured.
 
 The `aicode` launcher starts LiteLLM as a child process and passes these
 exports through. Keep the existing shell file private and never print these
