@@ -70,9 +70,10 @@ runtime. Do not introduce a parallel `~/.zshenv`, move PATH into
 
 The mode-600 `~/.manul/.env` is reserved for Manul-specific integration
 fallbacks such as the dedicated Manul Fiteo credential. It is not a general
-operator environment file. Zsh-exported values take precedence; legacy
-provider paths, provider API keys and OpenCode config values are removed from
-the Manul fallback file. Keep OpenCode Console authentication (including
+operator environment file. The non-secret `OPENCODE_CONFIG` file path may be
+kept there as an unattended fallback; a shell-exported value takes precedence.
+Do not store provider API keys, model choices or copied OpenCode configuration
+in this file. Keep OpenCode Console authentication (including
 `OPENCODE_API_KEY`, when configured) in the operator environment; it is not an
 OpenCode Go selector.
 
