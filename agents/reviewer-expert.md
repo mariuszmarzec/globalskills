@@ -8,7 +8,7 @@ access = "read-only"
 
 [opencode]
 mode = "all"
-model = "litellm/free-cloud"
+model = "litellm/freeLLMAPI"
 steps = 50
 
 [opencode.permissions]
