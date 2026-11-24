@@ -377,8 +377,12 @@ fi
 
 cd "$CARACAL_REPO"
 bash ./install.sh
-export PATH="$HOME/.caracal/bin:$PATH"
 ```
+
+The operator's existing `~/.zshrc` remains the only persistent PATH
+configuration. Invoke the Caracal CLI by its explicit path
+(`~/.caracal/bin/caracal-rag`) in setup commands, or add its directory once
+to that existing PATH if interactive convenience is required.
 
 Configure Caracal interactively so credentials are entered into hidden prompts, not shell history or process arguments:
 
