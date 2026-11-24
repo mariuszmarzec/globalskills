@@ -11,7 +11,11 @@ description: Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat 
 Install and validate a WSL2 AI development environment using one chat-completion
 route:
 
-`OpenCode / OpenClaw / Manul → LiteLLM → FreeLLMAPI → openai/auto`
+`OpenCode / OpenClaw → LiteLLM → FreeLLMAPI → openai/auto`
+
+Manul is an orchestrator, not a separate model client; it relies on the selected
+runtime's existing configuration. Its OpenCode adapter does not override the
+operator's model or provider selection.
 
 LiteLLM exposes exactly one chat model group named `free-cloud`. That is the
 model name sent to LiteLLM; each client has its own selector namespace:
