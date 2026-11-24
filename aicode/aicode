@@ -387,10 +387,12 @@ verify_opencode_caracal_config() {
     # connectivity a prerequisite for launching Manul/OpenCode.
     if [ -z "${OPENCODE_CONFIG:-}" ]; then
         local config_root="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-        if [ -r "$config_root/opencode.jsonc" ]; then
-            OPENCODE_CONFIG="$config_root/opencode.jsonc"
-        elif [ -r "$config_root/opencode.json" ]; then
+        # Prefer the canonical JSON config when both formats exist. Operators
+        # may keep an empty JSONC template beside the fully configured JSON file.
+        if [ -r "$config_root/opencode.json" ]; then
             OPENCODE_CONFIG="$config_root/opencode.json"
+        elif [ -r "$config_root/opencode.jsonc" ]; then
+            OPENCODE_CONFIG="$config_root/opencode.jsonc"
         else
             OPENCODE_CONFIG="$config_root/opencode.json"
         fi

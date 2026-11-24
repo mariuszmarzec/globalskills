@@ -82,17 +82,17 @@ ok "aicode starts Caracal after LiteLLM/Chroma without blocking later startup st
 # only an advisory one-shot status probe and never rewrites global JSON/JSONC.
 contains "$AICODE" 'verify_opencode_caracal_config' "aicode verifies the operator-owned OpenCode configuration"
 contains "$AICODE" 'Using static OpenCode config: $OPENCODE_CONFIG.' "aicode reports the effective operator-owned OpenCode config path"
-contains "$AICODE" 'if [ -r "$config_root/opencode.jsonc" ]; then' "aicode prefers the operator's JSONC config"
-contains "$ACP_WRAPPER" 'if [ -r "$config_root/opencode.jsonc" ]; then' "ACP wrapper prefers the operator's JSONC config"
-aicode_jsonc_line="$(grep -nF 'if [ -r "$config_root/opencode.jsonc" ]; then' "$AICODE" | head -n 1 | cut -d: -f1)"
-aicode_json_line="$(grep -nF 'elif [ -r "$config_root/opencode.json" ]; then' "$AICODE" | head -n 1 | cut -d: -f1)"
-acp_jsonc_line="$(grep -nF 'if [ -r "$config_root/opencode.jsonc" ]; then' "$ACP_WRAPPER" | head -n 1 | cut -d: -f1)"
-acp_json_line="$(grep -nF 'elif [ -r "$config_root/opencode.json" ]; then' "$ACP_WRAPPER" | head -n 1 | cut -d: -f1)"
-[ -n "$aicode_jsonc_line" ] && [ -n "$aicode_json_line" ] && [ "$aicode_jsonc_line" -lt "$aicode_json_line" ] ||
-  fail "aicode must prefer opencode.jsonc when both global config formats exist"
-[ -n "$acp_jsonc_line" ] && [ -n "$acp_json_line" ] && [ "$acp_jsonc_line" -lt "$acp_json_line" ] ||
-  fail "ACP wrapper must prefer opencode.jsonc when both global config formats exist"
-ok "aicode and ACP use the operator's JSONC config before JSON"
+contains "$AICODE" 'if [ -r "$config_root/opencode.json" ]; then' "aicode prefers the canonical operator JSON config"
+contains "$ACP_WRAPPER" 'if [ -r "$config_root/opencode.json" ]; then' "ACP wrapper prefers the canonical operator JSON config"
+aicode_json_line="$(grep -nF 'if [ -r "$config_root/opencode.json" ]; then' "$AICODE" | head -n 1 | cut -d: -f1)"
+aicode_jsonc_line="$(grep -nF 'elif [ -r "$config_root/opencode.jsonc" ]; then' "$AICODE" | head -n 1 | cut -d: -f1)"
+acp_json_line="$(grep -nF 'if [ -r "$config_root/opencode.json" ]; then' "$ACP_WRAPPER" | head -n 1 | cut -d: -f1)"
+acp_jsonc_line="$(grep -nF 'elif [ -r "$config_root/opencode.jsonc" ]; then' "$ACP_WRAPPER" | head -n 1 | cut -d: -f1)"
+[ -n "$aicode_json_line" ] && [ -n "$aicode_jsonc_line" ] && [ "$aicode_json_line" -lt "$aicode_jsonc_line" ] ||
+  fail "aicode must prefer opencode.json when both global config formats exist"
+[ -n "$acp_json_line" ] && [ -n "$acp_jsonc_line" ] && [ "$acp_json_line" -lt "$acp_jsonc_line" ] ||
+  fail "ACP wrapper must prefer opencode.json when both global config formats exist"
+ok "aicode and ACP prefer opencode.json and retain JSONC as a fallback"
 contains "$AICODE" 'operator config left unchanged' "aicode documents read-only OpenCode MCP verification"
 if grep -Fq 'jq -s -f "$jq_program"' "$AICODE" ||
    grep -Fq 'mv -- "$tmp" "$OPENCODE_CONFIG"' "$AICODE" ||
