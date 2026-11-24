@@ -26,6 +26,11 @@ aicode_load_environment_fallback() {
             }
             # Only simple assignments are accepted from these legacy/service
             # files. The operator shell wins and PATH is never sourced here.
+            value = substr(candidate, index(candidate, "=") + 1)
+            # These files are dotenv-style assignments, not executable shell
+            # scripts. Reject shell operators/command substitutions rather
+            # than sourcing a line that could run an extra command.
+            if (value ~ /[;&|\x60]/ || value ~ /\\$\\(/) next
             if (name == "" || name == "PATH" || name in inherited) next
             print
         }
