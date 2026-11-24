@@ -11,10 +11,20 @@ Keep one chat-completion route for local clients:
 
 `OpenCode / OpenClaw / Manul → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
 
-The only LiteLLM chat model group is `free-cloud`. Do not add chat aliases,
-per-role model groups, direct chat providers, or fallback chains. FreeLLMAPI may
-manage its upstream provider pool internally; clients select the one chat route
-as `litellm/free-cloud`.
+The only LiteLLM chat model group is `free-cloud`. This is the model name
+sent to LiteLLM; client-side selector IDs depend on each client's own model
+catalog:
+
+- OpenCode uses provider key `litellm` and, in this setup, model-catalog key
+  `freeLLMAPI`. Its selector is `litellm/freeLLMAPI`, while the OpenCode
+  entry's upstream `modelID` is `free-cloud`.
+- OpenClaw uses model ID `free-cloud`, exposed as
+  `litellm/free-cloud`.
+- Manul does not choose a model. When it uses OpenCode, it relies on the
+  operator's OpenCode config and selected OpenCode agent.
+
+Do not add chat aliases, per-role LiteLLM model groups, direct chat providers,
+or fallback chains.
 
 Caracal also uses a separate, embedding-only LiteLLM alias backed by local
 Ollama. That alias is not a second chat model, is not a fallback, and must never
@@ -63,14 +73,17 @@ native environment configuration. That is a distinct service boundary, not a
 second place to configure the interactive shell or PATH.
 
 For shell-wide settings consumed by interactive clients and unattended Manul
-workers, the existing `~/.zshrc` is the single source of truth. Do not
-duplicate PATH/provider settings in `~/.zshenv`, `~/.bashrc`,
-`~/.manul/.env` or multiple shell startup files. The Manul installer installs
-its Zsh integration; direct and unattended Manul entrypoints load the same
-`~/.zshrc` through `manul-zsh-bootstrap.sh` (`zsh -ic`) before running
-their Bash scripts. Manul's `~/.manul/.env` is reserved for Manul-specific
-integration fallbacks, not PATH, provider configuration, provider API keys or
-OpenCode configuration.
+workers, the existing `~/.zshrc` is the source of truth. Do not duplicate
+PATH/provider settings in `~/.zshenv`, `~/.bashrc` or multiple shell startup
+files. The Manul installer installs its Zsh integration; direct and unattended
+entrypoints load the same `~/.zshrc` through `manul-zsh-bootstrap.sh`
+(`zsh -ic`) before running their Bash scripts.
+
+Manul's mode-600 `~/.manul/.env` is not a second provider or shell config. It
+may contain Manul-specific integration fallbacks and the non-secret
+`OPENCODE_CONFIG` file path as an unattended fallback. A shell-exported
+`OPENCODE_CONFIG` takes precedence. Do not put provider keys, model choices,
+or copies of the OpenCode configuration in that file.
 
 ## LiteLLM configuration
 
@@ -145,13 +158,17 @@ check Ollama and the embedding endpoint independently.
 
 ## Routing rules
 
-- OpenCode's main model and small model: `litellm/free-cloud`.
-- OpenClaw's default model: `litellm/free-cloud`.
-- All Globalskills agent roles and Manul workers: `litellm/free-cloud`.
-- OpenCode's selectable model ID must be constructed from provider key
-  `litellm` and model key `free-cloud`: `litellm/free-cloud`.
-- The corresponding OpenCode model entry uses upstream `modelID: "free-cloud"`.
-  The OpenCode model key is the selectable ID; `modelID` is sent upstream.
+- OpenCode main model and small model: `litellm/freeLLMAPI` for the
+  `providers.litellm.models.freeLLMAPI` catalog entry.
+- Generated Globalskills OpenCode role agents use the same selector:
+  `litellm/freeLLMAPI`.
+- That OpenCode model entry sends upstream `modelID: "free-cloud"`, which is
+  the LiteLLM model-group name. Keep the catalog key and upstream ID distinct.
+- OpenClaw's default model: `litellm/free-cloud`, matching its provider model
+  ID `free-cloud`.
+- Manul does not have a model selector or model setting of its own. Its
+  OpenCode adapter uses the operator's OpenCode config; do not pass
+  `--model` or add a Manul model field.
 - Caracal embeddings may use the separate LiteLLM alias
   `multilingual-e5-base`; it is not a chat model.
 - Do not use chat aliases such as `big-pickle` or
@@ -178,16 +195,17 @@ check Ollama and the embedding endpoint independently.
 - If tool calls fail, verify that the FreeLLMAPI auto pool selects models that
   support tool calling.
 
-## Manul and OpenCode process isolation
+## Manul and OpenCode process behavior
 
-Manul leaves the operator's OpenCode model/provider selection untouched. It
-does not inject a model, provider or fallback into the task configuration.
-Its OpenCode adapter uses `opencode run --standalone`, and standalone mode for
-agent discovery and Caracal MCP preflight, so task processes do not reuse an
-already-running OpenCode server with stale environment variables.
+Model/provider selection belongs to the operator-owned OpenCode configuration
+and the selected OpenCode agent. Manul must not add a model setting, invent a
+Manul-specific model config key, or pass `--model` to `opencode run`.
+Manul invokes the regular OpenCode commands without `--standalone`, including
+task execution, agent discovery and Caracal MCP preflight. This keeps the
+existing OpenCode config and operator-selected runtime behavior in effect.
 
 Keep the operator's `OPENCODE_API_KEY` and any configured OpenCode Console
 provider authentication intact. `OPENCODE_API_KEY` does not select OpenCode
-Go. Diagnose the explicitly selected model/provider and the effective
-OpenCode config; do not remove unrelated provider authentication as a
-workaround for an OpenCode Go subscription error.
+Go. Diagnose the configured OpenCode catalog key and effective config; do not
+remove unrelated provider authentication as a workaround for an OpenCode Go
+subscription error.
