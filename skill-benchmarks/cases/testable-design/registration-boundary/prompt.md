@@ -1,0 +1,3 @@
+Refactor registration.py so input normalization and registration validation can be tested without a database or email sender. Keep the public register_user(data, database, mailer) function and its current behavior. Extract a pure helper named prepare_registration(data) that returns the normalized name and email, or raises ValueError for invalid input. Keep persistence and the welcome message in register_user.
+
+Add focused unit tests for the helper, including normalization and invalid email/name cases. Keep the existing lightweight fake-based integration tests. Do not add interfaces, classes, mocks, network dependencies, or test-only public APIs. Run the tests and keep the change scoped to registration.py and tests/test_registration.py.

@@ -108,6 +108,25 @@ Example:
 ```
 
 
+## Human-readable code quality cases
+
+The initial readability suite adds one case per skill:
+
+| Skill | Case | Behavior under evaluation |
+|---|---|---|
+| `human-readable-code` | `invoice-refactor` | Extract cohesive calculation helpers, preserve the public API and behavior, and avoid helper/class proliferation. |
+| `testable-design` | `registration-boundary` | Separate pure registration preparation from persistence and email side effects, with focused tests and lightweight fakes. |
+| `compose-ui-readability` | `training-screen-sections` | Extract meaningful screen sections while keeping UI-only state local, passing focused values/events, and preserving Modifier behavior. |
+
+The Compose case is intentionally source-level because the fixture does not
+include an Android/Gradle build. Its verifier checks section boundaries,
+state ownership, callback flow, modifiers, labels, and interactions; it does
+not claim to prove compilation or rendered visual equivalence.
+
+For all three cases, use `--mode both` to compare the agent with and without
+the relevant skill. Review the reports as behavioral evidence, not as a
+universal score for code quality.
+
 ## Exclusions
 
 Benchmark exclusions are explicit in `config.json`. They are for skills whose
