@@ -8,7 +8,7 @@ access = "review-before-edit"
 
 [opencode]
 mode = "all"
-model = "litellm/free-cloud"
+model = "litellm/freeLLMAPI"
 steps = 40
 
 [opencode.permissions]
