@@ -1,11 +1,9 @@
-# Setup Environment Skill
+# Setup Environment (legacy entrypoint)
 
-This skill handles OpenClaw environment setup and configuration, including:
-- OpenClaw Gateway configuration
-- Model provider setup
-- Database initialization
-- Credential management
-- System stability checks
+This directory contains the original OpenClaw setup scripts and requirements.
+It is a legacy entrypoint rather than an installable skill (there is no
+`SKILL.md`). Use the maintained environment instructions below for current
+FreeLLMAPI, LiteLLM, OpenCode, OpenClaw, Manul and Caracal configuration.
 
 ## Responsibilities
 
