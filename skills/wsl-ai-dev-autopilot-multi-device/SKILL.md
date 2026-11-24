@@ -296,7 +296,7 @@ LiteLLM embeddings endpoint, while chat clients continue to select only
 
 ```bash
 set -a
-source ~/litellm/free-cloud
+source ~/litellm/.env
 set +a
 
 curl -fsS http://127.0.0.1:3001/v1/models \
@@ -567,7 +567,7 @@ FreeLLMAPI is the only upstream used by LiteLLM for chat completions.
 
 1. Run FreeLLMAPI locally and bind it to loopback (`127.0.0.1:3001`).
 2. Configure the upstream provider pool and unified API key inside the FreeLLMAPI dashboard.
-3. Store the unified key only in `~/litellm/free-cloud` as `FREELLMAPI_API_KEY`.
+3. Store the unified key in the private LiteLLM service environment file `~/litellm/.env` as `FREELLMAPI_API_KEY`.
 4. Configure the only LiteLLM chat group: `free-cloud`, with
    `model: openai/auto`.
 5. Configure OpenCode, OpenClaw and Manul to request
