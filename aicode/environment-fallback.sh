@@ -30,7 +30,9 @@ aicode_load_environment_fallback() {
             # These files are dotenv-style assignments, not executable shell
             # scripts. Reject shell operators/command substitutions rather
             # than sourcing a line that could run an extra command.
-            if (value ~ /[;&|\x60]/ || value ~ /\\$\\(/) next
+            if (index(value, ";") || index(value, "&") || index(value, "|") ||
+                index(value, sprintf("%c", 96)) || index(value, "$(") ||
+                index(value, "<") || index(value, ">")) next
             if (name == "" || name == "PATH" || name in inherited) next
             print
         }
