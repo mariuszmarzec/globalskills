@@ -58,6 +58,29 @@ versions for rollback. Only the individual `~/.local/bin/globalskills` and
 `~/.aicode/aicode` launcher files may be symlinks; do not symlink whole
 runtime directories.
 
+## Operator shell environment and runtime updates
+
+The operator's existing `~/.zshrc` is the single source of truth for exported
+PATH, provider configuration, OpenCode authentication and tool locations.
+Interactive tools inherit it directly. Manul's interactive shell integration
+is installed there; direct and unattended Manul entrypoints use the standalone
+`manul-zsh-bootstrap.sh` to run `zsh -ic` and then execute the existing Bash
+runtime. Do not introduce a parallel `~/.zshenv`, move PATH into
+`~/.bashrc`, or maintain a second PATH/provider list in `~/.manul/.env`.
+
+The mode-600 `~/.manul/.env` is reserved for Manul-specific integration
+fallbacks such as the dedicated Manul Fiteo credential. It is not a general
+operator environment file. Zsh-exported values take precedence; legacy
+provider paths, provider API keys and OpenCode config values are removed from
+the Manul fallback file. Keep OpenCode Console authentication (including
+`OPENCODE_API_KEY`, when configured) in the operator environment; it is not an
+OpenCode Go selector.
+
+Globalskills and standalone Manul are separate repositories and updates:
+run `globalskills update` for skills/generated agents and `manul --update`
+for the daemon, adapters and runtime bootstrap. Neither update should modify
+Manul's task database or task data.
+
 ## Guidance
 - Keep skill names descriptive and scoped to their purpose.
 - Store each skill in its own folder with a clear README or skill definition file.
