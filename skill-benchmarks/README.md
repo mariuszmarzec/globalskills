@@ -136,6 +136,7 @@ Exclusions should be reviewed when the excluded skill changes.
 Current exclusions:
 - `manul-github-bot`
 - `setup-environment`
+- `freellmapi-environment`
 - `wsl-ai-dev-autopilot-multi-device`
 - `android-clean-architecture`
 - `agent-orchestration`
@@ -144,6 +145,12 @@ Current exclusions:
 The runner does not add benchmarks to CI. The benchmark suite is intentionally
 a developer-facing evaluation tool. Unit tests for the runner and adapters can
 use mocks and are independent of live LLM execution.
+
+Exclusions are recorded with a rationale in `config.json`. The FreeLLMAPI
+and WSL autopilot skills are excluded because they modify host-wide service and
+process configuration, rely on live external/local endpoints and handle
+credentials; their dedicated healthchecks are the appropriate validation
+boundary, not a generic fixture repository.
 
 ## Adding a skill
 
