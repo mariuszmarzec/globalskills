@@ -43,7 +43,7 @@ access = "review-before-edit"
 
 [opencode]
 mode = "all"
-model = "litellm/free-cloud"
+model = "litellm/freeLLMAPI"
 steps = 30
 
 [opencode.permissions]
@@ -83,7 +83,7 @@ disable_model_invocation = false
         self.assertTrue(manul.startswith('---\nname: "reviewer"'))
         self.assertNotIn("+++", manul)
         self.assertIn("Never modify code.", manul)
-        self.assertIn('model: "litellm/free-cloud"', opencode)
+        self.assertIn('model: "litellm/freeLLMAPI"', opencode)
         self.assertIn('permissions:\n  - action: "edit"\n    resource: "*"\n    effect: "deny"\n  - action: "shell"\n    resource: "*"\n    effect: "deny"', opencode)
         self.assertNotIn("\npermission:", opencode)
         self.assertNotIn("\ntemperature:", opencode)
