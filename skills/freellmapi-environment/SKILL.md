@@ -34,26 +34,33 @@ be selected for chat completions:
 
 ## Secrets and process environment
 
-LiteLLM needs these values in the environment of the LiteLLM process:
+LiteLLM needs these values in the environment of its process. In this
+Zsh-managed WSL setup, export them in the operator's existing `~/.zshrc`:
 
 ```bash
-LITELLM_MASTER_KEY=<generate-a-long-random-key>
-FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+export LITELLM_MASTER_KEY=<generate-a-long-random-key>
+export FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
 ```
 
-Keep credentials out of repository files, command-line arguments and logs.
-The LiteLLM service may use its existing private service environment file to
-receive these two process credentials. Do not put PATH, tool locations,
-OpenCode model selection or general shell configuration in that service file.
+The `aicode` launcher starts LiteLLM as a child of the initialized operator
+shell, so the service inherits these exports. Keep credentials out of
+repository files, command-line arguments and logs. Do not create a second
+`~/litellm/.env` containing copies of the same exported values.
+
+If LiteLLM is instead managed independently by systemd or another service
+manager, provide its required credentials through that service manager's
+native environment configuration. That is a distinct service boundary, not a
+second place to configure the interactive shell or PATH.
 
 For shell-wide settings consumed by interactive clients and unattended Manul
-workers, use the operator's existing `~/.zshrc` as the single source of truth.
-Do not duplicate PATH/provider settings in `~/.zshenv`, `~/.manul/.env` or
-multiple shell startup files. The Manul installer installs its Zsh integration;
-direct and unattended Manul entrypoints load the same `~/.zshrc` through
-`manul-zsh-bootstrap.sh` (`zsh -ic`) before running their Bash scripts.
-Manul's `~/.manul/.env` is reserved for Manul-specific integration fallbacks,
-not PATH, provider configuration, provider API keys or OpenCode configuration.
+workers, the existing `~/.zshrc` is the single source of truth. Do not
+duplicate PATH/provider settings in `~/.zshenv`, `~/.bashrc`,
+`~/.manul/.env` or multiple shell startup files. The Manul installer installs
+its Zsh integration; direct and unattended Manul entrypoints load the same
+`~/.zshrc` through `manul-zsh-bootstrap.sh` (`zsh -ic`) before running
+their Bash scripts. Manul's `~/.manul/.env` is reserved for Manul-specific
+integration fallbacks, not PATH, provider configuration, provider API keys or
+OpenCode configuration.
 
 ## LiteLLM configuration
 
@@ -104,9 +111,11 @@ API purposes; `multilingual-e5-base` is not a chat alias.
 
 ## Start and verify
 
-Start or reload the existing LiteLLM service using its normal service manager;
-do not start a second proxy process. The service must inherit
-`LITELLM_MASTER_KEY` and `FREELLMAPI_API_KEY`.
+Start or reload the existing LiteLLM service using its normal lifecycle;
+do not start a second proxy process. When launched by `aicode`, the service
+inherits `LITELLM_MASTER_KEY` and `FREELLMAPI_API_KEY` from the operator's
+Zsh session. If a separate service manager owns LiteLLM, configure the same
+two service credentials at that service boundary.
 
 Verify the upstream and proxy:
 
