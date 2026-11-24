@@ -249,6 +249,9 @@ export OPENCODE_API_KEY=<your-OpenCode-Console-key>
 selector. Keep the operator's `providers.opencode` section and its
 `{env:OPENCODE_API_KEY}` reference intact when that provider is configured.
 
+After editing `~/.zshrc`, load the updated exports into the current terminal
+with `source ~/.zshrc`. Manul's unattended bootstrap loads the same file itself.
+
 The `aicode` launcher starts LiteLLM as a child process and passes these
 exports through. Keep the existing shell file private and never print these
 values. A separately managed systemd service would need its own service
