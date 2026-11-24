@@ -678,7 +678,7 @@ else
 fi
 
 # All chat roles use the single FreeLLMAPI-backed LiteLLM model group.
-echo "Chat model via LiteLLM: litellm/free-cloud"
+echo "LiteLLM chat model group: free-cloud"
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
 else
