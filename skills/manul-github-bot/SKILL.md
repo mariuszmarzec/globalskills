@@ -15,11 +15,26 @@ Manul is a standalone GitHub task orchestrator maintained in
 - **Canonical runtime scripts:** `~/.manul-repo/skills/manul-github-bot/`
 - **Runtime data and configuration:** `~/.manul/`
 - **Task database:** `~/.manul/state/manul.db`
-- **Provider credentials:** `~/.manul/.env` (mode 600)
+- **Operator shell environment:** exported values from `~/.zshrc`
+- **Manul integration fallbacks:** `~/.manul/.env` (mode 600)
 
 This globalskills skill is only the host-side operating guide and integration
 contract. Do not implement Manul runtime changes in this repository. Runtime
 changes belong in the standalone Manul repository and its CI.
+
+The operator's existing `~/.zshrc` is the single source of truth for exported
+PATH, OpenCode binary/config selection, provider environment and tool paths.
+Manul's interactive shell integration is sourced there. Direct and unattended
+entrypoints (including cron/watchdog and daemon startup) use
+`manul-zsh-bootstrap.sh` to run `zsh -ic` and then execute the Bash runtime.
+Do not maintain a second copy of these settings in `~/.zshenv`,
+`~/.bashrc` or `~/.manul/.env`.
+
+The mode-600 `~/.manul/.env` is only for Manul-specific integration fallback
+credentials (for example, the dedicated Manul Fiteo PAT) and is not a provider
+or shell configuration file. Manul's installer removes legacy provider paths,
+OpenCode configuration and provider API keys from that file; values exported
+from Zsh take precedence.
 
 The runtime source checkout and runtime data are independent. Updating or
 reinstalling Manul source must not delete the runtime database, task artifacts,

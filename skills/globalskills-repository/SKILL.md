@@ -58,6 +58,29 @@ versions for rollback. Only the individual `~/.local/bin/globalskills` and
 `~/.aicode/aicode` launcher files may be symlinks; do not symlink whole
 runtime directories.
 
+## Operator shell environment and runtime updates
+
+The operator's existing `~/.zshrc` is the single source of truth for exported
+PATH, provider configuration, OpenCode authentication and tool locations.
+Interactive tools inherit it directly. Manul's interactive shell integration
+is installed there; direct and unattended Manul entrypoints use the standalone
+`manul-zsh-bootstrap.sh` to run `zsh -ic` and then execute the existing Bash
+runtime. Do not introduce a parallel `~/.zshenv`, move PATH into
+`~/.bashrc`, or maintain a second PATH/provider list in `~/.manul/.env`.
+
+The mode-600 `~/.manul/.env` is reserved for Manul-specific integration
+fallbacks such as the dedicated Manul Fiteo credential. It is not a general
+operator environment file. Zsh-exported values take precedence; legacy
+provider paths, provider API keys and OpenCode config values are removed from
+the Manul fallback file. Keep OpenCode Console authentication (including
+`OPENCODE_API_KEY`, when configured) in the operator environment; it is not an
+OpenCode Go selector.
+
+Globalskills and standalone Manul are separate repositories and updates:
+run `globalskills update` for skills/generated agents and `manul --update`
+for the daemon, adapters and runtime bootstrap. Neither update should modify
+Manul's task database or task data.
+
 ## Guidance
 - Keep skill names descriptive and scoped to their purpose.
 - Store each skill in its own folder with a clear README or skill definition file.
@@ -106,6 +129,6 @@ target.
 
 ## Skills Index (quick reference)
 - `chatgpt-supervised-workflow` — Evidence-driven execution workflow for tasks originating from ChatGPT, activated by a ChatGPT `chatId` or explicit supervision context (`~/.globalskills/skills/chatgpt-supervised-workflow/SKILL.md`).
-- `freellmapi-environment` — Operational notes for running FreeLLMAPI locally and wiring it into LiteLLM (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
+- `freellmapi-environment` — Configure the single FreeLLMAPI-backed LiteLLM chat group free-cloud and the separate local Ollama embedding alias used by Caracal RAG (`~/.globalskills/skills/freellmapi-environment/SKILL.md`).
 - `pr-description-management` — Manage GitHub Pull Request descriptions - create PRs with proper descriptions and update PR descriptions when pushing changes. Uses gh CLI for all PR operations. (`~/.globalskills/skills/pr-description-management/SKILL.md`).
-- `wsl-ai-dev-autopilot-multi-device` — Automated WSL2 AI dev environment installer and validator (`~/.globalskills/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).
+- `wsl-ai-dev-autopilot-multi-device` — Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat group (free-cloud), a separate local Ollama embedding alias for Caracal RAG, and a shared Zsh environment for OpenCode and Manul (`~/.globalskills/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md`).

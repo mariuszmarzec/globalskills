@@ -32,28 +32,46 @@ which its adapters strip before using the shared prompt body. Installed resource
 `~/.local/state/globalskills/manifest.json` (or
 `$XDG_STATE_HOME/globalskills/manifest.json`).
 
-Add the CLI directory to your shell PATH once:
+Add the CLI directory to the operator's existing `~/.zshrc` once, then
+reload that same shell configuration:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qF 'export PATH="$HOME/.local/bin:$PATH"' ~/.zshrc || \
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 ```
+
+Do not create a separate `.zshenv`, `.bashrc`, or Manul PATH configuration.
+The existing `~/.zshrc` is the source of truth for the operator's exported
+PATH, provider settings and tool locations. Manul's direct/unattended runtime
+loads that same file through its Zsh bootstrap.
 
 ## Updating
 
+Update the shared resources and standalone Manul runtime independently:
+
+```bash
+globalskills update
+manul --update
+globalskills status
+```
+
+`globalskills update` fast-forwards the Globalskills source checkout and
+synchronizes managed skills and generated agents. `manul --update` updates
+the separate standalone Manul checkout and runtime scripts. Both updates
+preserve Manul's task database and task data. Managed Globalskills resources
+are replaced only when their installed hashes still match the previous
+manifest; local edits and unmanaged files are preserved and collisions are
+reported instead of overwritten. Previous managed versions are backed up for
+rollback.
+
+Additional inspection/rollback commands:
+
 ```bash
 globalskills update --check
-globalskills update
-globalskills status
 globalskills rollback skill:my-skill --runtime all
 globalskills rollback agent:reviewer --runtime all
 ```
-
-Updates fast-forward the Globalskills source checkout when upstream changes
-are available. Managed resources are updated only when their installed hashes
-still match the previous manifest. Local edits and unmanaged files are
-preserved; collisions are reported instead of overwritten. Previous managed
-versions are backed up for rollback. The installer never changes Manul's
-runtime database or task data.
 
 ## macOS runtime prerequisites
 
@@ -65,15 +83,17 @@ and Python 3. Install at least one supported agent runtime (OpenClaw, OpenCode,
 Codex, or Claude Code) separately.
 
 ```bash
-brew install bash coreutils util-linux gh jq sqlite python
+brew install bash coreutils util-linux gh jq sqlite python zsh
 ```
 
 The platform bootstrap automatically prepends Homebrew Bash, GNU Coreutils
 (`timeout`, `stat`, `realpath`, `sha256sum`) and util-linux
 (`flock`, `setsid`) to PATH. It re-executes the launcher, daemon and
-watchdog under Homebrew Bash 4+ where necessary. The watchdog repeats this
-bootstrap when started by cron, whose PATH does not inherit interactive shell
-configuration. No Linux VM, Docker, WSL, or Todo bridge is needed on macOS.
+watchdog under Homebrew Bash 4+ where necessary. The Manul watchdog first
+loads the operator's existing `~/.zshrc` through `zsh -ic`, then applies the
+Homebrew runtime preparation; it does not maintain a second PATH list. Install
+Zsh as a prerequisite. No Linux VM, Docker, WSL, or Todo bridge is needed on
+macOS.
 
 ## Todo Desktop MCP (cross-platform)
 
@@ -146,9 +166,11 @@ export FITEO_PAT="YOUR_PAT"
 For the standalone Manul `todo_remote_mcp` source and task-scoped Fiteo MCP,
 provide the dedicated Manul-account token through `FITEO_MANUL_PAT` in the
 local environment before Manul bootstrap. Manul persists this token in the
-mode-600 `~/.manul/.env` for unattended workers. Never copy the
-operator PAT into this variable and never fall back to the operator PAT when
-the Manul token is missing. Global `aicode` continues to use `FITEO_PAT`;
+mode-600 `~/.manul/.env` as a Manul-specific integration fallback for
+unattended workers. The operator's exported shell/provider environment comes
+from `~/.zshrc`; the Manul file is not a second PATH or OpenCode/LiteLLM
+configuration source. Never copy the operator PAT into this variable and
+never fall back to the operator PAT when the Manul token is missing. Global `aicode` continues to use `FITEO_PAT`;
 only Manul remote Todo access uses `FITEO_MANUL_PAT`.
 
 Manul-created remote Todo tasks and report subtasks are shared with the
@@ -192,7 +214,7 @@ included in the task context. Unknown, ambiguous, or disallowed targets are
 not queued; there is no static repository fallback. Keep the project catalog
 and aliases current as repositories/projects are added.
 
-Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. MCP credentials are persisted only in the mode-600 `~/.manul/.env` for unattended runs; never put token values in the config or repository.
+Both adapters preserve Todo's returned subtask order and pass the whole nested tree to Manul as ordered steps. Subtasks are not separate Manul queue entries. After the repository work is verified, Manul marks the root and every descendant done through the same MCP source. Manul-specific integration credentials (including the dedicated Manul Fiteo PAT) may be persisted in the mode-600 `~/.manul/.env` for unattended runs. PATH, OpenCode configuration and provider API keys come from the operator's `~/.zshrc`; do not place them in Manul's fallback file. Never put token values in the config or repository.
 
 ## Specification-Driven Development (SDD)
 
@@ -280,7 +302,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `feature-branching-strategy` | Branching strategy for changes made by an AI agent. Use whenever pushing code changes to a repository (except the ~/.globalskills repo) — always create a feature/<ISSUE_NUMBER-if-exists>-<DESCRIPTION> branch, or bugfix/<DESCRIPTION> for bug fixes, and never push directly to the main branch. |
 | `fiteo-access` | Use whenever an agent needs to connect to a running Fiteo backend, determine its runtime base URL, use the Manul account, or make authenticated Fiteo HTTP requests. Runtime settings come from environment variables; never hardcode or disclose their values. |
 | `fiteo-backend-api` | Use whenever the user asks about Fiteo backend API endpoints or contracts, including routes, HTTP methods, request/response payloads, DTOs, query/path parameters, authentication, validation, status codes, pagination, or implementing/reviewing code that calls or exposes a Fiteo endpoint. Before answering, search the indexed Fiteo API documentation through the caracal-rag MCP server. |
-| `freellmapi-environment` | Configure the single FreeLLMAPI-backed LiteLLM model group `free-cloud`; no aliases or fallback providers. |
+| `freellmapi-environment` | Configure the single FreeLLMAPI-backed LiteLLM chat group free-cloud and the separate local Ollama embedding alias used by Caracal RAG. |
 | `github-selfhosted-runner` | Provision a self-hosted GitHub Actions runner in Docker on any Linux host (WSL2, VM, bare metal). Handles image build, token refresh, and container lifecycle. |
 | `globalskills-repository` | Manage the global skills repository at ~/.globalskills/skills. Use when creating new skills, moving skills between locations, or organizing the shared skill repository. |
 | `human-readable-code` | Language-agnostic guidance for code that is easy for people to read, understand, maintain, and change. Use when writing, reviewing, or refactoring software in any language. |
@@ -296,7 +318,7 @@ Issues/PRs and workflow checkpoints, so work can resume in another runtime.
 | `testable-design` | Language-agnostic guidance for designing code that is straightforward to test without test-driven overengineering. Use when shaping logic, dependencies, side-effect boundaries, or test seams. |
 | `unit-testing-android` | Android-specific unit and integration testing practices for JVM, instrumented, and UI tests. Use when designing or implementing tests for Android applications. |
 | `unit-testing-language-agnostic` | Language-agnostic unit and integration testing principles. Use when designing, writing, or reviewing automated tests in any language or framework. |
-| `wsl-ai-dev-autopilot-multi-device` | Install a WSL2 AI environment using only LiteLLM `free-cloud` backed by FreeLLMAPI, with OpenCode, OpenClaw, Manul, and optional Caracal RAG MCP integration. |
+| `wsl-ai-dev-autopilot-multi-device` | Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat group (free-cloud), a separate local Ollama embedding alias for Caracal RAG, and a shared Zsh environment for OpenCode and Manul. |
 | `yt-dlp-downloader` | Robust YouTube downloading and audio extraction via yt-dlp with anti-bot bypass flags (--user-agent, --extractor-args, --no-check-certificates) and oEmbed fallback search. Use when downloading videos or MP3s from YouTube URLs with yt-dlp to guarantee success. |
 
 ## Agents (multi-agent orchestration)

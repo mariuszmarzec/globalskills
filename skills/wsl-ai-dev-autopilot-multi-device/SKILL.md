@@ -1,6 +1,6 @@
 ---
 name: wsl-ai-dev-autopilot-multi-device
-description: Simple WSL2 AI development environment using one LiteLLM model group (free-cloud) backed by FreeLLMAPI, with OpenCode, OpenClaw, Manul, and optional Caracal RAG MCP integration. Use when installing or repairing this single-model setup.
+description: Set up WSL2 AI development with one FreeLLMAPI-backed LiteLLM chat group (free-cloud), a separate local Ollama embedding alias for Caracal RAG, and a shared Zsh environment for OpenCode and Manul.
 ---
 
 # WSL AI Dev Autopilot Skill
@@ -8,25 +8,34 @@ description: Simple WSL2 AI development environment using one LiteLLM model grou
 
 # Purpose
 
-Install and validate a WSL2 AI development environment using one chat-model route:
+Install and validate a WSL2 AI development environment using one chat-completion
+route:
 
 `OpenCode / OpenClaw / Manul → LiteLLM → FreeLLMAPI → openai/auto`
 
-LiteLLM exposes **exactly one model group: `free-cloud`**. Every client and every Globalskills agent requests `litellm/free-cloud`. Do not create aliases, per-role model groups, direct provider routes, fallback chains, or local chat-model routes.
+LiteLLM exposes exactly one chat model group: `free-cloud`. Every client and
+every Globalskills role requests `litellm/free-cloud`. Do not create chat
+aliases, per-role chat model groups, direct chat provider routes or fallback
+chains.
 
-FreeLLMAPI may manage its upstream provider pool internally. From the perspective of LiteLLM, OpenCode, OpenClaw, and Manul, the only model is `free-cloud`.
+Caracal RAG uses a separate, embedding-only alias in the same LiteLLM service:
+`multilingual-e5-base → Ollama → qllama/multilingual-e5-base`. This alias is
+not another chat group and must not be selected by OpenCode, OpenClaw, Manul or
+any chat agent. Do not remove it when simplifying the chat model list.
 
-Caracal RAG is a separate service. Its embeddings endpoint is configured in `~/.caracal/config/sources.yaml`; do not add an embedding model to LiteLLM's chat `model_list`. Keep its authenticated MCP listener loopback-only and pass its bearer token through the launcher environment, never through repository files.
+Caracal's authenticated MCP listener remains loopback-only. Pass its bearer
+token only to the Caracal process that needs it, never through repository files.
 
 ## Architecture
 
 ```text
 OpenCode ─┐
 OpenClaw ─┼──> LiteLLM :4000 ──> FreeLLMAPI :3001/v1 (openai/auto)
-Manul ────┘        exposes only "free-cloud"
+Manul ────┘        one chat group: "free-cloud"
 
-OpenCode ──> authenticated Caracal MCP :3500 ──> Chroma
-                       (embeddings configured separately)
+Caracal embeddings ──> LiteLLM :4000 ("multilingual-e5-base")
+                                  └──> Ollama :11434
+Caracal MCP :3500 ──> Chroma
 ```
 
 # Execution Rules
@@ -51,11 +60,16 @@ OpenCode ──> authenticated Caracal MCP :3500 ──> Chroma
 - WSL2 and required Ubuntu packages are operational.
 - Node.js, Python, and OpenCode are installed.
 - FreeLLMAPI responds on its configured loopback endpoint.
-- LiteLLM exposes exactly one model group: `free-cloud`.
+- LiteLLM exposes exactly one chat model group: `free-cloud`.
 - A chat completion succeeds through LiteLLM using `model: free-cloud`.
+- When Caracal's local embedding route is enabled, LiteLLM also has the
+  embedding-only `multilingual-e5-base` alias backed by Ollama; it is never
+  used for chat.
 - OpenCode uses `litellm/free-cloud` for both its main and small model.
 - OpenClaw and Manul use only `litellm/free-cloud`.
-- No other LiteLLM model groups, aliases, direct providers, or fallback routes are configured.
+- No additional LiteLLM chat groups, chat aliases, direct chat providers or
+  fallback routes are configured. The separate `multilingual-e5-base`
+  embedding-only alias is allowed only for Caracal/Ollama.
 - Caracal RAG is installed under `~/.caracal` with its own Python virtual environment; source remains at `~/.caracal-rag`.
 - Caracal credentials, embedding endpoint, Chroma settings, and `caracal-rag check` are valid.
 - The configured knowledge sources `fiteo-docs` and `quickmvi-readme` are indexed successfully.
@@ -93,13 +107,49 @@ Exact bash commands or WAITING.
 
 ## Single-model policy
 
-- The only LiteLLM model group is `free-cloud`, backed by FreeLLMAPI `openai/auto`.
-- OpenCode, OpenClaw, Manul, and every generated role agent use `litellm/free-cloud`.
-- Do not add aliases such as `big-pickle` or `deepseek-v4-flash-free`.
-- Do not add direct Groq, Cerebras, Gemini, Mistral, OpenRouter, Ollama, or OpenCode Zen chat routes.
+- The only LiteLLM chat model group is `free-cloud`, backed by FreeLLMAPI
+  `openai/auto`.
+- OpenCode, OpenClaw, Manul and every generated role agent use
+  `litellm/free-cloud`.
+- Do not add chat aliases such as `big-pickle` or
+  `deepseek-v4-flash-free`.
+- Do not add direct Groq, Cerebras, Gemini, Mistral, OpenRouter or OpenCode Zen
+  chat routes. Ollama is allowed only for the dedicated
+  `multilingual-e5-base` embeddings alias.
 - Do not configure `router_settings.fallbacks` or `completion_model`.
-- LiteLLM retries may retry the same `free-cloud` model group but must never fail over to another group.
-- LiteLLM needs only `FREELLMAPI_API_KEY` and `LITELLM_MASTER_KEY`; provider credentials stay in FreeLLMAPI.
+- LiteLLM chat retries may retry the same `free-cloud` group but must never
+  fail over to another chat model group.
+- LiteLLM needs `FREELLMAPI_API_KEY` and `LITELLM_MASTER_KEY`; upstream chat
+  provider credentials stay in FreeLLMAPI.
+- Caracal's embedding requests use the separate
+  `multilingual-e5-base` model alias and local Ollama backend; do not route
+  those requests through FreeLLMAPI's chat model.
+
+## Operator shell environment and Manul
+
+The operator's existing `~/.zshrc` is the single source of truth for exported
+shell settings used by interactive tools and unattended Manul tasks. Keep
+`PATH`, OpenCode binary/config selection, provider variables and tool paths
+there. Do not duplicate them in `~/.zshenv`, `~/.bashrc` or
+`~/.manul/.env`.
+
+Manul's installed Zsh integration is sourced from `~/.zshrc`. Interactive
+commands inherit that environment directly. Direct and unattended entrypoints,
+including cron/watchdog and the daemon, use the canonical
+`manul-zsh-bootstrap.sh` helper, which runs `zsh -ic` to load the same
+`~/.zshrc` before executing the Bash runtime. The readiness marker prevents
+nested Zsh shells for already initialized interactive commands.
+
+`~/.manul/.env` is not a second shell/provider configuration. It is reserved
+for Manul-specific integration fallbacks such as the dedicated Manul Fiteo
+credential. The Manul installer removes obsolete provider paths/configuration
+and provider API keys from that file. Shell-exported values always win.
+
+A service-specific environment file may still supply credentials to the
+service process that owns them (for example, LiteLLM's private service
+environment). It must not be used as an alternative PATH or Manul shell
+configuration. Any provider value required by unattended Manul workers must
+also be available in the Zsh environment loaded by `zsh -ic`.
 
 ## Detection Policy
 
@@ -125,7 +175,7 @@ Use the same LiteLLM and OpenCode model configuration on every device. Each devi
 **Command**
 
 ```bash
-sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip python3-venv
+sudo apt update && sudo apt upgrade -y && sudo apt install -y curl git jq unzip build-essential python3-pip python3-venv zsh
 
 ```
 
@@ -142,7 +192,7 @@ python3 --version
 
 ```bash
 curl -o- [https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh](https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh) | bash
-source ~/.bashrc
+source ~/.zshrc
 nvm install --lts
 nvm use --lts
 
@@ -183,28 +233,49 @@ litellm --help
 
 ## Step 5 — Configure LiteLLM
 
-Create `~/litellm/free-cloud`:
+Export the LiteLLM service credentials in the operator's existing
+`~/.zshrc` (do not create a second environment file containing duplicate
+values):
 
 ```bash
-LITELLM_MASTER_KEY=<generate-a-long-random-key>
-FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+export LITELLM_MASTER_KEY=<generate-a-long-random-key>
+export FREELLMAPI_API_KEY=<your-FreeLLMAPI-unified-key>
+
+# Keep this only when the operator OpenCode config uses providers.opencode.
+export OPENCODE_API_KEY=<your-OpenCode-Console-key>
 ```
 
-Protect it:
+`OPENCODE_API_KEY` is OpenCode Console authentication, not an OpenCode Go
+selector. Keep the operator's `providers.opencode` section and its
+`{env:OPENCODE_API_KEY}` reference intact when that provider is configured.
 
-```bash
-chmod 600 ~/litellm/free-cloud
-```
+After editing `~/.zshrc`, load the updated exports into the current terminal
+with `source ~/.zshrc`. Manul's unattended bootstrap loads the same file itself.
 
-Create `~/litellm/free-cloud`. This is the complete configuration; do not append other models or aliases:
+The `aicode` launcher starts LiteLLM as a child process and passes these
+exports through. Keep the existing shell file private and never print these
+values. A separately managed systemd service would need its own service
+environment, but that is not the local aicode-managed setup described here.
+
+Create or update `~/litellm/config.yaml` with the following model entries.
+The chat group is `free-cloud`; the local embedding alias is optional and
+must only be enabled when Caracal uses Ollama embeddings:
 
 ```yaml
 model_list:
+  # The only chat-completion model group.
   - model_name: free-cloud
     litellm_params:
       model: openai/auto
       api_base: http://127.0.0.1:3001/v1
       api_key: os.environ/FREELLMAPI_API_KEY
+
+  # Caracal-only embeddings alias; not a chat model or fallback.
+  - model_name: multilingual-e5-base
+    litellm_params:
+      model: ollama/qllama/multilingual-e5-base
+      api_base: http://localhost:11434
+      api_key: ollama-local
 
 litellm_settings:
   drop_params: true
@@ -222,17 +293,19 @@ general_settings:
   database_url: "postgresql://litellm:litellm@127.0.0.1:5432/litellm"
 ```
 
-Do not add `router_settings`, fallbacks, `completion_model`, or `default_embedding_models`. Caracal embeddings are configured separately, not in this chat-model list.
+Do not add `router_settings.fallbacks`, `completion_model`, or other chat
+groups. The `multilingual-e5-base` entry is the sole purpose-specific
+embedding alias and must not be exposed as a chat model.
 
-Load the environment into the LiteLLM service process. Reload the existing service using its normal service manager; do not start a second proxy process.
+Load the service credentials into the LiteLLM process and reload the existing
+service using its normal service manager; do not start a second proxy process.
+Caracal's embedding client must select `multilingual-e5-base` through the
+LiteLLM embeddings endpoint, while chat clients continue to select only
+`free-cloud`.
 
 **Healthchecks**
 
 ```bash
-set -a
-source ~/litellm/free-cloud
-set +a
-
 curl -fsS http://127.0.0.1:3001/v1/models \
   -H "Authorization: Bearer $FREELLMAPI_API_KEY"
 
@@ -240,7 +313,12 @@ curl -fsS http://127.0.0.1:4000/v1/models \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 ```
 
-The LiteLLM response must contain exactly one model ID: `free-cloud`. Then send one chat-completion request with `model: free-cloud`. If it fails, inspect FreeLLMAPI and LiteLLM logs; do not add fallback providers.
+Verify a successful chat completion with `model: free-cloud`. If Caracal's
+embedding alias is enabled, verify an embedding request with
+`model: multilingual-e5-base` and confirm it reaches local Ollama. LiteLLM
+may list both configured IDs; the invariant is exactly one chat model group,
+not exactly one model ID across chat and embeddings. If chat fails, inspect
+FreeLLMAPI/LiteLLM logs; do not add chat fallbacks.
 
 ### Multi-device
 
@@ -251,16 +329,19 @@ Repeat the same setup on each device. Use `127.0.0.1:3001` only when FreeLLMAPI 
 The environment ships with shared skills (`~/.globalskills/skills`) and OpenCode agents (`~/.globalskills/agents`). OpenCode only reads agents from `~/.config/opencode/agents/`, so they must be symlinked — `install.sh` does this automatically. This must run on **every** machine (Desktop and Laptop) before configuring OpenCode.
 
 ```bash
-# Clone or update the globalskills repo
+# Existing installation: update the source and all managed native skill/agent copies.
 if [ -d ~/.globalskills ]; then
-  git -C ~/.globalskills pull --ff-only
+  if command -v globalskills >/dev/null 2>&1; then
+    globalskills update
+  else
+    git -C ~/.globalskills pull --ff-only
+    bash ~/.globalskills/install.sh
+  fi
 else
   git clone git@github.com:mariuszmarzec/globalskills.git ~/.globalskills \
     || git clone https://github.com/mariuszmarzec/globalskills.git ~/.globalskills
+  bash ~/.globalskills/install.sh
 fi
-
-# Install native skill and agent copies for OpenCode and GitHub Copilot
-bash ~/.globalskills/install.sh
 ```
 
 **Healthcheck:**
@@ -271,6 +352,12 @@ test -e ~/.agents/skills/wsl-ai-dev-autopilot-multi-device/SKILL.md && echo "ski
 ```
 
 *If SSH fails on a fresh machine (no key deployed), fall back to the HTTPS clone URL shown above.*
+
+Globalskills and the standalone Manul runtime are updated independently. On an
+existing Manul installation, run `manul --update` after `globalskills update`
+to update the daemon, adapters and Manul environment bootstrap from the
+standalone `mariuszmarzec/manul` repository. No manual runtime symlink edits
+or direct installer invocation are required.
 
 
 ## Step 7 — Install and configure Caracal RAG
@@ -297,8 +384,12 @@ fi
 
 cd "$CARACAL_REPO"
 bash ./install.sh
-export PATH="$HOME/.caracal/bin:$PATH"
 ```
+
+The operator's existing `~/.zshrc` remains the only persistent PATH
+configuration. Invoke the Caracal CLI by its explicit path
+(`~/.caracal/bin/caracal-rag`) in setup commands, or add its directory once
+to that existing PATH if interactive convenience is required.
 
 Configure Caracal interactively so credentials are entered into hidden prompts, not shell history or process arguments:
 
@@ -306,7 +397,16 @@ Configure Caracal interactively so credentials are entered into hidden prompts, 
 "$HOME/.caracal/bin/caracal-rag" setup
 ```
 
-During setup, select an embedding family that is actually enabled in the FreeLLMAPI deployment under **Models → Embeddings**; do not guess a model or use `auto`. The key and access token are stored in `~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm `~/.caracal/config/sources.yaml` points to the intended FreeLLMAPI base URL, Chroma host/port/collection, and includes both knowledge sources:
+For this environment, Caracal embeddings use the local LiteLLM alias
+`multilingual-e5-base`, which routes to Ollama's
+`qllama/multilingual-e5-base` model on port `11434`. Configure Caracal's
+embedding client to call the local LiteLLM OpenAI-compatible endpoint on
+`127.0.0.1:4000/v1` with model `multilingual-e5-base`. Do not select
+FreeLLMAPI's cloud embedding catalogue or `auto` for this local route. The
+Caracal key and MCP access token are stored in
+`~/.caracal/config/secrets.yaml` with restrictive permissions. Confirm
+`~/.caracal/config/sources.yaml` points to the intended embedding endpoint,
+Chroma host/port/collection, and includes both knowledge sources:
 
 - `fiteo-docs` — API Markdown documents from `mariuszmarzec/fiteo/docs/api/` on `master`.
 - `quickmvi-readme` — `https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md`, covering QuickMVI library usage at README level.
@@ -319,7 +419,12 @@ The installer preserves an existing `sources.yaml`; updating `config/sources.exa
     url: https://raw.githubusercontent.com/mariuszmarzec/QuickMVI/develop/README.md
 ```
 
-Defaults in the template are FreeLLMAPI at `http://127.0.0.1:3001/v1`, Chroma at `127.0.0.1:3400`, and MCP at `127.0.0.1:3500/mcp`; change them only when the deployment really uses different endpoints. The Caracal embedding endpoint is independent from LiteLLM's chat-model routing.
+Defaults in the template include FreeLLMAPI at `http://127.0.0.1:3001/v1`,
+LiteLLM at `http://127.0.0.1:4000/v1`, Ollama at
+`http://127.0.0.1:11434`, Chroma at `127.0.0.1:3400`, and MCP at
+`127.0.0.1:3500/mcp`; change them only when the deployment really uses
+different endpoints. Caracal embeddings use the separate LiteLLM
+`multilingual-e5-base` alias; chat continues to use `free-cloud`.
 
 ```bash
 "$HOME/.caracal/bin/caracal-rag" check
@@ -335,7 +440,10 @@ The authenticated MCP server is launched by `aicode` in the background after Oll
 
 ## Step 8 — Configure OpenCode
 
-Use `litellm/free-cloud` for both main and small requests. Merge the following settings into the existing `~/.config/opencode/opencode.json`; do not replace existing MCP servers, permissions, or unrelated settings.
+Use `litellm/free-cloud` for both main and small chat requests. Merge the
+following settings into the existing `~/.config/opencode/opencode.json`; do not
+replace existing MCP servers, permissions, provider authentication or
+unrelated settings.
 
 ```json
 {
@@ -370,7 +478,19 @@ Use `litellm/free-cloud` for both main and small requests. Merge the following s
 }
 ```
 
-Keep only the `free-cloud` entry under the LiteLLM provider. Remove stale model aliases and direct chat providers from this model configuration. Preserve existing Caracal, Fiteo, and Todo MCP servers and permissions.
+The OpenCode selectable model ID is `litellm/free-cloud`: the provider key is
+`litellm`, the configured model key is `free-cloud`, and its upstream
+`modelID` is `free-cloud`. These identifiers have different purposes.
+Do not rename the model key to an unrelated alias such as `big-pickle`.
+
+Keep only the `free-cloud` chat entry under the LiteLLM provider. Remove stale
+chat aliases and direct chat routes, but preserve the separate LiteLLM
+`multilingual-e5-base` embedding alias for Caracal. Preserve existing Caracal,
+Fiteo and Todo MCP servers, permissions and unrelated provider authentication.
+Do not remove `providers.opencode` or `OPENCODE_API_KEY` as a workaround for
+an OpenCode Go subscription message: OpenCode Console authentication and the
+OpenCode Go provider are distinct. Diagnose the explicitly selected model and
+effective config instead.
 
 **Healthcheck:** run a short OpenCode task that invokes a tool and verify it completes through `litellm/free-cloud`. If the FreeLLMAPI auto pool cannot handle tool calls, fix that pool; do not add another LiteLLM model.
 
@@ -445,9 +565,9 @@ The maintained launcher is `~/.globalskills/aicode/aicode`; `install.sh` links i
 On each startup, `aicode` waits for the Ollama HTTP API, starts LiteLLM next, then starts/reuses Chroma and launches its authenticated Caracal HTTP MCP in the background. It does not wait for `caracal-rag check`, embedding warmup, or the OpenCode MCP connection before continuing with Manul and OpenCode; a short `opencode mcp list` probe is diagnostic only. The operator-owned OpenCode JSON/JSONC config must already contain the static V2 entry `mcp.servers["caracal-rag"]` with the hardcoded loopback URL `http://127.0.0.1:3500/mcp` and the `{env:CARACAL_ACCESS_TOKEN}` bearer-token placeholder. Keep this Caracal entry intact during updates and migrations; do not replace its URL with `{env:CARACAL_MCP_URL}`. `aicode` never generates, migrates, backs up, or rewrites that config. It points OpenClaw's ACPX `opencode` harness at `~/.globalskills/aicode/opencode-acp-caracal.sh` and sets `plugins.entries.acpx.config.probeAgent: "opencode"` so ACPX startup healthchecks validate this exact harness. Before each ACP session, the wrapper resolves the current local endpoint/token, exports `CARACAL_MCP_URL`, `CARACAL_ACCESS_TOKEN` and `OPENCODE_CONFIG`, and requires `opencode mcp list` to report Caracal connected before it executes `opencode acp`; this is an execution-time tool prerequisite, not an `aicode` startup gate. Manul's direct OpenCode adapter performs the same provider refresh for task processes started by a long-running daemon. This keeps credentials on the process that actually owns Caracal tools and avoids duplicating Caracal as a native OpenClaw MCP server. The ACPX plugin must already be enabled. A delayed or unavailable Caracal service is logged but does not prevent the general startup sequence; Caracal-dependent tool calls become available when its MCP is ready. Todo Desktop MCP remains optional: a missing/unconnected Todo server never blocks a session. The launcher reuses a healthy Caracal process only when the PID file and command line prove it owns that process; it will not kill an unrelated process or send credentials to an unverified endpoint. See `/tmp/caracal-mcp.log` for startup errors.
 
 ```bash
-bash ~/.globalskills/install.sh
-grep -qF "alias aicode='~/.aicode/aicode'" ~/.bashrc || echo "alias aicode='~/.aicode/aicode'" >> ~/.bashrc
-source ~/.bashrc
+globalskills update
+grep -qF "alias aicode='~/.aicode/aicode'" ~/.zshrc || echo "alias aicode='~/.aicode/aicode'" >> ~/.zshrc
+source ~/.zshrc
 aicode
 ```
 
@@ -458,11 +578,19 @@ FreeLLMAPI is the only upstream used by LiteLLM for chat completions.
 
 1. Run FreeLLMAPI locally and bind it to loopback (`127.0.0.1:3001`).
 2. Configure the upstream provider pool and unified API key inside the FreeLLMAPI dashboard.
-3. Store the unified key only in `~/litellm/free-cloud` as `FREELLMAPI_API_KEY`.
-4. Configure exactly one LiteLLM model group: `free-cloud`, with `model: openai/auto`.
-5. Configure OpenCode, OpenClaw, and Manul to request `litellm/free-cloud`.
+3. Export the unified key as `FREELLMAPI_API_KEY` in the operator's existing `~/.zshrc`.
+4. Configure the only LiteLLM chat group: `free-cloud`, with
+   `model: openai/auto`.
+5. Configure OpenCode, OpenClaw and Manul to request
+   `litellm/free-cloud`.
+6. When Caracal uses local embeddings, preserve the separate
+   `multilingual-e5-base` embedding alias routed to Ollama.
 
-The FreeLLMAPI catalogue may contain multiple upstream models; this does not mean LiteLLM should expose multiple model groups. Keep LiteLLM's `model_list` limited to `free-cloud`.
+The FreeLLMAPI catalogue may contain multiple upstream models; this does not
+mean LiteLLM should expose multiple chat groups. LiteLLM's `model_list` may
+contain the one `free-cloud` chat group plus the purpose-specific
+`multilingual-e5-base` embedding entry. Do not add more chat model groups or
+fallback chains.
 
 
 # Final Validation
@@ -470,13 +598,16 @@ The FreeLLMAPI catalogue may contain multiple upstream models; this does not mea
 Verify:
 
 - FreeLLMAPI responds at its loopback `/v1/models` endpoint.
-- LiteLLM responds on port 4000 and `/v1/models` contains exactly one model group: `free-cloud`.
+- LiteLLM responds on port 4000; `free-cloud` is the only chat model group.
+- When enabled for Caracal, `multilingual-e5-base` is present as a separate
+  embedding-only alias and a test embedding request reaches Ollama.
 - A chat completion succeeds through LiteLLM with `model: free-cloud`.
 - OpenCode uses `litellm/free-cloud` for main and small model.
 - Every generated Globalskills OpenCode agent uses `litellm/free-cloud`.
 - OpenClaw's default model is `litellm/free-cloud` and a test turn succeeds.
 - Manul role execution uses the same single model route; no role may request an old alias.
-- No fallback chain, direct LiteLLM provider, local model group, or OpenCode Zen model is required.
+- No chat fallback chain, direct LiteLLM chat provider, extra chat group or
+  OpenCode Zen model is required.
 - PostgreSQL/LiteLLM database health is verified when `database_url` is configured.
 - Caracal `check` and source indexing succeed; authenticated MCP responds on loopback.
 - `opencode mcp list` reports Caracal connected when launched through `aicode`.
@@ -486,4 +617,8 @@ Verify:
 
 Only then report:
 
-> Installation completed successfully. LiteLLM exposes only `free-cloud`, backed by FreeLLMAPI `openai/auto`. OpenCode, OpenClaw, and every Globalskills agent use `litellm/free-cloud`. Caracal RAG is configured separately for embeddings and MCP access.
+> Installation completed successfully. LiteLLM exposes one chat group,
+> `free-cloud`, backed by FreeLLMAPI `openai/auto`. OpenCode, OpenClaw and
+> every Globalskills agent use `litellm/free-cloud`. When enabled, Caracal
+> uses the separate `multilingual-e5-base` LiteLLM embedding alias backed by
+> local Ollama, plus its authenticated MCP service.

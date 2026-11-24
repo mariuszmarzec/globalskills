@@ -21,8 +21,15 @@ contains() {
 bash -n "$AICODE" || fail "aicode shell syntax"
 bash -n "$READINESS_HELPER" || fail "OpenCode MCP readiness helper shell syntax"
 bash -n "$ACP_WRAPPER" || fail "OpenCode ACP wrapper shell syntax"
+bash -n "$ROOT/aicode/environment-fallback.sh" || fail "shared environment fallback helper shell syntax"
+bash -n "$ROOT/aicode/test_environment_fallback.sh" || fail "environment fallback regression test shell syntax"
 bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
+bash "$ROOT/aicode/test_environment_fallback.sh"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
+if grep -Eq '^[[:space:]]*export[[:space:]]+PATH=' "$AICODE" "$ACP_WRAPPER"; then
+  fail "aicode and ACP must inherit the operator's PATH instead of maintaining another PATH list"
+fi
+ok "aicode and ACP inherit the operator's configured PATH"
 ok "Caracal runtime scripts have valid shell syntax"
 
 # Ollama starts first and must be reachable before LiteLLM starts.

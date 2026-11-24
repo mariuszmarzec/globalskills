@@ -12,15 +12,17 @@
 set -euo pipefail
 umask 077
 
-export PATH="$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-
-OPENCODE_ENV="$HOME/.config/opencode/opencode.env"
-if [ -f "$OPENCODE_ENV" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "$OPENCODE_ENV" >/dev/null
-    set +a
+# Inherit PATH and shell/provider settings from the operator's Zsh session.
+# Do not create a second PATH or overwrite exported settings with env-file copies.
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FALLBACK_HELPER="$SCRIPT_DIR/environment-fallback.sh"
+if [ ! -r "$ENV_FALLBACK_HELPER" ]; then
+    echo "opencode-acp-caracal: environment fallback helper is missing" >&2
+    exit 1
 fi
+# shellcheck source=aicode/environment-fallback.sh
+. "$ENV_FALLBACK_HELPER"
+aicode_load_environment_fallback "$HOME/.config/opencode/opencode.env"
 
 # A long-lived OpenClaw Gateway may have an older environment than the current
 # aicode launch. Refresh only Fiteo's pair from Manul's mode-600 runtime file,
