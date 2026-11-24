@@ -9,7 +9,11 @@ description: Configure the single FreeLLMAPI-backed LiteLLM chat group free-clou
 
 Keep one chat-completion route for local clients:
 
-`OpenCode / OpenClaw / Manul → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
+`OpenCode / OpenClaw → LiteLLM :4000 → FreeLLMAPI :3001/v1 → openai/auto`
+
+Manul is the task orchestrator, not a separate model client. It uses the
+selected runtime's configuration; for OpenCode tasks, model selection remains
+in the operator-owned OpenCode config and selected agent.
 
 The only LiteLLM chat model group is `free-cloud`. Do not add chat aliases,
 per-role model groups, direct chat providers, or fallback chains. FreeLLMAPI may
@@ -68,13 +72,15 @@ second place to configure the interactive shell or PATH.
 
 For shell-wide settings consumed by interactive clients and unattended Manul
 workers, the existing `~/.zshrc` is the single source of truth. Do not
-duplicate PATH/provider settings in `~/.zshenv`, `~/.bashrc`,
-`~/.manul/.env` or multiple shell startup files. The Manul installer installs
-its Zsh integration; direct and unattended Manul entrypoints load the same
-`~/.zshrc` through `manul-zsh-bootstrap.sh` (`zsh -ic`) before running
-their Bash scripts. Manul's `~/.manul/.env` is reserved for Manul-specific
-integration fallbacks, not PATH, provider configuration, provider API keys or
-OpenCode configuration.
+duplicate PATH/provider settings in `~/.zshenv`, `~/.bashrc` or multiple
+shell startup files. The Manul installer installs its Zsh integration; direct
+and unattended Manul entrypoints load the same `~/.zshrc` through
+`manul-zsh-bootstrap.sh` (`zsh -ic`) before running their Bash scripts.
+
+Manul's mode-600 `~/.manul/.env` may contain Manul-specific integration
+fallbacks and the non-secret `OPENCODE_CONFIG` file path for unattended runs.
+A value exported by `~/.zshrc` takes precedence. Do not put provider API keys,
+model choices or copied OpenCode configuration in the fallback file.
 
 ## LiteLLM configuration
 
