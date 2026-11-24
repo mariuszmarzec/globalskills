@@ -13,10 +13,12 @@ route:
 
 `OpenCode / OpenClaw / Manul → LiteLLM → FreeLLMAPI → openai/auto`
 
-LiteLLM exposes exactly one chat model group: `free-cloud`. Every client and
-every Globalskills role requests `litellm/free-cloud`. Do not create chat
-aliases, per-role chat model groups, direct chat provider routes or fallback
-chains.
+LiteLLM exposes exactly one chat model group: `free-cloud`. OpenCode and its
+generated agent roles select it through the catalog ID `litellm/freeLLMAPI`;
+OpenClaw selects it as `litellm/free-cloud`. Manul does not override model
+selection and uses the operator's OpenCode `model` and `small_model`. Do not
+create chat aliases, per-role chat model groups, direct chat provider routes
+or fallback chains.
 
 Caracal RAG uses a separate, embedding-only alias in the same LiteLLM service:
 `multilingual-e5-base → Ollama → qllama/multilingual-e5-base`. This alias is
@@ -65,8 +67,11 @@ Caracal MCP :3500 ──> Chroma
 - When Caracal's local embedding route is enabled, LiteLLM also has the
   embedding-only `multilingual-e5-base` alias backed by Ollama; it is never
   used for chat.
-- OpenCode uses `litellm/free-cloud` for both its main and small model.
-- OpenClaw and Manul use only `litellm/free-cloud`.
+- OpenCode uses `litellm/freeLLMAPI` for both `model` and `small_model`.
+- Every generated Globalskills OpenCode agent role uses
+  `litellm/freeLLMAPI`.
+- OpenClaw keeps `litellm/free-cloud`; Manul does not pass a model override
+  and inherits the operator's OpenCode model configuration.
 - No additional LiteLLM chat groups, chat aliases, direct chat providers or
   fallback routes are configured. The separate `multilingual-e5-base`
   embedding-only alias is allowed only for Caracal/Ollama.
@@ -109,8 +114,9 @@ Exact bash commands or WAITING.
 
 - The only LiteLLM chat model group is `free-cloud`, backed by FreeLLMAPI
   `openai/auto`.
-- OpenCode, OpenClaw, Manul and every generated role agent use
-  `litellm/free-cloud`.
+- OpenCode and every generated OpenCode role use `litellm/freeLLMAPI`.
+- OpenClaw keeps `litellm/free-cloud`; Manul does not inject a model
+  selector and inherits the operator's OpenCode `model` / `small_model`.
 - Do not add chat aliases such as `big-pickle` or
   `deepseek-v4-flash-free`.
 - Do not add direct Groq, Cerebras, Gemini, Mistral, OpenRouter or OpenCode Zen
@@ -440,7 +446,7 @@ The authenticated MCP server is launched by `aicode` in the background after Oll
 
 ## Step 8 — Configure OpenCode
 
-Use `litellm/free-cloud` for both main and small chat requests. Merge the
+Use `litellm/freeLLMAPI` for both main and small chat requests. Merge the
 following settings into the existing `~/.config/opencode/opencode.json`; do not
 replace existing MCP servers, permissions, provider authentication or
 unrelated settings.
@@ -448,8 +454,8 @@ unrelated settings.
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "litellm/free-cloud",
-  "small_model": "litellm/free-cloud",
+  "model": "litellm/freeLLMAPI",
+  "small_model": "litellm/freeLLMAPI",
   "default_agent": "orchestrator",
   "skills": {
     "paths": ["~/.agents/skills"]
@@ -463,7 +469,7 @@ unrelated settings.
         "apiKey": "{env:LITELLM_MASTER_KEY}"
       },
       "models": {
-        "free-cloud": {
+        "freeLLMAPI": {
           "modelID": "free-cloud",
           "name": "FreeLLMAPI auto (via LiteLLM)",
           "capabilities": {
@@ -478,10 +484,12 @@ unrelated settings.
 }
 ```
 
-The OpenCode selectable model ID is `litellm/free-cloud`: the provider key is
-`litellm`, the configured model key is `free-cloud`, and its upstream
-`modelID` is `free-cloud`. These identifiers have different purposes.
-Do not rename the model key to an unrelated alias such as `big-pickle`.
+The OpenCode selectable model ID is `litellm/freeLLMAPI`: the provider key is
+`litellm`, the configured model key is `freeLLMAPI`, and its upstream
+`modelID` remains `free-cloud`. These identifiers have different purposes:
+OpenCode selects the catalog key, while LiteLLM receives the upstream ID.
+Keep the LiteLLM chat group named `free-cloud`; do not rename it or add
+another chat group.
 
 Keep only the `free-cloud` chat entry under the LiteLLM provider. Remove stale
 chat aliases and direct chat routes, but preserve the separate LiteLLM
@@ -492,7 +500,7 @@ an OpenCode Go subscription message: OpenCode Console authentication and the
 OpenCode Go provider are distinct. Diagnose the explicitly selected model and
 effective config instead.
 
-**Healthcheck:** run a short OpenCode task that invokes a tool and verify it completes through `litellm/free-cloud`. If the FreeLLMAPI auto pool cannot handle tool calls, fix that pool; do not add another LiteLLM model.
+**Healthcheck:** run a short OpenCode task that invokes a tool and verify it completes through `litellm/freeLLMAPI`. If the FreeLLMAPI auto pool cannot handle tool calls, fix that pool; do not add another LiteLLM model.
 
 
 ## Step 9 — Install & Configure OpenClaw
@@ -581,8 +589,10 @@ FreeLLMAPI is the only upstream used by LiteLLM for chat completions.
 3. Export the unified key as `FREELLMAPI_API_KEY` in the operator's existing `~/.zshrc`.
 4. Configure the only LiteLLM chat group: `free-cloud`, with
    `model: openai/auto`.
-5. Configure OpenCode, OpenClaw and Manul to request
-   `litellm/free-cloud`.
+5. Configure OpenCode's `model` and `small_model`, and every generated
+   OpenCode agent, to select `litellm/freeLLMAPI`. Keep OpenClaw's default
+   selector as `litellm/free-cloud`. Manul must not pass `--model`; its
+   OpenCode task workers inherit the operator's OpenCode configuration.
 6. When Caracal uses local embeddings, preserve the separate
    `multilingual-e5-base` embedding alias routed to Ollama.
 
@@ -602,10 +612,11 @@ Verify:
 - When enabled for Caracal, `multilingual-e5-base` is present as a separate
   embedding-only alias and a test embedding request reaches Ollama.
 - A chat completion succeeds through LiteLLM with `model: free-cloud`.
-- OpenCode uses `litellm/free-cloud` for main and small model.
-- Every generated Globalskills OpenCode agent uses `litellm/free-cloud`.
-- OpenClaw's default model is `litellm/free-cloud` and a test turn succeeds.
-- Manul role execution uses the same single model route; no role may request an old alias.
+- OpenCode uses `litellm/freeLLMAPI` for both `model` and `small_model`.
+- Every generated Globalskills OpenCode agent uses `litellm/freeLLMAPI`.
+- OpenClaw's default model remains `litellm/free-cloud` and a test turn succeeds.
+- Manul's OpenCode adapter does not pass `--model`; task workers inherit the
+  operator's configured `model` and `small_model`.
 - No chat fallback chain, direct LiteLLM chat provider, extra chat group or
   OpenCode Zen model is required.
 - PostgreSQL/LiteLLM database health is verified when `database_url` is configured.
@@ -618,7 +629,9 @@ Verify:
 Only then report:
 
 > Installation completed successfully. LiteLLM exposes one chat group,
-> `free-cloud`, backed by FreeLLMAPI `openai/auto`. OpenCode, OpenClaw and
-> every Globalskills agent use `litellm/free-cloud`. When enabled, Caracal
+> `free-cloud`, backed by FreeLLMAPI `openai/auto`. OpenCode and its
+> Globalskills agent profiles use `litellm/freeLLMAPI`; OpenClaw keeps
+> `litellm/free-cloud`, and Manul inherits the operator's OpenCode model
+> configuration. When enabled, Caracal
 > uses the separate `multilingual-e5-base` LiteLLM embedding alias backed by
 > local Ollama, plus its authenticated MCP service.
