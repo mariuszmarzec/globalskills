@@ -1,0 +1,13 @@
+commit 0c241ff03770859fe0f9451d0cea5e9a96883d9c
+Author:     Benchmark User <benchmark@example.invalid>
+AuthorDate: Wed Nov 25 20:49:14 2026 +0100
+Commit:     Benchmark User <benchmark@example.invalid>
+CommitDate: Wed Nov 25 20:49:14 2026 +0100
+
+    benchmark: baseline
+
+ .opencode/opencode.json                   |  8 +++
+ .opencode/skills/testable-design/SKILL.md | 92 +++++++++++++++++++++++++++++++
+ registration.py                           | 19 +++++++
+ tests/test_registration.py                | 46 ++++++++++++++++
+ 4 files changed, 165 insertions(+)

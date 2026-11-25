@@ -1,0 +1,30 @@
+Now I understand the current code. I'll refactor `registration.py` to extract the pure helper `prepare_registration(data)` and add focused unit tests for it.
+Now let me add focused unit tests for `prepare_registration` in the test file:
+Now let me run the tests to verify the refactoring works correctly:
+All 9 tests pass. Let me verify the final state of both files:
+The refactoring is complete. All tests pass.
+
+```text
+Task: Refactor registration.py to extract pure helper prepare_registration(data) with focused unit tests
+
+Role:
+ coder
+
+Initial tier:
+ NORMAL
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple refactoring task: extract pure validation/normalization logic into a testable helper function, add focused unit tests, keep existing integration tests. Low complexity, low risk.
+
+Escalated:
+ NO
+
+Steps:
+ 2
+
+Result:
+ SUCCESS
+```

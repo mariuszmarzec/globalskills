@@ -1,0 +1,34 @@
+All tests pass. Now I'll refactor `invoice.py` to extract meaningful operations into clearly named helper functions while preserving the public `create_invoice` signature and all behavior.
+The refactoring is complete and all tests pass. Let me provide the final report.
+```text
+Task: Refactor invoice.py to make the main invoice flow easier to understand while preserving the public create_invoice signature and all current behavior
+
+Role:
+ coder
+
+Initial tier:
+ NORMAL
+
+Model:
+ freeLLMAPI
+
+Reason:
+ The task required extracting meaningful operations from a single function into clearly named helper functions without changing behavior or adding unnecessary complexity. This is a standard refactoring task suited for the normal coder tier.
+
+Escalated:
+ NO
+
+Steps:
+ 1. Read the existing invoice.py and test_invoice.py to understand current behavior
+ 2. Run existing tests to confirm they pass (6/6 passed)
+ 3. Refactor invoice.py by extracting four cohesive helper functions:
+    - _calculate_subtotal(items): validates items and computes line-item subtotal
+    - _calculate_discount(subtotal, discount_code): applies SAVE10/SAVE20 discount logic
+    - _calculate_taxable_amount(subtotal, discount): computes subtotal - discount, floored at 0
+    - _calculate_tax_and_total(taxable_amount, tax_rate): computes tax and total with rounding
+ 4. Updated create_invoice to be a readable orchestration of these steps
+ 5. Re-ran test suite: all 6 tests pass
+
+Result:
+ SUCCESS
+```

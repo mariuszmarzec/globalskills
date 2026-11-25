@@ -1,0 +1,19 @@
+Now I understand the current structure. Let me implement the refactoring.
+All tests pass. Let me verify the final state of both files:
+The refactoring is complete. All 10 tests pass.
+
+**Summary of changes:**
+
+1. **`registration.py`**: Extracted pure helper `prepare_registration(data)` that normalizes (strips name, strips+lowers email) and validates (non-empty name, email contains `@` not at start/end). Returns `(name, email)` tuple or raises `ValueError`. `register_user` now delegates to this helper and retains persistence + welcome email behavior.
+
+2. **`tests/test_registration.py`**: Added `PrepareRegistrationTests` class with 8 focused unit tests covering:
+   - Normalization of whitespace and case
+   - Empty/missing/whitespace-only name → `ValueError("name is required")`
+   - Email without `@`, starting with `@`, ending with `@` → `ValueError("email is invalid")`
+   - Multiple `@` allowed (existing behavior preserved)
+   - Name with only tabs/newlines → raises
+
+3. Existing `RegisterUserTests` (fake-based integration tests) unchanged and passing.
+
+No interfaces, classes, mocks, network dependencies, or test-only public APIs added. Change scoped to the two files.
+The refactoring is complete and all tests pass. The pure `prepare_registration` helper can now be tested without any database or email sender dependencies, while `register_user` retains its original behavior.

@@ -1,0 +1,49 @@
+{
+  "passed": false,
+  "mode": "with-skill",
+  "checks": [
+    {
+      "name": "valid-python",
+      "passed": true,
+      "expected": "invoice.py parses",
+      "actual": "valid",
+      "evidence": "ast.parse(invoice.py)"
+    },
+    {
+      "name": "public-api-preserved",
+      "passed": true,
+      "expected": "create_invoice(items, discount_code=None, tax_rate=0.0)",
+      "actual": "['items', 'discount_code', 'tax_rate']",
+      "evidence": "AST function signature"
+    },
+    {
+      "name": "meaningful-calculation-helpers",
+      "passed": false,
+      "expected": "subtotal, discount, and tax are named helpers without helper proliferation",
+      "actual": "_calculate_discount, _calculate_subtotal, _calculate_tax_and_total, _calculate_taxable_amount",
+      "evidence": "top-level function definitions"
+    },
+    {
+      "name": "entry-point-orchestrates-steps",
+      "passed": false,
+      "expected": "create_invoice calls named operations rather than containing the calculation loop",
+      "actual": "calculation details remain in entry point",
+      "evidence": "AST calls and control-flow inspection"
+    },
+    {
+      "name": "no-unneeded-production-types",
+      "passed": true,
+      "expected": "no classes added for this local refactor",
+      "actual": "no classes",
+      "evidence": "top-level AST class definitions"
+    },
+    {
+      "name": "existing-behavior-tests",
+      "passed": true,
+      "expected": "all existing invoice tests pass",
+      "actual": "OK",
+      "evidence": "python -m unittest discover -s tests -v"
+    }
+  ],
+  "returncode": 1
+}
