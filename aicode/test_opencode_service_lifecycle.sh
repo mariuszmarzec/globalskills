@@ -103,6 +103,15 @@ aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/n
 [ ! -s "$MOCK_RESTART_FILE" ] || fail "new service was unnecessarily restarted"
 ok "new shared service inherits aicode's current environment without a restart"
 
+# Existing healthy service must be reused; no restart or disruption.
+write_service
+printf '%s\n' connected > "$MOCK_STATE_FILE"
+: > "$MOCK_RESTART_FILE"
+aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1 ||
+  fail "healthy shared service was not reused"
+[ ! -s "$MOCK_RESTART_FILE" ] || fail "healthy shared service was unnecessarily restarted"
+ok "healthy existing shared service is reused without restart"
+
 # Existing service, disconnected MCP, no sessions/terminals/clients: restart
 # once from aicode's current shell and verify the actual MCP connection.
 reset_fixture
