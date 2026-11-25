@@ -12,6 +12,28 @@ Optimize code for the next person who has to understand, debug, review, or chang
 
 Prefer clear, direct code over cleverness, architectural ceremony, or reducing line count. Preserve behavior and public contracts that the task does not ask you to change.
 
+---
+
+### ⚠️ CRITICAL RULES FOR EXTRACTION TASKS (READ FIRST)
+
+When a task asks you to extract specific domain operations (e.g., "subtotal, discount, tax"):
+
+1. **Extract EXACTLY ONE helper per named operation** — no more, no less.
+2. **Do NOT create helpers for intermediate values** (e.g., `taxable_amount`, `running_total`) — these are single arithmetic expressions; keep them inline.
+3. **Do NOT combine distinct operations** (e.g., tax calculation + total assembly) into one helper — they are separate domain operations.
+4. **The public entry point should call ONLY the requested helpers** plus simple inline arithmetic for assembly (subtraction, addition, rounding).
+
+**Concrete anti-patterns this task commonly produces — DO NOT DO THESE:**
+- ❌ `_calculate_taxable_amount` — one-line subtraction, keep inline
+- ❌ `_calculate_tax_and_total` — combines tax + total, two operations
+- ❌ `_calculate_line_subtotal` + `_calculate_subtotal` — one operation (subtotal), don't split
+- ✅ `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
+- ✅ `total = round(taxable_amount + tax, 2)` — simple assembly stays inline
+
+If you find yourself creating a helper for a single arithmetic expression, STOP and inline it instead.
+
+---
+
 ## Working approach
 
 1. Read the surrounding code before editing. Follow established naming, formatting, module boundaries, and local conventions unless they are actively harmful to the requested change.
