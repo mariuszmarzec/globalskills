@@ -154,9 +154,10 @@ ok "unknown OpenCode state prevents service restart"
 if grep -Fq -- '--standalone' "$HELPER"; then
   fail "service lifecycle helper must never reintroduce --standalone"
 fi
-if grep -Fq 'service restart' "$ROOT/../manul/skills/manul-github-bot/opencode-adapter.sh" 2>/dev/null; then
-  fail "Manul task adapter must not restart the shared OpenCode service per task"
-fi
-ok "service restart is limited to aicode startup, never Manul task execution"
+grep -Fq 'aicode_opencode_caracal_service_ready' "$ROOT/aicode/aicode" ||
+  fail "aicode does not invoke the startup-only OpenCode lifecycle guard"
+grep -Fq 'if ! verify_opencode_caracal_config; then' "$ROOT/aicode/aicode" ||
+  fail "aicode does not fail closed when shared Caracal readiness fails"
+ok "the shared service refresh is guarded at aicode startup, not in task execution"
 
 echo "All OpenCode service lifecycle tests passed."
