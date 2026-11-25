@@ -401,7 +401,7 @@ verify_opencode_caracal_config() {
     export OPENCODE_CONFIG
     echo "Using static OpenCode config: $OPENCODE_CONFIG."
 
-    local opencode_cli mcp_output mcp_status=0 probe_timeout
+    local opencode_cli mcp_output
     if [ ! -r "$OPENCODE_CONFIG" ]; then
         echo "WARNING: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG; continuing without Caracal connectivity verification." >&2
         return 0
@@ -416,20 +416,27 @@ verify_opencode_caracal_config() {
         return 0
     fi
 
-    probe_timeout="${CARACAL_MCP_PROBE_TIMEOUT:-2}"
-    if ! [[ "$probe_timeout" =~ ^[0-9]{1,2}$ ]] || (( probe_timeout < 1 || probe_timeout > 10 )); then
-        probe_timeout=2
+    # The shared OpenCode service snapshots its environment when it starts.
+    # Refresh it here, once per aicode launch, only when Caracal is disconnected
+    # and no agent sessions, running PTYs, or connected clients would be disrupted.
+    # Manul task execution deliberately never restarts the shared service.
+    local service_lifecycle_helper="$AICODE_SOURCE_DIR/opencode-service-lifecycle.sh"
+    if [ ! -r "$service_lifecycle_helper" ]; then
+        echo "ERROR: shared OpenCode service lifecycle helper is missing: $service_lifecycle_helper" >&2
+        return 1
     fi
-    mcp_output="$(timeout "$probe_timeout" "$opencode_cli" mcp list 2>&1)" || mcp_status=$?
-    if printf '%s\n' "$mcp_output" |
-        grep -Eiq '(^|[[:space:]])caracal-rag[[:space:]]+connected([[:space:]]|$|\()'; then
-        echo "OpenCode reports caracal-rag connected; operator config left unchanged."
-    else
-        echo "WARNING: Caracal MCP is not connected yet (mcp list exit $mcp_status); continuing startup without waiting." >&2
-        if [ -n "$mcp_output" ]; then
-            printf '%s\n' "$mcp_output" | tail -n 6 >&2
-        fi
+    # shellcheck source=aicode/opencode-service-lifecycle.sh
+    . "$service_lifecycle_helper"
+    if ! aicode_opencode_caracal_service_ready "$AICODE_SOURCE_DIR" "$opencode_cli"; then
+        echo "ERROR: Caracal MCP is not ready in the shared OpenCode service; refusing to continue." >&2
+        return 1
     fi
+
+    # The lifecycle helper has already verified Caracal using the actual
+    # shared service. Reuse that exact output; do not perform a second advisory
+    # probe that could race with service startup or mask a failed connection.
+    mcp_output="${OPENCODE_MCP_LAST_OUTPUT:-}"
+    echo "OpenCode reports caracal-rag connected; operator config left unchanged."
 
     if [ "${TODO_LOCAL_MCP_AVAILABLE:-0}" = "1" ] &&
        ! printf '%s\n' "$mcp_output" |
@@ -561,7 +568,9 @@ fi
 
 ensure_caracal_mcp || echo "WARNING: Caracal MCP startup failed; continuing with Manul/OpenCode." >&2
 ensure_todo_mcp_bridge
-verify_opencode_caracal_config
+if ! verify_opencode_caracal_config; then
+    exit 1
+fi
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     # The ACP wrapper loads current Caracal credentials directly when each
     # OpenCode harness starts, so no Gateway restart is needed just to refresh them.

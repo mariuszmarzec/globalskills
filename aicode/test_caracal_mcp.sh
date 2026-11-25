@@ -25,6 +25,7 @@ bash -n "$ROOT/aicode/environment-fallback.sh" || fail "shared environment fallb
 bash -n "$ROOT/aicode/test_environment_fallback.sh" || fail "environment fallback regression test shell syntax"
 bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash "$ROOT/aicode/test_environment_fallback.sh"
+bash "$ROOT/aicode/test_opencode_service_lifecycle.sh"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 if grep -Eq '^[[:space:]]*export[[:space:]]+PATH=' "$AICODE" "$ACP_WRAPPER"; then
   fail "aicode and ACP must inherit the operator's PATH instead of maintaining another PATH list"
@@ -45,24 +46,28 @@ if grep -Fq 'OLLAMA_BASE_URL' "$AICODE" && grep -Fq 'ollama_http_ready' "$AICODE
     fail "Ollama must become ready before LiteLLM startup"
 fi
 
-# Caracal must be launched in the background without waiting for embedding or MCP readiness.
+# The Caracal daemon launch itself is asynchronous, but aicode must not
+# continue until the shared OpenCode runtime reports a real MCP connection.
 if grep -Fq '"$CARACAL_CLI" check' "$AICODE" ||
    grep -Fq 'CARACAL_CHECK_ATTEMPTS' "$AICODE" ||
    grep -Fq 'Caracal embedding healthcheck not ready' "$AICODE"; then
-  fail "aicode must not wait for the Caracal embedding healthcheck"
+  fail "aicode must not put embedding warmup into the Caracal daemon launcher"
 fi
 if grep -Fq 'opencode_wait_for_mcp_connected' "$AICODE"; then
-  fail "aicode must not wait for Caracal's OpenCode MCP connection"
+  fail "keep the shared OpenCode readiness implementation in its dedicated helper"
 fi
-contains "$AICODE" 'echo "Starting Caracal MCP at $mcp_url (non-blocking)..."' "aicode starts Caracal MCP asynchronously"
-contains "$AICODE" 'continuing without readiness wait' "Caracal startup explicitly proceeds without waiting"
-contains "$AICODE" 'timeout "$probe_timeout" "$opencode_cli" mcp list' "OpenCode performs only one bounded advisory Caracal probe"
-contains "$AICODE" 'continuing startup without waiting' "a disconnected Caracal MCP does not block startup"
+contains "$AICODE" 'echo "Starting Caracal MCP at $mcp_url (non-blocking)..."' "aicode launches the Caracal daemon asynchronously"
+contains "$AICODE" 'continuing without readiness wait' "Caracal daemon startup does not block on embedding warmup"
+contains "$AICODE" 'aicode_opencode_caracal_service_ready' "aicode verifies Caracal through the shared OpenCode runtime"
+contains "$AICODE" 'if ! verify_opencode_caracal_config; then' "aicode fails startup when shared Caracal readiness cannot be established"
+if grep -Fq 'continuing startup without waiting' "$AICODE"; then
+  fail "aicode must not continue when the required Caracal MCP is disconnected"
+fi
 caracal_fn="$(sed -n '/^ensure_caracal_mcp() {/,/^ensure_todo_mcp_bridge()/p' "$AICODE")"
 if printf '%s\n' "$caracal_fn" | grep -Eq 'sleep[[:space:]]|CARACAL_CHECK_ATTEMPTS|"$CARACAL_CLI"[[:space:]]+check'; then
-  fail "Caracal lifecycle function must not contain readiness waits or a healthcheck loop"
+  fail "Caracal daemon lifecycle must not contain embedding readiness waits or a healthcheck loop"
 fi
-ok "Ollama starts before LiteLLM and Caracal startup is non-blocking"
+ok "Caracal daemon starts asynchronously; aicode gates startup on shared MCP readiness"
 
 # Caracal is always a local service owned by aicode. A stale/inherited URL
 # must never switch startup into an external-endpoint mode or skip Chroma.
@@ -176,7 +181,9 @@ contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul migration removes 
 if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
   fail "Manul must not persist Caracal endpoint/token values"
 fi
-contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul supports its dedicated Fiteo identity for unattended tasks"
+# Manul intentionally treats its runtime .env as a generic integration
+# environment file; the OpenCode adapter owns the dedicated Fiteo key names.
+contains "$MANUL/opencode-adapter.sh" 'FITEO_MANUL_PAT' "Manul reads its dedicated Fiteo identity from the task runtime environment"
 contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes dedicated Fiteo credentials when available"
 contains "$MANUL/opencode-adapter.sh" 'optional Manul Fiteo MCP' "Manul documents the optional Fiteo MCP overlay"
 contains "$MANUL/opencode-adapter.sh" 'could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP' "Manul skips optional Fiteo injection when config cannot be inspected"
@@ -190,8 +197,8 @@ fi
 if grep -Fq 'persist the current Caracal MCP endpoint/token for Manul' "$AICODE"; then
   fail "aicode must not describe Caracal credentials as Manul-owned runtime values"
 fi
-contains "$AICODE" 'Manul environment helper deliberately removes obsolete' "aicode documents the Caracal cleanup boundary during Manul bootstrap"
-contains "$AICODE" 'could not persist supported Manul runtime environment values' "aicode reports only supported Manul bootstrap values"
+contains "$AICODE" 'Caracal remains owned by aicode/OpenCode and is never persisted as a Manul' "aicode keeps Caracal credentials outside Manul's runtime environment"
+contains "$AICODE" 'could not prepare Manul integration fallbacks' "aicode reports failures while preparing Manul integration fallbacks"
 
 # The standalone migration helper remains available for explicit migration.
 contains "$ROOT/aicode/opencode-config-v2.jq" "OpenCode's" "the standalone V2 migration helper retains readable comments"
