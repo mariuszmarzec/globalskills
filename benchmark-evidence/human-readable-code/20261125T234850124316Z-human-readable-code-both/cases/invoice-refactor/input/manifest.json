@@ -1,0 +1,7 @@
+{
+  "case_id": "invoice-refactor",
+  "skill_id": "human-readable-code",
+  "prompt_sha256": "808210f04845e76f65f58c3be4660d38eff4638b03b8788792a52c41f404ec08",
+  "verifier_sha256": "05f6c2a0ed5c23ce56bdbb783f0463d6ac92d9780d164b71fdb97c9f19d48248",
+  "skill_sha256": "66318da8f6221354435a453e352b68c8fb1a5814b67092199c6b862a50dbe984"
+}
