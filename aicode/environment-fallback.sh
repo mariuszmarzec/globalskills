@@ -4,15 +4,18 @@
 
 aicode_load_environment_fallback() {
     local env_file="${1:?environment file path required}"
+    local filtered_env_file source_status=0
     [ -f "$env_file" ] || return 0
     if ! bash -n "$env_file" >/dev/null 2>&1; then
         echo "WARNING: ignoring invalid environment fallback: $env_file" >&2
         return 0
     fi
 
-    set -a
-    # shellcheck disable=SC1090
-    . <(awk '
+    # Use a private temporary file rather than process substitution. This
+    # avoids platform-specific /dev/fd and awk pipe-close behavior (notably
+    # BSD awk on macOS) while keeping the filtered assignments non-executable.
+    filtered_env_file="$(mktemp "${TMPDIR:-/tmp}/aicode-env.XXXXXX")" || return 1
+    if ! awk '
         BEGIN {
             for (name in ENVIRON) inherited[name] = 1
         }
@@ -36,6 +39,19 @@ aicode_load_environment_fallback() {
             if (name == "" || name == "PATH" || name in inherited) next
             print
         }
-    ' "$env_file")
+    ' "$env_file" > "$filtered_env_file"; then
+        rm -f -- "$filtered_env_file"
+        return 1
+    fi
+
+    set -a
+    # shellcheck disable=SC1090
+    if . "$filtered_env_file"; then
+        source_status=0
+    else
+        source_status=$?
+    fi
     set +a
+    rm -f -- "$filtered_env_file"
+    return "$source_status"
 }
