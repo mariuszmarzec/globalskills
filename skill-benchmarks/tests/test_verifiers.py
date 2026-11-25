@@ -541,6 +541,8 @@ def _calculate_subtotal(items):
 def _calculate_discount(subtotal, discount_code):
     if discount_code == "SAVE10":
         return subtotal * 0.10
+    if discount_code == "SAVE20" and subtotal >= 100.0:
+        return subtotal * 0.20
     return 0.0
 
 def _calculate_tax(taxable_amount, tax_rate):
@@ -561,9 +563,18 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
 """
 
     def assert_additional_helper_is_rejected(self, extra_helper: str) -> None:
+        baseline = self.run_verifier(self.VALID_SOURCE)
+        self.assertTrue(baseline["passed"], f"Baseline fixture should pass every verifier check: {baseline}")
+
         result = self.run_verifier(self.VALID_SOURCE + "\n\n" + extra_helper)
-        check = next(c for c in result["checks"] if c["name"] == "meaningful-calculation-helpers")
-        self.assertFalse(check["passed"], f"Expected exactly three helpers, got: {check}")
+        checks = {check["name"]: check for check in result["checks"]}
+        self.assertFalse(
+            checks["meaningful-calculation-helpers"]["passed"],
+            f"Expected exact helper cardinality to reject {extra_helper!r}: {checks['meaningful-calculation-helpers']}",
+        )
+        for name, check in checks.items():
+            if name != "meaningful-calculation-helpers":
+                self.assertTrue(check["passed"], f"Unexpected unrelated verifier failure for {name}: {check}")
 
     def test_duplicate_subtotal_helper_fails(self):
         self.assert_additional_helper_is_rejected(
@@ -583,6 +594,11 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
     def test_unrelated_private_helper_fails(self):
         self.assert_additional_helper_is_rejected(
             "def _format_invoice_note(value):\n    return str(value)"
+        )
+    
+    def test_duplicate_definition_with_same_name_fails(self):
+        self.assert_additional_helper_is_rejected(
+            "def _calculate_tax(taxable_amount, tax_rate):\n    return round(taxable_amount * tax_rate, 2)"
         )
 
 
