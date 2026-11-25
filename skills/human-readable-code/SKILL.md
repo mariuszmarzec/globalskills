@@ -20,6 +20,8 @@ Prefer clear, direct code over cleverness, architectural ceremony, or reducing l
 4. Keep the change scoped. Do not use a small task as an excuse to reorganize neighboring code.
 5. Verify behavior with relevant existing tests and add focused tests when the change needs them.
 
+**For extraction tasks:** When the task names specific domain operations to extract (e.g., "subtotal, discount, tax"), extract EXACTLY ONE helper per named operation. Do not create additional helpers for intermediate values, sub-steps of a single operation, or derived calculations. The public entry point should call ONLY the requested helpers plus simple inline arithmetic for assembly.
+
 ## Functions: small, cohesive, meaningful
 
 Prefer functions with one coherent responsibility and a name that communicates the operation.
@@ -41,6 +43,7 @@ Prefer one helper per cohesive domain operation. Extract helpers for the meaning
 **Anti-patterns to avoid for this task:**
 - ❌ Creating `_calculate_taxable_amount` — this is a one-line subtraction, keep it inline in the caller
 - ❌ Creating `_calculate_tax_and_total` — this combines tax calculation with total assembly, two distinct operations
+- ❌ Splitting the subtotal loop into `_calculate_line_subtotal` + `_calculate_subtotal` — the validation and summationsummation are ONE cohesive domain operation (calculating the subtotal)
 - ✅ Creating `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
 - ✅ Keeping `total = round(taxable_amount + tax, 2)` inline in the orchestrator — simple assembly
 
@@ -106,6 +109,8 @@ Before finishing, ask:
 - Did I avoid arbitrary line-count rules and unnecessary forwarding wrappers?
 - Did I extract helpers for the meaningful domain operations the task requests?
 - Did I avoid creating helpers for intermediate arithmetic or derived values that lack independent domain meaning?
+- **Did I create EXACTLY ONE helper per explicitly requested domain operation (no more, no less)?**
+- **Did I keep simple assembly arithmetic (subtraction, addition, rounding) inline in the orchestrator?**
 - Did I follow the task's requested extraction boundaries without adding extra helpers?
 - Did I introduce any abstraction that costs more than it simplifies?
 - Are similar-looking pieces actually the same rule, or merely coincidental duplication?
