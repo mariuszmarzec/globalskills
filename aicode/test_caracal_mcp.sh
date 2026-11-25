@@ -197,7 +197,7 @@ fi
 if grep -Fq 'persist the current Caracal MCP endpoint/token for Manul' "$AICODE"; then
   fail "aicode must not describe Caracal credentials as Manul-owned runtime values"
 fi
-contains "$AICODE" 'Manul environment helper deliberately removes obsolete' "aicode documents the Caracal cleanup boundary during Manul bootstrap"
+contains "$AICODE" 'Caracal remains owned by aicode/OpenCode and is never persisted as a Manul' "aicode keeps Caracal credentials outside Manul's runtime environment"
 contains "$AICODE" 'could not persist supported Manul runtime environment values' "aicode reports only supported Manul bootstrap values"
 
 # The standalone migration helper remains available for explicit migration.
