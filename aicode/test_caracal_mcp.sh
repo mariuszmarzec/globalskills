@@ -181,7 +181,9 @@ contains "$MANUL/manul-env.sh" 'CARACAL_ACCESS_TOKEN=' "Manul migration removes 
 if grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$MANUL/manul-env.sh"; then
   fail "Manul must not persist Caracal endpoint/token values"
 fi
-contains "$MANUL/manul-env.sh" 'FITEO_MANUL_PAT' "Manul supports its dedicated Fiteo identity for unattended tasks"
+# Manul intentionally treats its runtime .env as a generic integration
+# environment file; the OpenCode adapter owns the dedicated Fiteo key names.
+contains "$MANUL/opencode-adapter.sh" 'FITEO_MANUL_PAT' "Manul reads its dedicated Fiteo identity from the task runtime environment"
 contains "$MANUL/opencode-adapter.sh" '_FITEO_RUNTIME_ENV_FILE' "Manul refreshes dedicated Fiteo credentials when available"
 contains "$MANUL/opencode-adapter.sh" 'optional Manul Fiteo MCP' "Manul documents the optional Fiteo MCP overlay"
 contains "$MANUL/opencode-adapter.sh" 'could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP' "Manul skips optional Fiteo injection when config cannot be inspected"
