@@ -25,6 +25,7 @@ bash -n "$ROOT/aicode/environment-fallback.sh" || fail "shared environment fallb
 bash -n "$ROOT/aicode/test_environment_fallback.sh" || fail "environment fallback regression test shell syntax"
 bash -n "$MANUL/opencode-adapter.sh" || fail "OpenCode adapter shell syntax"
 bash "$ROOT/aicode/test_environment_fallback.sh"
+bash "$ROOT/aicode/test_opencode_service_lifecycle.sh"
 bash -n "$MANUL/manul-env.sh" || fail "Manul env helper shell syntax"
 if grep -Eq '^[[:space:]]*export[[:space:]]+PATH=' "$AICODE" "$ACP_WRAPPER"; then
   fail "aicode and ACP must inherit the operator's PATH instead of maintaining another PATH list"
