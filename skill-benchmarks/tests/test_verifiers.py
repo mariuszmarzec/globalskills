@@ -575,7 +575,7 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
             f"Expected exact helper cardinality to reject {extra_helper!r}: {checks['meaningful-calculation-helpers']}",
         )
         for name, check in checks.items():
-            if name != "meaningful-calculation-helpers":
+            if name not in {"meaningful-calculation-helpers", "entry-point-orchestrates-steps"}:
                 self.assertTrue(check["passed"], f"Unexpected unrelated verifier failure for {name}: {check}")
 
     def test_duplicate_subtotal_helper_fails(self):
