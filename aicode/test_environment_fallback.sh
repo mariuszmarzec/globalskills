@@ -24,17 +24,17 @@ LITELLM_MASTER_KEY=legacy-litellm-key
 FALLBACK_INTEGRATION_VALUE='loaded from private fallback'
 ENV
 
-result="$(
-  PATH="$TMP/operator-bin:/usr/bin:/bin" \
-  OPENCODE_API_KEY="console-key-from-zshrc" \
-  LITELLM_MASTER_KEY="litellm-key-from-zshrc" \
-  bash -c '
-    set -euo pipefail
-    . "$1"
-    aicode_load_environment_fallback "$2"
-    printf "%s\n%s\n%s\n%s\n" "$PATH" "$OPENCODE_API_KEY" "$LITELLM_MASTER_KEY" "$FALLBACK_INTEGRATION_VALUE"
-  ' _ "$HELPER" "$TMP/legacy.env"
-)"
+result_file="$TMP/operator-result.txt"
+PATH="$TMP/operator-bin:/usr/bin:/bin" \
+OPENCODE_API_KEY="console-key-from-zshrc" \
+LITELLM_MASTER_KEY="litellm-key-from-zshrc" \
+bash -c '
+  set -euo pipefail
+  . "$1"
+  aicode_load_environment_fallback "$2"
+  printf "%s\n%s\n%s\n%s\n" "$PATH" "$OPENCODE_API_KEY" "$LITELLM_MASTER_KEY" "$FALLBACK_INTEGRATION_VALUE"
+' _ "$HELPER" "$TMP/legacy.env" > "$result_file"
+result="$(cat "$result_file")"
 expected="$TMP/operator-bin:/usr/bin:/bin
 console-key-from-zshrc
 litellm-key-from-zshrc
@@ -42,15 +42,15 @@ loaded from private fallback"
 [ "$result" = "$expected" ] || fail "Zsh exports or PATH were overwritten by a fallback file"
 ok "Zsh PATH and provider credentials win over legacy fallback values"
 
-fallback_only="$(
-  env -u OPENCODE_API_KEY -u LITELLM_MASTER_KEY \
-    PATH="$PATH" bash -c '
-      set -euo pipefail
-      . "$1"
-      aicode_load_environment_fallback "$2"
-      printf "%s\n%s\n%s\n" "$OPENCODE_API_KEY" "$LITELLM_MASTER_KEY" "$FALLBACK_INTEGRATION_VALUE"
-    ' _ "$HELPER" "$TMP/legacy.env"
-)"
+fallback_result_file="$TMP/fallback-only-result.txt"
+env -u OPENCODE_API_KEY -u LITELLM_MASTER_KEY \
+  PATH="$PATH" bash -c '
+    set -euo pipefail
+    . "$1"
+    aicode_load_environment_fallback "$2"
+    printf "%s\n%s\n%s\n" "$OPENCODE_API_KEY" "$LITELLM_MASTER_KEY" "$FALLBACK_INTEGRATION_VALUE"
+  ' _ "$HELPER" "$TMP/legacy.env" > "$fallback_result_file"
+fallback_only="$(cat "$fallback_result_file")"
 expected_fallback="legacy-console-key
 legacy-litellm-key
 loaded from private fallback"
