@@ -171,6 +171,23 @@ aicode_opencode_caracal_service_ready() {
         return 1
     fi
 
+    # Agent activity is global to the service. Check it before inspecting
+    # location-scoped PTYs; never restart underneath a running agent session.
+    active_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/session/active" 8 2>/dev/null)" || {
+        echo "ERROR: cannot inspect active OpenCode sessions; refusing to restart the shared service." >&2
+        return 1
+    }
+    if ! jq -e '.data | type == "object"' >/dev/null 2>&1 <<<"$active_json"; then
+        echo "ERROR: OpenCode returned an invalid active-session response; refusing to restart the shared service." >&2
+        return 1
+    fi
+    active_count="$(jq -r '.data | length' <<<"$active_json")" || return 1
+    if [ "$active_count" -gt 0 ]; then
+        echo "ERROR: OpenCode has $active_count active agent session(s); refusing to restart the shared service." >&2
+        echo "Finish those sessions, then rerun aicode to refresh Caracal's environment." >&2
+        return 1
+    fi
+
     # A restart is only allowed after proving the shared server is idle.
     # Enumerate every saved project and registered worktree because PTYs are
     # location-scoped and service restart tears down all server-owned PTYs.
