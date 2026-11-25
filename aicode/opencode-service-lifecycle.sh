@@ -27,6 +27,81 @@ aicode_opencode_registered_service_pid() {
     esac
 }
 
+# Resolve the executable that is actually running the registered shared service.
+# On Linux/WSL /proc/<pid>/exe is authoritative and resolves symlinks. On macOS,
+# use the service's argv[0], with lsof as a fallback. Never guess via PATH here:
+# PATH may point at an unrelated wrapper with the same command name.
+aicode_opencode_registered_service_executable() {
+    local pid="${1:-}" proc_root proc_exe executable="" command_line=""
+
+    if [ -z "$pid" ]; then
+        pid="$(aicode_opencode_registered_service_pid)" || return 1
+    fi
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+
+    proc_root="${AICODE_OPENCODE_PROC_ROOT:-/proc}"
+    proc_exe="$proc_root/$pid/exe"
+    if [ -L "$proc_exe" ]; then
+        executable="$(readlink "$proc_exe" 2>/dev/null || true)"
+    fi
+
+    if [ -z "$executable" ] || [ ! -x "$executable" ]; then
+        command_line="$(ps -p "$pid" -o args= 2>/dev/null)" || command_line=""
+        if [ -n "$command_line" ]; then
+            executable="$(printf '%s' "$command_line" | python3 -c '
+import shlex
+import sys
+try:
+    arguments = shlex.split(sys.stdin.read())
+except ValueError:
+    raise SystemExit(1)
+if not arguments:
+    raise SystemExit(1)
+print(arguments[0])
+' 2>/dev/null || true)"
+        fi
+    fi
+
+    # Some platforms expose only a process name in argv[0]. lsof can resolve
+    # the executable image without consulting the current shell's PATH.
+    if [ -z "$executable" ] || [[ "$executable" != /* ]] || [ ! -x "$executable" ]; then
+        if command -v lsof >/dev/null 2>&1; then
+            executable="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null |
+                awk 'substr($0, 1, 2) == "n/" { print substr($0, 2); exit }')"
+        fi
+    fi
+
+    if [[ "$executable" != /* ]] || [ ! -x "$executable" ]; then
+        echo "ERROR: cannot resolve the executable for shared OpenCode PID $pid without guessing from PATH." >&2
+        return 1
+    fi
+    printf '%s' "$executable"
+}
+
+# OPENCODE_BIN is an explicit operator override. Otherwise, reuse the exact
+# executable that owns the registered service; consult PATH only for first start.
+aicode_opencode_resolve_cli() {
+    local service_pid executable
+
+    if [ -n "${OPENCODE_BIN:-}" ]; then
+        if [ ! -x "$OPENCODE_BIN" ]; then
+            echo "ERROR: OPENCODE_BIN is set but is not executable: $OPENCODE_BIN" >&2
+            return 2
+        fi
+        printf '%s' "$OPENCODE_BIN"
+        return 0
+    fi
+
+    service_pid="$(aicode_opencode_registered_service_pid 2>/dev/null || true)"
+    if [ -n "$service_pid" ]; then
+        executable="$(aicode_opencode_registered_service_executable "$service_pid")" || return 2
+        printf '%s' "$executable"
+        return 0
+    fi
+
+    command -v opencode 2>/dev/null
+}
+
 aicode_opencode_api_get() {
     local source_dir="$1"
     local opencode_cli="$2"
