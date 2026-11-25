@@ -42,17 +42,16 @@ def main() -> int:
     add("public-api-preserved", signature_ok, "create_invoice(items, discount_code=None, tax_rate=0.0)", str([arg.arg for arg in public.args.args]) if public else "missing", "AST function signature")
 
     # Semantic helper check: recognize separate subtotal, discount, tax helpers
-    # Accept sensible naming variants (e.g., _calculate_line_item_subtotal)
+    # Accept sensible naming variants with or without underscore prefix (e.g., _calculate_subtotal or calculate_subtotal)
     # Reject combined tax+total helper and intermediate taxable_amount helper
-    subtotal_helpers = [name for name in functions if name.startswith("_") and ("subtotal" in name or "line_item" in name)]
-    discount_helpers = [name for name in functions if name.startswith("_") and "discount" in name]
-    taxable_amount_helpers = [name for name in functions if name.startswith("_") and "taxable" in name]
-    tax_and_total_helpers = [name for name in functions if name.startswith("_") and "tax" in name and "total" in name]
-    # Tax helpers must have "tax" in name but NOT "total" and NOT "taxable"
-    tax_helpers = [name for name in functions if name.startswith("_") and "tax" in name and "total" not in name and "taxable" not in name]
+    helper_names = [name for name in functions if name != "create_invoice"]
+    subtotal_helpers = [name for name in helper_names if "subtotal" in name or "line_item" in name]
+    discount_helpers = [name for name in helper_names if "discount" in name]
+    taxable_amount_helpers = [name for name in helper_names if "taxable" in name]
+    tax_and_total_helpers = [name for name in helper_names if "tax" in name and "total" in name]
+    tax_helpers = [name for name in helper_names if "tax" in name and "total" not in name and "taxable" not in name]
 
-    all_private_helpers = [name for name in functions if name.startswith("_")]
-    helper_count = len(all_private_helpers)
+    helper_count = len(helper_names)
 
     has_subtotal = len(subtotal_helpers) >= 1
     has_discount = len(discount_helpers) >= 1
@@ -61,20 +60,20 @@ def main() -> int:
     has_tax_and_total = len(tax_and_total_helpers) >= 1
 
     helpers_ok = has_subtotal and has_discount and has_tax and not has_taxable_amount and not has_tax_and_total and helper_count <= 4
-    actual_helpers = ", ".join(sorted(all_private_helpers)) or "no private helpers"
+    actual_helpers = ", ".join(sorted(helper_names)) or "no private helpers"
     expected_msg = "separate subtotal, discount, tax helpers; no taxable_amount or tax_and_total helper; <=4 total"
     add("meaningful-calculation-helpers", helpers_ok, expected_msg, actual_helpers, "top-level function definitions (semantic match)")
 
-    # Orchestration: public entry point calls all three recognized operations and contains no calculation loop
+    # Orchestration: public entry point calls subtotal, discount, and tax (not tax_and_total) helpers and contains no calculation loop
     orchestration_ok = False
     if public is not None:
         called = {node.func.id for node in ast.walk(public) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
         has_loop = any(isinstance(node, (ast.For, ast.AsyncFor, ast.While)) for node in ast.walk(public))
-        # Check that it calls at least one helper for each domain operation
+        # Check that it calls subtotal, discount, and pure tax helper (disallowing tax_and_total for orchestration if we want pure tax)
         calls_subtotal = any(h in called for h in subtotal_helpers)
         calls_discount = any(h in called for h in discount_helpers)
-        calls_tax = any(h in called for h in tax_helpers)
-        orchestration_ok = calls_subtotal and calls_discount and calls_tax and not has_loop
+        calls_pure_tax = any(h in called for h in tax_helpers)
+        orchestration_ok = calls_subtotal and calls_discount and calls_pure_tax and not has_loop
     add("entry-point-orchestrates-steps", orchestration_ok, "create_invoice calls subtotal, discount, tax helpers and contains no calculation loop", "orchestration extracted" if orchestration_ok else "calculation details remain in entry point or missing helper calls", "AST calls and control-flow inspection")
 
     no_classes = not any(isinstance(node, ast.ClassDef) for node in tree.body)
