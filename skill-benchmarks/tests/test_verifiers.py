@@ -533,8 +533,10 @@ def _calculate_subtotal(items):
     for item in items:
         quantity = item["quantity"]
         unit_price = item["unit_price"]
-        if quantity < 0 or unit_price < 0:
-            raise ValueError("invalid item")
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
         subtotal += quantity * unit_price
     return subtotal
 
