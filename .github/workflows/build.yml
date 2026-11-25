@@ -32,6 +32,35 @@ env:
     installer/test_globalskills.sh
 
 jobs:
+  verify-aicode-caracal-lifecycle:
+    name: Verify aicode shared OpenCode / Caracal lifecycle
+    runs-on: ubuntu-latest
+    env:
+      MANUL_CANONICAL_ROOT: ${{ github.workspace }}/manul-repo
+      MANUL_CANONICAL_DIR: ${{ github.workspace }}/manul-repo/skills/manul-github-bot
+      MANUL_CANONICAL_BRANCH: master
+    steps:
+      - name: Checkout globalskills
+        uses: actions/checkout@v4
+      - name: Checkout standalone Manul runtime
+        uses: actions/checkout@v4
+        with:
+          repository: mariuszmarzec/manul
+          ref: master
+          path: manul-repo
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq sqlite3 util-linux gh
+      - name: Run Caracal and shared OpenCode lifecycle regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n aicode/aicode
+          bash -n aicode/opencode-service-lifecycle.sh
+          bash -n aicode/test_opencode_service_lifecycle.sh
+          bash aicode/test_caracal_mcp.sh
+
   verify-macos:
     name: Verify native macOS Manul and aicode integration
     runs-on: macos-latest
