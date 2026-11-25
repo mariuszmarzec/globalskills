@@ -41,41 +41,70 @@ def main() -> int:
         signature_ok = positional == ["items", "discount_code", "tax_rate"] and len(public.args.defaults) == 2
     add("public-api-preserved", signature_ok, "create_invoice(items, discount_code=None, tax_rate=0.0)", str([arg.arg for arg in public.args.args]) if public else "missing", "AST function signature")
 
-    # Semantic helper check: recognize separate subtotal, discount, tax helpers
-    # Accept sensible naming variants (e.g., _calculate_line_item_subtotal)
-    # Reject combined tax+total helper and intermediate taxable_amount helper
-    subtotal_helpers = [name for name in functions if name.startswith("_") and ("subtotal" in name or "line_item" in name)]
-    discount_helpers = [name for name in functions if name.startswith("_") and "discount" in name]
-    taxable_amount_helpers = [name for name in functions if name.startswith("_") and "taxable" in name]
-    tax_and_total_helpers = [name for name in functions if name.startswith("_") and "tax" in name and "total" in name]
-    # Tax helpers must have "tax" in name but NOT "total" and NOT "taxable"
-    tax_helpers = [name for name in functions if name.startswith("_") and "tax" in name and "total" not in name and "taxable" not in name]
+    # Identify private helpers by responsibility (function names starting with "_").
+    # Preserve semantic naming variants (e.g., _calculate_line_item_subtotal for subtotal).
+    helper_names = [
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name != "create_invoice"
+        and node.name.startswith("_")
+    ]
+    subtotal_helpers = [name for name in helper_names if "subtotal" in name]
+    discount_helpers = [name for name in helper_names if "discount" in name]
+    taxable_amount_helpers = [name for name in helper_names if "taxable" in name]
+    tax_and_total_helpers = [name for name in helper_names if "tax" in name and "total" in name]
+    tax_helpers = [
+        name for name in helper_names
+        if "tax" in name and "total" not in name and "taxable" not in name
+    ]
 
-    all_private_helpers = [name for name in functions if name.startswith("_")]
-    helper_count = len(all_private_helpers)
+    # Requirements: exactly one helper per operation category, no duplicates, no extra helpers, no forbidden helpers
+    category_helpers = subtotal_helpers + discount_helpers + tax_helpers
+    categories_are_distinct = len(category_helpers) == 3 and len(set(category_helpers)) == 3
+    exactly_one_per_operation = (
+        len(subtotal_helpers) == 1
+        and len(discount_helpers) == 1
+        and len(tax_helpers) == 1
+        and categories_are_distinct
+    )
+    no_additional_helpers = len(helper_names) == 3 and set(helper_names) == set(category_helpers)
+    no_forbidden_helpers = not taxable_amount_helpers and not tax_and_total_helpers
+    helpers_ok = exactly_one_per_operation and no_additional_helpers and no_forbidden_helpers
 
-    has_subtotal = len(subtotal_helpers) >= 1
-    has_discount = len(discount_helpers) >= 1
-    has_tax = len(tax_helpers) >= 1
-    has_taxable_amount = len(taxable_amount_helpers) >= 1
-    has_tax_and_total = len(tax_and_total_helpers) >= 1
+    actual_helpers = ", ".join(sorted(helper_names)) or "no calculation helpers"
+    expected_msg = "exactly one private helper for subtotal, discount and tax, with no duplicate or additional helper"
+    add(
+        "meaningful-calculation-helpers",
+        helpers_ok,
+        expected_msg,
+        actual_helpers,
+        "private top-level function definitions classified by domain responsibility"
+    )
 
-    helpers_ok = has_subtotal and has_discount and has_tax and not has_taxable_amount and not has_tax_and_total and helper_count <= 4
-    actual_helpers = ", ".join(sorted(all_private_helpers)) or "no private helpers"
-    expected_msg = "separate subtotal, discount, tax helpers; no taxable_amount or tax_and_total helper; <=4 total"
-    add("meaningful-calculation-helpers", helpers_ok, expected_msg, actual_helpers, "top-level function definitions (semantic match)")
-
-    # Orchestration: public entry point calls all three recognized operations and contains no calculation loop
+    # The public entry point must call those unique helpers and contain no calculation loop.
     orchestration_ok = False
-    if public is not None:
-        called = {node.func.id for node in ast.walk(public) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-        has_loop = any(isinstance(node, (ast.For, ast.AsyncFor, ast.While)) for node in ast.walk(public))
-        # Check that it calls at least one helper for each domain operation
-        calls_subtotal = any(h in called for h in subtotal_helpers)
-        calls_discount = any(h in called for h in discount_helpers)
-        calls_tax = any(h in called for h in tax_helpers)
-        orchestration_ok = calls_subtotal and calls_discount and calls_tax and not has_loop
-    add("entry-point-orchestrates-steps", orchestration_ok, "create_invoice calls subtotal, discount, tax helpers and contains no calculation loop", "orchestration extracted" if orchestration_ok else "calculation details remain in entry point or missing helper calls", "AST calls and control-flow inspection")
+    if public is not None and exactly_one_per_operation:
+        called = {
+            node.func.id for node in ast.walk(public)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        has_loop = any(
+            isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+            for node in ast.walk(public)
+        )
+        orchestration_ok = (
+            subtotal_helpers[0] in called
+            and discount_helpers[0] in called
+            and tax_helpers[0] in called
+            and not has_loop
+        )
+    add(
+        "entry-point-orchestrates-steps",
+        orchestration_ok,
+        "create_invoice calls the private subtotal, discount and tax helpers and contains no calculation loop",
+        "orchestration extracted" if orchestration_ok else "expected helper calls or loop-free orchestration missing",
+        "AST calls and control-flow inspection"
+    )
 
     no_classes = not any(isinstance(node, ast.ClassDef) for node in tree.body)
     add("no-unneeded-production-types", no_classes, "no classes added for this local refactor", "no classes" if no_classes else "class declaration found", "top-level AST class definitions")

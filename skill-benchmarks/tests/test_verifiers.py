@@ -260,6 +260,58 @@ class RegisterUserTests(unittest.TestCase):
         self.assertFalse(check["passed"], f"Expected fail, got: {check}")
         self.assertEqual(check["actual"], "no direct helper tests")
 
+    def test_nested_function_call_does_not_count_as_direct_call(self):
+        """Helper called only inside a nested function within a test method -> FAIL (should not count)."""
+        source = """
+def prepare_registration(data):
+    name = data.get("name", "").strip()
+    email = data.get("email", "").strip().lower()
+    if not name:
+        raise ValueError("name is required")
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise ValueError("email is invalid")
+    return {"name": name, "email": email}
+
+def register_user(data, database, mailer):
+    prepared = prepare_registration(data)
+    user = {"name": prepared["name"], "email": prepared["email"]}
+    database.insert(user)
+    mailer.send_welcome(prepared["email"])
+    return user
+"""
+        tests = """
+import unittest
+from registration import prepare_registration, register_user
+
+class FakeDatabase:
+    def __init__(self):
+        self.users = []
+    def insert(self, user):
+        self.users.append(user)
+
+class FakeMailer:
+    def __init__(self):
+        self.sent_to = []
+    def send_welcome(self, email):
+        self.sent_to.append(email)
+
+class TestPrepareRegistration(unittest.TestCase):
+    def test_calls_via_nested_function(self):
+        # The test method itself does NOT directly call prepare_registration
+        # Instead it calls a nested function which calls prepare_registration
+        def inner():
+            prepare_registration({"name": "Ada", "email": "ada@example.com"})
+        inner()
+
+    def test_another_test_no_direct_call(self):
+        user = register_user({"name": "Ada", "email": "ada@example.com"}, FakeDatabase(), FakeMailer())
+        self.assertEqual("Ada", user["name"])
+"""
+        result = self.run_verifier(source, tests)
+        check = next(c for c in result["checks"] if c["name"] == "direct-helper-tests")
+        self.assertFalse(check["passed"], f"Expected fail (nested call should not count), got: {check}")
+        self.assertEqual(check["actual"], "no direct helper tests")
+
 
 class HumanReadableCodeVerifierTests(unittest.TestCase):
     """Regression tests for the human-readable-code invoice-refactor verifier."""
@@ -492,6 +544,263 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
             if check["name"] == "meaningful-calculation-helpers":
                 self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
                 self.assertIn("taxable_amount", check["actual"])
+
+    def test_duplicate_subtotal_helper_fails(self):
+        """Duplicate subtotal helper -> FAIL."""
+        source = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_line_subtotal(items):
+    return _calculate_subtotal(items)
+
+def _calculate_discount(subtotal, discount_code):
+    discount = 0.0
+    if discount_code is not None:
+        if discount_code == "SAVE10":
+            discount = subtotal * 0.10
+        elif discount_code == "SAVE20" and subtotal >= 100.0:
+            discount = subtotal * 0.20
+    return discount
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+        result = self.run_verifier(source)
+        for check in result["checks"]:
+            if check["name"] == "meaningful-calculation-helpers":
+                self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
+                self.assertIn("line_subtotal", check["actual"])
+                self.assertIn("subtotal", check["actual"])
+
+    def test_duplicate_discount_helper_fails(self):
+        """Duplicate discount helper -> FAIL."""
+        source = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_discount(subtotal, discount_code):
+    discount = 0.0
+    if discount_code is not None:
+        if discount_code == "SAVE10":
+            discount = subtotal * 0.10
+        elif discount_code == "SAVE20" and subtotal >= 100.0:
+            discount = subtotal * 0.20
+    return discount
+
+def _calculate_discount_v2(subtotal, discount_code):
+    return _calculate_discount(subtotal, discount_code)
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+        result = self.run_verifier(source)
+        for check in result["checks"]:
+            if check["name"] == "meaningful-calculation-helpers":
+                self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
+                self.assertIn("discount_v2", check["actual"])
+                self.assertIn("discount", check["actual"])
+
+    def test_duplicate_tax_helper_fails(self):
+        """Duplicate tax helper -> FAIL."""
+        source = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_discount(subtotal, discount_code):
+    discount = 0.0
+    if discount_code is not None:
+        if discount_code == "SAVE10":
+            discount = subtotal * 0.10
+        elif discount_code == "SAVE20" and subtotal >= 100.0:
+            discount = subtotal * 0.20
+    return discount
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def _calculate_tax_v2(taxable_amount, tax_rate):
+    return _calculate_tax(taxable_amount, tax_rate)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+        result = self.run_verifier(source)
+        for check in result["checks"]:
+            if check["name"] == "meaningful-calculation-helpers":
+                self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
+                self.assertIn("tax_v2", check["actual"])
+                self.assertIn("tax", check["actual"])
+
+    def test_unrelated_private_helper_fails(self):
+        """Unrelated extra private helper -> FAIL."""
+        source = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_discount(subtotal, discount_code):
+    discount = 0.0
+    if discount_code is not None:
+        if discount_code == "SAVE10":
+            discount = subtotal * 0.10
+        elif discount_code == "SAVE20" and subtotal >= 100.0:
+            discount = subtotal * 0.20
+    return discount
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def _unrelated_helper():
+    return "unrelated"
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+        result = self.run_verifier(source)
+        for check in result["checks"]:
+            if check["name"] == "meaningful-calculation-helpers":
+                self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
+                self.assertIn("unrelated", check["actual"])
+
+    def test_duplicate_definition_with_same_name_fails(self):
+        """Duplicate definition with same name -> FAIL (AST keeps last, but list has duplicate)."""
+        source = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0:
+            raise ValueError("quantity cannot be negative")
+        if unit_price < 0:
+            raise ValueError("unit_price cannot be negative")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_discount(subtotal, discount_code):
+    discount = 0.0
+    if discount_code is not None:
+        if discount_code == "SAVE10":
+            discount = subtotal * 0.10
+        elif discount_code == "SAVE20" and subtotal >= 100.0:
+            discount = subtotal * 0.20
+    return discount
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+        result = self.run_verifier(source)
+        for check in result["checks"]:
+            if check["name"] == "meaningful-calculation-helpers":
+                self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
 
 
 if __name__ == "__main__":

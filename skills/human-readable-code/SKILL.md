@@ -36,16 +36,16 @@ Extract a function when it does at least one meaningful job:
 
 Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
 
-**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create helpers for intermediate values like `_calculate_taxable_amount` or `_calculate_total` when they are one-line derivations.
+**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create helpers for intermediate values when they are one-line derivations.
 
-**Do not combine separately requested or domain-distinct operations into a single helper** merely because their calculations are adjacent (e.g., tax calculation vs. assembling the final total). Each distinct domain operation deserves its own helper.
+**Do not combine separately requested or domain-distinct operations into a single helper** merely because their calculations are adjacent. Each distinct domain operation deserves its own helper.
 
 **Anti-patterns to avoid for this task:**
-- ❌ Creating `_calculate_taxable_amount` — this is a one-line subtraction, keep it inline in the caller
-- ❌ Creating `_calculate_tax_and_total` — this combines tax calculation with total assembly, two distinct operations
-- ❌ Splitting the subtotal loop into `_calculate_line_subtotal` + `_calculate_subtotal` — the validation and summationsummation are ONE cohesive domain operation (calculating the subtotal)
-- ✅ Creating `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
-- ✅ Keeping `total = round(taxable_amount + tax, 2)` inline in the orchestrator — simple assembly
+- ❌ Creating a helper for a one-line subtraction (e.g., taxable amount = subtotal - discount) — keep it inline in the caller
+- ❌ Creating a combined tax-and-total helper — this merges two distinct operations (calculating tax, then assembling total)
+- ❌ Splitting a cohesive operation into multiple helpers — the operation itself defines one boundary
+- ✅ Creating a helper for the pure tax calculation
+- ✅ Keeping the final assembly arithmetic inline in the orchestrator
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
