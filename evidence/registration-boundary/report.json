@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "selector": "registration-boundary",
+    "requested_mode": "with-skill",
+    "model": null,
+    "config": "config.json",
+    "started_at": "2026-11-25T22:58:43.502280+00:00",
+    "finished_at": "2026-11-25T23:03:19.569014+00:00"
+  },
+  "summary": {
+    "runs": 1,
+    "passed_runs": 1,
+    "failed_runs": 0,
+    "cases": 1,
+    "skills": 1
+  },
+  "evaluation": {
+    "target_mode": "with-skill",
+    "runs": 1,
+    "passed_runs": 1,
+    "failed_runs": 0,
+    "passed": true,
+    "note": null
+  },
+  "impact": {
+    "cases_compared": 0,
+    "skill_helped": 0,
+    "skill_harmed": 0,
+    "case_passes_without_skill": 0,
+    "case_fails_with_and_without_skill": 0,
+    "comparison_unavailable": 1
+  },
+  "comparisons": [
+    {
+      "case": "registration-boundary",
+      "comparison_available": false,
+      "reason": "Run with --mode both to compare skill impact."
+    }
+  ],
+  "results": [
+    {
+      "case": "registration-boundary",
+      "skill": "testable-design",
+      "mode": "with-skill",
+      "adapter": "opencode",
+      "model": null,
+      "timeout_seconds": 600,
+      "agent_returncode": 0,
+      "agent_duration_seconds": 276.267,
+      "duration_seconds": 276.376,
+      "passed": true,
+      "verifier": {
+        "passed": true,
+        "mode": "with-skill",
+        "checks": [
+          {
+            "name": "valid-python",
+            "passed": true,
+            "expected": "production and test files parse",
+            "actual": "valid",
+            "evidence": "ast.parse(registration.py, test_registration.py)"
+          },
+          {
+            "name": "explicit-pure-policy-helper",
+            "passed": true,
+            "expected": "prepare_registration(data) and register_user(data, database, mailer) exist",
+            "actual": "prepare_registration, register_user",
+            "evidence": "top-level function definitions"
+          },
+          {
+            "name": "validation-independent-of-effects",
+            "passed": true,
+            "expected": "prepare_registration has no persistence, mail, time, filesystem, or output effects",
+            "actual": "no external-effect references",
+            "evidence": "AST inspection of prepare_registration"
+          },
+          {
+            "name": "entry-point-orchestrates-boundaries",
+            "passed": true,
+            "expected": "register_user uses prepare_registration, then persists and sends welcome email",
+            "actual": "delegation present",
+            "evidence": "AST calls and collaborator operations"
+          },
+          {
+            "name": "direct-helper-tests",
+            "passed": true,
+            "expected": "at least two distinct test functions directly call prepare_registration",
+            "actual": "test_lowercase_email, test_normalizes_name_and_email, test_raises_value_error_for_email_ending_with_at, test_raises_value_error_for_email_starting_with_at, test_raises_value_error_for_empty_email, test_raises_value_error_for_empty_name, test_raises_value_error_for_invalid_email_no_at, test_raises_value_error_for_missing_email_key, test_raises_value_error_for_missing_name_key, test_raises_value_error_for_whitespace_only_email, test_raises_value_error_for_whitespace_only_name, test_strips_whitespace_from_name",
+            "evidence": "AST inspection of test_* function bodies for direct Call(Name('prepare_registration'))"
+          },
+          {
+            "name": "no-mock-heavy-test-setup",
+            "passed": true,
+            "expected": "use lightweight fakes rather than mocks",
+            "actual": "no mock framework usage",
+            "evidence": "test source scan"
+          },
+          {
+            "name": "registration-tests",
+            "passed": true,
+            "expected": "all registration tests pass",
+            "actual": "OK",
+            "evidence": "python -m unittest discover -s tests -v"
+          }
+        ],
+        "returncode": 0
+      },
+      "command": [
+        "opencode",
+        "run",
+        "--auto",
+        "Refactor registration.py so input normalization and registration validation can be tested without a database or email sender. Keep the public register_user(data, database, mailer) function and its current behavior. Extract a pure helper named prepare_registration(data) that returns the normalized name and email, or raises ValueError for invalid input. Keep persistence and the welcome message in register_user.\n\nAdd tests covering normalized input and invalid email/name cases. Keep the existing lightweight fake-based integration tests. Do not add interfaces, classes, mocks, network dependencies, or test-only public APIs. Run the tests and keep the change scoped to registration.py and tests/test_registration.py."
+      ],
+      "artifact_dir": "cases/registration-boundary/with-skill"
+    }
+  ]
+}
