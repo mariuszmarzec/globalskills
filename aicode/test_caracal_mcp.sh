@@ -46,24 +46,28 @@ if grep -Fq 'OLLAMA_BASE_URL' "$AICODE" && grep -Fq 'ollama_http_ready' "$AICODE
     fail "Ollama must become ready before LiteLLM startup"
 fi
 
-# Caracal must be launched in the background without waiting for embedding or MCP readiness.
+# The Caracal daemon launch itself is asynchronous, but aicode must not
+# continue until the shared OpenCode runtime reports a real MCP connection.
 if grep -Fq '"$CARACAL_CLI" check' "$AICODE" ||
    grep -Fq 'CARACAL_CHECK_ATTEMPTS' "$AICODE" ||
    grep -Fq 'Caracal embedding healthcheck not ready' "$AICODE"; then
-  fail "aicode must not wait for the Caracal embedding healthcheck"
+  fail "aicode must not put embedding warmup into the Caracal daemon launcher"
 fi
 if grep -Fq 'opencode_wait_for_mcp_connected' "$AICODE"; then
-  fail "aicode must not wait for Caracal's OpenCode MCP connection"
+  fail "keep the shared OpenCode readiness implementation in its dedicated helper"
 fi
-contains "$AICODE" 'echo "Starting Caracal MCP at $mcp_url (non-blocking)..."' "aicode starts Caracal MCP asynchronously"
-contains "$AICODE" 'continuing without readiness wait' "Caracal startup explicitly proceeds without waiting"
-contains "$AICODE" 'timeout "$probe_timeout" "$opencode_cli" mcp list' "OpenCode performs only one bounded advisory Caracal probe"
-contains "$AICODE" 'continuing startup without waiting' "a disconnected Caracal MCP does not block startup"
+contains "$AICODE" 'echo "Starting Caracal MCP at $mcp_url (non-blocking)..."' "aicode launches the Caracal daemon asynchronously"
+contains "$AICODE" 'continuing without readiness wait' "Caracal daemon startup does not block on embedding warmup"
+contains "$AICODE" 'aicode_opencode_caracal_service_ready' "aicode verifies Caracal through the shared OpenCode runtime"
+contains "$AICODE" 'if ! verify_opencode_caracal_config; then' "aicode fails startup when shared Caracal readiness cannot be established"
+if grep -Fq 'continuing startup without waiting' "$AICODE"; then
+  fail "aicode must not continue when the required Caracal MCP is disconnected"
+fi
 caracal_fn="$(sed -n '/^ensure_caracal_mcp() {/,/^ensure_todo_mcp_bridge()/p' "$AICODE")"
 if printf '%s\n' "$caracal_fn" | grep -Eq 'sleep[[:space:]]|CARACAL_CHECK_ATTEMPTS|"$CARACAL_CLI"[[:space:]]+check'; then
-  fail "Caracal lifecycle function must not contain readiness waits or a healthcheck loop"
+  fail "Caracal daemon lifecycle must not contain embedding readiness waits or a healthcheck loop"
 fi
-ok "Ollama starts before LiteLLM and Caracal startup is non-blocking"
+ok "Caracal daemon starts asynchronously; aicode gates startup on shared MCP readiness"
 
 # Caracal is always a local service owned by aicode. A stale/inherited URL
 # must never switch startup into an external-endpoint mode or skip Chroma.
