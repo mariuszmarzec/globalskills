@@ -22,7 +22,9 @@ export AICODE_OPENCODE_SERVICE_INFO_FILE="$TMP/state/service.json"
 export MOCK_STATE_FILE="$TMP/state/mcp-state"
 export MOCK_RESTART_FILE="$TMP/state/restarts"
 export MOCK_ACTIVE_FILE="$TMP/state/active.json"
-export MOCK_PTY_FILE="$TMP/state/pty.json"
+export MOCK_PROJECTS_FILE="$TMP/state/projects.json"
+export MOCK_WORKTREES_FILE="$TMP/state/worktrees.json"
+export MOCK_PTY_BUSY_DIR=""
 export MOCK_SS_BUSY=0
 export OPENCODE_MCP_WAIT_TIMEOUT=2 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
 export AICODE_OPENCODE_EXISTING_SERVICE_WAIT_SECONDS=1
@@ -61,8 +63,22 @@ case "$1 $2" in
       "/api/session/active")
         cat "$MOCK_ACTIVE_FILE"
         ;;
+      "/api/project?archived=true")
+        cat "$MOCK_PROJECTS_FILE"
+        ;;
+      /api/worktree\?projectID=*)
+        cat "$MOCK_WORKTREES_FILE"
+        ;;
       /api/pty\?*)
-        cat "$MOCK_PTY_FILE"
+        python3 - "$3" "${MOCK_PTY_BUSY_DIR:-}" <<'MOCK_PTY'
+import json
+import sys
+from urllib.parse import parse_qs, urlsplit
+path = urlsplit(sys.argv[1])
+directory = parse_qs(path.query).get("location[directory]", [""])[0]
+busy = directory and directory == sys.argv[2]
+print(json.dumps([{"id": "pty_busy", "status": "running"}] if busy else []))
+MOCK_PTY
         ;;
       *)
         exit 2
@@ -87,7 +103,9 @@ reset_fixture() {
   printf '%s\n' disconnected > "$MOCK_STATE_FILE"
   : > "$MOCK_RESTART_FILE"
   printf '%s\n' '{"data":{}}' > "$MOCK_ACTIVE_FILE"
-  printf '%s\n' '{"data":[]}' > "$MOCK_PTY_FILE"
+  printf '%s\n' '[{"id":"proj_main","canonical":"/home/test/project-main","sandboxes":[]},{"id":"proj_other","canonical":"/home/test/project-other","sandboxes":[]}]' > "$MOCK_PROJECTS_FILE"
+  printf '%s\n' '[{"directory":"/home/test/project-other/worktree"}]' > "$MOCK_WORKTREES_FILE"
+  export MOCK_PTY_BUSY_DIR=""
   export MOCK_SS_BUSY=0
   write_service
 }
@@ -130,14 +148,15 @@ fi
 [ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted while an agent session was active"
 ok "active OpenCode agent sessions prevent service restart"
 
-# Never restart while a persistent terminal is running in the aicode directory.
+# Never restart while a terminal exists in another project's worktree.
+# The aicode launch directory is not enough: service restart tears down every PTY.
 reset_fixture
-printf '%s\n' '{"data":[{"id":"pty_1","status":"running"}]}' > "$MOCK_PTY_FILE"
+export MOCK_PTY_BUSY_DIR="/home/test/project-other/worktree"
 if aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1; then
-  fail "running PTY should block the service restart"
+  fail "PTY in another project's worktree should block the service restart"
 fi
-[ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted while a persistent terminal was running"
-ok "running OpenCode terminals prevent service restart"
+[ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted while another project's worktree had a running terminal"
+ok "running PTYs in every saved project/worktree prevent service restart"
 
 # A connected TUI/browser client is also a hard stop because service restart
 # would drop the server-owned terminal/process state.
