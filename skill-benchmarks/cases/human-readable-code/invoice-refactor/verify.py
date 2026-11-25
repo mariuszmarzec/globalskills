@@ -42,7 +42,10 @@ def main() -> int:
     add("public-api-preserved", signature_ok, "create_invoice(items, discount_code=None, tax_rate=0.0)", str([arg.arg for arg in public.args.args]) if public else "missing", "AST function signature")
 
     # Identify helpers by responsibility, allowing naming variants with or without a leading underscore.
-    helper_names = [name for name in functions if name != "create_invoice"]
+    helper_names = [
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "create_invoice"
+    ]
     subtotal_helpers = [name for name in helper_names if "subtotal" in name]
     discount_helpers = [name for name in helper_names if "discount" in name]
     taxable_amount_helpers = [name for name in helper_names if "taxable" in name]
@@ -53,7 +56,7 @@ def main() -> int:
     ]
 
     category_helpers = subtotal_helpers + discount_helpers + tax_helpers
-    categories_are_distinct = len(set(category_helpers)) == 3
+    categories_are_distinct = len(category_helpers) == 3 and len(set(category_helpers)) == 3
     exactly_one_per_operation = (
         len(subtotal_helpers) == 1
         and len(discount_helpers) == 1
