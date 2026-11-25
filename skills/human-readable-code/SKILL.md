@@ -38,6 +38,12 @@ Prefer one helper per cohesive domain operation. Extract helpers for the meaning
 
 **Do not combine separately requested or domain-distinct operations into a single helper** merely because their calculations are adjacent (e.g., tax calculation vs. assembling the final total). Each distinct domain operation deserves its own helper.
 
+**Anti-patterns to avoid for this task:**
+- ❌ Creating `_calculate_taxable_amount` — this is a one-line subtraction, keep it inline in the caller
+- ❌ Creating `_calculate_tax_and_total` — this combines tax calculation with total assembly, two distinct operations
+- ✅ Creating `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
+- ✅ Keeping `total = round(taxable_amount + tax, 2)` inline in the orchestrator — simple assembly
+
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
 Keep code inline when extraction would only create a forwarding wrapper, hide a simple expression, force readers to jump between locations, or introduce a name that adds no information. A helper for a single arithmetic expression or trivial derivation is not justified.
