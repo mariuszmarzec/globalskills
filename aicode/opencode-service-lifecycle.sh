@@ -32,7 +32,7 @@ aicode_opencode_registered_service_pid() {
 # use the service's argv[0], with lsof as a fallback. Never guess via PATH here:
 # PATH may point at an unrelated wrapper with the same command name.
 aicode_opencode_registered_service_executable() {
-    local pid="${1:-}" proc_root proc_exe executable command_line
+    local pid="${1:-}" proc_root proc_exe executable="" command_line=""
 
     if [ -z "$pid" ]; then
         pid="$(aicode_opencode_registered_service_pid)" || return 1
