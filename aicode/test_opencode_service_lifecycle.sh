@@ -158,6 +158,16 @@ fi
 [ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted while another project's worktree had a running terminal"
 ok "running PTYs in every saved project/worktree prevent service restart"
 
+# An incomplete project inventory means we cannot prove that no other PTY
+# exists, so the helper must fail closed rather than restart.
+reset_fixture
+printf '%s\n' '{"unexpected":[]}' > "$MOCK_PROJECTS_FILE"
+if aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1; then
+  fail "invalid project inventory should block the service restart"
+fi
+[ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted after an invalid project inventory"
+ok "unknown project/worktree state prevents service restart"
+
 # A connected TUI/browser client is also a hard stop because service restart
 # would drop the server-owned terminal/process state.
 reset_fixture
