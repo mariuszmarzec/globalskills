@@ -417,7 +417,9 @@ verify_opencode_caracal_config() {
     # Resolve the client from the actual shared service process, not the first
     # same-named executable in PATH. This keeps API probes and the final TUI
     # launch on the one OpenCode installation already serving the workspace.
-    if ! opencode_cli="$(aicode_opencode_resolve_cli)"; then
+    if opencode_cli="$(aicode_opencode_resolve_cli)"; then
+        :
+    else
         resolve_rc=$?
         if [ "$resolve_rc" -eq 2 ]; then
             return 1
