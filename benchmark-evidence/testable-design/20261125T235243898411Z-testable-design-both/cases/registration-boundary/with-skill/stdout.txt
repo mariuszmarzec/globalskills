@@ -1,0 +1,50 @@
+Now I understand the current code. Let me refactor `registration.py` to extract the pure helper `prepare_registration`, then update the tests.
+Now let me update the tests to add unit tests for `prepare_registration`:
+Now let me run the tests to verify the refactoring works correctly:
+All tests pass. Let me verify the final state of both files:
+The refactoring is complete. Here's the summary:
+
+## Summary
+
+**Changes made:**
+
+1. **`registration.py`** - Extracted pure helper `prepare_registration(data)` that:
+   - Normalizes name (strip) and email (strip + lower)
+   - Validates: name not empty, email contains `@` and doesn't start/end with `@`
+   - Returns `(name, email)` tuple or raises `ValueError`
+   - No database/mailer dependencies — fully testable in isolation
+
+2. **`register_user(data, database, mailer)`** - Unchanged public API and behavior; now delegates to `prepare_registration`
+
+3. **`tests/test_registration.py`** - Added `PrepareRegistrationTests` class with 7 unit tests covering:
+   - Normalized input (whitespace, case)
+   - Empty/missing name
+   - Invalid email: missing `@`, starts with `@`, ends with `@`, missing email
+   - Kept existing `RegisterUserTests` integration tests (2 tests) using lightweight fakes
+
+**Test results:** All 9 tests pass.
+
+```text
+Task: Refactor registration.py to extract pure validation helper with tests
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple single-file refactor with pure function extraction and test additions - no architecture, concurrency, security, or complex integration concerns
+
+Escalated:
+ NO
+
+Steps:
+ 2
+
+Result:
+ SUCCESS
+```

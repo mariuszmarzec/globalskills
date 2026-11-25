@@ -1,0 +1,25 @@
+Now I understand the task. I need to:
+1. Extract a pure `prepare_registration(data)` helper from the validation/normalization logic
+2. Keep `register_user` calling it, preserving behavior
+3. Add unit tests for the new helper
+4. Keep existing integration tests
+
+Let me implement this:
+Now let me run the tests to verify:
+All tests pass. Let me verify the final files:
+The refactoring is complete. All 9 tests pass.
+
+**Summary of changes:**
+
+1. **`registration.py`** — Extracted pure helper `prepare_registration(data)` that:
+   - Normalizes name (strip) and email (strip + lower)
+   - Validates: non-empty name, email contains `@` not at start/end
+   - Returns `(name, email)` tuple or raises `ValueError`
+   - `register_user` now delegates to it, keeping persistence + mailer logic unchanged
+
+2. **`tests/test_registration.py`** — Added `PrepareRegistrationTests` class with 7 new tests covering:
+   - Normalized input (whitespace, case)
+   - Empty/missing name
+   - Invalid emails (missing `@`, starts with `@`, ends with `@`, missing entirely)
+   - Kept existing `RegisterUserTests` integration tests (2 tests, still pass)
+Done. The refactoring is complete with all tests passing.

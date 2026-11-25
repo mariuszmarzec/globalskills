@@ -1,0 +1,26 @@
+Now I understand the current structure. Let me refactor `invoice.py` by extracting the meaningful operations into clearly named helper functions while preserving the public API and all behavior.
+Now let me run the existing test suite to verify the refactoring preserves all behavior.
+All 6 tests pass. Let me verify the final refactored code:
+The refactoring is complete. Here's a summary:
+
+**Changes made to `invoice.py`:**
+1. **`calculate_subtotal(items)`** - Extracts the line-item validation and subtotal computation loop into a cohesive helper
+2. **`calculate_discount(subtotal, discount_code)`** - Encapsulates the discount logic (SAVE10/SAVE20 with threshold) cleanly; handles `None` discount_code by returning 0.0
+3. **`calculate_tax_and_total(taxable_amount, tax_rate)`** - Extracts the tax/total calculation with rounding
+4. **`create_invoice`** - Now reads as a clear orchestration: calculate subtotal → calculate discount → compute taxable amount → calculate tax & total → return result
+
+**Verification:**
+- All 6 existing tests pass
+- Public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature preserved
+- All current behavior maintained
+- No classes/interfaces, dependencies, or tiny forwarding wrappers added
+- Change scoped to `invoice.py` only
+Done. The refactoring is complete and all tests pass.
+
+**Summary of changes to `invoice.py`:**
+- Extracted `calculate_subtotal(items)` — validates items and computes subtotal
+- Extracted `calculate_discount(subtotal, discount_code)` — encapsulates SAVE10/SAVE20 logic cleanly
+- Extracted `calculate_tax_and_total(taxable_amount, tax_rate)` — handles tax/total rounding
+- `create_invoice` now reads as a clear orchestration of those steps
+
+The public signature and all behavior are preserved. No classes, interfaces, dependencies, or tiny forwarding wrappers were added.
