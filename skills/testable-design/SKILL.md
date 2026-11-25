@@ -51,6 +51,7 @@ Do not inject constants, local values, or deterministic helpers just to make the
 - Avoid hidden global state and implicit environment reads in logic that should be deterministic.
 - Control time, randomness, generated identifiers, and environment-dependent values when their variability affects the behavior under test.
 - Do not expose implementation-only methods publicly just to make tests reach them. Prefer testing through public behavior unless an isolated rule is itself a meaningful reusable unit.
+- When a task explicitly requests focused tests for an extracted pure helper, you MUST test that helper directly through its contract (representative valid, normalization/edge, and invalid-input cases as relevant). Write at least two focused test cases that call the helper by name (e.g., `test_prepare_registration_valid_input`, `test_prepare_registration_invalid_email`). Do not rely solely on testing through the public orchestration path. Keep tests of the public orchestration path too when it covers effects/integration. Do not expose private APIs or add interfaces/mocks solely to satisfy tests.
 
 ## Write representative tests
 
@@ -85,6 +86,7 @@ Before finishing, ask:
 - Are dependencies explicit only where they represent real variation or an external capability?
 - Did I avoid adding interfaces, wrappers, factories, or public test hooks solely for mocking?
 - Do tests exercise behavior through a meaningful entry point?
+- When a task explicitly requests focused tests for an extracted pure helper, did I add direct tests for that helper's contract?
 - Are fakes/stubs more representative and simpler than mocks for this case?
 - Are time, randomness, IDs, and environment-dependent inputs controlled where necessary?
 - Is the implementation still the simplest design that meets the requirements?
