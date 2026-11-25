@@ -401,32 +401,41 @@ verify_opencode_caracal_config() {
     export OPENCODE_CONFIG
     echo "Using static OpenCode config: $OPENCODE_CONFIG."
 
-    local opencode_cli mcp_output
+    local opencode_cli mcp_output resolve_rc
+    local service_lifecycle_helper="$AICODE_SOURCE_DIR/opencode-service-lifecycle.sh"
     if [ ! -r "$OPENCODE_CONFIG" ]; then
         echo "WARNING: static OpenCode config is missing/unreadable: $OPENCODE_CONFIG; continuing without Caracal connectivity verification." >&2
         return 0
     fi
-    if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
-        opencode_cli="$OPENCODE_BIN"
-    else
-        opencode_cli="$(command -v opencode 2>/dev/null || true)"
-    fi
-    if [ -z "$opencode_cli" ] || [ ! -x "$opencode_cli" ]; then
-        echo "WARNING: OpenCode CLI is not executable; skipping the optional Caracal MCP startup probe." >&2
-        return 0
-    fi
-
-    # The shared OpenCode service snapshots its environment when it starts.
-    # Refresh it here, once per aicode launch, only when Caracal is disconnected
-    # and no agent sessions, running PTYs, or connected clients would be disrupted.
-    # Manul task execution deliberately never restarts the shared service.
-    local service_lifecycle_helper="$AICODE_SOURCE_DIR/opencode-service-lifecycle.sh"
     if [ ! -r "$service_lifecycle_helper" ]; then
         echo "ERROR: shared OpenCode service lifecycle helper is missing: $service_lifecycle_helper" >&2
         return 1
     fi
     # shellcheck source=aicode/opencode-service-lifecycle.sh
     . "$service_lifecycle_helper"
+
+    # Resolve the client from the actual shared service process, not the first
+    # same-named executable in PATH. This keeps API probes and the final TUI
+    # launch on the one OpenCode installation already serving the workspace.
+    if ! opencode_cli="$(aicode_opencode_resolve_cli)"; then
+        resolve_rc=$?
+        if [ "$resolve_rc" -eq 2 ]; then
+            return 1
+        fi
+        echo "WARNING: OpenCode CLI is not available; skipping the optional Caracal MCP startup probe." >&2
+        return 0
+    fi
+    if [ -z "$opencode_cli" ] || [ ! -x "$opencode_cli" ]; then
+        echo "WARNING: resolved OpenCode CLI is not executable; skipping the optional Caracal MCP startup probe." >&2
+        return 0
+    fi
+    AICODE_OPENCODE_CLI="$opencode_cli"
+    echo "Using OpenCode executable: $AICODE_OPENCODE_CLI"
+
+    # The shared OpenCode service snapshots its environment when it starts.
+    # Refresh it here, once per aicode launch, only when Caracal is disconnected
+    # and no agent sessions, running PTYs, or connected clients would be disrupted.
+    # Manul task execution deliberately never restarts the shared service.
     if ! aicode_opencode_caracal_service_ready "$AICODE_SOURCE_DIR" "$opencode_cli"; then
         echo "ERROR: Caracal MCP is not ready in the shared OpenCode service; refusing to continue." >&2
         return 1
@@ -692,6 +701,14 @@ if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     echo "OpenClaw Gateway: http://127.0.0.1:${GATEWAY_PORT} (openclaw dashboard)"
 else
     echo "OpenClaw Gateway not required (Manul agentRuntime=$AGENT_RUNTIME)."
+fi
+
+if [ -n "${AICODE_OPENCODE_CLI:-}" ]; then
+    if [ ! -x "$AICODE_OPENCODE_CLI" ]; then
+        echo "ERROR: resolved OpenCode executable is no longer available: $AICODE_OPENCODE_CLI" >&2
+        exit 127
+    fi
+    exec "$AICODE_OPENCODE_CLI" "$@" --auto
 fi
 
 type -p opencode >/dev/null 2>&1 || {
