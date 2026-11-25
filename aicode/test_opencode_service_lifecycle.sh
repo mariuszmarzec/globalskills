@@ -16,8 +16,7 @@ ok() { echo "PASS: $*"; }
 bash -n "$HELPER" || fail "service lifecycle helper syntax"
 bash -n "$READINESS" || fail "MCP readiness helper syntax"
 
-mkdir -p "$TMP/bin" "$TMP/state"
-export PATH="$TMP/bin:$PATH"
+mkdir -p "$TMP/bin" "$TMP/server" "$TMP/caracal" "$TMP/proc/$" "$TMP/state"
 export AICODE_OPENCODE_SERVICE_INFO_FILE="$TMP/state/service.json"
 export MOCK_STATE_FILE="$TMP/state/mcp-state"
 export MOCK_RESTART_FILE="$TMP/state/restarts"
@@ -35,7 +34,7 @@ cat > "$TMP/bin/ps" <<'MOCK_PS'
 #!/usr/bin/env bash
 case "$*" in
   *"stat="*) printf '%s\n' 'S' ;;
-  *"args="*) printf '%s\n' '/home/test/.opencode/bin/opencode serve --service' ;;
+  *"args="*) printf '%s\n' "$MOCK_SERVICE_EXECUTABLE serve --service" ;;
   *) exit 2 ;;
 esac
 MOCK_PS
@@ -95,6 +94,18 @@ MOCK_PTY
 esac
 MOCK_OPENCODE
 chmod +x "$TMP/bin/ps" "$TMP/bin/ss" "$TMP/bin/opencode"
+cp "$TMP/bin/opencode" "$TMP/server/opencode"
+cat > "$TMP/caracal/opencode" <<'MOCK_WRAPPER'
+#!/usr/bin/env bash
+echo "wrong PATH wrapper was executed" >&2
+exit 99
+MOCK_WRAPPER
+chmod +x "$TMP/server/opencode" "$TMP/caracal/opencode"
+ln -s "$TMP/server/opencode" "$TMP/proc/$/exe"
+export AICODE_OPENCODE_PROC_ROOT="$TMP/proc"
+export MOCK_SERVICE_EXECUTABLE="$TMP/server/opencode"
+# Deliberately put an unrelated same-named wrapper first in PATH.
+export PATH="$TMP/caracal:$TMP/bin:$PATH"
 
 write_service() {
   printf '{"pid":%s,"url":"http://127.0.0.1:49374"}\n' "$$" > "$AICODE_OPENCODE_SERVICE_INFO_FILE"
@@ -111,6 +122,33 @@ reset_fixture() {
 }
 
 source "$HELPER"
+
+# A registered shared service is authoritative even when PATH resolves a
+# different executable with the same name (for example ~/.caracal/bin/opencode).
+write_service
+resolved_cli="$(aicode_opencode_resolve_cli)" ||
+  fail "could not resolve the executable from the registered shared service"
+[ "$resolved_cli" = "$TMP/server/opencode" ] ||
+  fail "resolver selected $resolved_cli instead of the running shared service executable"
+ok "registered shared-service executable wins over an unrelated PATH wrapper"
+
+# An explicit OPENCODE_BIN remains an intentional operator override.
+OPENCODE_BIN="$TMP/bin/opencode"
+resolved_cli="$(aicode_opencode_resolve_cli)" ||
+  fail "explicit OPENCODE_BIN override was not accepted"
+[ "$resolved_cli" = "$TMP/bin/opencode" ] ||
+  fail "explicit OPENCODE_BIN override was ignored"
+unset OPENCODE_BIN
+ok "explicit OPENCODE_BIN override is preserved"
+
+# With no registered service, first-start behavior may resolve OpenCode from PATH.
+rm -f "$AICODE_OPENCODE_SERVICE_INFO_FILE"
+resolved_cli="$(aicode_opencode_resolve_cli)" ||
+  fail "PATH fallback did not resolve OpenCode when no service exists"
+[ "$resolved_cli" = "$TMP/caracal/opencode" ] ||
+  fail "first-start PATH fallback unexpectedly changed"
+write_service
+ok "PATH is consulted only when there is no registered shared service"
 
 # With no pre-existing service, the first mcp list starts a fresh server from
 # aicode's already-loaded environment. It must not perform a redundant restart.
@@ -194,6 +232,10 @@ if grep -Fq -- '--standalone' "$HELPER"; then
 fi
 grep -Fq 'aicode_opencode_caracal_service_ready' "$ROOT/aicode/aicode" ||
   fail "aicode does not invoke the startup-only OpenCode lifecycle guard"
+grep -Fq 'aicode_opencode_resolve_cli' "$ROOT/aicode/aicode" ||
+  fail "aicode does not resolve its CLI from the registered shared service"
+grep -Fq 'exec "$AICODE_OPENCODE_CLI"' "$ROOT/aicode/aicode" ||
+  fail "aicode does not launch the same executable it used for lifecycle checks"
 grep -Fq 'if ! verify_opencode_caracal_config; then' "$ROOT/aicode/aicode" ||
   fail "aicode does not fail closed when shared Caracal readiness fails"
 ok "the shared service refresh is guarded at aicode startup, not in task execution"
