@@ -133,6 +133,16 @@ resolved_cli="$(aicode_opencode_resolve_cli)" ||
   fail "resolver selected $resolved_cli instead of the running shared service executable"
 ok "registered shared-service executable wins over an unrelated PATH wrapper"
 
+# macOS has no Linux /proc/<pid>/exe; its process argv[0] must resolve the same
+# executable without falling back to the unrelated PATH wrapper.
+export AICODE_OPENCODE_PROC_ROOT="$TMP/no-proc"
+resolved_cli="$(aicode_opencode_resolve_cli)" ||
+  fail "macOS-style process argv[0] resolution failed"
+[ "$resolved_cli" = "$TMP/server/opencode" ] ||
+  fail "macOS-style resolver selected $resolved_cli instead of the running service executable"
+export AICODE_OPENCODE_PROC_ROOT="$TMP/proc"
+ok "process argv[0] fallback resolves the same service executable without /proc"
+
 # An explicit OPENCODE_BIN remains an intentional operator override.
 OPENCODE_BIN="$TMP/bin/opencode"
 resolved_cli="$(aicode_opencode_resolve_cli)" ||
