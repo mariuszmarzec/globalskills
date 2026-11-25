@@ -71,7 +71,7 @@ PY_OPENCODE_PORT
 aicode_opencode_no_running_ptys() {
     local source_dir="$1"
     local opencode_cli="$2"
-    local projects_json project_id worktrees_json directories_json directory encoded_directory
+    local projects_json project_id worktrees_json directory encoded_directory
     local pty_json running_count
     local -a project_ids=() directories=()
     local -A seen_directories=()
