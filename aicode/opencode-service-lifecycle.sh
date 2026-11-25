@@ -68,11 +68,74 @@ PY_OPENCODE_PORT
     [ "$count" -gt 0 ]
 }
 
+aicode_opencode_no_running_ptys() {
+    local source_dir="$1"
+    local opencode_cli="$2"
+    local projects_json project_id worktrees_json directories_json directory encoded_directory
+    local pty_json running_count
+    local -a project_ids=() directories=()
+    local -A seen_directories=()
+
+    # PTYs are scoped by OpenCode location, not just by the current shell
+    # directory. Inspect every saved project (including archived ones), its
+    # registered worktrees, and the directory from which aicode was launched.
+    projects_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/project?archived=true" 8 2>/dev/null)" || {
+        echo "ERROR: cannot enumerate OpenCode projects; refusing to restart the shared service." >&2
+        return 2
+    }
+    if ! jq -e 'if type == "array" then true else (.data | type == "array") end' >/dev/null 2>&1 <<<"$projects_json"; then
+        echo "ERROR: OpenCode returned an invalid project inventory; refusing to restart the shared service." >&2
+        return 2
+    fi
+    mapfile -t project_ids < <(jq -r '(.data // .)[] | .id // empty' <<<"$projects_json")
+    mapfile -t directories < <(jq -r '(.data // .)[] | .canonical // empty, (.sandboxes[]? // empty)' <<<"$projects_json")
+
+    for project_id in "${project_ids[@]}"; do
+        [ -n "$project_id" ] || continue
+        worktrees_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/worktree?projectID=$project_id" 8 2>/dev/null)" || {
+            echo "ERROR: cannot enumerate worktrees for OpenCode project $project_id; refusing to restart the shared service." >&2
+            return 2
+        }
+        if ! jq -e 'if type == "array" then true else (.data | type == "array") end' >/dev/null 2>&1 <<<"$worktrees_json"; then
+            echo "ERROR: OpenCode returned an invalid worktree inventory for project $project_id; refusing to restart the shared service." >&2
+            return 2
+        fi
+        while IFS= read -r directory; do
+            [ -n "$directory" ] && directories+=("$directory")
+        done < <(jq -r '(.data // .)[] | .directory // empty' <<<"$worktrees_json")
+    done
+    directories+=("$PWD")
+
+    for directory in "${directories[@]}"; do
+        [ -n "$directory" ] || continue
+        if [ -n "${seen_directories[$directory]:-}" ]; then
+            continue
+        fi
+        seen_directories["$directory"]=1
+        encoded_directory="$(printf '%s' "$directory" | jq -sRr @uri)" || return 2
+        pty_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/pty?location%5Bdirectory%5D=$encoded_directory" 8 2>/dev/null)" || {
+            echo "ERROR: cannot inspect OpenCode terminals in $directory; refusing to restart the shared service." >&2
+            return 2
+        }
+        if ! jq -e 'if type == "array" then true else (.data | type == "array") end' >/dev/null 2>&1 <<<"$pty_json"; then
+            echo "ERROR: OpenCode returned an invalid terminal inventory for $directory; refusing to restart the shared service." >&2
+            return 2
+        fi
+        running_count="$(jq '[ (.data // .)[] | select(.status == "running") ] | length' <<<"$pty_json")" || return 2
+        if [ "$running_count" -gt 0 ]; then
+            echo "ERROR: OpenCode has $running_count running terminal(s) in $directory; refusing to restart the shared service." >&2
+            echo "Close those terminals, then rerun aicode to refresh Caracal's environment." >&2
+            return 1
+        fi
+    done
+    return 0
+}
+
 aicode_opencode_caracal_service_ready() {
     local source_dir="$1"
     local opencode_cli="$2"
-    local registration existing_pid active_json pty_json pty_path encoded_pwd
-    local active_count running_pty_count probe_wait restart_timeout
+    local registration existing_pid active_json
+    local active_count pty_check_rc probe_wait restart_timeout
 
     if [ ! -r "$source_dir/opencode-mcp-readiness.sh" ] || [ ! -r "$source_dir/run-with-timeout.py" ]; then
         echo "ERROR: OpenCode readiness helpers are missing; cannot verify Caracal safely." >&2
@@ -108,39 +171,17 @@ aicode_opencode_caracal_service_ready() {
         return 1
     fi
 
-    # A restart is only allowed after proving the shared server is idle. The
-    # active-session API is global to the service; the PTY check covers the
-    # aicode launch directory; socket inspection catches connected TUI/browser
-    # clients in any directory.
-    active_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/session/active" 8 2>/dev/null)" || {
-        echo "ERROR: cannot inspect active OpenCode sessions; refusing to restart the shared service." >&2
-        return 1
-    }
-    if ! jq -e '.data | type == "object"' >/dev/null 2>&1 <<<"$active_json"; then
-        echo "ERROR: OpenCode returned an invalid active-session response; refusing to restart the shared service." >&2
-        return 1
-    fi
-    active_count="$(jq -r '.data | length' <<<"$active_json")" || return 1
-    if [ "$active_count" -gt 0 ]; then
-        echo "ERROR: OpenCode has $active_count active agent session(s); refusing to restart the shared service." >&2
-        echo "Finish those sessions, then rerun aicode to refresh Caracal's environment." >&2
-        return 1
-    fi
-
-    encoded_pwd="$(printf '%s' "$PWD" | jq -sRr @uri)"
-    pty_path="/api/pty?location%5Bdirectory%5D=$encoded_pwd"
-    pty_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "$pty_path" 8 2>/dev/null)" || {
-        echo "ERROR: cannot inspect OpenCode terminal sessions; refusing to restart the shared service." >&2
-        return 1
-    }
-    if ! jq -e '.data | type == "array"' >/dev/null 2>&1 <<<"$pty_json"; then
-        echo "ERROR: OpenCode returned an invalid terminal-session response; refusing to restart the shared service." >&2
-        return 1
-    fi
-    running_pty_count="$(jq '[.data[] | select(.status == "running")] | length' <<<"$pty_json")" || return 1
-    if [ "$running_pty_count" -gt 0 ]; then
-        echo "ERROR: OpenCode has $running_pty_count running terminal(s) in $PWD; refusing to restart the shared service." >&2
-        echo "Close those terminals, then rerun aicode to refresh Caracal's environment." >&2
+    # A restart is only allowed after proving the shared server is idle.
+    # Enumerate every saved project and registered worktree because PTYs are
+    # location-scoped and service restart tears down all server-owned PTYs.
+    if aicode_opencode_no_running_ptys "$source_dir" "$opencode_cli"; then
+        :
+    else
+        pty_check_rc=$?
+        if [ "$pty_check_rc" -eq 1 ]; then
+            return 1
+        fi
+        echo "ERROR: cannot prove the shared OpenCode service has no running terminals; refusing restart." >&2
         return 1
     fi
 
