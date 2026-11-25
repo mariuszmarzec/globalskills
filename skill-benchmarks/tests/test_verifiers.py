@@ -150,6 +150,39 @@ class TestPrepareRegistration(unittest.TestCase):
         self.assertFalse(check["passed"], f"Expected fail, got: {check}")
         self.assertEqual(check["actual"], "no direct helper tests")
 
+    def test_calls_inside_nested_local_functions_do_not_count(self):
+        """Calls inside nested local functions are not direct calls from the test methods."""
+        source = """
+def prepare_registration(data):
+    return {"name": data["name"], "email": data["email"]}
+
+def register_user(data, database, mailer):
+    prepared = prepare_registration(data)
+    database.insert(prepared)
+    mailer.send_welcome(prepared["email"])
+    return prepared
+"""
+        tests = """
+from registration import register_user
+
+class TestRegistration:
+    def test_first_case(self):
+        def nested_check():
+            from registration import prepare_registration
+            return prepare_registration({"name": "Ada", "email": "ada@example.com"})
+        nested_check()
+
+    def test_second_case(self):
+        def another_nested_check():
+            from registration import prepare_registration
+            return prepare_registration({"name": "Grace", "email": "grace@example.com"})
+        another_nested_check()
+"""
+        result = self.run_verifier(source, tests)
+        check = next(c for c in result["checks"] if c["name"] == "direct-helper-tests")
+        self.assertFalse(check["passed"], f"Expected nested calls not to count, got: {check}")
+        self.assertEqual(check["actual"], "no direct helper tests")
+
     def test_only_one_test_method_directly_calls_helper_fails(self):
         """Only one test_* method directly calls prepare_registration -> FAIL."""
         source = """
@@ -492,6 +525,65 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
             if check["name"] == "meaningful-calculation-helpers":
                 self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
                 self.assertIn("taxable_amount", check["actual"])
+
+
+    VALID_SOURCE = """
+def _calculate_subtotal(items):
+    subtotal = 0.0
+    for item in items:
+        quantity = item["quantity"]
+        unit_price = item["unit_price"]
+        if quantity < 0 or unit_price < 0:
+            raise ValueError("invalid item")
+        subtotal += quantity * unit_price
+    return subtotal
+
+def _calculate_discount(subtotal, discount_code):
+    if discount_code == "SAVE10":
+        return subtotal * 0.10
+    return 0.0
+
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = max(subtotal - discount, 0.0)
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "tax": tax,
+        "total": total,
+    }
+"""
+
+    def assert_additional_helper_is_rejected(self, extra_helper: str) -> None:
+        result = self.run_verifier(self.VALID_SOURCE + "\n\n" + extra_helper)
+        check = next(c for c in result["checks"] if c["name"] == "meaningful-calculation-helpers")
+        self.assertFalse(check["passed"], f"Expected exactly three helpers, got: {check}")
+
+    def test_duplicate_subtotal_helper_fails(self):
+        self.assert_additional_helper_is_rejected(
+            "def _calculate_additional_subtotal(items):\\n    return 0.0"
+        )
+
+    def test_duplicate_discount_helper_fails(self):
+        self.assert_additional_helper_is_rejected(
+            "def _calculate_additional_discount(subtotal, code):\\n    return 0.0"
+        )
+
+    def test_duplicate_tax_helper_fails(self):
+        self.assert_additional_helper_is_rejected(
+            "def _calculate_additional_tax(amount, rate):\\n    return 0.0"
+        )
+
+    def test_unrelated_private_helper_fails(self):
+        self.assert_additional_helper_is_rejected(
+            "def _format_invoice_note(value):\\n    return str(value)"
+        )
 
 
 if __name__ == "__main__":
