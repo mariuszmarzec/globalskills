@@ -1,0 +1,26 @@
+Now I understand the current code. Let me refactor `registration.py` to extract the pure helper `prepare_registration(data)` and update the tests.
+Task: Refactor registration.py to extract pure normalization and validation
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ The task required a surgical refactoring to separate pure logic from side-effect-heavy functions, and updating existing tests to cover the new helper function. This was a straightforward refactor requiring no complex planning or architecture changes.
+
+Escalated:
+ NO
+
+Steps:
+ 1. Read `registration.py` and `tests/test_registration.py`.
+ 2. Refactor `registration.py` to extract `prepare_registration(data)` as requested.
+ 3. Update `tests/test_registration.py` to include tests for `prepare_registration` and keep existing `register_user` tests.
+ 4. Verify tests pass with `python3 -m unittest`.
+
+Result:
+ SUCCESS
