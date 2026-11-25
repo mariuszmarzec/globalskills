@@ -24,7 +24,12 @@ export MOCK_RESTART_FILE="$TMP/state/restarts"
 export MOCK_ACTIVE_FILE="$TMP/state/active.json"
 export MOCK_PROJECTS_FILE="$TMP/state/projects.json"
 export MOCK_WORKTREES_FILE="$TMP/state/worktrees.json"
-export MOCK_PTY_BUSY_DIR=""
+MOCK_PROJECT_MAIN="$TMP/project-main"
+MOCK_PROJECT_OTHER="$TMP/project-other"
+MOCK_WORKTREE="$MOCK_PROJECT_OTHER/worktree"
+mkdir -p "$MOCK_PROJECT_MAIN" "$MOCK_WORKTREE"
+export MOCK_PROJECT_MAIN MOCK_PROJECT_OTHER MOCK_WORKTREE
+export MOCK_PTY_BUSY_DIR="" MOCK_PTY_MISSING_DIR="" MOCK_PTY_UNAUTHORIZED_DIR=""
 export MOCK_SS_BUSY=0
 export OPENCODE_MCP_WAIT_TIMEOUT=2 OPENCODE_MCP_PROBE_TIMEOUT=1 OPENCODE_MCP_RETRY_INTERVAL=1
 export AICODE_OPENCODE_EXISTING_SERVICE_WAIT_SECONDS=1
@@ -70,13 +75,24 @@ case "$1 $2" in
         cat "$MOCK_WORKTREES_FILE"
         ;;
       /api/pty\?*)
-        python3 - "$3" "${MOCK_PTY_BUSY_DIR:-}" <<'MOCK_PTY'
+        python3 - "$3" "${MOCK_PTY_BUSY_DIR:-}" "${MOCK_PTY_MISSING_DIR:-}" "${MOCK_PTY_UNAUTHORIZED_DIR:-}" <<'MOCK_PTY'
 import json
 import sys
 from urllib.parse import parse_qs, urlsplit
 path = urlsplit(sys.argv[1])
 directory = parse_qs(path.query).get("location[directory]", [""])[0]
-busy = directory and directory == sys.argv[2]
+busy_dir, missing_dir, unauthorized_dir = sys.argv[2:5]
+if directory and directory == missing_dir:
+    print(json.dumps({
+        "_tag": "LocationNotFoundError",
+        "location": {"directory": directory},
+        "message": f"Location not found: {directory}",
+    }))
+    raise SystemExit(1)
+if directory and directory == unauthorized_dir:
+    print(json.dumps({"_tag": "UnauthorizedError", "message": "Authentication required"}))
+    raise SystemExit(1)
+busy = directory and directory == busy_dir
 print(json.dumps([{"id": "pty_busy", "status": "running"}] if busy else []))
 MOCK_PTY
         ;;
@@ -115,9 +131,10 @@ reset_fixture() {
   printf '%s\n' disconnected > "$MOCK_STATE_FILE"
   : > "$MOCK_RESTART_FILE"
   printf '%s\n' '{"data":{}}' > "$MOCK_ACTIVE_FILE"
-  printf '%s\n' '[{"id":"proj_main","canonical":"/home/test/project-main","sandboxes":[]},{"id":"proj_other","canonical":"/home/test/project-other","sandboxes":[]}]' > "$MOCK_PROJECTS_FILE"
-  printf '%s\n' '[{"directory":"/home/test/project-other/worktree"}]' > "$MOCK_WORKTREES_FILE"
-  export MOCK_PTY_BUSY_DIR=""
+  printf '[{"id":"proj_main","canonical":"%s","sandboxes":[]},{"id":"proj_other","canonical":"%s","sandboxes":[]} ]\n' "$MOCK_PROJECT_MAIN" "$MOCK_PROJECT_OTHER" > "$MOCK_PROJECTS_FILE"
+  printf '[{"directory":"%s"}]\n' "$MOCK_WORKTREE" > "$MOCK_WORKTREES_FILE"
+  mkdir -p "$MOCK_PROJECT_MAIN" "$MOCK_WORKTREE"
+  export MOCK_PTY_BUSY_DIR="" MOCK_PTY_MISSING_DIR="" MOCK_PTY_UNAUTHORIZED_DIR=""
   export MOCK_SS_BUSY=0
   write_service
 }
@@ -188,6 +205,39 @@ aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/n
 [ "$(cat "$MOCK_STATE_FILE")" = "connected" ] || fail "MCP did not reconnect after service restart"
 ok "idle stale service is restarted once and Caracal readiness is re-verified"
 
+# Deleted benchmark workspaces can remain in OpenCode's saved project/worktree
+# inventory. OpenCode returns a typed LocationNotFoundError for those locations;
+# skip only when the same directory is also absent from the local filesystem.
+reset_fixture
+rmdir "$MOCK_WORKTREE"
+export MOCK_PTY_MISSING_DIR="$MOCK_WORKTREE"
+stale_output="$(aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" 2>&1)" ||
+  fail "a deleted OpenCode workspace blocked a safe service refresh: $stale_output"
+printf '%s\n' "$stale_output" | grep -Fq "Skipping stale OpenCode PTY location" ||
+  fail "deleted OpenCode workspace was not reported as skipped"
+[ "$(wc -l < "$MOCK_RESTART_FILE" | tr -d ' ')" = "1" ] ||
+  fail "stale missing workspace prevented the one safe service refresh"
+ok "deleted OpenCode project/worktree locations are skipped only for typed 404 responses"
+
+# A typed LocationNotFoundError for a directory that still exists is unexpected
+# and must fail closed rather than assuming the PTY inventory is empty.
+reset_fixture
+export MOCK_PTY_MISSING_DIR="$MOCK_PROJECT_MAIN"
+if aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1; then
+  fail "LocationNotFoundError for an existing directory should block restart"
+fi
+[ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted after LocationNotFoundError for an existing directory"
+ok "unexpected LocationNotFoundError for an existing directory prevents restart"
+
+# Authentication failures must never be mistaken for deleted locations.
+reset_fixture
+export MOCK_PTY_UNAUTHORIZED_DIR="$MOCK_PROJECT_MAIN"
+if aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1; then
+  fail "UnauthorizedError should block the service restart"
+fi
+[ ! -s "$MOCK_RESTART_FILE" ] || fail "service restarted after an OpenCode API authentication failure"
+ok "PTY API authentication failures remain fail-closed"
+
 # Never restart while an agent session is active.
 reset_fixture
 printf '%s\n' '{"data":{"ses_busy":{"type":"running"}}}' > "$MOCK_ACTIVE_FILE"
@@ -200,7 +250,7 @@ ok "active OpenCode agent sessions prevent service restart"
 # Never restart while a terminal exists in another project's worktree.
 # The aicode launch directory is not enough: service restart tears down every PTY.
 reset_fixture
-export MOCK_PTY_BUSY_DIR="/home/test/project-other/worktree"
+export MOCK_PTY_BUSY_DIR="$MOCK_WORKTREE"
 if aicode_opencode_caracal_service_ready "$ROOT/aicode" "$TMP/bin/opencode" >/dev/null 2>&1; then
   fail "PTY in another project's worktree should block the service restart"
 fi
