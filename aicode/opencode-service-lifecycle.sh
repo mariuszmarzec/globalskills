@@ -147,7 +147,7 @@ aicode_opencode_no_running_ptys() {
     local source_dir="$1"
     local opencode_cli="$2"
     local projects_json project_id worktrees_json directory encoded_directory
-    local pty_json running_count
+    local pty_json running_count pty_query_status
     local -a project_ids=() directories=()
     local -A seen_directories=()
 
@@ -188,10 +188,27 @@ aicode_opencode_no_running_ptys() {
         fi
         seen_directories["$directory"]=1
         encoded_directory="$(printf '%s' "$directory" | jq -sRr @uri)" || return 2
-        pty_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/pty?location%5Bdirectory%5D=$encoded_directory" 8 2>/dev/null)" || {
-            echo "ERROR: cannot inspect OpenCode terminals in $directory; refusing to restart the shared service." >&2
+        if pty_json="$(aicode_opencode_api_get "$source_dir" "$opencode_cli" "/api/pty?location%5Bdirectory%5D=$encoded_directory" 8 2>&1)"; then
+            :
+        else
+            pty_query_status=$?
+            # OpenCode's location-scoped PTY API returns a typed 404 when an
+            # old project/worktree directory has been deleted. Ignore only that
+            # exact case and only when the directory is also absent on disk.
+            # A 404 for an existing directory, 401, timeout, or any other error
+            # leaves terminal state unknown and must continue to fail closed.
+            if [ ! -d "$directory" ] &&
+               printf '%s\\n' "$pty_json" |
+                   grep -Eq '"_tag"[[:space:]]*:[[:space:]]*"LocationNotFoundError"'; then
+                echo "Skipping stale OpenCode PTY location; directory no longer exists: $directory" >&2
+                continue
+            fi
+            echo "ERROR: cannot inspect OpenCode terminals in $directory (API exit $pty_query_status); refusing to restart the shared service." >&2
+            if [ -n "$pty_json" ]; then
+                printf '%s\\n' "$pty_json" >&2
+            fi
             return 2
-        }
+        fi
         if ! jq -e 'if type == "array" then true else (.data | type == "array") end' >/dev/null 2>&1 <<<"$pty_json"; then
             echo "ERROR: OpenCode returned an invalid terminal inventory for $directory; refusing to restart the shared service." >&2
             return 2
