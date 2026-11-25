@@ -416,6 +416,22 @@ verify_opencode_caracal_config() {
         return 0
     fi
 
+    # The shared OpenCode service snapshots its environment when it starts.
+    # Refresh it here, once per aicode launch, only when Caracal is disconnected
+    # and no agent sessions, running PTYs, or connected clients would be disrupted.
+    # Manul task execution deliberately never restarts the shared service.
+    local service_lifecycle_helper="$AICODE_SOURCE_DIR/opencode-service-lifecycle.sh"
+    if [ ! -r "$service_lifecycle_helper" ]; then
+        echo "ERROR: shared OpenCode service lifecycle helper is missing: $service_lifecycle_helper" >&2
+        return 1
+    fi
+    # shellcheck source=aicode/opencode-service-lifecycle.sh
+    . "$service_lifecycle_helper"
+    if ! aicode_opencode_caracal_service_ready "$AICODE_SOURCE_DIR" "$opencode_cli"; then
+        echo "ERROR: Caracal MCP is not ready in the shared OpenCode service; refusing to continue." >&2
+        return 1
+    fi
+
     probe_timeout="${CARACAL_MCP_PROBE_TIMEOUT:-2}"
     if ! [[ "$probe_timeout" =~ ^[0-9]{1,2}$ ]] || (( probe_timeout < 1 || probe_timeout > 10 )); then
         probe_timeout=2
@@ -561,7 +577,9 @@ fi
 
 ensure_caracal_mcp || echo "WARNING: Caracal MCP startup failed; continuing with Manul/OpenCode." >&2
 ensure_todo_mcp_bridge
-verify_opencode_caracal_config
+if ! verify_opencode_caracal_config; then
+    exit 1
+fi
 if [ "$AGENT_RUNTIME" = "openclaw" ]; then
     # The ACP wrapper loads current Caracal credentials directly when each
     # OpenCode harness starts, so no Gateway restart is needed just to refresh them.
