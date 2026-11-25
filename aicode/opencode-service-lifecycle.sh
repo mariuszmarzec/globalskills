@@ -198,14 +198,14 @@ aicode_opencode_no_running_ptys() {
             # A 404 for an existing directory, 401, timeout, or any other error
             # leaves terminal state unknown and must continue to fail closed.
             if [ ! -d "$directory" ] &&
-               printf '%s\\n' "$pty_json" |
+               printf '%s\n' "$pty_json" |
                    grep -Eq '"_tag"[[:space:]]*:[[:space:]]*"LocationNotFoundError"'; then
                 echo "Skipping stale OpenCode PTY location; directory no longer exists: $directory" >&2
                 continue
             fi
             echo "ERROR: cannot inspect OpenCode terminals in $directory (API exit $pty_query_status); refusing to restart the shared service." >&2
             if [ -n "$pty_json" ]; then
-                printf '%s\\n' "$pty_json" >&2
+                printf '%s\n' "$pty_json" >&2
             fi
             return 2
         fi
