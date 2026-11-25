@@ -14,23 +14,15 @@ Prefer clear, direct code over cleverness, architectural ceremony, or reducing l
 
 ---
 
-### ⚠️ CRITICAL RULES FOR EXTRACTION TASKS (READ FIRST)
+### Extraction boundaries
 
-When a task asks you to extract specific domain operations (e.g., "subtotal, discount, tax"):
+When a task requests function extraction, identify the distinct responsibilities it expects to become easier to understand or test. Create one cohesive helper for each requested responsibility when it has meaningful behavior or a clear contract.
 
-1. **Extract EXACTLY ONE helper per named operation** — no more, no less.
-2. **Do NOT create helpers for intermediate values** (e.g., `taxable_amount`, `running_total`) — these are single arithmetic expressions; keep them inline.
-3. **Do NOT combine distinct operations** (e.g., tax calculation + total assembly) into one helper — they are separate domain operations.
-4. **The public entry point should call ONLY the requested helpers** plus simple inline arithmetic for assembly (subtraction, addition, rounding).
+Do not create extra helpers for incidental intermediate values, trivial transformations, or sub-steps that belong to the same responsibility. Keep straightforward assembly in the caller. Do not combine separate requested responsibilities in one helper merely because they occur next to each other.
 
-**Concrete anti-patterns this task commonly produces — DO NOT DO THESE:**
-- ❌ `_calculate_taxable_amount` — one-line subtraction, keep inline
-- ❌ `_calculate_tax_and_total` — combines tax + total, two operations
-- ❌ `_calculate_line_subtotal` + `_calculate_subtotal` — one operation (subtotal), don't split
-- ✅ `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
-- ✅ `total = round(taxable_amount + tax, 2)` — simple assembly stays inline
+The public entry point should orchestrate the operation-level helpers in a clear sequence. It should remain easy to understand without following a chain of trivial wrappers.
 
-If you find yourself creating a helper for a single arithmetic expression, STOP and inline it instead.
+If a proposed helper only gives a name to a single obvious expression or temporary value, keep that work inline unless it has independent domain meaning, meaningful complexity, genuine reuse, or a separately testable contract.
 
 ---
 
@@ -42,7 +34,7 @@ If you find yourself creating a helper for a single arithmetic expression, STOP 
 4. Keep the change scoped. Do not use a small task as an excuse to reorganize neighboring code.
 5. Verify behavior with relevant existing tests and add focused tests when the change needs them.
 
-**For extraction tasks:** When the task names specific domain operations to extract (e.g., "subtotal, discount, tax"), extract EXACTLY ONE helper per named operation. Do not create additional helpers for intermediate values, sub-steps of a single operation, or derived calculations. The public entry point should call ONLY the requested helpers plus simple inline arithmetic for assembly.
+**For extraction tasks:** Identify the distinct responsibilities the task explicitly asks to separate. Create one cohesive helper for each requested responsibility when it has meaningful behavior or a clear contract. Do not add helpers for incidental intermediate values, trivial transformations, or sub-steps that belong to the same responsibility. Keep straightforward assembly in the caller and preserve a clear sequence in the public entry point.
 
 ## Functions: small, cohesive, meaningful
 
@@ -56,54 +48,11 @@ Extract a function when it does at least one meaningful job:
 - captures logic that has a clear, independently testable contract;
 - removes genuinely shared behavior that has the same meaning and is likely to change together.
 
-Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
+Prefer one helper per cohesive domain operation. When a task names or clearly requires several distinct responsibilities to be separated, create one helper for each such responsibility. Avoid additional helpers for incidental intermediate values, simple arithmetic, formatting steps, or temporary representations unless they have independent domain meaning, meaningful complexity, genuine reuse, or a separately testable contract. Keep simple follow-on work with the operation it supports.
 
-**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create helpers for intermediate values like `_calculate_taxable_amount` or `_calculate_total` when they are one-line derivations.
+**Keep distinct responsibilities distinct:** Do not combine separately requested operations into one helper merely because they occur next to each other. At the same time, do not split one cohesive operation into multiple helpers solely to make each function shorter. Choose boundaries by responsibility and meaning, not by statement count.
 
-**Do not combine separately requested or domain-distinct operations into a single helper** merely because their calculations are adjacent (e.g., tax calculation vs. assembling the final total). Each distinct domain operation deserves its own helper.
-
-**Anti-patterns to avoid for this task:**
-- ❌ Creating `_calculate_taxable_amount` — this is a one-line subtraction, keep it inline in the caller
-- ❌ Creating `_calculate_tax_and_total` — this combines tax calculation with total assembly, two distinct operations
-- ❌ Splitting the subtotal loop into `_calculate_line_subtotal` + `_calculate_subtotal` — the validation and summation are ONE cohesive domain operation (calculating the subtotal)
-- ✅ Creating `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
-- ✅ Keeping `total = round(taxable_amount + tax, 2)` inline in the orchestrator — simple assembly
-
-### Illustrative example: extracting tax calculation
-
-If the original code computes tax and total together:
-
-```python
-# Before (inline or combined)
-taxable_amount = max(subtotal - discount, 0.0)
-tax = round(taxable_amount * tax_rate, 2)
-total = round(taxable_amount + tax, 2)
-```
-
-Extract a **pure tax calculation** helper only; keep total assembly inline:
-
-```python
-def _calculate_tax(taxable_amount, tax_rate):
-    return round(taxable_amount * tax_rate, 2)
-
-def create_invoice(items, discount_code=None, tax_rate=0.0):
-    subtotal = _calculate_subtotal(items)
-    discount = _calculate_discount(subtotal, discount_code)
-    taxable_amount = max(subtotal - discount, 0.0)
-    tax = _calculate_tax(taxable_amount, tax_rate)
-    total = round(taxable_amount + tax, 2)  # simple assembly stays inline
-    return {"subtotal": subtotal, "discount": discount, "tax": tax, "total": total}
-```
-
-Do NOT create a combined helper:
-
-```python
-# ❌ Wrong: combines tax calculation with total assembly
-def _calculate_tax_and_total(taxable_amount, tax_rate):
-    tax = round(taxable_amount * tax_rate, 2)
-    total = round(taxable_amount + tax, 2)
-    return tax, total
-```
+**Keep orchestration readable:** The public entry point should call the requested operation-level helpers in a clear sequence and perform only straightforward coordination or assembly. A reader should be able to understand the overall flow without following a chain of trivial wrappers.
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
