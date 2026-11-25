@@ -58,10 +58,47 @@ def main() -> int:
         delegation_ok = "prepare_registration" in calls and "insert" in attrs and "send_welcome" in attrs
     add("entry-point-orchestrates-boundaries", delegation_ok, "register_user uses prepare_registration, then persists and sends welcome email", "delegation present" if delegation_ok else "expected orchestration missing", "AST calls and collaborator operations")
 
-    test_names = {node.name for node in ast.walk(test_tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    helper_tests = {name for name in test_names if "prepare_registration" in name}
-    test_coverage_ok = len(helper_tests) >= 2
-    add("direct-helper-tests", test_coverage_ok, "at least two focused tests exercise prepare_registration directly", ", ".join(sorted(helper_tests)) or "no direct helper tests", "test function names")
+    # Count direct calls in each test method body, but do not recurse into nested scopes.
+    def has_direct_helper_call(test_function: ast.AST) -> bool:
+        def contains_direct_call(node: ast.AST) -> bool:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                return False
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "prepare_registration":
+                    return True
+            return any(contains_direct_call(child) for child in ast.iter_child_nodes(node))
+
+        return any(contains_direct_call(statement) for statement in test_function.body)
+
+    class TestMethodCollector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.methods: list[ast.AST] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            if node.name.startswith("test_"):
+                self.methods.append(node)
+            # A nested function is not an independent test method.
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            if node.name.startswith("test_"):
+                self.methods.append(node)
+
+    collector = TestMethodCollector()
+    collector.visit(test_tree)
+    test_functions_with_direct_call = [
+        node for node in collector.methods if has_direct_helper_call(node)
+    ]
+    test_coverage_ok = len(test_functions_with_direct_call) >= 2
+    helper_test_names = [
+        f"{node.name}@{node.lineno}" for node in test_functions_with_direct_call
+    ]
+    add(
+        "direct-helper-tests",
+        test_coverage_ok,
+        "at least two distinct test methods directly call prepare_registration",
+        ", ".join(helper_test_names) or "no direct helper tests",
+        "AST inspection of test method bodies, excluding nested scopes"
+    )
 
     mocks_absent = "unittest.mock" not in tests and "MagicMock" not in tests and "Mock(" not in tests
     add("no-mock-heavy-test-setup", mocks_absent, "use lightweight fakes rather than mocks", "no mock framework usage" if mocks_absent else "mock usage found", "test source scan")

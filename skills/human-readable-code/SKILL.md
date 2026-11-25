@@ -12,6 +12,20 @@ Optimize code for the next person who has to understand, debug, review, or chang
 
 Prefer clear, direct code over cleverness, architectural ceremony, or reducing line count. Preserve behavior and public contracts that the task does not ask you to change.
 
+---
+
+### Extraction boundaries
+
+When a task requests function extraction, identify the distinct responsibilities it expects to become easier to understand or test. Create one cohesive helper for each requested responsibility when it has meaningful behavior or a clear contract.
+
+Do not create extra helpers for incidental intermediate values, trivial transformations, or sub-steps that belong to the same responsibility. Keep straightforward assembly in the caller. Do not combine separate requested responsibilities in one helper merely because they occur next to each other.
+
+The public entry point should orchestrate the operation-level helpers in a clear sequence. It should remain easy to understand without following a chain of trivial wrappers.
+
+If a proposed helper only gives a name to a single obvious expression or temporary value, keep that work inline unless it has independent domain meaning, meaningful complexity, genuine reuse, or a separately testable contract.
+
+---
+
 ## Working approach
 
 1. Read the surrounding code before editing. Follow established naming, formatting, module boundaries, and local conventions unless they are actively harmful to the requested change.
@@ -19,6 +33,8 @@ Prefer clear, direct code over cleverness, architectural ceremony, or reducing l
 3. Make the intent visible in names, function boundaries, and control flow.
 4. Keep the change scoped. Do not use a small task as an excuse to reorganize neighboring code.
 5. Verify behavior with relevant existing tests and add focused tests when the change needs them.
+
+**For extraction tasks:** Identify the distinct responsibilities the task explicitly asks to separate. Create one cohesive helper for each requested responsibility when it has meaningful behavior or a clear contract. Do not add helpers for incidental intermediate values, trivial transformations, or sub-steps that belong to the same responsibility. Keep straightforward assembly in the caller and preserve a clear sequence in the public entry point.
 
 ## Functions: small, cohesive, meaningful
 
@@ -32,9 +48,11 @@ Extract a function when it does at least one meaningful job:
 - captures logic that has a clear, independently testable contract;
 - removes genuinely shared behavior that has the same meaning and is likely to change together.
 
-Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
+Prefer one helper per cohesive domain operation. When a task names or clearly requires several distinct responsibilities to be separated, create one helper for each such responsibility. Avoid additional helpers for incidental intermediate values, simple arithmetic, formatting steps, or temporary representations unless they have independent domain meaning, meaningful complexity, genuine reuse, or a separately testable contract. Keep simple follow-on work with the operation it supports.
 
-**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create `_calculate_taxable_amount` or `_calculate_total` helpers for one-line derivations.
+**Keep distinct responsibilities distinct:** Do not combine separately requested operations into one helper merely because they occur next to each other. At the same time, do not split one cohesive operation into multiple helpers solely to make each function shorter. Choose boundaries by responsibility and meaning, not by statement count.
+
+**Keep orchestration readable:** The public entry point should call the requested operation-level helpers in a clear sequence and perform only straightforward coordination or assembly. A reader should be able to understand the overall flow without following a chain of trivial wrappers.
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
@@ -98,6 +116,8 @@ Before finishing, ask:
 - Did I avoid arbitrary line-count rules and unnecessary forwarding wrappers?
 - Did I extract helpers for the meaningful domain operations the task requests?
 - Did I avoid creating helpers for intermediate arithmetic or derived values that lack independent domain meaning?
+- **Did I create EXACTLY ONE helper per explicitly requested domain operation (no more, no less)?**
+- **Did I keep simple assembly arithmetic (subtraction, addition, rounding) inline in the orchestrator?**
 - Did I follow the task's requested extraction boundaries without adding extra helpers?
 - Did I introduce any abstraction that costs more than it simplifies?
 - Are similar-looking pieces actually the same rule, or merely coincidental duplication?
