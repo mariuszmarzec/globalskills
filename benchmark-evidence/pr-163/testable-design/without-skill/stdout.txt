@@ -1,0 +1,30 @@
+Now I understand the current code. I'll refactor `registration.py` to extract the pure helper `prepare_registration(data)` and add focused unit tests for it.
+Now let me add focused unit tests for the `prepare_registration` helper:
+Now let me run the tests to verify everything works:
+All 9 tests pass. Let me verify the final state of both files:
+The refactoring is complete. All 9 tests pass. Here's the summary:
+
+## Summary
+
+**Changes made:**
+
+1. **`registration.py`** - Extracted pure helper `prepare_registration(data)` that:
+   - Normalizes name (strip whitespace) and email (strip + lowercase)
+   - Validates name is non-empty
+   - Validates email contains `@` and doesn't start/end with `@`
+   - Returns `(name, email)` tuple or raises `ValueError` with appropriate message
+   - No dependencies on database or mailer - fully testable in isolation
+
+2. **`register_user(data, database, mailer)`** - Preserved exact original behavior:
+   - Calls `prepare_registration` internally
+   - Handles persistence via `database.insert(user)`
+   - Sends welcome email via `mailer.send_welcome(email)`
+   - Returns the created user dict with `created_at`
+
+3. **`tests/test_registration.py`** - Added 7 focused unit tests for `prepare_registration`:
+   - Normalization of name/email (whitespace, case)
+   - Empty name, missing name
+   - Invalid email: missing `@`, starts with `@`, ends with `@`, missing email
+   - Kept existing 2 lightweight fake-based integration tests for `register_user`
+
+All tests pass (9 total). The change is scoped to the two requested files only.

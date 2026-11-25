@@ -1,0 +1,13 @@
+All tests pass. Now I'll refactor `invoice.py` to extract meaningful helper functions while preserving the exact public signature and behavior.
+All tests pass. The refactoring is complete.
+
+**Summary of changes to `invoice.py`:**
+
+Extracted 5 cohesive helper functions, each with a clear single responsibility:
+- `calculate_subtotal(items)` — validates items and computes the line-item sum
+- `calculate_discount(subtotal, discount_code)` — encapsulates the discount rules (SAVE10, SAVE20 with minimum)
+- `calculate_taxable_amount(subtotal, discount)` — applies discount and floors at zero
+- `calculate_tax(taxable_amount, tax_rate)` — computes rounded tax
+- `calculate_total(taxable_amount, tax)` — computes rounded total
+
+`create_invoice` is now a readable orchestration of these steps, preserving the exact public signature and all current behavior. No classes, interfaces, dependencies, or tiny forwarding wrappers were added.

@@ -1,0 +1,29 @@
+Now I understand the current code. Let me implement the refactoring:
+All tests pass. Let me also verify with the standard unittest runner:
+All 10 tests pass. The refactoring is complete.
+---
+
+```text
+Task: Refactor registration.py to extract pure helper prepare_registration(data) for testable normalization/validation, keep register_user behavior, add focused unit tests, keep existing integration tests
+ 
+Role:
+ coder
+ 
+Initial tier:
+ CHEAP
+ 
+Model:
+ freeLLMAPI
+ 
+Reason:
+ Trivial single-file refactoring with pure function extraction and test additions - no architectural complexity, no external dependencies, minimal risk
+ 
+Escalated:
+ NO
+ 
+Steps:
+ 3
+ 
+Result:
+ SUCCESS
+```
