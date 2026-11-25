@@ -16,7 +16,7 @@ ok() { echo "PASS: $*"; }
 bash -n "$HELPER" || fail "service lifecycle helper syntax"
 bash -n "$READINESS" || fail "MCP readiness helper syntax"
 
-TEST_PID=$
+TEST_PID="${BASHPID}"
 mkdir -p "$TMP/bin" "$TMP/server" "$TMP/caracal" "$TMP/proc/$TEST_PID" "$TMP/state"
 export AICODE_OPENCODE_SERVICE_INFO_FILE="$TMP/state/service.json"
 export MOCK_STATE_FILE="$TMP/state/mcp-state"
