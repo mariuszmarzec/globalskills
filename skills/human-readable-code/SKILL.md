@@ -43,9 +43,45 @@ Prefer one helper per cohesive domain operation. Extract helpers for the meaning
 **Anti-patterns to avoid for this task:**
 - ❌ Creating `_calculate_taxable_amount` — this is a one-line subtraction, keep it inline in the caller
 - ❌ Creating `_calculate_tax_and_total` — this combines tax calculation with total assembly, two distinct operations
-- ❌ Splitting the subtotal loop into `_calculate_line_subtotal` + `_calculate_subtotal` — the validation and summationsummation are ONE cohesive domain operation (calculating the subtotal)
+- ❌ Splitting the subtotal loop into `_calculate_line_subtotal` + `_calculate_subtotal` — the validation and summation are ONE cohesive domain operation (calculating the subtotal)
 - ✅ Creating `_calculate_tax(taxable_amount, tax_rate)` — pure tax calculation only
 - ✅ Keeping `total = round(taxable_amount + tax, 2)` inline in the orchestrator — simple assembly
+
+### Illustrative example: extracting tax calculation
+
+If the original code computes tax and total together:
+
+```python
+# Before (inline or combined)
+taxable_amount = max(subtotal - discount, 0.0)
+tax = round(taxable_amount * tax_rate, 2)
+total = round(taxable_amount + tax, 2)
+```
+
+Extract a **pure tax calculation** helper only; keep total assembly inline:
+
+```python
+def _calculate_tax(taxable_amount, tax_rate):
+    return round(taxable_amount * tax_rate, 2)
+
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = _calculate_subtotal(items)
+    discount = _calculate_discount(subtotal, discount_code)
+    taxable_amount = max(subtotal - discount, 0.0)
+    tax = _calculate_tax(taxable_amount, tax_rate)
+    total = round(taxable_amount + tax, 2)  # simple assembly stays inline
+    return {"subtotal": subtotal, "discount": discount, "tax": tax, "total": total}
+```
+
+Do NOT create a combined helper:
+
+```python
+# ❌ Wrong: combines tax calculation with total assembly
+def _calculate_tax_and_total(taxable_amount, tax_rate):
+    tax = round(taxable_amount * tax_rate, 2)
+    total = round(taxable_amount + tax, 2)
+    return tax, total
+```
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
