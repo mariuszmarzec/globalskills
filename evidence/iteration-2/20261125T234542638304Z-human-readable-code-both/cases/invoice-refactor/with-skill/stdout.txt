@@ -1,0 +1,44 @@
+Now I understand the code and tests. Let me refactor `invoice.py` to extract the meaningful operations into clearly named helper functions while preserving the public API and all behavior.
+Now let me run the existing test suite to verify behavior is preserved:
+All 6 tests pass. Let me verify the refactored code:
+The refactoring is complete. 
+
+**Summary of changes:**
+
+1. **`create_invoice`** - Now acts as a clear orchestration of distinct steps: calculate subtotal → calculate discount → calculate taxable amount → calculate tax → calculate total → return dict
+
+2. **`_calculate_subtotal(items)`** - Extracts the item iteration with validation logic. Clearly named, handles the quantity/unit_price validation and accumulation.
+
+3. **`_calculate_discount(subtotal, discount_code)`** - Extracts discount logic into a well-named function. Handles all the discount code rules (SAVE10, SAVE20 with threshold, invalid codes).
+
+4. **`_calculate_taxable_amount(subtotal, discount)`** - Extracts the subtraction with floor-at-zero protection.
+
+5. **`_calculate_tax(taxable_amount, tax_rate)`** - Simple single-responsibility function for tax calculation with rounding.
+
+6. **`_calculate_total(taxable_amount, tax)`** - Simple single-responsibility function for total calculation with rounding.
+
+All 6 tests pass, preserving 100% of the original behavior. The public API `create_invoice(items, discount_code=None, tax_rate=0.0)` is unchanged.
+
+---
+Task: Refactor invoice.py to improve code readability through helper function extraction
+
+Role:
+ 1 role used (coder)
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple refactoring task - extracting cohesive operations into helper functions to improve code readability. Low complexity and low risk.
+
+Escalated:
+ NO
+
+Steps:
+ 5
+
+Result:
+ SUCCESS

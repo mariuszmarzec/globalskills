@@ -1,0 +1,12 @@
+commit 82a98553ddc6c1e3413bf3fed69f2ba6d4531e55
+Author:     Benchmark User <benchmark@example.invalid>
+AuthorDate: Thu Nov 26 00:46:18 2026 +0100
+Commit:     Benchmark User <benchmark@example.invalid>
+CommitDate: Thu Nov 26 00:46:18 2026 +0100
+
+    benchmark: baseline
+
+ .opencode/opencode.json |  8 ++++++++
+ invoice.py              | 30 ++++++++++++++++++++++++++++++
+ tests/test_invoice.py   | 49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 87 insertions(+)

@@ -1,0 +1,41 @@
+All 9 tests pass. The refactoring is complete.
+```text
+Task: Refactor registration.py to extract pure input normalization/validation helper with tests
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple, single-file refactoring with pure function extraction and test additions. Low complexity and low risk.
+
+Escalated:
+ NO
+
+Steps:
+ 2
+
+Result:
+ SUCCESS
+```
+
+**Summary of changes:**
+
+1. **`registration.py`** - Extracted pure function `normalize_and_validate(data)` that:
+   - Takes raw input dict, returns `(normalized_name, normalized_email)` tuple
+   - Performs all validation (empty name, invalid email formats)
+   - Has no side effects, no database/mailer dependencies
+   - `register_user` now delegates to this helper and retains persistence/email logic
+
+2. **`tests/test_registration.py`** - Added 7 new unit tests for `normalize_and_validate` covering:
+   - Normalized name/email whitespace and case handling
+   - Empty name, missing name
+   - Invalid emails: missing `@`, starts with `@`, ends with `@`, missing email entirely
+   - Preserved 2 existing fake-based integration tests for `register_user`
+
+All 9 tests pass. No interfaces, classes, mocks, network dependencies, or test-only public APIs added. Changes scoped to the two requested files.

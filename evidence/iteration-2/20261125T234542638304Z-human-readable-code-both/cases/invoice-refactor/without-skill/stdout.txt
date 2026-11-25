@@ -1,0 +1,43 @@
+I'll start by reading the invoice.py file to understand the current implementation.
+Now let me read the test file to understand the tests and expected behavior:
+Now I understand the code and tests. Let me run the tests first to ensure they pass:
+All tests pass. Now I'll refactor the code by extracting meaningful helper functions. The natural boundaries are:
+
+1. **Calculating subtotal** - validates items and calculates the line-item subtotal
+2. **Calculating discount** - applies discount codes to subtotal
+3. **Calculating tax and total** - computes tax and final total
+
+Let me write the refactored version:
+Now let me run the tests to verify the refactoring preserves all behavior:
+All 6 tests pass. Let me verify the refactored code:
+The refactoring is complete. Let me verify one more time with a fresh test run:
+## Results
+
+**Success** ✓
+
+**Task:** Refactored invoice.py to make the main invoice flow easier to understand.
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** A straightforward refactoring task that improves code readability by extracting logical operations into named helper functions.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Read the original invoice.py and test file to understand the implementation
+2. Ran existing tests to establish baseline behavior (all 6 tests passed)
+3. Extracted three cohesive helper functions: `calculate_subtotal()`, `calculate_discount()`, and `calculate_total_and_tax()`
+4. Verified all tests still pass after refactoring
+
+**Result:** SUCCESS
+
+The refactored `create_invoice()` function is now a clear orchestration of three well-named steps:
+- `calculate_subtotal(items)` - validates items and calculates the line-item subtotal
+- `calculate_discount(subtotal, discount_code)` - applies discount codes to subtotal
+- `calculate_total_and_tax(subtotal, discount, tax_rate)` - computes tax and final total
+
+Each helper function has a docstring describing its purpose, and all 6 existing tests pass without modification.

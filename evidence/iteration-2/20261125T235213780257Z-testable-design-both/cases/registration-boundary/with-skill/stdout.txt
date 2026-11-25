@@ -1,0 +1,40 @@
+Now I understand the task. I need to:
+1. Extract a pure helper for input normalization and validation
+2. Keep the public `register_user` function unchanged in behavior
+3. Add tests for the new helper
+4. Run all tests
+
+Let me refactor `registration.py` first:
+Now let me update the test file to add tests for the pure helper:
+Now let me run the tests:
+The test for `ada@.com` fails because the original validation logic only checks for `@` presence and not starting/ending with `@`. Since we must keep the current behavior, I'll remove that test case:
+All 9 tests pass. Let me verify the final state of both files:
+```text
+Task: Refactor registration.py to extract input normalization and validation into a pure helper function, add tests for the helper, keep existing integration tests, and run all tests.
+
+Role:
+ coder (implemented refactoring and tests)
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI (litellm)
+
+Reason:
+ Simple single-file refactoring with pure function extraction and test additions. Low complexity, low risk.
+
+Escalated:
+ NO
+
+Steps:
+ 1. Read existing registration.py and tests/test_registration.py
+ 2. Extracted _normalize_and_validate pure helper function from register_user
+ 3. Updated register_user to call the helper and keep persistence/email logic
+ 4. Added NormalizeAndValidateTests class with 7 test cases covering normalized input and invalid email/name cases
+ 5. Kept existing RegisterUserTests integration tests unchanged
+ 6. Ran pytest - all 9 tests pass
+
+Result:
+ SUCCESS
+```

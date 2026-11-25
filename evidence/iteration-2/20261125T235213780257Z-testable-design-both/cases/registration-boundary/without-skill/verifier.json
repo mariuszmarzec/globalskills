@@ -1,0 +1,56 @@
+{
+  "passed": true,
+  "mode": "without-skill",
+  "checks": [
+    {
+      "name": "valid-python",
+      "passed": true,
+      "expected": "production and test files parse",
+      "actual": "valid",
+      "evidence": "ast.parse(registration.py, test_registration.py)"
+    },
+    {
+      "name": "explicit-pure-policy-helper",
+      "passed": true,
+      "expected": "a pure helper (one data arg, no effects) and register_user(data, database, mailer) exist",
+      "actual": "normalize_and_validate, register_user",
+      "evidence": "top-level function definitions"
+    },
+    {
+      "name": "validation-independent-of-effects",
+      "passed": true,
+      "expected": "normalize_and_validate has no persistence, mail, time, filesystem, or output effects",
+      "actual": "no external-effect references",
+      "evidence": "AST inspection of normalize_and_validate"
+    },
+    {
+      "name": "entry-point-orchestrates-boundaries",
+      "passed": true,
+      "expected": "register_user uses normalize_and_validate, then persists and sends welcome email",
+      "actual": "delegation present",
+      "evidence": "AST calls and collaborator operations"
+    },
+    {
+      "name": "direct-helper-tests",
+      "passed": true,
+      "expected": "at least two distinct test functions directly call normalize_and_validate",
+      "actual": "test_empty_name_raises, test_invalid_email_ends_with_at_raises, test_invalid_email_missing_at_raises, test_invalid_email_starts_with_at_raises, test_missing_email_raises, test_missing_name_raises, test_normalizes_name_and_email",
+      "evidence": "AST inspection of test_* function bodies for direct Call(Name('normalize_and_validate'))"
+    },
+    {
+      "name": "no-mock-heavy-test-setup",
+      "passed": true,
+      "expected": "use lightweight fakes rather than mocks",
+      "actual": "no mock framework usage",
+      "evidence": "test source scan"
+    },
+    {
+      "name": "registration-tests",
+      "passed": true,
+      "expected": "all registration tests pass",
+      "actual": "OK",
+      "evidence": "python -m unittest discover -s tests -v"
+    }
+  ],
+  "returncode": 0
+}
