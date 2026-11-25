@@ -58,10 +58,22 @@ def main() -> int:
         delegation_ok = "prepare_registration" in calls and "insert" in attrs and "send_welcome" in attrs
     add("entry-point-orchestrates-boundaries", delegation_ok, "register_user uses prepare_registration, then persists and sends welcome email", "delegation present" if delegation_ok else "expected orchestration missing", "AST calls and collaborator operations")
 
-    test_names = {node.name for node in ast.walk(test_tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    helper_tests = {name for name in test_names if "prepare_registration" in name}
-    test_coverage_ok = len(helper_tests) >= 2
-    add("direct-helper-tests", test_coverage_ok, "at least two focused tests exercise prepare_registration directly", ", ".join(sorted(helper_tests)) or "no direct helper tests", "test function names")
+    # Find test functions/methods (functions whose names start with test_)
+    # that directly call prepare_registration(...) via AST Call with Name id
+    test_functions_with_direct_call = []
+    for node in ast.walk(test_tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            # Check if this test function directly calls prepare_registration
+            has_direct_call = False
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "prepare_registration":
+                    has_direct_call = True
+                    break
+            if has_direct_call:
+                test_functions_with_direct_call.append(node.name)
+
+    test_coverage_ok = len(test_functions_with_direct_call) >= 2
+    add("direct-helper-tests", test_coverage_ok, "at least two distinct test functions directly call prepare_registration", ", ".join(sorted(test_functions_with_direct_call)) or "no direct helper tests", "AST inspection of test_* function bodies for direct Call(Name('prepare_registration'))")
 
     mocks_absent = "unittest.mock" not in tests and "MagicMock" not in tests and "Mock(" not in tests
     add("no-mock-heavy-test-setup", mocks_absent, "use lightweight fakes rather than mocks", "no mock framework usage" if mocks_absent else "mock usage found", "test source scan")

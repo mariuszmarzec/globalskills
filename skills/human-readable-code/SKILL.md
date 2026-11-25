@@ -34,7 +34,9 @@ Extract a function when it does at least one meaningful job:
 
 Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
 
-**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create `_calculate_taxable_amount` or `_calculate_total` helpers for one-line derivations.
+**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create helpers for intermediate values like `_calculate_taxable_amount` or `_calculate_total` when they are one-line derivations.
+
+**Do not combine separately requested or domain-distinct operations into a single helper** merely because their calculations are adjacent (e.g., tax calculation vs. assembling the final total). Each distinct domain operation deserves its own helper.
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
 
