@@ -567,22 +567,22 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
 
     def test_duplicate_subtotal_helper_fails(self):
         self.assert_additional_helper_is_rejected(
-            "def _calculate_additional_subtotal(items):\\n    return 0.0"
+            "def _calculate_additional_subtotal(items):\n    return 0.0"
         )
 
     def test_duplicate_discount_helper_fails(self):
         self.assert_additional_helper_is_rejected(
-            "def _calculate_additional_discount(subtotal, code):\\n    return 0.0"
+            "def _calculate_additional_discount(subtotal, code):\n    return 0.0"
         )
 
     def test_duplicate_tax_helper_fails(self):
         self.assert_additional_helper_is_rejected(
-            "def _calculate_additional_tax(amount, rate):\\n    return 0.0"
+            "def _calculate_additional_tax(amount, rate):\n    return 0.0"
         )
 
     def test_unrelated_private_helper_fails(self):
         self.assert_additional_helper_is_rejected(
-            "def _format_invoice_note(value):\\n    return str(value)"
+            "def _format_invoice_note(value):\n    return str(value)"
         )
 
 
