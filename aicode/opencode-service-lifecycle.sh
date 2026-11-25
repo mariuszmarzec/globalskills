@@ -87,8 +87,8 @@ aicode_opencode_no_running_ptys() {
         echo "ERROR: OpenCode returned an invalid project inventory; refusing to restart the shared service." >&2
         return 2
     fi
-    mapfile -t project_ids < <(jq -r '(.data // .)[] | .id // empty' <<<"$projects_json")
-    mapfile -t directories < <(jq -r '(.data // .)[] | .canonical // empty, (.sandboxes[]? // empty)' <<<"$projects_json")
+    mapfile -t project_ids < <(jq -r '(if type == "array" then . else .data end)[] | .id // empty' <<<"$projects_json")
+    mapfile -t directories < <(jq -r '(if type == "array" then . else .data end)[] | .canonical // empty, (.sandboxes[]? // empty)' <<<"$projects_json")
 
     for project_id in "${project_ids[@]}"; do
         [ -n "$project_id" ] || continue
@@ -102,7 +102,7 @@ aicode_opencode_no_running_ptys() {
         fi
         while IFS= read -r directory; do
             [ -n "$directory" ] && directories+=("$directory")
-        done < <(jq -r '(.data // .)[] | .directory // empty' <<<"$worktrees_json")
+        done < <(jq -r '(if type == "array" then . else .data end)[] | .directory // empty' <<<"$worktrees_json")
     done
     directories+=("$PWD")
 
@@ -121,7 +121,7 @@ aicode_opencode_no_running_ptys() {
             echo "ERROR: OpenCode returned an invalid terminal inventory for $directory; refusing to restart the shared service." >&2
             return 2
         fi
-        running_count="$(jq '[ (.data // .)[] | select(.status == "running") ] | length' <<<"$pty_json")" || return 2
+        running_count="$(jq '[ (if type == "array" then . else .data end)[] | select(.status == "running") ] | length' <<<"$pty_json")" || return 2
         if [ "$running_count" -gt 0 ]; then
             echo "ERROR: OpenCode has $running_count running terminal(s) in $directory; refusing to restart the shared service." >&2
             echo "Close those terminals, then rerun aicode to refresh Caracal's environment." >&2
