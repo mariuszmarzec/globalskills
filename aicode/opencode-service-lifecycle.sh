@@ -67,7 +67,7 @@ print(arguments[0])
     if [ -z "$executable" ] || [[ "$executable" != /* ]] || [ ! -x "$executable" ]; then
         if command -v lsof >/dev/null 2>&1; then
             executable="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null |
-                awk '/^n\\// { sub(/^n/, ""); print; exit }')"
+                awk 'substr($0, 1, 2) == "n/" { print substr($0, 2); exit }')"
         fi
     fi
 
