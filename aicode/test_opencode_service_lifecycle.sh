@@ -16,7 +16,8 @@ ok() { echo "PASS: $*"; }
 bash -n "$HELPER" || fail "service lifecycle helper syntax"
 bash -n "$READINESS" || fail "MCP readiness helper syntax"
 
-mkdir -p "$TMP/bin" "$TMP/server" "$TMP/caracal" "$TMP/proc/$" "$TMP/state"
+TEST_PID=$
+mkdir -p "$TMP/bin" "$TMP/server" "$TMP/caracal" "$TMP/proc/$TEST_PID" "$TMP/state"
 export AICODE_OPENCODE_SERVICE_INFO_FILE="$TMP/state/service.json"
 export MOCK_STATE_FILE="$TMP/state/mcp-state"
 export MOCK_RESTART_FILE="$TMP/state/restarts"
@@ -101,7 +102,7 @@ echo "wrong PATH wrapper was executed" >&2
 exit 99
 MOCK_WRAPPER
 chmod +x "$TMP/server/opencode" "$TMP/caracal/opencode"
-ln -s "$TMP/server/opencode" "$TMP/proc/$/exe"
+ln -s "$TMP/server/opencode" "$TMP/proc/$TEST_PID/exe"
 export AICODE_OPENCODE_PROC_ROOT="$TMP/proc"
 export MOCK_SERVICE_EXECUTABLE="$TMP/server/opencode"
 # Deliberately put an unrelated same-named wrapper first in PATH.
