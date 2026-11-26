@@ -32,7 +32,13 @@ Extract a function when it does at least one meaningful job:
 - captures logic that has a clear, independently testable contract;
 - removes genuinely shared behavior that has the same meaning and is likely to change together.
 
-Keep code inline when extraction would only create a forwarding wrapper, hide a simple expression, force readers to jump between locations, or introduce a name that adds no information.
+Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
+
+**Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create `_calculate_taxable_amount` or `_calculate_total` helpers for one-line derivations.
+
+When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
+
+Keep code inline when extraction would only create a forwarding wrapper, hide a simple expression, force readers to jump between locations, or introduce a name that adds no information. A helper for a single arithmetic expression or trivial derivation is not justified.
 
 **Do not use an arbitrary line limit as an extraction rule.** A longer function can be easy to read when its steps form one clear sequence. A short function can be hard to understand when it hides important behavior behind vague names or unnecessary indirection. Optimize for cognitive load and cohesion, not a target line count.
 
@@ -90,6 +96,9 @@ Before finishing, ask:
 - Do names communicate intent without requiring implementation details?
 - Does each extracted function represent a meaningful operation or boundary?
 - Did I avoid arbitrary line-count rules and unnecessary forwarding wrappers?
+- Did I extract helpers for the meaningful domain operations the task requests?
+- Did I avoid creating helpers for intermediate arithmetic or derived values that lack independent domain meaning?
+- Did I follow the task's requested extraction boundaries without adding extra helpers?
 - Did I introduce any abstraction that costs more than it simplifies?
 - Are similar-looking pieces actually the same rule, or merely coincidental duplication?
 - Is the change limited to what the task requires?
