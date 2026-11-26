@@ -47,6 +47,7 @@ class HumanReadableSkillBoundaryTests(unittest.TestCase):
         self.assertIn("calculate_tax_and_total", skill)
         self.assertIn("calculate_taxable_amount", skill)
 
+
 class BenchmarkGitDiffArtifactTests(unittest.TestCase):
     def test_git_diff_artifact_captures_uncommitted_workspace_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
