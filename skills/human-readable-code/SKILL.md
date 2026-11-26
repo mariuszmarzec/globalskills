@@ -34,6 +34,22 @@ Extract a function when it does at least one meaningful job:
 
 Prefer one helper per cohesive domain operation. Extract helpers for the meaningful operations the task explicitly requests (e.g., subtotal, discount, tax calculations). Do not split intermediate arithmetic or derived values (e.g., "taxable amount," "running total") into additional helpers unless they have independent domain meaning, non-trivial complexity, genuine reuse, or a separately testable contract. Keep simple follow-on calculations inline in the operation that owns them.
 
+### Match helper boundaries to requested operations
+
+When a task explicitly names multiple operations for extraction, use that list as a boundary checklist. Create one helper for each named operation that has meaningful behavior, and make the helper return only that operation's result. Do not extend a helper into the next step just because the next calculation uses its result or is only one line long.
+
+For example, when subtotal, discount, and tax are the requested operations:
+
+```python
+subtotal = calculate_subtotal(items)
+discount = calculate_discount(subtotal, discount_code)
+taxable_amount = max(subtotal - discount, 0.0)
+tax = calculate_tax(taxable_amount, tax_rate)
+total = round(taxable_amount + tax, 2)
+```
+
+Here, `calculate_tax` returns tax only. It must not also calculate or return `total`; deriving the final total is straightforward assembly owned by the caller. Avoid combined helpers such as `calculate_tax_and_total` when the requested operation is tax. Apply this same boundary rule outside financial calculations: a helper should stop when its named responsibility is complete, rather than absorbing a downstream operation.
+
 **Concrete rule:** If a derived value is computed by a single arithmetic expression (subtraction, multiplication, addition, rounding) immediately after another helper's result, keep it inline. Do not create `_calculate_taxable_amount` or `_calculate_total` helpers for one-line derivations.
 
 When extracting helpers for a multi-step calculation, make the entry point a clear orchestration that calls each helper in sequence. The main function should read like an outline: call helper A, call helper B, call helper C, combine results. Avoid leaving loops or detailed calculation logic in the entry point.
