@@ -279,7 +279,7 @@ def write_mode_artifacts(
     for artifact_name, git_args in (
         ("git-status.txt", ("git", "status", "--short", "--branch")),
         ("git-log.txt", ("git", "log", "--oneline", "--decorate", "-5")),
-        ("git-diff.txt", ("git", "diff", "HEAD^", "HEAD")),
+        ("git-diff.txt", ("git", "diff", "HEAD", "--")),
         ("git-show.txt", ("git", "show", "--stat", "--format=fuller", "HEAD")),
     ):
         completed = subprocess.run(
