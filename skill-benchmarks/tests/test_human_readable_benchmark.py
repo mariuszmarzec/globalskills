@@ -49,6 +49,7 @@ class TestableDesignBenchmarkPromptTests(unittest.TestCase):
         self.assertIn("without-skill baseline", prompt)
         self.assertIn("continue without a skill", prompt)
 
+
 class HumanReadableSkillBoundaryTests(unittest.TestCase):
     def test_explicit_operation_list_is_closed_and_precedes_general_guidance(self) -> None:
         skill_path = HERE.parent.parent / "skills" / "human-readable-code" / "SKILL.md"
