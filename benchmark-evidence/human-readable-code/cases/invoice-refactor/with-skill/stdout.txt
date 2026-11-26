@@ -1,0 +1,16 @@
+Now I'll refactor the invoice.py to extract meaningful operations into clearly named helper functions while preserving the public API and all behavior.
+All tests pass. The refactoring is complete.
+
+**Summary of changes:**
+
+- Extracted four meaningful, cohesive helper functions with clear domain names:
+  - `_calculate_line_item_subtotal(items)` — validates quantities/prices and computes subtotal
+  - `_calculate_discount(subtotal, discount_code)` — applies discount rules (SAVE10, SAVE20 with threshold)
+  - `_calculate_taxable_amount(subtotal, discount)` — computes taxable amount floored at zero
+  - `_calculate_tax_and_total(taxable_amount, tax_rate)` — computes rounded tax and total
+
+- The public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature and all behavior are preserved exactly.
+
+- The main function now reads as a clean orchestration of the invoice calculation steps.
+
+- All 6 existing tests pass without modification.
