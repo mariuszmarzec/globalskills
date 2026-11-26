@@ -52,7 +52,7 @@ class BenchmarkGitDiffArtifactTests(unittest.TestCase):
             )
 
             target = workspace / "invoice.py"
-            target.write_text("def total():\\n    return 1\\n", encoding="utf-8")
+            target.write_text("def total():\n    return 1\n", encoding="utf-8")
             subprocess.run(["git", "add", "invoice.py"], cwd=workspace, check=True, capture_output=True)
             subprocess.run(
                 ["git", "commit", "-m", "benchmark: baseline"],
@@ -60,7 +60,7 @@ class BenchmarkGitDiffArtifactTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            target.write_text("def total():\\n    return 2\\n", encoding="utf-8")
+            target.write_text("def total():\n    return 2\n", encoding="utf-8")
 
             artifact_dir = Path(temp_dir) / "artifacts"
             run_result = SimpleNamespace(
