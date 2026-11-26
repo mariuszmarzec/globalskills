@@ -1,0 +1,7 @@
+{
+  "adapter": "opencode",
+  "opencode_version": "v2.4.1",
+  "provider": "freeLLMAPI",
+  "model": null,
+  "model_note": "OpenCode default model (freeLLMAPI/free-cloud); model field is null in adapter output, which indicates the OpenCode default was used without explicit override"
+}

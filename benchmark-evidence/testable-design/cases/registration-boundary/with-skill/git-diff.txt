@@ -1,0 +1,91 @@
+diff --git a/registration.py b/registration.py
+index 93a1afa..832b249 100644
+--- a/registration.py
++++ b/registration.py
+@@ -1,13 +1,23 @@
+ from datetime import datetime, timezone
+ 
+ 
+-def register_user(data, database, mailer):
++def prepare_registration(data):
++    """Normalize and validate registration input.
++
++    Returns a tuple of (name, email) with name stripped and email lowercased.
++    Raises ValueError if name is empty or email is invalid.
++    """
+     name = data.get("name", "").strip()
+     email = data.get("email", "").strip().lower()
+     if not name:
+         raise ValueError("name is required")
+     if "@" not in email or email.startswith("@") or email.endswith("@"):
+         raise ValueError("email is invalid")
++    return name, email
++
++
++def register_user(data, database, mailer):
++    name, email = prepare_registration(data)
+ 
+     user = {
+         "name": name,
+@@ -16,4 +26,4 @@ def register_user(data, database, mailer):
+     }
+     database.insert(user)
+     mailer.send_welcome(email)
+-    return user
++    return user
+\ No newline at end of file
+diff --git a/tests/test_registration.py b/tests/test_registration.py
+index 3f99d06..9c96627 100644
+--- a/tests/test_registration.py
++++ b/tests/test_registration.py
+@@ -1,6 +1,6 @@
+ import unittest
+ 
+-from registration import register_user
++from registration import prepare_registration, register_user
+ 
+ 
+ class FakeDatabase:
+@@ -19,6 +19,41 @@ class FakeMailer:
+         self.sent_to.append(email)
+ 
+ 
++class PrepareRegistrationTests(unittest.TestCase):
++    def test_normalizes_name_and_email(self):
++        name, email = prepare_registration(
++            {"name": "  Ada Lovelace ", "email": " ADA@EXAMPLE.COM "}
++        )
++        self.assertEqual("Ada Lovelace", name)
++        self.assertEqual("ada@example.com", email)
++
++    def test_empty_name_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": " ", "email": "valid@example.com"})
++        self.assertEqual("name is required", str(cm.exception))
++
++    def test_missing_name_raises(self):
++        with self.assertRaises(ValueError):
++            prepare_registration({"email": "valid@example.com"})
++
++    def test_invalid_email_missing_at_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": "Ada", "email": "invalid"})
++        self.assertEqual("email is invalid", str(cm.exception))
++
++    def test_invalid_email_starts_with_at_raises(self):
++        with self.assertRaises(ValueError):
++            prepare_registration({"name": "Ada", "email": "@example.com"})
++
++    def test_invalid_email_ends_with_at_raises(self):
++        with self.assertRaises(ValueError):
++            prepare_registration({"name": "Ada", "email": "ada@"})
++
++    def test_missing_email_raises(self):
++        with self.assertRaises(ValueError):
++            prepare_registration({"name": "Ada"})
++
++
+ class RegisterUserTests(unittest.TestCase):
+     def test_normalizes_user_and_sends_welcome_message(self):
+         database = FakeDatabase()
+warning: in the working copy of 'registration.py', LF will be replaced by CRLF the next time Git touches it

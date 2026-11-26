@@ -1,0 +1,194 @@
+[0m
+> orchestrator · freeLLMAPI
+[0m✱ [0mGlob "**/*.py" [90m2 matches[0m
+> orchestrator · freeLLMAPI
+[0m→ [0mRead registration.py 
+> orchestrator · freeLLMAPI
+[0m→ [0mRead tests/test_registration.py 
+> orchestrator · freeLLMAPI
+[0m← [0mEdit registration.py
+Index: registration.py
+===================================================================
+--- registration.py
++++ registration.py
+@@ -1,15 +1,28 @@
+ from datetime import datetime, timezone
+ 
+ 
+-def register_user(data, database, mailer):
++def prepare_registration(data):
++    """Normalize and validate registration input.
++    
++    Returns:
++        tuple: (normalized_name, normalized_email)
++    
++    Raises:
++        ValueError: If name is missing/empty or email is invalid.
++    """
+     name = data.get("name", "").strip()
+     email = data.get("email", "").strip().lower()
+     if not name:
+         raise ValueError("name is required")
+     if "@" not in email or email.startswith("@") or email.endswith("@"):
+         raise ValueError("email is invalid")
++    return name, email
+ 
++
++def register_user(data, database, mailer):
++    name, email = prepare_registration(data)
++
+     user = {
+         "name": name,
+         "email": email,
+         "created_at": datetime.now(timezone.utc),
+
+> orchestrator · freeLLMAPI
+[0m← [0mEdit tests/test_registration.py
+Index: tests/test_registration.py
+===================================================================
+--- tests/test_registration.py
++++ tests/test_registration.py
+@@ -1,7 +1,7 @@
+ import unittest
+ 
+-from registration import register_user
++from registration import register_user, prepare_registration
+ 
+ 
+ class FakeDatabase:
+     def __init__(self):
+@@ -18,8 +18,53 @@
+     def send_welcome(self, email):
+         self.sent_to.append(email)
+ 
+ 
++class PrepareRegistrationTests(unittest.TestCase):
++    def test_normalizes_name_and_email(self):
++        name, email = prepare_registration(
++            {"name": "  Ada Lovelace ", "email": " ADA@EXAMPLE.COM "}
++        )
++        self.assertEqual("Ada Lovelace", name)
++        self.assertEqual("ada@example.com", email)
++
++    def test_valid_email_with_subdomain(self):
++        name, email = prepare_registration(
++            {"name": "Bob", "email": "bob@mail.example.org"}
++        )
++        self.assertEqual("bob@mail.example.org", email)
++
++    def test_empty_name_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": " ", "email": "valid@example.com"})
++        self.assertEqual("name is required", str(cm.exception))
++
++    def test_missing_name_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"email": "valid@example.com"})
++        self.assertEqual("name is required", str(cm.exception))
++
++    def test_email_missing_at_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": "Bob", "email": "bobexample.com"})
++        self.assertEqual("email is invalid", str(cm.exception))
++
++    def test_email_starts_with_at_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": "Bob", "email": "@example.com"})
++        self.assertEqual("email is invalid", str(cm.exception))
++
++    def test_email_ends_with_at_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": "Bob", "email": "bob@example."})
++        self.assertEqual("email is invalid", str(cm.exception))
++
++    def test_email_only_at_raises(self):
++        with self.assertRaises(ValueError) as cm:
++            prepare_registration({"name": "Bob", "email": "@"})
++        self.assertEqual("email is invalid", str(cm.exception))
++
++
+ class RegisterUserTests(unittest.TestCase):
+     def test_normalizes_user_and_sends_welcome_message(self):
+         database = FakeDatabase()
+         mailer = FakeMailer()
+
+> orchestrator · freeLLMAPI
+[0m$ [0mcd /tmp/skill-bench-registration-boundary-fvbsbxbh/workspace && python -m pytest tests/test_registration.py -v
+zsh:1: command not found: python
+> orchestrator · freeLLMAPI
+[0m$ [0mcd /tmp/skill-bench-registration-boundary-fvbsbxbh/workspace && python3 -m pytest tests/test_registration.py -v
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /tmp/skill-bench-registration-boundary-fvbsbxbh/workspace
+plugins: anyio-4.14.2, cov-7.1.0
+collecting ... collected 10 items
+
+tests/test_registration.py::PrepareRegistrationTests::test_email_ends_with_at_raises FAILED [ 10%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_missing_at_raises PASSED [ 20%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_only_at_raises PASSED [ 30%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_starts_with_at_raises PASSED [ 40%]
+tests/test_registration.py::PrepareRegistrationTests::test_empty_name_raises PASSED [ 50%]
+tests/test_registration.py::PrepareRegistrationTests::test_missing_name_raises PASSED [ 60%]
+tests/test_registration.py::PrepareRegistrationTests::test_normalizes_name_and_email PASSED [ 70%]
+tests/test_registration.py::PrepareRegistrationTests::test_valid_email_with_subdomain PASSED [ 80%]
+tests/test_registration.py::RegisterUserTests::test_invalid_input_does_not_write_or_send PASSED [ 90%]
+tests/test_registration.py::RegisterUserTests::test_normalizes_user_and_sends_welcome_message PASSED [100%]
+
+=================================== FAILURES ===================================
+___________ PrepareRegistrationTests.test_email_ends_with_at_raises ____________
+
+self = <test_registration.PrepareRegistrationTests testMethod=test_email_ends_with_at_raises>
+
+    def test_email_ends_with_at_raises(self):
+>       with self.assertRaises(ValueError) as cm:
+E       AssertionError: ValueError not raised
+
+tests/test_registration.py:57: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_registration.py::PrepareRegistrationTests::test_email_ends_with_at_raises
+========================= 1 failed, 9 passed in 0.03s ==========================
+> orchestrator · freeLLMAPI
+[0m← [0mEdit tests/test_registration.py
+Index: tests/test_registration.py
+===================================================================
+--- tests/test_registration.py
++++ tests/test_registration.py
+@@ -54,9 +54,9 @@
+         self.assertEqual("email is invalid", str(cm.exception))
+ 
+     def test_email_ends_with_at_raises(self):
+         with self.assertRaises(ValueError) as cm:
+-            prepare_registration({"name": "Bob", "email": "bob@example."})
++            prepare_registration({"name": "Bob", "email": "bob@"})
+         self.assertEqual("email is invalid", str(cm.exception))
+ 
+     def test_email_only_at_raises(self):
+         with self.assertRaises(ValueError) as cm:
+
+> orchestrator · freeLLMAPI
+[0m$ [0mcd /tmp/skill-bench-registration-boundary-fvbsbxbh/workspace && python3 -m pytest tests/test_registration.py -v
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /tmp/skill-bench-registration-boundary-fvbsbxbh/workspace
+plugins: anyio-4.14.2, cov-7.1.0
+collecting ... collected 10 items
+
+tests/test_registration.py::PrepareRegistrationTests::test_email_ends_with_at_raises PASSED [ 10%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_missing_at_raises PASSED [ 20%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_only_at_raises PASSED [ 30%]
+tests/test_registration.py::PrepareRegistrationTests::test_email_starts_with_at_raises PASSED [ 40%]
+tests/test_registration.py::PrepareRegistrationTests::test_empty_name_raises PASSED [ 50%]
+tests/test_registration.py::PrepareRegistrationTests::test_missing_name_raises PASSED [ 60%]
+tests/test_registration.py::PrepareRegistrationTests::test_normalizes_name_and_email PASSED [ 70%]
+tests/test_registration.py::PrepareRegistrationTests::test_valid_email_with_subdomain PASSED [ 80%]
+tests/test_registration.py::RegisterUserTests::test_invalid_input_does_not_write_or_send PASSED [ 90%]
+tests/test_registration.py::RegisterUserTests::test_normalizes_user_and_sends_welcome_message PASSED [100%]
+
+============================== 10 passed in 0.02s ==============================
+> orchestrator · freeLLMAPI
+[0m→ [0mRead registration.py 
+> orchestrator · freeLLMAPI
+[0m→ [0mRead tests/test_registration.py 
+> orchestrator · freeLLMAPI

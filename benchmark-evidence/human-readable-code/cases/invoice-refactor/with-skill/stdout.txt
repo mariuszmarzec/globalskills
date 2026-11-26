@@ -1,0 +1,44 @@
+Now I have a clear understanding of the current implementation and the test expectations. Let me refactor `invoice.py` by extracting the meaningful domain operations into helper functions while keeping `create_invoice` as a readable orchestration.
+All 6 tests pass. The refactoring is complete and follows the human-readable-code guidelines:
+
+**Changes made to `invoice.py`:**
+1. Extracted `_calculate_subtotal(items)` — validates quantities/prices and computes the line-item subtotal
+2. Extracted `_calculate_discount(subtotal, discount_code)` — encapsulates the discount rules (SAVE10, SAVE20 with minimum threshold)
+3. Extracted `_calculate_tax(taxable_amount, tax_rate)` — computes tax with rounding
+4. `create_invoice` now reads as a clear orchestration: calculate subtotal → calculate discount → derive taxable amount → calculate tax → compute total → return result
+
+**Preserved:**
+- Public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature
+- All current behavior (validation, discount logic, rounding, edge cases)
+- No changes to tests
+
+**Avoided per guidelines:**
+- No arbitrary line-count rules
+- No classes/interfaces
+- No dependencies
+- No tiny forwarding wrappers (each helper has meaningful domain logic)
+- No helpers for intermediate derivations like `taxable_amount` or `total` (kept inline)
+```text
+Task: Refactor invoice.py to make the main invoice flow easier to understand by extracting meaningful operations into clearly named helper functions
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple single-file refactoring with clear scope: extract three cohesive domain helpers (subtotal, discount, tax) while preserving the public create_invoice signature and all behavior. No architectural complexity, no new dependencies, low risk.
+
+Escalated:
+ NO
+
+Steps:
+ 3
+
+Result:
+ SUCCESS
+```
