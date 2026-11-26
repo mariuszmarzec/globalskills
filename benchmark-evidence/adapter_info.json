@@ -1,0 +1,8 @@
+{
+  "adapter": "opencode",
+  "opencode_version": "v2.4.1",
+  "provider": "freeLLMAPI",
+  "model": "free-cloud (OpenCode default)",
+  "model_effective": null,
+  "note": "No model override or fallback used. Model=null as reported by OpenCode adapter."
+}

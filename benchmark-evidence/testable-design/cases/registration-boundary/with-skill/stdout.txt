@@ -1,0 +1,49 @@
+Now I'll implement the refactoring following the testable-design principles. Let me update `registration.py` first:
+Now let me update the test file to add tests for `prepare_registration`:
+Now let me run the tests to verify the changes:
+All tests pass. Let me verify the final state of the files:
+The refactoring is complete. All tests pass. Here's the summary:
+
+```text
+Task: Refactor registration.py to extract pure prepare_registration helper for testable validation/normalization
+
+Role:
+ coder
+
+Initial tier:
+ NORMAL
+
+Model:
+ freeLLMAPI
+
+Reason:
+ The task required extracting pure logic into a testable helper while preserving the public register_user function and its integration tests. This is a focused refactoring with clear scope.
+
+Escalated:
+ NO
+
+Steps:
+ 2
+
+Result:
+ SUCCESS
+```
+
+**Changes made:**
+
+1. **`registration.py`** - Added `prepare_registration(data)` pure function that:
+   - Normalizes name (strips whitespace)
+   - Normalizes email (strips whitespace, lowercases)
+   - Validates name is non-empty
+   - Validates email contains `@` and doesn't start/end with `@`
+   - Returns `(name, email)` tuple or raises `ValueError`
+   - `register_user` now delegates to this helper
+
+2. **`tests/test_registration.py`** - Added `PrepareRegistrationTests` class with 5 focused unit tests:
+   - Normalization of whitespace and email lowercasing
+   - Empty name validation
+   - Missing `@` symbol
+   - Email starting with `@`
+   - Email ending with `@`
+
+3. Existing `RegisterUserTests` integration tests (fake-based) remain unchanged and pass.

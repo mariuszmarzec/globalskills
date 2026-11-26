@@ -1,0 +1,20 @@
+Now I understand the code and tests. Let me refactor `invoice.py` to extract meaningful operations into clearly named helper functions while preserving the public API and all behavior.
+All 6 tests pass. The refactoring is complete.
+The refactoring is complete. Here's a summary:
+
+**Changes made to `invoice.py`:**
+- Extracted four meaningful, cohesive helper functions:
+  - `_calculate_subtotal(items)` — validates items and computes the line-item subtotal
+  - `_calculate_discount(subtotal, discount_code)` — applies SAVE10/SAVE20 discount logic
+  - `_calculate_tax(taxable_amount, tax_rate)` — computes tax with rounding
+  - `_calculate_total(taxable_amount, tax)` — computes final total with rounding
+- `create_invoice` is now a readable orchestration of these steps
+- Public signature `create_invoice(items, discount_code=None, tax_rate=0.0)` is preserved
+- All existing behavior maintained (all 6 tests pass)
+
+**No:**
+- Arbitrary line-count rules applied
+- Classes/interfaces added
+- Dependencies introduced
+- Tiny forwarding wrappers created
+- Tests changed

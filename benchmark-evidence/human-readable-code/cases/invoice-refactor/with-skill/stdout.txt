@@ -1,0 +1,48 @@
+Now I understand the current implementation and tests. Let me refactor `invoice.py` to extract meaningful operations into clearly named helper functions while preserving the public `create_invoice` signature and all behavior.
+All 6 tests pass. The refactoring is complete.
+
+**Summary of changes to `invoice.py`:**
+
+1. **`_calculate_line_items_subtotal(items)`** - Extracts the loop that validates each item (negative quantity/unit_price) and computes the subtotal. This isolates the line-item calculation with its validation logic.
+
+2. **`_calculate_discount(subtotal, discount_code)`** - Extracts the discount logic (SAVE10, SAVE20 with minimum threshold) into a clear domain-named function.
+
+3. **`_calculate_tax_and_total(taxable_amount, tax_rate)`** - Extracts the tax rounding and total computation.
+
+4. **`create_invoice`** now reads as a clean orchestration:
+   - Calculate subtotal
+   - Calculate discount
+   - Derive taxable amount (kept inline — simple subtraction)
+   - Calculate tax and total
+   - Return the rounded result dict
+
+No classes, interfaces, new dependencies, or forwarding wrappers were added. All existing tests pass without modification.
+The refactoring is complete and all tests pass. Here's the final report:
+
+**Task:** Refactor invoice.py to make the main invoice flow easier to understand
+
+**Role:** orchestrator → coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** Simple, scoped refactoring task with clear extraction boundaries (subtotal, discount, tax). Low complexity and low risk - no architectural changes, no new dependencies, all behavior preserved by existing tests.
+
+**Escalated:** NO
+
+**Steps:**
+1. Loaded human-readable-code skill for guidance
+2. Read existing invoice.py and test_invoice.py to understand behavior
+3. Refactored invoice.py extracting three meaningful helper functions
+4. Ran test suite - all 6 tests pass
+
+**Result:** SUCCESS
+
+The refactored `invoice.py` now has:
+- `_calculate_line_items_subtotal(items)` — validates items and computes subtotal
+- `_calculate_discount(subtotal, discount_code)` — handles SAVE10/SAVE20 logic
+- `_calculate_tax_and_total(taxable_amount, tax_rate)` — computes rounded tax and total
+- `create_invoice` as a clean orchestration calling each helper in sequence
+
+All 6 existing tests pass without modification.
