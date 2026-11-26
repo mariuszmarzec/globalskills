@@ -1,3 +1,5 @@
+Before editing, inspect the skills listed in OpenCode's available-skills description. If `human-readable-code` is listed, load it with the native `skill` tool using ID `human-readable-code` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill. Do not infer the skill's content from its name or from the task wording.
+
 Refactor invoice.py to make the main invoice flow easier for another developer to understand. Preserve the public create_invoice(items, discount_code=None, tax_rate=0.0) signature and all current behavior. Extract the meaningful operations for calculating the line-item subtotal, discount, and tax into clearly named, cohesive helper functions where that improves the structure. Keep create_invoice as a readable orchestration of those steps.
 
 Do not use arbitrary line-count rules, add classes/interfaces, introduce dependencies, or create tiny forwarding wrappers. Do not change the tests. Run the existing test suite and keep the change scoped to invoice.py.
