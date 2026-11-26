@@ -1,0 +1,20 @@
+The `testable-design` skill is not in the available skills list, so I'll proceed without it. Let me implement the refactoring.
+All 7 tests pass. Let me verify the final state of both files:
+The refactoring is complete. All 7 tests pass (5 new unit tests for `prepare_registration` + 2 existing integration tests for `register_user`).
+
+**Summary of changes:**
+
+**registration.py:**
+- Extracted pure `prepare_registration(data)` function that normalizes name/email and validates input, raising `ValueError` for invalid input
+- `register_user` now calls `prepare_registration` and retains all original behavior (persistence, welcome email)
+
+**tests/test_registration.py:**
+- Added `PrepareRegistrationTests` class with 5 tests covering:
+  - Normalized name (whitespace stripped) and email (lowercased)
+  - Empty name → `ValueError("name is required")`
+  - Missing `@` in email → `ValueError("email is invalid")`
+  - Email starting with `@` → `ValueError("email is invalid")`
+  - Email ending with `@` → `ValueError("email is invalid")`
+- Existing `RegisterUserTests` unchanged and still passing
+
+No interfaces, classes, mocks, network dependencies, or test-only public APIs were added.
