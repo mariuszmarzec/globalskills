@@ -32,6 +32,21 @@ class HumanReadableBenchmarkPromptTests(unittest.TestCase):
         self.assertIn("continue without a skill", prompt)
 
 
+class HumanReadableSkillBoundaryTests(unittest.TestCase):
+    def test_explicit_operation_list_is_closed_and_precedes_general_guidance(self) -> None:
+        skill_path = HERE.parent.parent / "skills" / "human-readable-code" / "SKILL.md"
+        skill = skill_path.read_text(encoding="utf-8").lower()
+
+        priority_rule = skill.index("## priority rule: explicit operation lists are closed")
+        general_guidance = skill.index("## goal")
+        self.assertLess(priority_rule, general_guidance)
+        self.assertIn("closed and exhaustive", skill)
+        self.assertIn("exactly one helper for each named operation", skill)
+        self.assertIn("do not combine a named operation with a downstream result", skill)
+        self.assertIn("do not add helpers for simple intermediate or derived values", skill)
+        self.assertIn("calculate_tax_and_total", skill)
+        self.assertIn("calculate_taxable_amount", skill)
+
 class BenchmarkGitDiffArtifactTests(unittest.TestCase):
     def test_git_diff_artifact_captures_uncommitted_workspace_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
