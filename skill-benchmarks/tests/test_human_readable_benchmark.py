@@ -32,6 +32,23 @@ class HumanReadableBenchmarkPromptTests(unittest.TestCase):
         self.assertIn("continue without a skill", prompt)
 
 
+class TestableDesignBenchmarkPromptTests(unittest.TestCase):
+    def test_prompt_loads_testable_design_skill_only_when_available(self) -> None:
+        prompt_path = (
+            HERE.parent
+            / "cases"
+            / "testable-design"
+            / "registration-boundary"
+            / "prompt.md"
+        )
+        prompt = prompt_path.read_text(encoding="utf-8").lower()
+
+        self.assertIn("available-skills", prompt)
+        self.assertIn("testable-design", prompt)
+        self.assertIn("native", prompt)
+        self.assertIn("without-skill baseline", prompt)
+        self.assertIn("continue without a skill", prompt)
+
 class HumanReadableSkillBoundaryTests(unittest.TestCase):
     def test_explicit_operation_list_is_closed_and_precedes_general_guidance(self) -> None:
         skill_path = HERE.parent.parent / "skills" / "human-readable-code" / "SKILL.md"
