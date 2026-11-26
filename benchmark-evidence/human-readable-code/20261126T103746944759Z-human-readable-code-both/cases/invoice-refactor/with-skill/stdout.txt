@@ -1,0 +1,27 @@
+Now I understand the code and tests. Let me refactor `invoice.py` to extract meaningful helper functions while preserving all behavior.
+All 6 tests pass. The refactoring is complete and preserves all behavior.
+
+```text
+Task: Refactor invoice.py to extract meaningful helper functions while preserving public API and behavior
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple single-file refactoring with existing tests. Low complexity, low risk - just extracting helper functions.
+
+Escalated:
+ NO
+
+Steps:
+ 1
+
+Result:
+ SUCCESS
+```

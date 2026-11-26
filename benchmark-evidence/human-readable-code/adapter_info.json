@@ -1,0 +1,13 @@
+{
+  "adapter": "opencode",
+  "opencode_version": "v2.4.1",
+  "provider": "freeLLMAPI",
+  "model": null,
+  "model_note": "OpenCode default = litellm/freeLLMAPI (free-cloud group), model identifier not explicitly exposed by adapter; preserved as null per instructions",
+  "benchmark_command": "python3 skill-benchmarks/benchmark.py run --skill human-readable-code --mode both",
+  "source_sha": "2e214689d1c3cde978dc6a829e373a43030c8e8b",
+  "source_branch": "fix/human-readable-code-iteration-2",
+  "source_pr": 172,
+  "base_master_sha": "e5c026b3401391c20c027ce22643fe9171b7e5f2",
+  "ci_run_url": "https://github.com/mariuszmarzec/globalskills/actions/runs/45776277378"
+}

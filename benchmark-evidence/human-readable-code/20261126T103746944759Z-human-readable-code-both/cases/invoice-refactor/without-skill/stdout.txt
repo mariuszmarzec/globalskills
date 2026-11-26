@@ -1,0 +1,36 @@
+Now I understand the current implementation and tests. Let me refactor `invoice.py` by extracting cohesive helper functions while preserving the public signature and behavior.
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final refactored code:
+The refactoring is complete. All tests pass and the code is now more readable.
+
+```
+Task: Refactor invoice.py to extract meaningful helper functions while preserving public API and behavior
+
+Role:
+ coder
+
+Initial tier:
+ NORMAL
+
+Model:
+ freeLLMAPI
+
+Reason:
+ The task required extracting cohesive helper functions from a single function. This is a straightforward refactoring with no architectural complexity, no new dependencies, and clear existing test coverage. NORMAL tier is appropriate for this well-scoped implementation work.
+
+Escalated:
+ NO
+
+Steps:
+ 2
+
+Result:
+ SUCCESS
+```
+
+**Summary of changes to `invoice.py`:**
+- Extracted `_calculate_subtotal(items)` — validates quantities/prices and computes subtotal
+- Extracted `_calculate_discount(subtotal, discount_code)` — encapsulates SAVE10/SAVE20 logic
+- Extracted `_calculate_tax_and_total(taxable_amount, tax_rate)` — computes tax and total
+- `create_invoice` now reads as a clear orchestration of these steps
+- Public signature and all behavior preserved; all 6 tests pass
