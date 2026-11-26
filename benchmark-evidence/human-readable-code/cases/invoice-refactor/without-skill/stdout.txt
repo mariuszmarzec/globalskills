@@ -1,0 +1,20 @@
+The `human-readable-code` skill is not available. I'll proceed with the refactoring based on the task requirements. Let me refactor `invoice.py` by extracting cohesive helper functions.
+Now let me run the existing test suite to verify the refactoring preserves all behavior.
+All 6 tests pass. Let me verify the final refactored code.
+The refactoring is complete. All 6 tests pass.
+
+**Summary of changes:**
+
+- Extracted **5 cohesive helper functions** with clear, intent-revealing names:
+  - `_calculate_line_item_total` — validates and computes a single line item
+  - `_calculate_subtotal` — aggregates all line items
+  - `_calculate_discount` — encapsulates discount code logic (SAVE10, SAVE20 with threshold)
+  - `_calculate_taxable_amount` — computes post-discount amount, floored at 0
+  - `_calculate_tax` — applies tax rate with rounding
+
+- `create_invoice` is now a **readable orchestration** of those steps, each step clearly named and doing one thing.
+
+- **Preserved** the public signature `create_invoice(items, discount_code=None, tax_rate=0.0)` and **all behavior** (validations, rounding, discount thresholds, edge cases).
+
+- No classes, interfaces, new dependencies, or arbitrary line-count splits — just meaningful, cohesive functions.
+**Done.** The refactored `invoice.py` now has clearly named, cohesive helper functions that make the main `create_invoice` flow easy to read and understand, while preserving the exact same public signature and all behavior. All 6 existing tests pass.
