@@ -1,0 +1,49 @@
+Now I understand the current code. I'll refactor `registration.py` to extract the pure `prepare_registration` helper and add tests for it.
+All 9 tests pass. The refactoring is complete and verified.
+The refactoring is complete. Here's the summary:
+
+**Changes made:**
+1. **`registration.py`** - Extracted `prepare_registration(data)` pure helper that:
+   - Normalizes name (strip) and email (strip + lowercase)
+   - Validates: name required, email must contain `@` not at start/end
+   - Returns `(name, email)` tuple or raises `ValueError`
+   - No database/mailer dependencies
+
+2. **`register_user`** - Now delegates to `prepare_registration`, keeps all persistence and welcome email behavior unchanged.
+
+3. **`tests/test_registration.py`** - Added `PrepareRegistrationTests` (7 new tests) covering:
+   - Normalized input (whitespace, case)
+   - Empty/missing name
+   - Invalid emails: missing `@`, starts with `@`, ends with `@`, missing email
+   - Kept existing `RegisterUserTests` integration tests (2 tests) using lightweight fakes
+
+**Verification:** All 9 tests pass (7 unit + 2 integration).
+```text
+Task: Refactor registration.py to extract pure prepare_registration helper with tests
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI
+
+Reason:
+ Simple refactoring task - extract pure function, add tests, no architectural changes needed
+
+Escalated:
+ NO
+
+Steps:
+ 1. Read existing registration.py and tests/test_registration.py
+ 2. Extract prepare_registration(data) pure helper with normalization/validation logic
+ 3. Update register_user to delegate to prepare_registration
+ 4. Add PrepareRegistrationTests class with 7 test cases for normalized/invalid inputs
+ 5. Keep existing RegisterUserTests integration tests unchanged
+ 6. Run pytest - all 9 tests pass
+
+Result:
+ SUCCESS
+```

@@ -1,0 +1,31 @@
+Now I understand the current code. I'll refactor `registration.py` to extract a pure `prepare_registration` helper and add tests for it.
+The test case for email ending with `@` was incorrect - `"bob@example."` ends with `.` not `@`. Let me fix that test:
+All tests pass. Let me verify the final state of both files:
+```
+Task: Refactor registration.py to extract a pure prepare_registration helper for testable input normalization/validation
+
+Role:
+ coder
+
+Initial tier:
+ CHEAP
+
+Model:
+ freeLLMAPI (litellm)
+
+Reason:
+ Simple single-file refactor with test additions - pure extraction of logic into a helper function, no architecture changes needed
+
+Escalated:
+ NO
+
+Steps:
+ 1. Extracted prepare_registration(data) pure function from register_user
+ 2. Updated register_user to call prepare_registration
+ 3. Added 8 unit tests for prepare_registration covering normalized input and all invalid cases
+ 4. Kept existing 2 fake-based integration tests for register_user
+ 5. Ran all 10 tests - all pass
+
+Result:
+ SUCCESS
+```
