@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "selector": "human-readable-code",
+    "requested_mode": "both",
+    "model": null,
+    "config": "config.json",
+    "started_at": "2026-11-27T10:54:50.001104+00:00",
+    "finished_at": "2026-11-27T10:59:11.104133+00:00"
+  },
+  "summary": {
+    "runs": 2,
+    "passed_runs": 0,
+    "failed_runs": 2,
+    "cases": 1,
+    "skills": 1
+  },
+  "evaluation": {
+    "target_mode": "with-skill",
+    "runs": 1,
+    "passed_runs": 0,
+    "failed_runs": 1,
+    "passed": false,
+    "note": "In both mode, without-skill is a diagnostic baseline and does not determine the command exit status."
+  },
+  "impact": {
+    "cases_compared": 1,
+    "skill_helped": 0,
+    "skill_harmed": 0,
+    "case_passes_without_skill": 0,
+    "case_fails_with_and_without_skill": 1,
+    "comparison_unavailable": 0
+  },
+  "comparisons": [
+    {
+      "case": "invoice-refactor",
+      "comparison_available": true,
+      "without_skill_passed": false,
+      "with_skill_passed": false,
+      "impact_signal": "case_fails_with_and_without_skill",
+      "without_skill_passed_checks": 4,
+      "with_skill_passed_checks": 4,
+      "passed_checks_delta": 0,
+      "without_skill_failed_checks": [
+        "entry-point-orchestrates-steps",
+        "meaningful-calculation-helpers",
+        "tax-helper-returns-one-result"
+      ],
+      "with_skill_failed_checks": [
+        "entry-point-orchestrates-steps",
+        "meaningful-calculation-helpers",
+        "tax-helper-returns-one-result"
+      ],
+      "check_deltas": []
+    }
+  ],
+  "results": [
+    {
+      "case": "invoice-refactor",
+      "skill": "human-readable-code",
+      "mode": "with-skill",
+      "adapter": "opencode",
+      "model": null,
+      "timeout_seconds": 600,
+      "agent_returncode": 0,
+      "agent_duration_seconds": 35.535,
+      "duration_seconds": 35.621,
+      "passed": false,
+      "verifier": {
+        "passed": false,
+        "mode": "with-skill",
+        "checks": [
+          {
+            "name": "valid-python",
+            "passed": true,
+            "expected": "invoice.py parses",
+            "actual": "valid",
+            "evidence": "ast.parse(invoice.py)"
+          },
+          {
+            "name": "public-api-preserved",
+            "passed": true,
+            "expected": "create_invoice(items, discount_code=None, tax_rate=0.0)",
+            "actual": "['items', 'discount_code', 'tax_rate']",
+            "evidence": "AST function signature"
+          },
+          {
+            "name": "meaningful-calculation-helpers",
+            "passed": false,
+            "expected": "exactly one separate subtotal, discount and tax helper, with no duplicate or additional helper",
+            "actual": "calculate_discount, calculate_subtotal, calculate_total_and_tax",
+            "evidence": "top-level function definitions classified by domain responsibility"
+          },
+          {
+            "name": "tax-helper-returns-one-result",
+            "passed": false,
+            "expected": "the tax helper returns only one tax amount and does not calculate or return invoice total",
+            "actual": "tax helper missing, multi-value result, or downstream total found",
+            "evidence": "AST return expressions, aggregate assignments, and downstream-total identifiers"
+          },
+          {
+            "name": "entry-point-orchestrates-steps",
+            "passed": false,
+            "expected": "create_invoice calls the unique subtotal, discount and tax helpers and contains no calculation loop",
+            "actual": "expected helper calls or loop-free orchestration missing",
+            "evidence": "AST calls and control-flow inspection"
+          },
+          {
+            "name": "no-unneeded-production-types",
+            "passed": true,
+            "expected": "no classes added for this local refactor",
+            "actual": "no classes",
+            "evidence": "top-level AST class definitions"
+          },
+          {
+            "name": "existing-behavior-tests",
+            "passed": true,
+            "expected": "all existing invoice tests pass",
+            "actual": "OK",
+            "evidence": "python -m unittest discover -s tests -v"
+          }
+        ],
+        "returncode": 1
+      },
+      "command": [
+        "opencode",
+        "run",
+        "--auto",
+        "Before editing, inspect the skills listed in OpenCode's available-skills description. If `human-readable-code` is listed, load it with the native `skill` tool using ID `human-readable-code` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill. Do not infer the skill's content from its name or from the task wording.\n\nRefactor invoice.py to make the main invoice flow easier for another developer to understand. Preserve the public create_invoice(items, discount_code=None, tax_rate=0.0) signature and all current behavior. Extract the meaningful operations for calculating the line-item subtotal, discount, and tax into clearly named, cohesive helper functions where that improves the structure. Keep create_invoice as a readable orchestration of those steps.\n\nDo not use arbitrary line-count rules, add classes/interfaces, introduce dependencies, or create tiny forwarding wrappers. Do not change the tests. Run the existing test suite and keep the change scoped to invoice.py."
+      ],
+      "artifact_dir": "cases/invoice-refactor/with-skill"
+    },
+    {
+      "case": "invoice-refactor",
+      "skill": "human-readable-code",
+      "mode": "without-skill",
+      "adapter": "opencode",
+      "model": null,
+      "timeout_seconds": 600,
+      "agent_returncode": 0,
+      "agent_duration_seconds": 226.299,
+      "duration_seconds": 226.378,
+      "passed": false,
+      "verifier": {
+        "passed": false,
+        "mode": "without-skill",
+        "checks": [
+          {
+            "name": "valid-python",
+            "passed": true,
+            "expected": "invoice.py parses",
+            "actual": "valid",
+            "evidence": "ast.parse(invoice.py)"
+          },
+          {
+            "name": "public-api-preserved",
+            "passed": true,
+            "expected": "create_invoice(items, discount_code=None, tax_rate=0.0)",
+            "actual": "['items', 'discount_code', 'tax_rate']",
+            "evidence": "AST function signature"
+          },
+          {
+            "name": "meaningful-calculation-helpers",
+            "passed": false,
+            "expected": "exactly one separate subtotal, discount and tax helper, with no duplicate or additional helper",
+            "actual": "_apply_discount, _calculate_discount, _calculate_subtotal, _calculate_tax, _calculate_total",
+            "evidence": "top-level function definitions classified by domain responsibility"
+          },
+          {
+            "name": "tax-helper-returns-one-result",
+            "passed": false,
+            "expected": "the tax helper returns only one tax amount and does not calculate or return invoice total",
+            "actual": "tax helper missing, multi-value result, or downstream total found",
+            "evidence": "AST return expressions, aggregate assignments, and downstream-total identifiers"
+          },
+          {
+            "name": "entry-point-orchestrates-steps",
+            "passed": false,
+            "expected": "create_invoice calls the unique subtotal, discount and tax helpers and contains no calculation loop",
+            "actual": "expected helper calls or loop-free orchestration missing",
+            "evidence": "AST calls and control-flow inspection"
+          },
+          {
+            "name": "no-unneeded-production-types",
+            "passed": true,
+            "expected": "no classes added for this local refactor",
+            "actual": "no classes",
+            "evidence": "top-level AST class definitions"
+          },
+          {
+            "name": "existing-behavior-tests",
+            "passed": true,
+            "expected": "all existing invoice tests pass",
+            "actual": "OK",
+            "evidence": "python -m unittest discover -s tests -v"
+          }
+        ],
+        "returncode": 1
+      },
+      "command": [
+        "opencode",
+        "run",
+        "--auto",
+        "Before editing, inspect the skills listed in OpenCode's available-skills description. If `human-readable-code` is listed, load it with the native `skill` tool using ID `human-readable-code` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill. Do not infer the skill's content from its name or from the task wording.\n\nRefactor invoice.py to make the main invoice flow easier for another developer to understand. Preserve the public create_invoice(items, discount_code=None, tax_rate=0.0) signature and all current behavior. Extract the meaningful operations for calculating the line-item subtotal, discount, and tax into clearly named, cohesive helper functions where that improves the structure. Keep create_invoice as a readable orchestration of those steps.\n\nDo not use arbitrary line-count rules, add classes/interfaces, introduce dependencies, or create tiny forwarding wrappers. Do not change the tests. Run the existing test suite and keep the change scoped to invoice.py."
+      ],
+      "artifact_dir": "cases/invoice-refactor/without-skill"
+    }
+  ]
+}

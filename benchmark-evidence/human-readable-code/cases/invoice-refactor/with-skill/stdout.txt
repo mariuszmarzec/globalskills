@@ -1,0 +1,34 @@
+I'll start by examining the current state of the repository and the invoice.py file to understand what we're working with.
+Now I understand the code. Let me run the tests first to establish a baseline:
+All 6 tests pass. Now I'll refactor the code to improve readability by extracting meaningful operations into clearly named helper functions. The key operations are:
+
+1. **Calculating subtotal** - summing up all line items with validation
+2. **Calculating discount** - applying discount code logic
+3. **Calculating tax and total** - computing the final amounts
+
+Let me write the refactored version:
+Now let me run the tests to verify all behavior is preserved:
+All tests pass. Let me verify the refactored code:
+The refactoring is complete. Let me verify one more time with a comprehensive test run:
+All tests pass. The refactoring is complete.
+
+---
+
+**Summary:**
+
+I refactored `invoice.py` to improve readability by extracting meaningful operations into clearly named helper functions:
+
+1. **`create_invoice(items, discount_code=None, tax_rate=0.0)`** - Now serves as a clear orchestration of the three main steps, making the flow easy to follow at a glance.
+
+2. **`calculate_subtotal(items)`** - Encapsulates line-item subtotal calculation with validation (negative quantity/unit_price checks).
+
+3. **`calculate_discount(subtotal, discount_code)`** - Handles all discount code logic (SAVE10, SAVE20 with threshold).
+
+4. **`calculate_total_and_tax(subtotal, discount, tax_rate)`** - Computes tax and final total from the taxable amount.
+
+**Key improvements:**
+- Each function has a single, well-defined responsibility
+- Docstrings describe each function's purpose
+- The main `create_invoice` function now reads like a story: calculate subtotal → calculate discount → calculate total/tax
+- The `max(0.0, ...)` replaces the manual check for negative taxable amounts, making it clearer
+- Preserved all existing behavior and the public API signature

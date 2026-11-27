@@ -1,0 +1,7 @@
+{
+  "adapter": "opencode",
+  "opencode_version": "v2.4.1",
+  "provider": "freeLLMAPI",
+  "model": null,
+  "model_note": "OpenCode default (freeLLMAPI/free-cloud via LiteLLM), no override or fallback used"
+}
