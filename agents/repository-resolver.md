@@ -65,9 +65,15 @@ Return exactly one JSON object and no Markdown or explanation:
 
 {
   "repositories": ["owner/repo"],
+  "skills": ["installed-skill-name"],
   "confidence": "high",
   "reason": "Short explanation tied to task evidence"
 }
+
+The optional skills array should contain only the exact directory names of
+installed skills whose supplied content materially established the project
+mapping or provides necessary implementation context. Do not invent skill
+names. Use an empty array when no specific project skill applies.
 
 Use confidence "high" only when every selected repository is supported by
 clear task wording or a direct mapping in the supplied project skills. Use
