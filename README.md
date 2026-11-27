@@ -339,6 +339,7 @@ Canonical agent definitions live in `agents/<name>.md`. Each file contains one s
 | `debugger` | all | STRONG | `litellm/freeLLMAPI` | no |
 | `debugger-expert` | all | EXPERT | `litellm/freeLLMAPI` | no |
 | `researcher` | all | CHEAP | `litellm/freeLLMAPI` | edit: deny |
+| `repository-resolver` | all | CHEAP | inherited from operator config | yes |
 | `tester` | all | NORMAL | `litellm/freeLLMAPI` | no |
 | `specification-driven-development` | Specification-first workflow: baseline audits, human-approved requirement changes, traceable implementation handoffs, and requirements-focused verification. |
 | `security` | all | EXPERT | `litellm/freeLLMAPI` | edit: deny |
