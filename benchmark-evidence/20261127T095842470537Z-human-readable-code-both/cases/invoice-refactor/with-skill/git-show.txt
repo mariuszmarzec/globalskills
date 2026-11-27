@@ -1,0 +1,13 @@
+commit f8506b6e1fbd96bfa9f9310eaf39ab07330a3ade
+Author:     Benchmark User <benchmark@example.invalid>
+AuthorDate: Fri Nov 27 10:58:42 2026 +0100
+Commit:     Benchmark User <benchmark@example.invalid>
+CommitDate: Fri Nov 27 10:58:42 2026 +0100
+
+    benchmark: baseline
+
+ .opencode/opencode.json                       |   8 ++
+ .opencode/skills/human-readable-code/SKILL.md | 171 ++++++++++++++++++++++++++
+ invoice.py                                    |  30 +++++
+ tests/test_invoice.py                         |  49 ++++++++
+ 4 files changed, 258 insertions(+)

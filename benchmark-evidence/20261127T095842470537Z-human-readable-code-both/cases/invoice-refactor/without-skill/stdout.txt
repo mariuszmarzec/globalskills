@@ -1,0 +1,32 @@
+Now I understand the current implementation and tests. Let me refactor `invoice.py` by extracting cohesive helper functions for subtotal, discount, and tax calculations.
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final refactored code:
+The refactoring is complete. 
+
+**Summary:**
+
+I refactored `invoice.py` by extracting three cohesive helper functions:
+
+1. **`calculate_subtotal(items)`** - Iterates through items, validates quantity and unit_price are non-negative, and accumulates the subtotal.
+
+2. **`calculate_discount(subtotal, discount_code)`** - Applies discount rules: SAVE10 gives 10% off, SAVE20 gives 20% off (only if subtotal ≥ $100).
+
+3. **`calculate_tax_and_total(taxable_amount, tax_rate)`** - Computes tax and total from the taxable amount and tax rate.
+
+The `create_invoice` function now reads as a clear orchestration of these steps, making the flow easy to follow:
+
+```python
+def create_invoice(items, discount_code=None, tax_rate=0.0):
+    subtotal = calculate_subtotal(items)
+    discount = calculate_discount(subtotal, discount_code)
+    
+    taxable_amount = subtotal - discount
+    if taxable_amount < 0:
+        taxable_amount = 0.0
+    
+    tax, total = calculate_tax_and_total(taxable_amount, tax_rate)
+    
+    return {...}
+```
+
+All 6 existing tests pass, confirming the public signature and behavior are preserved.

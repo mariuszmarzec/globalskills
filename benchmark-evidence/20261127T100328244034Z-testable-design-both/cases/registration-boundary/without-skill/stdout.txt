@@ -1,0 +1,58 @@
+I'll start by examining the current state of the files and the available skills.
+Now let me check if `testable-design` is in the available skills by searching the skills catalog:
+The skill `testable-design` is explicitly denied (set to `"deny"`), meaning it is listed in OpenCode's available-skills description but is not available for use. Following the instructions, I will continue without loading the skill.
+
+Now I understand the task. I need to:
+1. Extract a pure helper `prepare_registration(data)` from `register_user` for testing without database/email sender
+2. Keep the public `register_user` function and its current behavior
+3. Add tests for normalized input and invalid email/name cases
+
+Let me implement the refactoring:
+Now let me update the test file to add unit tests for `prepare_registration` while keeping the existing integration tests:
+Now let me run the tests to verify everything works:
+All 8 tests pass. Let me verify the final state of both files:
+The refactoring is complete. Let me verify there are no other files modified:
+## Task Complete ✓
+
+**Summary of changes:**
+
+### `registration.py`
+- Added pure helper function `prepare_registration(data)` that:
+  - Takes a data dict
+  - Returns a tuple `(name, email)` with normalized values
+  - Raises `ValueError` for invalid input (empty name, invalid email)
+  - Contains NO database or email sender dependencies - testable in isolation
+- Refactored `register_user()` to use `prepare_registration()` internally, keeping its original behavior unchanged
+
+### `tests/test_registration.py`
+- Added new `PrepareRegistrationTests` class with 6 unit tests:
+  - `test_normalizes_name_and_email` - verifies name/email normalization
+  - `test_empty_name_raises_error` - whitespace-only name handling
+  - `test_missing_name_raises_error` - missing name field handling
+  - `test_invalid_email_no_at_raises_error` - email without @ symbol
+  - `test_invalid_email_starts_with_at_raises_error` - email starting with @
+  - `test_invalid_email_ends_with_at_raises_error` - email ending with @
+- Kept existing `RegisterUserTests` integration tests unchanged (2 tests)
+
+**Verification:** All 8 tests pass (6 new unit tests + 2 existing integration tests)
+
+---
+
+**Task:** Refactor registration.py for testable input normalization
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** Simple refactoring task - extract pure function from existing function, add tests. Minimal changes, low risk.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Analyzed existing code structure
+2. Extracted `prepare_registration()` helper function
+3. Added unit tests for the helper while preserving integration tests
+
+**Result:** SUCCESS

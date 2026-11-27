@@ -1,0 +1,32 @@
+I'll start by inspecting OpenCode's available-skills to check if `testable-design` is listed, then examine the current code structure before making changes.
+The `testable-design` skill is listed. Let me load it:
+Now let me load the `testable-design` skill:
+The skill is loaded. Now let me examine the current code structure:
+Now I have a clear picture. Following the `testable-design` skill guidelines, I need to:
+1. Extract a pure helper `prepare_registration(data)` for input normalization and validation
+2. Keep `register_user` as the public entry point with persistence and welcome message
+3. Add focused tests for the pure helper directly
+
+Let me refactor `registration.py` and add tests:
+Now let me update the test file to add focused tests for the pure helper:
+Now let me run the tests to verify everything works:
+I have a test failure. The test `test_handles_missing_name_key` is incorrect - when the name key is missing, it should raise `ValueError` (since `data.get("name", "")` returns `""`), not return an empty name. Let me fix the test to correctly test that a missing name key raises an error:
+Now let me run the tests again:
+All 13 tests pass. Let me verify the final state of both files:
+Let me also verify the tests run correctly one more time:
+All tests pass. The refactoring is complete.
+
+---
+
+**Task:** Refactor registration.py for testable design  
+**Role:** coder  
+**Initial tier:** CHEAP  
+**Model:** freeLLMAPI  
+**Reason:** Pure refactoring with extraction of validation logic and addition of unit tests. No complexity or risk increase - same functionality, better test separation.  
+**Escalated:** NO  
+**Steps:** 3  
+1. Load testable-design skill for guidance on separating decisions from effects  
+2. Extract `prepare_registration(data)` pure helper for normalization/validation, keep `register_user` for persistence/welcome message  
+3. Add focused tests for pure helper + keep lightweight integration tests  
+
+**Result:** SUCCESS

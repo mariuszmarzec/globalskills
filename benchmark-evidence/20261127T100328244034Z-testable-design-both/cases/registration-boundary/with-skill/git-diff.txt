@@ -1,0 +1,107 @@
+diff --git a/registration.py b/registration.py
+index 93a1afa..e0308e1 100644
+--- a/registration.py
++++ b/registration.py
+@@ -1,13 +1,23 @@
+ from datetime import datetime, timezone
+ 
+ 
+-def register_user(data, database, mailer):
++def prepare_registration(data):
++    """Normalize and validate registration input.
++    
++    Returns a tuple (name, email) with normalized values.
++    Raises ValueError for invalid input.
++    """
+     name = data.get("name", "").strip()
+     email = data.get("email", "").strip().lower()
+     if not name:
+         raise ValueError("name is required")
+     if "@" not in email or email.startswith("@") or email.endswith("@"):
+         raise ValueError("email is invalid")
++    return name, email
++
++
++def register_user(data, database, mailer):
++    name, email = prepare_registration(data)
+ 
+     user = {
+         "name": name,
+diff --git a/tests/test_registration.py b/tests/test_registration.py
+index 3f99d06..b520928 100644
+--- a/tests/test_registration.py
++++ b/tests/test_registration.py
+@@ -1,6 +1,6 @@
+ import unittest
+ 
+-from registration import register_user
++from registration import register_user, prepare_registration
+ 
+ 
+ class FakeDatabase:
+@@ -19,6 +19,65 @@ class FakeMailer:
+         self.sent_to.append(email)
+ 
+ 
++class PrepareRegistrationTests(unittest.TestCase):
++    def test_normalizes_input_and_lowercases_email(self):
++        name, email = prepare_registration(
++            {"name": "  Ada Lovelace ", "email": " ADA@EXAMPLE.COM "}
++        )
++        self.assertEqual("Ada Lovelace", name)
++        self.assertEqual("ada@example.com", email)
++
++    def test_valid_email_with_name(self):
++        name, email = prepare_registration({"name": "John Doe", "email": "john@example.com"})
++        self.assertEqual("John Doe", name)
++        self.assertEqual("john@example.com", email)
++
++    def test_handles_missing_name_key(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"email": "test@example.com"})
++        self.assertIn("name is required", str(ctx.exception))
++
++    def test_handles_missing_email_key(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "John Doe"})
++        self.assertIn("email is invalid", str(ctx.exception))
++
++    def test_invalid_email_empty(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "John", "email": ""})
++        self.assertIn("email is invalid", str(ctx.exception))
++
++    def test_invalid_email_no_at_symbol(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "John", "email": "johnexample.com"})
++        self.assertIn("email is invalid", str(ctx.exception))
++
++    def test_invalid_email_starts_with_at(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "John", "email": "@example.com"})
++        self.assertIn("email is invalid", str(ctx.exception))
++
++    def test_invalid_email_ends_with_at(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "John", "email": "john@"})
++        self.assertIn("email is invalid", str(ctx.exception))
++
++    def test_invalid_name_whitespace_only(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "   ", "email": "test@example.com"})
++        self.assertIn("name is required", str(ctx.exception))
++
++    def test_invalid_name_empty(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"name": "", "email": "test@example.com"})
++        self.assertIn("name is required", str(ctx.exception))
++
++    def test_invalid_name_missing_key(self):
++        with self.assertRaises(ValueError) as ctx:
++            prepare_registration({"email": "test@example.com"})
++        self.assertIn("name is required", str(ctx.exception))
++
++
+ class RegisterUserTests(unittest.TestCase):
+     def test_normalizes_user_and_sends_welcome_message(self):
+         database = FakeDatabase()

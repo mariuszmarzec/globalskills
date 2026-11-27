@@ -1,0 +1,12 @@
+commit a73b00c17ab2b795365a90f21c73d6ce4ae850c8
+Author:     Benchmark User <benchmark@example.invalid>
+AuthorDate: Fri Nov 27 11:04:15 2026 +0100
+Commit:     Benchmark User <benchmark@example.invalid>
+CommitDate: Fri Nov 27 11:04:15 2026 +0100
+
+    benchmark: baseline
+
+ .opencode/opencode.json    |  8 ++++++++
+ registration.py            | 19 +++++++++++++++++++
+ tests/test_registration.py | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 73 insertions(+)
