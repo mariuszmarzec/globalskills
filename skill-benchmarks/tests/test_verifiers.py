@@ -368,6 +368,8 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
                 self.assertTrue(check["passed"], f"entry-point-orchestrates-steps failed: {check}")
             if check["name"] == "existing-behavior-tests":
                 self.assertTrue(check["passed"], f"existing-behavior-tests failed: {check}")
+            if check["name"] == "tax-helper-returns-one-result":
+                self.assertTrue(check["passed"], f"tax-helper-returns-one-result failed: {check}")
 
     def test_previous_with_skill_implementation_fails_correct_reason(self):
         """Previous with-skill output (intermediate taxable_amount + combined tax_and_total) -> FAIL for correct reasons."""
@@ -525,6 +527,35 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
             if check["name"] == "meaningful-calculation-helpers":
                 self.assertFalse(check["passed"], f"meaningful-calculation-helpers should fail: {check}")
                 self.assertIn("taxable_amount", check["actual"])
+
+
+    def test_tax_helper_returning_tax_and_total_tuple_fails(self):
+        source = self.VALID_SOURCE.replace(
+            "return round(taxable_amount * tax_rate, 2)",
+            "tax = round(taxable_amount * tax_rate, 2)\\n"
+            "    total = round(taxable_amount + tax, 2)\\n"
+            "    return tax, total",
+        )
+        result = self.run_verifier(source)
+        checks = {check["name"]: check for check in result["checks"]}
+        self.assertFalse(
+            checks["tax-helper-returns-one-result"]["passed"],
+            f"A tax/total tuple must be rejected: {checks['tax-helper-returns-one-result']}",
+        )
+
+    def test_tax_helper_returning_tax_and_total_mapping_fails(self):
+        source = self.VALID_SOURCE.replace(
+            "return round(taxable_amount * tax_rate, 2)",
+            "tax = round(taxable_amount * tax_rate, 2)\\n"
+            "    total = round(taxable_amount + tax, 2)\\n"
+            "    return {\\"tax\\": tax, \\"total\\": total}",
+        )
+        result = self.run_verifier(source)
+        checks = {check["name"]: check for check in result["checks"]}
+        self.assertFalse(
+            checks["tax-helper-returns-one-result"]["passed"],
+            f"A tax/total mapping must be rejected: {checks['tax-helper-returns-one-result']}",
+        )
 
 
     VALID_SOURCE = """
