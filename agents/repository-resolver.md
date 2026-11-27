@@ -42,7 +42,9 @@ installed project-skill contents.
    keys, GitHub URLs and contextual descriptions using the supplied skills.
 2. Return every repository that the task explicitly asks to change. When the
    request clearly requires coordinated changes in multiple projects, return
-   all of them. Each will receive its own independent Manul task and PR.
+   all of them. Each receives its own separate PR: the first ordered target is
+   delivered by the current Manul Team parent task, and each remaining target
+   is delivered by one independent top-level child task with its own workspace.
 3. Do not include a repository merely because it is mentioned as background,
    a dependency, an example, or something to inspect. Include it only when
    code changes / a PR are requested there.
