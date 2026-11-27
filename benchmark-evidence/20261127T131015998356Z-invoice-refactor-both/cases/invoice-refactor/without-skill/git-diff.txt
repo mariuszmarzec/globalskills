@@ -1,0 +1,56 @@
+diff --git a/invoice.py b/invoice.py
+index 093df85..8d03d55 100644
+--- a/invoice.py
++++ b/invoice.py
+@@ -1,4 +1,5 @@
+-def create_invoice(items, discount_code=None, tax_rate=0.0):
++def calculate_subtotal(items):
++    """Calculate the line-item subtotal amount from a list of items."""
+     subtotal = 0.0
+     for item in items:
+         quantity = item["quantity"]
+@@ -8,23 +9,39 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
+         if unit_price < 0:
+             raise ValueError("unit_price cannot be negative")
+         subtotal += quantity * unit_price
++    return subtotal
++
+ 
++def calculate_discount(subtotal, discount_code):
++    """Calculate the discount amount given a subtotal and optional discount code."""
+     discount = 0.0
+     if discount_code is not None:
+         if discount_code == "SAVE10":
+             discount = subtotal * 0.10
+         elif discount_code == "SAVE20" and subtotal >= 100.0:
+             discount = subtotal * 0.20
++    return discount
++
++
++def calculate_tax(taxable_amount, tax_rate):
++    """Calculate the tax amount given a taxable amount and tax rate."""
++    return round(taxable_amount * tax_rate, 2)
+ 
++
++def create_invoice(items, discount_code=None, tax_rate=0.0):
++    subtotal = calculate_subtotal(items)
++    discount = calculate_discount(subtotal, discount_code)
++    
+     taxable_amount = subtotal - discount
+     if taxable_amount < 0:
+         taxable_amount = 0.0
+-
+-    tax = round(taxable_amount * tax_rate, 2)
++    
++    tax = calculate_tax(taxable_amount, tax_rate)
+     total = round(taxable_amount + tax, 2)
++    
+     return {
+         "subtotal": round(subtotal, 2),
+         "discount": round(discount, 2),
+         "tax": tax,
+         "total": total,
+-    }
++    }
+\ No newline at end of file
+warning: in the working copy of 'invoice.py', LF will be replaced by CRLF the next time Git touches it

@@ -1,0 +1,63 @@
+{
+  "passed": true,
+  "mode": "without-skill",
+  "checks": [
+    {
+      "name": "valid-python",
+      "passed": true,
+      "expected": "invoice.py parses",
+      "actual": "valid",
+      "evidence": "ast.parse(invoice.py)"
+    },
+    {
+      "name": "public-api-preserved",
+      "passed": true,
+      "expected": "create_invoice(items, discount_code=None, tax_rate=0.0)",
+      "actual": "['items', 'discount_code', 'tax_rate']",
+      "evidence": "AST function signature"
+    },
+    {
+      "name": "meaningful-calculation-helpers",
+      "passed": true,
+      "expected": "exactly one separate subtotal, discount and tax helper, with no duplicate or additional helper",
+      "actual": "calculate_discount, calculate_subtotal, calculate_tax",
+      "evidence": "top-level function definitions classified by domain responsibility"
+    },
+    {
+      "name": "tax-helper-returns-one-result",
+      "passed": true,
+      "expected": "the tax helper returns only one tax amount and does not calculate or return invoice total",
+      "actual": "single tax result",
+      "evidence": "AST return expressions, aggregate assignments, and downstream-total identifiers"
+    },
+    {
+      "name": "entry-point-orchestrates-steps",
+      "passed": true,
+      "expected": "create_invoice calls the unique subtotal, discount and tax helpers and contains no calculation loop",
+      "actual": "orchestration extracted",
+      "evidence": "AST calls and control-flow inspection"
+    },
+    {
+      "name": "no-unneeded-production-types",
+      "passed": true,
+      "expected": "no classes added for this local refactor",
+      "actual": "no classes",
+      "evidence": "top-level AST class definitions"
+    },
+    {
+      "name": "existing-behavior-tests",
+      "passed": true,
+      "expected": "all existing invoice tests pass",
+      "actual": "OK",
+      "evidence": "python -m unittest discover -s tests -v"
+    },
+    {
+      "name": "native-skill-activation",
+      "passed": true,
+      "expected": "no native Skill tool invocation for \"human-readable-code\"",
+      "actual": "no native Skill tool invocation for \"human-readable-code\" observed",
+      "evidence": "OpenCode stderr tool trace"
+    }
+  ],
+  "returncode": 0
+}

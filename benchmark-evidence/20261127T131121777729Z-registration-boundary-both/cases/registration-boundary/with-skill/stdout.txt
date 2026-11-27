@@ -1,0 +1,63 @@
+Now I understand the testable design principles. Let me read the existing code to understand what we're working with.
+Now I understand the codebase. Let me implement the changes:
+
+1. Extract `prepare_registration(data)` as a pure helper that normalizes name/email and validates
+2. Keep `register_user` using the helper and handling persistence/welcome message
+3. Add focused tests for the helper directly
+Now let me update the test file to add focused tests for the extracted helper:
+Now let me add the focused tests for the helper. I'll add them before the `if __name__` block:
+Let me verify the changes by reading both files:
+Now let me run the tests to verify everything works:
+All 9 tests pass. Let me verify there are no additional test files or requirements:
+All tests pass. Let me verify the final state of both files:
+**Summary of changes:**
+
+**registration.py:**
+- Extracted `prepare_registration(data)` as a pure helper function that:
+  - Takes a data dict
+  - Returns a tuple `(name, email)` with normalized values (stripped, lowercased email)
+  - Raises `ValueError` for invalid input (empty name, invalid email)
+- `register_user(data, database, mailer)` now uses the helper and handles persistence/welcome message
+
+**tests/test_registration.py:**
+- Imported `prepare_registration` for direct testing
+- Added `PrepareRegistrationTests` class with 6 focused test cases:
+  - `test_prepare_registration_valid_input` - tests normalized output
+  - `test_prepare_registration_normalizes_whitespace_and_case` - edge case for normalization
+  - `test_prepare_registration_empty_name_raises` - whitespace-only name
+  - `test_prepare_registration_missing_name_raises` - empty name
+  - `test_prepare_registration_invalid_email_no_at_raises` - email without @
+  - `test_prepare_registration_invalid_email_starts_with_at_raises` - starts with @
+  - `test_prepare_registration_invalid_email_ends_with_at_raises` - ends with @
+- Kept existing lightweight integration tests (`RegisterUserTests`)
+
+**Test results:** 9 tests passed (2 integration tests + 7 focused helper tests)
+
+The design follows testable design principles:
+- Pure decision/normalization logic (`prepare_registration`) can now be tested without database or mailer
+- Side effects (database.insert, mailer.send_welcome) remain at the boundary in `register_user`
+- No interfaces, classes, mocks, or test-only public APIs added
+- Simple, proportional design maintained
+
+Task: Refactor registration.py to extract pure input normalization helper while keeping public API and tests unchanged
+ 
+Role:
+ coder
+ 
+Initial tier:
+ CHEAP
+ 
+Model:
+ freeLLMAPI
+ 
+Reason:
+ Simple refactoring task - extract validation/normalization to a pure function. Low complexity, low risk.
+ 
+Escalated:
+ NO
+ 
+Steps:
+ 5
+ 
+Result:
+ SUCCESS

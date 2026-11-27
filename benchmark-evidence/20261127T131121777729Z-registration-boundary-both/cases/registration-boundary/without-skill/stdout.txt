@@ -1,0 +1,53 @@
+I'll start by examining the current state of the repository to understand the existing code structure.
+Now I understand the existing code structure. I need to:
+1. Extract a pure helper `prepare_registration(data)` from the normalization/validation logic
+2. Keep the public `register_user` function unchanged in behavior
+3. Add tests for the new helper covering normalized input and invalid cases
+
+Let me implement the refactoring:
+Now let me add tests for the new `prepare_registration` helper:
+Now let me run the tests to verify everything works:
+The test `test_normalizes_missing_fields_to_empty` is incorrect - an empty name should raise `ValueError`, not return empty values. Let me fix that test:
+Let me read the current state of the test file:
+I need to remove the incorrect test. Let me fix it:
+Now let me run the tests again:
+All 10 tests pass. Let me verify the final state of both files:
+The refactoring is complete. Let me verify there are no other files modified:
+The changes are scoped correctly to only `registration.py` and `tests/test_registration.py`. The `__pycache__` directories are just compiled Python bytecode, not source files.
+
+Let me run all tests one more time to confirm:
+All tests pass. The refactoring is complete.
+
+---
+
+**Summary:**
+
+**Task:** Refactor `registration.py` so input normalization and registration validation can be tested without a database or email sender, while keeping the public `register_user(data, database, mailer)` function unchanged.
+
+**Role:** Coder (implementing the refactoring)
+
+**Complexity:** CHEAP - single file refactoring with straightforward extraction
+
+**Risk:** LOW - refactoring with no behavioral changes to public API
+
+**Changes made:**
+
+1. **`registration.py`**: Extracted a pure helper function `prepare_registration(data)` that:
+   - Takes a data dict
+   - Normalizes name (strip) and email (strip, lowercase)
+   - Validates that name is not empty/whitespace-only
+   - Validates that email contains `@` but doesn't start or end with it
+   - Returns `(name, email)` tuple on success
+   - Raises `ValueError` for invalid input
+
+2. **`tests/test_registration.py`**: Added new test class `PrepareRegistrationTests` with 8 tests:
+   - `test_normalizes_name_and_email` - tests happy path with whitespace
+   - `test_strips_and_lowercases_email` - tests email normalization
+   - `test_raises_value_error_for_empty_name` - empty name validation
+   - `test_raises_value_error_for_whitespace_only_name` - whitespace-only name validation
+   - `test_raises_value_error_for_missing_name_key` - missing name key validation
+   - `test_raises_value_error_for_email_without_at` - invalid email (no @)
+   - `test_raises_value_error_for_email_starting_with_at` - invalid email (@ prefix)
+   - `test_raises_value_error_for_email_ending_with_at` - invalid email (@ suffix)
+
+**Tests:** All 10 tests pass (2 original integration tests + 8 new unit tests for `prepare_registration`)
