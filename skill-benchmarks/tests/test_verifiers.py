@@ -548,7 +548,7 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
             "return round(taxable_amount * tax_rate, 2)",
             "tax = round(taxable_amount * tax_rate, 2)\\n"
             "    total = round(taxable_amount + tax, 2)\\n"
-            "    return {\\"tax\\": tax, \\"total\\": total}",
+            "    return {'tax': tax, 'total': total}",
         )
         result = self.run_verifier(source)
         checks = {check["name"]: check for check in result["checks"]}
