@@ -1,0 +1,8 @@
+[HEARTBEAT] Starting command: python3 skill-benchmarks/benchmark.py run --skill human-readable-code --mode both
+[HEARTBEAT] Working directory: /home/marzec/.manul/workspace/ws-91-1795767337/benchmark-workspace/globalskills-benchmark
+[HEARTBEAT] 0.0s elapsed - process still running (PID: 1540470)
+[HEARTBEAT] 59.8s elapsed - process still running (PID: 1540470)
+[HEARTBEAT] 119.6s elapsed - process still running (PID: 1540470)
+[HEARTBEAT] 179.4s elapsed - process still running (PID: 1540470)
+[HEARTBEAT] 239.1s elapsed - process still running (PID: 1540470)
+[HEARTBEAT] Command completed in 261.2s with exit code 1
