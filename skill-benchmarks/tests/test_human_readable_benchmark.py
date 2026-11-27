@@ -55,15 +55,36 @@ class HumanReadableSkillBoundaryTests(unittest.TestCase):
         skill_path = HERE.parent.parent / "skills" / "human-readable-code" / "SKILL.md"
         skill = skill_path.read_text(encoding="utf-8").lower()
 
-        priority_rule = skill.index("## priority rule: explicit operation lists are closed")
+        priority_rule = skill.index("## priority rule: one requested operation, one result")
         general_guidance = skill.index("## goal")
         self.assertLess(priority_rule, general_guidance)
         self.assertIn("closed and exhaustive", skill)
         self.assertIn("exactly one helper for each named operation", skill)
+        self.assertIn("each helper performs only its named operation", skill)
+        self.assertIn("returns exactly that operation's result", skill)
+        self.assertIn(
+            "must not return a tuple, list, dictionary, or object",
+            skill,
+        )
         self.assertIn("do not combine a named operation with a downstream result", skill)
         self.assertIn("do not add helpers for simple intermediate or derived values", skill)
         self.assertIn("calculate_tax_and_total", skill)
-        self.assertIn("calculate_taxable_amount", skill)
+        self.assertIn("return tax, total", skill)
+        self.assertIn("tax = calculate_tax(taxable_amount, tax_rate)", skill)
+        self.assertIn("total = round(taxable_amount + tax, 2)", skill)
+
+    def test_working_approach_requires_operation_to_result_mapping(self) -> None:
+        skill_path = HERE.parent.parent / "skills" / "human-readable-code" / "SKILL.md"
+        skill = skill_path.read_text(encoding="utf-8").lower()
+
+        self.assertIn(
+            "write down the operation-to-helper-to-result map before editing",
+            skill,
+        )
+        self.assertIn(
+            "keep intermediate values and downstream result assembly with the caller",
+            skill,
+        )
 
 
 class BenchmarkGitDiffArtifactTests(unittest.TestCase):
