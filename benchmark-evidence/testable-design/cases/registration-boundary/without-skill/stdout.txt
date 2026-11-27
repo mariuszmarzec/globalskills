@@ -1,0 +1,36 @@
+Now I understand the current code. Let me refactor `registration.py` to extract the pure helper `prepare_registration` and update the tests.
+Now let me update the test file to add unit tests for `prepare_registration` while keeping the existing integration tests:
+Now let me run the tests to verify everything works:
+All 9 tests pass. Let me verify the final state of both files:
+The refactoring is complete. Let me verify there are no other files involved:
+## Final Report
+
+Task: Refactor registration.py to extract pure helper `prepare_registration` for testable input normalization, keeping the public `register_user` function and its current behavior.
+
+Role: Orchestrator (self)
+
+Initial tier: CHEAP
+
+Model: freeLLMAPI (default)
+
+Reason: Simple refactoring task - extract validation/normalization logic into a pure function for testability. No additional agent needed.
+
+Escalated: NO
+
+Steps: 4
+1. Read existing `registration.py` and `tests/test_registration.py`
+2. Refactored `registration.py` to extract `prepare_registration(data)` helper
+3. Added unit tests for `prepare_registration` in `tests/test_registration.py`
+4. Ran tests - all 9 passed
+
+Result: SUCCESS
+
+- Created new pure function `prepare_registration(data)` that returns `(name, email)` tuple
+- Function raises `ValueError` for invalid input (empty name, invalid email)
+- `register_user(data, database, mailer)` now calls `prepare_registration` and handles persistence/welcome message
+- Added 7 new unit tests for `prepare_registration` covering:
+  - Name/email normalization
+  - Empty name (whitespace-only and missing key)
+  - Invalid email patterns (no @, starts with @, ends with @)
+- Existing 2 integration tests (`RegisterUserTests`) preserved - all pass
+- No interfaces, classes, mocks, or test-only public APIs added

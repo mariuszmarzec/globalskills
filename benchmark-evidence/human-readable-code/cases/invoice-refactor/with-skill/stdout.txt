@@ -1,0 +1,41 @@
+Now let me read the `invoice.py` file to understand the current implementation:
+Now let me read the test file to understand the tests and expected behavior:
+Now I understand the code and tests. Let me refactor `invoice.py` according to the requirements:
+
+1. Extract `calculate_subtotal(items)` - returns the line-item subtotal amount
+2. Extract `calculate_discount(subtotal, discount_code)` - returns only the discount amount
+3. Extract `calculate_tax(taxable_amount, tax_rate)` - returns only the tax amount as one scalar number
+4. Keep `taxable_amount` calculation and `total` calculation inline in `create_invoice`
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final code looks correct by reading it:
+The refactoring is complete. Let me verify there are no other test files that might be affected:
+Let me also run a quick verification to ensure the module can be imported correctly:
+**Task Completed Successfully**
+
+## Summary
+
+I refactored `invoice.py` to make the main invoice flow easier to understand by extracting three calculation helpers:
+
+1. **`calculate_subtotal(items)`** - Returns the line-item subtotal amount (loops through items, validates quantity/unit_price aren't negative, sums quantity * unit_price)
+
+2. **`calculate_discount(subtotal, discount_code)`** - Returns only the discount amount based on discount code logic (SAVE10 = 10%, SAVE20 = 20% with $100 minimum)
+
+3. **`calculate_tax(taxable_amount, tax_rate)`** - Returns only the tax amount as a scalar (taxable_amount * tax_rate, rounded to 2 decimals)
+
+The `taxable_amount` calculation (`subtotal - discount`, with negative check) and `total` calculation (`taxable_amount + tax`, rounded) remain inline in `create_invoice` as requested.
+
+The entry point `create_invoice` now has a clear orchestration flow:
+```python
+subtotal = calculate_subtotal(items)
+discount = calculate_discount(subtotal, discount_code)
+taxable_amount = subtotal - discount  # inline
+tax = calculate_tax(taxable_amount, tax_rate)
+total = round(taxable_amount + tax, 2)  # inline
+```
+
+**Verification:**
+- All 6 existing tests pass
+- Public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature preserved
+- All current behavior preserved
+- Only `invoice.py` was modified
+- No changes to tests

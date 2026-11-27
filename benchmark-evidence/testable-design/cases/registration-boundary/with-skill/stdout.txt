@@ -1,0 +1,43 @@
+Let me start by reading the existing files to understand the current implementation.
+Now I understand the task. Let me refactor `registration.py` and add tests following testable design principles:
+
+1. Extract `prepare_registration(data)` as a pure helper for normalization and validation
+2. Add focused tests for the helper directly
+3. Keep the existing integration tests
+4. Maintain the same public API and behavior
+Now let me verify the files and run the tests:
+All 12 tests pass (2 original integration tests + 10 new pure helper tests). Let me verify the final state of both files:
+The refactoring is complete. Let me summarize the changes:
+
+---
+
+**Task:** Refactor registration.py for testability - extract `prepare_registration(data)` helper for input normalization/validation.
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** Pure refactoring to improve testability while maintaining existing public API and behavior.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Read existing `registration.py` and `tests/test_registration.py`
+2. Extract `prepare_registration(data)` as a pure helper function returning `(name, email)` tuple
+3. Add focused unit tests for the helper, keep existing integration tests
+
+**Result:** SUCCESS
+
+**Changes made:**
+- `registration.py`: Added `prepare_registration(data)` pure helper function that handles normalization (strip whitespace, lowercase email) and validation (name required, email format check). `register_user()` now calls this helper.
+- `tests/test_registration.py`: Added `PrepareRegistrationTests` class with 10 focused tests covering:
+  - Valid input normalization
+  - Empty/whitespace-only/missing name errors
+  - Invalid email patterns (no @, starts with @, ends with @)
+  - Email case normalization
+  - Name stripping preserving internal spaces
+- Kept existing `RegisterUserTests` integration tests
+
+**Verification:** All 12 tests pass (2 original + 10 new)

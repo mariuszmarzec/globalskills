@@ -1,0 +1,28 @@
+Now I understand the task. I need to refactor `invoice.py` by extracting three helper functions:
+1. `calculate_subtotal(items)` - returns subtotal amount
+2. `calculate_discount(subtotal, discount_code)` - returns discount amount
+3. `calculate_tax(taxable_amount, tax_rate)` - returns tax amount
+
+I'll keep the `taxable_amount` calculation and `total` calculation inline in `create_invoice`, and preserve the exact same validation and behavior.
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final state of the refactored file:
+Task completed successfully.
+
+**Summary:**
+
+Refactored `invoice.py` by extracting three helper functions:
+
+1. `calculate_subtotal(items)` - Returns the line-item subtotal amount (includes validation for negative quantity and unit_price)
+2. `calculate_discount(subtotal, discount_code)` - Returns only the discount amount
+3. `calculate_tax(taxable_amount, tax_rate)` - Returns only the tax amount as a scalar
+
+The `create_invoice` entry point now:
+- Calls the three helpers in sequence
+- Keeps `taxable_amount` calculation inline
+- Keeps `total` calculation inline
+- Preserves the exact public signature: `create_invoice(items, discount_code=None, tax_rate=0.0)`
+
+**Verification:**
+- All 6 existing tests pass
+- No test changes were made
+- Behavior is preserved exactly

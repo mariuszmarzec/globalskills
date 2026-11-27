@@ -1,0 +1,89 @@
+diff --git a/invoice.py b/invoice.py
+index 093df85..e52e5f5 100644
+--- a/invoice.py
++++ b/invoice.py
+@@ -1,4 +1,15 @@
+-def create_invoice(items, discount_code=None, tax_rate=0.0):
++def calculate_subtotal(items):
++    """Calculate the line-item subtotal from a list of items.
++
++    Args:
++        items: List of dicts with 'quantity' and 'unit_price' keys.
++
++    Returns:
++        The subtotal amount (sum of quantity * unit_price for each item).
++
++    Raises:
++        ValueError: If quantity or unit_price is negative.
++    """
+     subtotal = 0.0
+     for item in items:
+         quantity = item["quantity"]
+@@ -8,23 +19,62 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
+         if unit_price < 0:
+             raise ValueError("unit_price cannot be negative")
+         subtotal += quantity * unit_price
++    return subtotal
+ 
++
++def calculate_discount(subtotal, discount_code):
++    """Calculate the discount amount based on subtotal and discount code.
++
++    Args:
++        subtotal: The subtotal amount before discount.
++        discount_code: Optional discount code string ('SAVE10' or 'SAVE20').
++
++    Returns:
++        The discount amount (0.0 if no valid discount code applies).
++    """
+     discount = 0.0
+     if discount_code is not None:
+         if discount_code == "SAVE10":
+             discount = subtotal * 0.10
+         elif discount_code == "SAVE20" and subtotal >= 100.0:
+             discount = subtotal * 0.20
++    return discount
++
+ 
++def calculate_tax(taxable_amount, tax_rate):
++    """Calculate the tax amount based on taxable amount and tax rate.
++
++    Args:
++        taxable_amount: The amount subject to tax.
++        tax_rate: The tax rate as a decimal (e.g., 0.10 for 10%).
++
++    Returns:
++        The tax amount rounded to 2 decimal places.
++    """
++    return round(taxable_amount * tax_rate, 2)
++
++
++def create_invoice(items, discount_code=None, tax_rate=0.0):
++    """Create an invoice with subtotal, discount, tax, and total.
++
++    Args:
++        items: List of dicts with 'quantity' and 'unit_price' keys.
++        discount_code: Optional discount code string.
++        tax_rate: Tax rate as a decimal (e.g., 0.10 for 10%).
++
++    Returns:
++        Dict with 'subtotal', 'discount', 'tax', and 'total' keys.
++    """
++    subtotal = calculate_subtotal(items)
++    discount = calculate_discount(subtotal, discount_code)
+     taxable_amount = subtotal - discount
+     if taxable_amount < 0:
+         taxable_amount = 0.0
+-
+-    tax = round(taxable_amount * tax_rate, 2)
++    tax = calculate_tax(taxable_amount, tax_rate)
+     total = round(taxable_amount + tax, 2)
+     return {
+         "subtotal": round(subtotal, 2),
+         "discount": round(discount, 2),
+         "tax": tax,
+         "total": total,
+-    }
++    }
+\ No newline at end of file
+warning: in the working copy of 'invoice.py', LF will be replaced by CRLF the next time Git touches it
