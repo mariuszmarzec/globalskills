@@ -538,6 +538,8 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
         )
         result = self.run_verifier(source)
         checks = {check["name"]: check for check in result["checks"]}
+        self.assertTrue(checks["valid-python"]["passed"], f"Fixture must remain valid Python: {checks['valid-python']}")
+        self.assertTrue(checks["meaningful-calculation-helpers"]["passed"], f"Only the return contract should fail: {checks['meaningful-calculation-helpers']}")
         self.assertFalse(
             checks["tax-helper-returns-one-result"]["passed"],
             f"A tax/total tuple must be rejected: {checks['tax-helper-returns-one-result']}",
@@ -552,6 +554,8 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
         )
         result = self.run_verifier(source)
         checks = {check["name"]: check for check in result["checks"]}
+        self.assertTrue(checks["valid-python"]["passed"], f"Fixture must remain valid Python: {checks['valid-python']}")
+        self.assertTrue(checks["meaningful-calculation-helpers"]["passed"], f"Only the return contract should fail: {checks['meaningful-calculation-helpers']}")
         self.assertFalse(
             checks["tax-helper-returns-one-result"]["passed"],
             f"A tax/total mapping must be rejected: {checks['tax-helper-returns-one-result']}",
