@@ -19,6 +19,36 @@ review pipeline or task queue. Every independently executable work item must
 be submitted to Manul as an ordinary repository task so Manul provides its
 existing isolated workspace, lease, heartbeat, retry and recovery behavior.
 
+## Multi-repository intake
+
+Manul may automatically select this existing Team workflow when its repository
+resolver determines that one user request requires changes in more than one
+repository. In that case the parent prompt contains an explicit list of
+**write-target repositories** and a resolver reason.
+
+- Treat that list as the complete required target set. Do not reduce it to the
+  parent task's primary repository, reorder it in a way that loses a target,
+  substitute another repository, or silently omit a target.
+- Create exactly one independently executable top-level/root tracker item for
+  each listed write target. Each item must name its exact allowlisted
+  `owner/repo`, contain a bounded change request and acceptance criteria, use
+  a stable marker and `/manul run` trigger, and receive its own Manul
+  workspace, branch and PR.
+- The parent is coordination-only by default. Do not implement cross-repository
+  changes in the parent's primary checkout and do not create one combined PR
+  from that checkout. Coordinate API/schema compatibility and dependency order
+  across child items.
+- A repository mentioned only as a read-only dependency, API consumer,
+  reference, issue URL or example is not a write target unless the parent
+  request explicitly requires a change and PR there.
+- If a required target is absent from the supplied list, outside the current
+  allowlist, or conflicts with the task evidence, stop and use the normal
+  `TASK_NEEDS_USER` flow. Never infer permission to add a repository to the
+  allowlist.
+- Do not finish until every required child has a terminal, verified result and
+  every requested PR URL is included in the parent report. A partial set of PRs
+  is not completion.
+
 ## Repository policy and SDD
 
 1. Read the trusted Team policy supplied by Manul before creating work items.
