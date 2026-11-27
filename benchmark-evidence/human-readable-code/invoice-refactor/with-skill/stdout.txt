@@ -1,0 +1,15 @@
+Now I understand the code and tests. Let me refactor `invoice.py` following the human-readable-code guidelines - extracting meaningful operations into cohesive helper functions while keeping `create_invoice` as a readable orchestration.
+All 6 tests pass. The refactoring is complete and preserves all behavior.
+
+**Summary of changes to `invoice.py`:**
+
+1. **`_calculate_subtotal(items)`** - Extracts the line-item iteration and validation into a cohesive helper with a clear domain name. Returns the validated subtotal.
+
+2. **`_calculate_discount(subtotal, discount_code)`** - Isolates the discount logic (SAVE10, SAVE20 with threshold) as a pure function of subtotal and code. Returns the discount amount.
+
+3. **`_calculate_tax_and_total(taxable_amount, tax_rate)`** - Captures the tax/total calculation (including rounding) as one meaningful operation. Returns both values.
+
+4. **`create_invoice`** - Now reads as a clear orchestration: calculate subtotal → calculate discount → compute taxable amount → calculate tax and total → return result.
+
+No classes, interfaces, dependencies, or tiny forwarding wrappers were added. The public signature and all behavior are preserved.
+The refactoring is complete. All tests pass and the code follows the human-readable-code guidelines with cohesive, meaningfully named helpers and a clear orchestration in `create_invoice`.

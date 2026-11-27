@@ -1,0 +1,64 @@
+diff --git a/invoice.py b/invoice.py
+index 093df85..ebb8777 100644
+--- a/invoice.py
++++ b/invoice.py
+@@ -1,4 +1,17 @@
+ def create_invoice(items, discount_code=None, tax_rate=0.0):
++    subtotal = calculate_subtotal(items)
++    discount = calculate_discount(subtotal, discount_code)
++    taxable_amount = calculate_taxable_amount(subtotal, discount)
++    tax, total = calculate_tax_and_total(taxable_amount, tax_rate)
++    return {
++        "subtotal": round(subtotal, 2),
++        "discount": round(discount, 2),
++        "tax": tax,
++        "total": total,
++    }
++
++
++def calculate_subtotal(items):
+     subtotal = 0.0
+     for item in items:
+         quantity = item["quantity"]
+@@ -8,23 +21,27 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
+         if unit_price < 0:
+             raise ValueError("unit_price cannot be negative")
+         subtotal += quantity * unit_price
++    return subtotal
++
+ 
+-    discount = 0.0
+-    if discount_code is not None:
+-        if discount_code == "SAVE10":
+-            discount = subtotal * 0.10
+-        elif discount_code == "SAVE20" and subtotal >= 100.0:
+-            discount = subtotal * 0.20
++def calculate_discount(subtotal, discount_code):
++    if discount_code is None:
++        return 0.0
++    if discount_code == "SAVE10":
++        return subtotal * 0.10
++    if discount_code == "SAVE20" and subtotal >= 100.0:
++        return subtotal * 0.20
++    return 0.0
+ 
++
++def calculate_taxable_amount(subtotal, discount):
+     taxable_amount = subtotal - discount
+     if taxable_amount < 0:
+         taxable_amount = 0.0
++    return taxable_amount
++
+ 
++def calculate_tax_and_total(taxable_amount, tax_rate):
+     tax = round(taxable_amount * tax_rate, 2)
+     total = round(taxable_amount + tax, 2)
+-    return {
+-        "subtotal": round(subtotal, 2),
+-        "discount": round(discount, 2),
+-        "tax": tax,
+-        "total": total,
+-    }
++    return tax, total
+\ No newline at end of file
+warning: in the working copy of 'invoice.py', LF will be replaced by CRLF the next time Git touches it
