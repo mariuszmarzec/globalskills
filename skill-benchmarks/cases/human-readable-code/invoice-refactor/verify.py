@@ -77,6 +77,50 @@ def main() -> int:
         "top-level function definitions classified by domain responsibility"
     )
 
+    # The tax helper must return one tax amount, never bundle downstream totals.
+    tax_helper = functions.get(tax_helpers[0]) if exactly_one_per_operation else None
+    tax_returns = (
+        [node for node in ast.walk(tax_helper) if isinstance(node, ast.Return)]
+        if tax_helper is not None
+        else []
+    )
+    aggregate_result_names: set[str] = set()
+    if tax_helper is not None:
+        for node in ast.walk(tax_helper):
+            if isinstance(node, ast.Assign) and isinstance(
+                node.value, (ast.Tuple, ast.List, ast.Dict, ast.Set)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aggregate_result_names.add(target.id)
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and isinstance(
+                node.value, (ast.Tuple, ast.List, ast.Dict, ast.Set)
+            ):
+                target = node.target if isinstance(node, ast.AnnAssign) else node.target
+                if isinstance(target, ast.Name):
+                    aggregate_result_names.add(target.id)
+    returns_one_value = bool(tax_returns) and all(
+        returned.value is not None
+        and not isinstance(returned.value, (ast.Tuple, ast.List, ast.Dict, ast.Set))
+        and not (
+            isinstance(returned.value, ast.Name)
+            and returned.value.id in aggregate_result_names
+        )
+        for returned in tax_returns
+    )
+    mentions_downstream_total = tax_helper is not None and any(
+        isinstance(node, ast.Name) and "total" in node.id.lower()
+        for node in ast.walk(tax_helper)
+    )
+    tax_result_ok = tax_helper is not None and returns_one_value and not mentions_downstream_total
+    add(
+        "tax-helper-returns-one-result",
+        tax_result_ok,
+        "the tax helper returns only one tax amount and does not calculate or return invoice total",
+        "single tax result" if tax_result_ok else "tax helper missing, multi-value result, or downstream total found",
+        "AST return expressions, aggregate assignments, and downstream-total identifiers",
+    )
+
     # The public entry point must call those unique helpers and contain no calculation loop.
     orchestration_ok = False
     if public is not None and exactly_one_per_operation:
