@@ -16,18 +16,24 @@ Each skill was run in both modes:
 
 ## Pass/Fail Breakdown
 
-| Skill | Mode | Result | Notes |
-|-------|------|--------|-------|
-| human-readable-code | with-skill | ✅ PASS | 8/8 checks passed |
-| human-readable-code | without-skill | ✅ PASS | 8/8 checks passed |
-| testable-design | with-skill | ✅ PASS | 8/8 checks passed |
-| testable-design | without-skill | ❌ FAIL | Native skill activation check failed |
+| Run | Skill | Mode | Result | Notes |
+|-----|-------|------|--------|-------|
+| 1 | human-readable-code | with-skill | ✅ PASS | 8/8 checks passed |
+| 1 | human-readable-code | without-skill | ✅ PASS | 8/8 checks passed |
+| 1 | testable-design | with-skill | ✅ PASS | 8/8 checks passed |
+| 1 | testable-design | without-skill | ❌ FAIL | Native skill activation check failed |
+| 2 | human-readable-code | with-skill | ✅ PASS | 8/8 checks passed |
+| 2 | human-readable-code | without-skill | ✅ PASS | 8/8 checks passed |
+| 2 | testable-design | with-skill | ✅ PASS | 8/8 checks passed |
+| 2 | testable-design | without-skill | ✅ PASS | 8/8 checks passed |
+
+**Note:** Testable-design without-skill mode shows non-deterministic behavior. Run 1 failed the native-skill-activation check; run 2 passed. See Root Cause Analysis below.
 
 ## Detailed Results
 
 ### human-readable-code (invoice-refactor case)
 
-**with-skill mode:**
+**Both runs - with-skill mode:**
 - ✅ valid-python
 - ✅ public-api-preserved
 - ✅ meaningful-calculation-helpers
@@ -37,7 +43,7 @@ Each skill was run in both modes:
 - ✅ existing-behavior-tests
 - ✅ native-skill-activation
 
-**without-skill mode:**
+**Both runs - without-skill mode:**
 - ✅ valid-python
 - ✅ public-api-preserved
 - ✅ meaningful-calculation-helpers
@@ -49,7 +55,7 @@ Each skill was run in both modes:
 
 ### testable-design (registration-boundary case)
 
-**with-skill mode:**
+**Run 1 - with-skill mode:**
 - ✅ valid-python
 - ✅ explicit-pure-policy-helper
 - ✅ validation-independent-of-effects
@@ -59,7 +65,7 @@ Each skill was run in both modes:
 - ✅ registration-tests
 - ✅ native-skill-activation
 
-**without-skill mode:**
+**Run 1 - without-skill mode:**
 - ✅ valid-python
 - ✅ explicit-pure-policy-helper
 - ✅ validation-independent-of-effects
@@ -69,9 +75,29 @@ Each skill was run in both modes:
 - ✅ registration-tests
 - ❌ native-skill-activation (FAIL)
 
+**Run 2 - with-skill mode:**
+- ✅ valid-python
+- ✅ explicit-pure-policy-helper
+- ✅ validation-independent-of-effects
+- ✅ entry-point-orchestrates-boundaries
+- ✅ direct-helper-tests
+- ✅ no-mock-heavy-test-setup
+- ✅ registration-tests
+- ✅ native-skill-activation
+
+**Run 2 - without-skill mode:**
+- ✅ valid-python
+- ✅ explicit-pure-policy-helper
+- ✅ validation-independent-of-effects
+- ✅ entry-point-orchestrates-boundaries
+- ✅ direct-helper-tests
+- ✅ no-mock-heavy-test-setup
+- ✅ registration-tests
+- ✅ native-skill-activation
+
 ## Root Cause Analysis: testable-design without-skill failure
 
-In the without-skill mode for testable-design, the benchmark's native skill activation check failed because:
+In run 1, the testable-design without-skill mode failed the native skill activation check because:
 
 1. The `registration-boundary` prompt contains instructions:
    > "Before editing, inspect the skills listed in OpenCode's available-skills description. If `testable-design` is listed, load it with the native `skill` tool using ID `testable-design` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill."
@@ -87,6 +113,8 @@ In the without-skill mode for testable-design, the benchmark's native skill acti
 6. The benchmark's `skill_activation_check` function pattern-matches `Skill "testable-design"` in stderr, which matches both successful (`→ Skill "testable-design"`) and failed (`✗ Skill "testable-design"`) invocations.
 
 7. Since the pattern is found in without-skill mode, the check fails.
+
+**In run 2**, the model correctly did NOT attempt to load the skill, and the check passed. This demonstrates **non-deterministic behavior** in the model's handling of the prompt.
 
 **This is a prompt design issue**, not a model behavior issue. The testable-design prompt should be modified to account for the without-skill baseline mode, either by:
 - Using conditional prompt text based on mode, or
