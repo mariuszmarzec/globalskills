@@ -4,7 +4,7 @@
 **Canonical PR URL:** https://github.com/mariuszmarzec/globalskills/pull/172  
 **Benchmark Date:** 2026-11-27  
 **Evidence PR:** https://github.com/mariuszmarzec/globalskills/pull/182  
-**Evidence Branch:** evidence/benchmark-run-e3d67db (head: 0dd853d4fbcf47225b7fa135b58ab71756042c01)
+**Evidence Branch:** evidence/benchmark-run-e3d67db (head: 237de6abf48cb6b1c1f3c993c34bdfef4d3d4e12)
 
 ## Summary
 
@@ -152,7 +152,7 @@ All artifact SHA256 checksums are recorded in `benchmark-evidence/runs/manifest.
 | human-readable-code / with-skill | 2db4ce33c95a43b9b241c2608814b77adbb9ddd75a679ab1711da06cf4af0a42 | b54cccb2464f8d3c38fafff45adb715febd263fec00fad23e75990da557f580b | a4c8a5d93c9d3340a6350866ff68f50aa4370f5d40aa2b1586c9535addd9698d |
 | human-readable-code / without-skill | 94c5d3068130215b3bd7ef9a997efe77ebc4a97a688574d64597b21413dcbe98 | 2dbe28ae42847abc673d9a91cb98ade807e0f9545c02412809802c1d87b1333e | 3baaea43318bed2f525dee6206b359795a0859c7ff0c1973a1207ec4dc85f62a |
 | testable-design / with-skill | 580ece041704cc05d097568cc3a171afa326329c1018840ccba51eaa03e62618 | d9b13d0289838ee167b7de14f58b814ed43b91f5f0067963247c0c50bda0c4e8 | 3212598cd55e6611824d508ff08046e654cccaead32396a1e88f4f7265850e78 |
-| testable-design / without-skill | 595935a35fed000b8733fe8217552fe39121aba5b83b8f4ef10dc7e63adcc461 | 538f0e34498d35d1378648059c492f0a03db0d439ef428041221faeb0e596643 | 4acc793a0edf163131d7827c4a1022adfe9b9e4e89b60215044840a5a6427229 |
+| testable-design / without-skill | b6ccf51dc0eb9b69f1427a072b1fc711a3e6227b3d04591fe11ec5a7f7211263 | 538f0e34498d35d1378648059c492f0a03db0d439ef428041221faeb0e596643 | 4acc793a0edf163131d7827c4a1022adfe9b9e4e89b60215044840a5a6427229 |
 
 ## Per-Run Source SHA and Command/Exit Status
 
@@ -180,12 +180,14 @@ The script `benchmark-evidence/redaction.py` is deterministic and idempotent.
 
 ### 1. Verify Artifact Integrity
 ```bash
-# From repository root (keys are repo-root-relative)
-sha256sum -c <(jq -r '.artifact_checksums | to_entries[] | "\(.value)  \(.key)"' benchmark-evidence/runs/manifest.json)
+# From benchmark-evidence/ directory (keys in manifest.json are relative to this directory)
+cd benchmark-evidence
+sha256sum -c <(jq -r '.artifact_checksums | to_entries[] | "\(.value)  \(.key)"' runs/manifest.json)
 ```
 
 ### 2. Verify Native Skill Activation (from sanitized stderr)
 ```bash
+# From benchmark-evidence/runs/ directory
 # With-skill: should show "→ Skill <id>" (U+2192)
 grep "→ Skill" human-readable-code_with-skill_20261127T185653037682Z/stderr.txt
 grep "→ Skill" testable-design_with-skill_20261127T190339527239Z/stderr.txt
@@ -199,6 +201,7 @@ grep "Skill" testable-design_without-skill_20261127T190339527239Z/stderr.txt
 
 ### 3. Verify Per-Run Results
 ```bash
+# From benchmark-evidence/runs/ directory
 jq '.results[0] | {mode, passed, activation: .skill_activation.passed}' \
   human-readable-code_with-skill_20261127T185653037682Z/report.json
 jq '.results[0] | {mode, passed, activation: .skill_activation.passed}' \
@@ -223,7 +226,8 @@ cd skill-benchmarks
 python3 benchmark.py --selector human-readable-code --mode both
 python3 benchmark.py --selector testable-design --mode both
 # Uses config.json, adapter=opencode, model=OpenCode default (litellm/freeLLMAPI)
-# Output will appear in skill-benchmarks/output/ with new timestamped directories
+# Output artifacts are written to a local timestamped directory outside the repository.
+# The evidence in this PR consists of the saved sanitized artifacts in benchmark-evidence/runs/.
 ```
 
 ## Recoverable vs. Missing Runs
