@@ -140,14 +140,14 @@ Index: tests/test_registration.py
          mailer = FakeMailer()
 
 > orchestrator · freeLLMAPI
-$ cd /tmp/skill-bench-registration-boundary-without/workspace && python -m pytest tests/test_registration.py -v
+$ cd /tmp/skill-bench-registration-boundary-20261127T190339527239Z/workspace && python -m pytest tests/test_registration.py -v
 zsh:1: command not found: python
 > orchestrator · freeLLMAPI
-$ cd /tmp/skill-bench-registration-boundary-without/workspace && python3 -m pytest tests/test_registration.py -v
+$ cd /tmp/skill-bench-registration-boundary-20261127T190339527239Z/workspace && python3 -m pytest tests/test_registration.py -v
 ============================= test session starts ==============================
 platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /usr/local/bin/python3
 cachedir: .pytest_cache
-rootdir: /tmp/skill-bench-registration-boundary-without/workspace
+rootdir: /tmp/skill-bench-registration-boundary-20261127T190339527239Z/workspace
 plugins: anyio-4.14.2, cov-7.1.0
 collecting ... collected 9 items
 
@@ -167,7 +167,7 @@ tests/test_registration.py::RegisterUserTests::test_normalizes_user_and_sends_we
 > orchestrator · freeLLMAPI
 → Read tests/test_registration.py 
 > orchestrator · freeLLMAPI
-$ cd /tmp/skill-bench-registration-boundary-without/workspace && git diff --stat
+$ cd /tmp/skill-bench-registration-boundary-20261127T190339527239Z/workspace && git diff --stat
 registration.py            | 12 +++++++++++-
  tests/test_registration.py | 41 ++++++++++++++++++++++++++++++++++++++++-
  2 files changed, 51 insertions(+), 2 deletions(-)

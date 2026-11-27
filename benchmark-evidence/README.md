@@ -4,7 +4,7 @@
 **Canonical PR URL:** https://github.com/mariuszmarzec/globalskills/pull/172  
 **Benchmark Date:** 2026-11-27  
 **Evidence PR:** https://github.com/mariuszmarzec/globalskills/pull/182  
-**Evidence Branch:** evidence/benchmark-run-e3d67db (head: c0dc8eafc9d14ef1f3d7bfa35e0cab7404f7acf2)
+**Evidence Branch:** evidence/benchmark-run-e3d67db (head: 93850aa55f908c586040ba5156ff242faab86013)
 
 ## Summary
 
