@@ -15,9 +15,49 @@ workflow; it is not another agent router or execution engine.
 
 Use the existing `agent-orchestration` skill and canonical role definitions.
 Do not create a second model-tier policy, workspace manager, agent executor,
-review pipeline or task queue. Every independently executable work item must
-be submitted to Manul as an ordinary repository task so Manul provides its
-existing isolated workspace, lease, heartbeat, retry and recovery behavior.
+review pipeline or task queue. The parent task owns implementation and
+delivery in its primary repository; delegate bounded code changes there to the
+existing specialist agents. Every independently executable
+additional-repository work item must be submitted to Manul as an ordinary root
+repository task so Manul provides its own isolated workspace, lease, heartbeat,
+retry and recovery behavior.
+
+## Multi-repository intake
+
+Manul may automatically select this existing Team workflow when its repository
+resolver determines that one user request requires changes in more than one
+repository. In that case the parent prompt contains an explicit list of
+**write-target repositories** and a resolver reason.
+
+- Treat that list as the complete required target set. Preserve the
+  resolver's order: the first target is the parent task's primary repository.
+  Do not substitute, reorder or silently omit a target.
+- The Team parent owns the first target. Implement it in the parent's assigned
+  primary checkout and deliver a separate verified PR for that repository.
+  Do not create a duplicate child tracker item for the primary target.
+- For every remaining target, create exactly one independently executable
+  top-level/root tracker item. Each child must name its exact allowlisted
+  `owner/repo`, contain a bounded change request and acceptance criteria, use
+  a stable marker and `/manul run` trigger, and receive its own Manul
+  workspace, branch and PR. Copy the relevant project-skill requirements and
+  constraints supplied in the parent prompt into each child task description
+  (or its linked implementation brief); do not rely on ephemeral parent
+  context or merely mention a skill name that the child resolver may not
+  rediscover.
+- Never combine changes from multiple repositories into one PR. Coordinate
+  API/schema compatibility and dependency order across the parent-owned primary
+  change and all child items. The final report must include the parent's PR
+  and every child PR.
+- A repository mentioned only as a read-only dependency, API consumer,
+  reference, issue URL or example is not a write target unless the parent
+  request explicitly requires a change and PR there.
+- If a required target is absent from the supplied list, outside the current
+  allowlist, or conflicts with the task evidence, stop and use the normal
+  `TASK_NEEDS_USER` flow. Never infer permission to add a repository to the
+  allowlist.
+- Do not finish until every required child has a terminal, verified result and
+  every requested PR URL is included in the parent report. A partial set of PRs
+  is not completion.
 
 ## Repository policy and SDD
 
@@ -107,8 +147,10 @@ must be enabled in Manul's global `taskSources` configuration.
 
 ## Creating executable work items
 
-Each independently executable item must be a **top-level/root task** in its
-selected tracker. Manul's existing Todo adapters poll root tasks; nested Todo
+Each independently executable **additional-repository** item must be a
+**top-level/root task** in its selected tracker. The first/primary repository
+is implemented by the existing Team parent task and does not need a duplicate
+tracker item. Manul's existing Todo adapters poll root tasks; nested Todo
 subtasks are ordered steps within one root and do not receive an independent
 Manul workspace. Preserve hierarchy and dependencies in the Team checkpoint
 and link external tasks to each other in their descriptions.
@@ -295,7 +337,12 @@ human decision is required, use the normal `TASK_NEEDS_USER` flow. Emit
 
 At meaningful planning, dispatch, decision, review, QA and delivery milestones,
 emit a generic Manul workflow checkpoint. Do not access or modify Manul
-databases; the daemon validates and persists it.
+databases; the daemon validates and persists it. For multi-repository intake,
+the parent task's own primary-repository PR is delivered through the normal
+Manul task lifecycle. Put only additional-repository child tasks in
+`data.items`/trackerRefs so the coordinator never waits on the parent itself.
+Record the primary target and its PR URL separately in workflow data and
+include it in finalization and the user-facing report.
 
 ```text
 MANUL_WORKFLOW_STATE_BEGIN
