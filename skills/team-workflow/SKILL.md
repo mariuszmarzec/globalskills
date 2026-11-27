@@ -39,7 +39,11 @@ repository. In that case the parent prompt contains an explicit list of
   top-level/root tracker item. Each child must name its exact allowlisted
   `owner/repo`, contain a bounded change request and acceptance criteria, use
   a stable marker and `/manul run` trigger, and receive its own Manul
-  workspace, branch and PR.
+  workspace, branch and PR. Copy the relevant project-skill requirements and
+  constraints supplied in the parent prompt into each child task description
+  (or its linked implementation brief); do not rely on ephemeral parent
+  context or merely mention a skill name that the child resolver may not
+  rediscover.
 - Never combine changes from multiple repositories into one PR. Coordinate
   API/schema compatibility and dependency order across the parent-owned primary
   change and all child items. The final report must include the parent's PR
