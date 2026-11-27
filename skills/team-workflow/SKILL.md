@@ -15,9 +15,12 @@ workflow; it is not another agent router or execution engine.
 
 Use the existing `agent-orchestration` skill and canonical role definitions.
 Do not create a second model-tier policy, workspace manager, agent executor,
-review pipeline or task queue. Every independently executable work item must
-be submitted to Manul as an ordinary repository task so Manul provides its
-existing isolated workspace, lease, heartbeat, retry and recovery behavior.
+review pipeline or task queue. The parent task owns implementation and
+delivery in its primary repository; delegate bounded code changes there to the
+existing specialist agents. Every independently executable
+additional-repository work item must be submitted to Manul as an ordinary root
+repository task so Manul provides its own isolated workspace, lease, heartbeat,
+retry and recovery behavior.
 
 ## Multi-repository intake
 
