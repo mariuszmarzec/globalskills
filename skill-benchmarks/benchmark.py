@@ -186,8 +186,9 @@ def compose_mode_prompt(prompt: str, skill_id: str, mode: str) -> str:
 
 
 def skill_activation_check(stderr: str, skill_id: str, mode: str) -> dict[str, Any]:
+    normalized_stderr = re.sub(r"\x1b\[[0-9;]*m", "", stderr)
     pattern = re.compile(rf"""\bSkill\s+["']{re.escape(skill_id)}["']""")
-    observed = pattern.search(stderr) is not None
+    observed = pattern.search(normalized_stderr) is not None
     passed = observed if mode == "with-skill" else not observed
     expected = (
         f'native Skill tool invocation for "{skill_id}"'
