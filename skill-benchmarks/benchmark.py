@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -163,6 +164,51 @@ def read_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def compose_mode_prompt(prompt: str, skill_id: str, mode: str) -> str:
+    if mode == "with-skill":
+        instruction = (
+            f"MANDATORY FIRST ACTION — SKILL ACTIVATION\n"
+            f"Before any Glob, Read, Shell, search, or file operation, your first tool call "
+            f"must invoke the native skill tool with ID `{skill_id}`. "
+            f"Wait for the skill content and follow it. Do not continue if the tool is "
+            f"unavailable or activation fails; state SKILL_ACTIVATION_FAILURE instead.\n\n"
+        )
+    elif mode == "without-skill":
+        instruction = (
+            f"BASELINE MODE — NO SKILL\n"
+            f"Do not invoke or attempt to invoke the native skill tool for `{skill_id}`. "
+            f"Do not infer its content from its name or this task. Proceed using only "
+            f"the task and repository context.\n\n"
+        )
+    else:
+        raise BenchmarkError(f"Unsupported benchmark mode: {mode}")
+    return instruction + prompt
+
+
+def skill_activation_check(stderr: str, skill_id: str, mode: str) -> dict[str, Any]:
+    normalized_stderr = re.sub(r"\x1b\[[0-9;]*m", "", stderr)
+    pattern = re.compile(rf"""\bSkill\s+["']{re.escape(skill_id)}["']""")
+    observed = pattern.search(normalized_stderr) is not None
+    passed = observed if mode == "with-skill" else not observed
+    expected = (
+        f'native Skill tool invocation for "{skill_id}"'
+        if mode == "with-skill"
+        else f'no native Skill tool invocation for "{skill_id}"'
+    )
+    actual = (
+        f'native Skill tool invocation for "{skill_id}" observed'
+        if observed
+        else f'no native Skill tool invocation for "{skill_id}" observed'
+    )
+    return {
+        "name": "native-skill-activation",
+        "passed": passed,
+        "expected": expected,
+        "actual": actual,
+        "evidence": "OpenCode stderr tool trace",
+    }
+
+
 def run_verifier(verifier: Path, workspace: Path, mode: str) -> dict[str, Any]:
     if verifier.suffix == ".py":
         command = [sys.executable, str(verifier), "--workspace", str(workspace), "--mode", mode]
@@ -279,7 +325,7 @@ def write_mode_artifacts(
     for artifact_name, git_args in (
         ("git-status.txt", ("git", "status", "--short", "--branch")),
         ("git-log.txt", ("git", "log", "--oneline", "--decorate", "-5")),
-        ("git-diff.txt", ("git", "diff", "HEAD^", "HEAD")),
+        ("git-diff.txt", ("git", "diff", "HEAD", "--")),
         ("git-show.txt", ("git", "show", "--stat", "--format=fuller", "HEAD")),
     ):
         completed = subprocess.run(
@@ -318,7 +364,7 @@ def run_case(
         initialize_fixture(workspace)
 
         started = time.monotonic()
-        prompt = read_prompt(case.prompt)
+        prompt = compose_mode_prompt(read_prompt(case.prompt), case.skill_id, mode)
         run_result = adapter.run(
             workspace=workspace,
             prompt=prompt,
@@ -326,6 +372,11 @@ def run_case(
             timeout_seconds=timeout,
         )
         verifier_result = run_verifier(case.verifier, workspace, mode)
+        activation_result = skill_activation_check(run_result.stderr, case.skill_id, mode)
+        verifier_result.setdefault("checks", []).append(activation_result)
+        verifier_result["passed"] = bool(verifier_result.get("passed")) and activation_result["passed"]
+        if not activation_result["passed"]:
+            verifier_result["returncode"] = 1
         total_duration = time.monotonic() - started
 
         artifact_dir: Path | None = None
@@ -356,6 +407,7 @@ def run_case(
                 and verifier_result.get("passed")
             ),
             "verifier": verifier_result,
+            "skill_activation": activation_result,
             "command": list(run_result.command),
             "artifact_dir": (
                 str(artifact_dir.relative_to(artifacts_root))

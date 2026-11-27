@@ -63,7 +63,13 @@ class MockAdapter:
             capture_output=True,
             text=True,
         )
-        return AgentRunResult(0, 0.001, completed.stdout, completed.stderr, ("mock",))
+        skill_dirs = sorted((workspace / ".opencode" / "skills").iterdir())
+        stderr = (
+            f'→ Skill "{skill_dirs[0].name}"\\n'
+            if with_trailer and skill_dirs
+            else completed.stderr
+        )
+        return AgentRunResult(0, 0.001, completed.stdout, stderr, ("mock",))
 
 
 class BenchmarkTests(unittest.TestCase):

@@ -41,16 +41,110 @@ def main() -> int:
         signature_ok = positional == ["items", "discount_code", "tax_rate"] and len(public.args.defaults) == 2
     add("public-api-preserved", signature_ok, "create_invoice(items, discount_code=None, tax_rate=0.0)", str([arg.arg for arg in public.args.args]) if public else "missing", "AST function signature")
 
-    expected_helpers = {"_calculate_subtotal", "_calculate_discount", "_calculate_tax"}
-    helper_names = [name for name in functions if name.startswith("_")]
-    helpers_ok = expected_helpers.issubset(functions) and len(helper_names) <= 4
-    add("meaningful-calculation-helpers", helpers_ok, "subtotal, discount, and tax are named helpers without helper proliferation", ", ".join(sorted(helper_names)) or "no private helpers", "top-level function definitions")
+    # Identify helpers by responsibility, allowing naming variants with or without a leading underscore.
+    helper_names = [
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "create_invoice"
+    ]
+    subtotal_helpers = [name for name in helper_names if "subtotal" in name]
+    discount_helpers = [name for name in helper_names if "discount" in name]
+    taxable_amount_helpers = [name for name in helper_names if "taxable" in name]
+    tax_and_total_helpers = [name for name in helper_names if "tax" in name and "total" in name]
+    tax_helpers = [
+        name for name in helper_names
+        if "tax" in name and "total" not in name and "taxable" not in name
+    ]
 
+    category_helpers = subtotal_helpers + discount_helpers + tax_helpers
+    categories_are_distinct = len(category_helpers) == 3 and len(set(category_helpers)) == 3
+    exactly_one_per_operation = (
+        len(subtotal_helpers) == 1
+        and len(discount_helpers) == 1
+        and len(tax_helpers) == 1
+        and categories_are_distinct
+    )
+    no_additional_helpers = len(helper_names) == 3 and set(helper_names) == set(category_helpers)
+    no_forbidden_helpers = not taxable_amount_helpers and not tax_and_total_helpers
+    helpers_ok = exactly_one_per_operation and no_additional_helpers and no_forbidden_helpers
+
+    actual_helpers = ", ".join(sorted(helper_names)) or "no calculation helpers"
+    expected_msg = "exactly one separate subtotal, discount and tax helper, with no duplicate or additional helper"
+    add(
+        "meaningful-calculation-helpers",
+        helpers_ok,
+        expected_msg,
+        actual_helpers,
+        "top-level function definitions classified by domain responsibility"
+    )
+
+    # The tax helper must return one tax amount, never bundle downstream totals.
+    tax_helper = functions.get(tax_helpers[0]) if exactly_one_per_operation else None
+    tax_returns = (
+        [node for node in ast.walk(tax_helper) if isinstance(node, ast.Return)]
+        if tax_helper is not None
+        else []
+    )
+    aggregate_result_names: set[str] = set()
+    if tax_helper is not None:
+        for node in ast.walk(tax_helper):
+            if isinstance(node, ast.Assign) and isinstance(
+                node.value, (ast.Tuple, ast.List, ast.Dict, ast.Set)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        aggregate_result_names.add(target.id)
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and isinstance(
+                node.value, (ast.Tuple, ast.List, ast.Dict, ast.Set)
+            ):
+                target = node.target if isinstance(node, ast.AnnAssign) else node.target
+                if isinstance(target, ast.Name):
+                    aggregate_result_names.add(target.id)
+    returns_one_value = bool(tax_returns) and all(
+        returned.value is not None
+        and not isinstance(returned.value, (ast.Tuple, ast.List, ast.Dict, ast.Set))
+        and not (
+            isinstance(returned.value, ast.Name)
+            and returned.value.id in aggregate_result_names
+        )
+        for returned in tax_returns
+    )
+    mentions_downstream_total = tax_helper is not None and any(
+        isinstance(node, ast.Name) and "total" in node.id.lower()
+        for node in ast.walk(tax_helper)
+    )
+    tax_result_ok = tax_helper is not None and returns_one_value and not mentions_downstream_total
+    add(
+        "tax-helper-returns-one-result",
+        tax_result_ok,
+        "the tax helper returns only one tax amount and does not calculate or return invoice total",
+        "single tax result" if tax_result_ok else "tax helper missing, multi-value result, or downstream total found",
+        "AST return expressions, aggregate assignments, and downstream-total identifiers",
+    )
+
+    # The public entry point must call those unique helpers and contain no calculation loop.
     orchestration_ok = False
-    if public is not None:
-        called = {node.func.id for node in ast.walk(public) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-        orchestration_ok = expected_helpers.issubset(called) and not any(isinstance(node, (ast.For, ast.AsyncFor, ast.While)) for node in ast.walk(public))
-    add("entry-point-orchestrates-steps", orchestration_ok, "create_invoice calls named operations rather than containing the calculation loop", "orchestration extracted" if orchestration_ok else "calculation details remain in entry point", "AST calls and control-flow inspection")
+    if public is not None and exactly_one_per_operation:
+        called = {
+            node.func.id for node in ast.walk(public)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        has_loop = any(
+            isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+            for node in ast.walk(public)
+        )
+        orchestration_ok = (
+            subtotal_helpers[0] in called
+            and discount_helpers[0] in called
+            and tax_helpers[0] in called
+            and not has_loop
+        )
+    add(
+        "entry-point-orchestrates-steps",
+        orchestration_ok,
+        "create_invoice calls the unique subtotal, discount and tax helpers and contains no calculation loop",
+        "orchestration extracted" if orchestration_ok else "expected helper calls or loop-free orchestration missing",
+        "AST calls and control-flow inspection"
+    )
 
     no_classes = not any(isinstance(node, ast.ClassDef) for node in tree.body)
     add("no-unneeded-production-types", no_classes, "no classes added for this local refactor", "no classes" if no_classes else "class declaration found", "top-level AST class definitions")
