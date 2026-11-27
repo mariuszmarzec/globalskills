@@ -104,6 +104,7 @@ class HumanReadableSkillBoundaryTests(unittest.TestCase):
         )
         self.assertIn("do not combine a named operation with a downstream result", skill)
         self.assertIn("do not add helpers for simple intermediate or derived values", skill)
+        self.assertIn("native skill tool before inspecting or editing code", skill)
         self.assertIn("calculate_tax_and_total", skill)
         self.assertIn("return tax, total", skill)
         self.assertIn("tax = calculate_tax(taxable_amount, tax_rate)", skill)
