@@ -26,18 +26,21 @@ resolver determines that one user request requires changes in more than one
 repository. In that case the parent prompt contains an explicit list of
 **write-target repositories** and a resolver reason.
 
-- Treat that list as the complete required target set. Do not reduce it to the
-  parent task's primary repository, reorder it in a way that loses a target,
-  substitute another repository, or silently omit a target.
-- Create exactly one independently executable top-level/root tracker item for
-  each listed write target. Each item must name its exact allowlisted
+- Treat that list as the complete required target set. Preserve the
+  resolver's order: the first target is the parent task's primary repository.
+  Do not substitute, reorder or silently omit a target.
+- The Team parent owns the first target. Implement it in the parent's assigned
+  primary checkout and deliver a separate verified PR for that repository.
+  Do not create a duplicate child tracker item for the primary target.
+- For every remaining target, create exactly one independently executable
+  top-level/root tracker item. Each child must name its exact allowlisted
   `owner/repo`, contain a bounded change request and acceptance criteria, use
   a stable marker and `/manul run` trigger, and receive its own Manul
   workspace, branch and PR.
-- The parent is coordination-only by default. Do not implement cross-repository
-  changes in the parent's primary checkout and do not create one combined PR
-  from that checkout. Coordinate API/schema compatibility and dependency order
-  across child items.
+- Never combine changes from multiple repositories into one PR. Coordinate
+  API/schema compatibility and dependency order across the parent-owned primary
+  change and all child items. The final report must include the parent's PR
+  and every child PR.
 - A repository mentioned only as a read-only dependency, API consumer,
   reference, issue URL or example is not a write target unless the parent
   request explicitly requires a change and PR there.
@@ -137,8 +140,10 @@ must be enabled in Manul's global `taskSources` configuration.
 
 ## Creating executable work items
 
-Each independently executable item must be a **top-level/root task** in its
-selected tracker. Manul's existing Todo adapters poll root tasks; nested Todo
+Each independently executable **additional-repository** item must be a
+**top-level/root task** in its selected tracker. The first/primary repository
+is implemented by the existing Team parent task and does not need a duplicate
+tracker item. Manul's existing Todo adapters poll root tasks; nested Todo
 subtasks are ordered steps within one root and do not receive an independent
 Manul workspace. Preserve hierarchy and dependencies in the Team checkpoint
 and link external tasks to each other in their descriptions.
@@ -325,7 +330,12 @@ human decision is required, use the normal `TASK_NEEDS_USER` flow. Emit
 
 At meaningful planning, dispatch, decision, review, QA and delivery milestones,
 emit a generic Manul workflow checkpoint. Do not access or modify Manul
-databases; the daemon validates and persists it.
+databases; the daemon validates and persists it. For multi-repository intake,
+the parent task's own primary-repository PR is delivered through the normal
+Manul task lifecycle. Put only additional-repository child tasks in
+`data.items`/trackerRefs so the coordinator never waits on the parent itself.
+Record the primary target and its PR URL separately in workflow data and
+include it in finalization and the user-facing report.
 
 ```text
 MANUL_WORKFLOW_STATE_BEGIN
