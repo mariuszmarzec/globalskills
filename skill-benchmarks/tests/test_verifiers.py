@@ -532,8 +532,8 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
     def test_tax_helper_returning_tax_and_total_tuple_fails(self):
         source = self.VALID_SOURCE.replace(
             "return round(taxable_amount * tax_rate, 2)",
-            "tax = round(taxable_amount * tax_rate, 2)\\n"
-            "    total = round(taxable_amount + tax, 2)\\n"
+            "tax = round(taxable_amount * tax_rate, 2)\n"
+            "    total = round(taxable_amount + tax, 2)\n"
             "    return tax, total",
         )
         result = self.run_verifier(source)
@@ -546,8 +546,8 @@ def create_invoice(items, discount_code=None, tax_rate=0.0):
     def test_tax_helper_returning_tax_and_total_mapping_fails(self):
         source = self.VALID_SOURCE.replace(
             "return round(taxable_amount * tax_rate, 2)",
-            "tax = round(taxable_amount * tax_rate, 2)\\n"
-            "    total = round(taxable_amount + tax, 2)\\n"
+            "tax = round(taxable_amount * tax_rate, 2)\n"
+            "    total = round(taxable_amount + tax, 2)\n"
             "    return {'tax': tax, 'total': total}",
         )
         result = self.run_verifier(source)
