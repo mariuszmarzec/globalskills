@@ -1,6 +1,6 @@
 ---
 name: human-readable-code
-description: Required guidance for code changes and refactoring. Use before writing, reviewing, or refactoring software in any language to choose cohesive function boundaries, preserve behavior, and avoid unnecessary abstractions.
+description: Required guidance for code changes and refactoring. Load with the native skill tool before inspecting or editing code; then choose cohesive function boundaries, preserve behavior, and avoid unnecessary abstractions.
 license: MIT
 ---
 
