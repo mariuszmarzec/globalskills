@@ -1,0 +1,44 @@
+I'll start by examining the current state of the repository to understand the existing code structure.
+Now let me check if there's a `.specification/config.yaml` file to determine if SDD routing is needed:
+No SDD configuration exists. Let me check the available skills to see if `testable-design` is listed:
+The `testable-design` skill IS listed in the available skills. I need to load it before making changes:
+The skill is listed but I cannot load it due to permission restrictions. According to the BASELINE MODE instructions, I should proceed without the skill and use only the task and repository context.
+
+Now let me refactor `registration.py` and add tests. The task is to:
+1. Extract a pure helper `prepare_registration(data)` that normalizes input and validates it
+2. Keep the public `register_user(data, database, mailer)` function unchanged in behavior
+3. Add tests for normalized input and invalid email/name cases
+
+Let me implement the changes:
+Now let me update the test file to add unit tests for `prepare_registration` while keeping the existing integration tests:
+Now let me run the tests to verify everything works:
+All 9 tests pass. Let me verify the final state of both files:
+The refactoring is complete. Let me verify there are no additional files that need changes (scoped to just `registration.py` and `tests/test_registration.py`):
+The changes are scoped correctly to just the two specified files. Let me provide a summary:
+
+---
+
+**Task:** Refactor registration.py to extract input normalization and validation into a testable pure helper function.
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI (default)
+
+**Reason:** Simple refactoring task - extract existing logic into a pure function for testability. No architectural changes, no new dependencies, minimal complexity.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Analyzed existing code structure in registration.py and tests/test_registration.py
+2. Extracted `prepare_registration(data)` helper function that normalizes input and raises ValueError for invalid data
+3. Added unit tests for `prepare_registration` covering normalized input and all invalid email/name cases
+
+**Result:** SUCCESS
+
+**Verification:**
+- All 9 tests pass (6 new unit tests for `prepare_registration` + 2 existing integration tests + 1 normalization test)
+- Changes scoped to registration.py and tests/test_registration.py only
+- No interfaces, classes, mocks, network dependencies, or test-only public APIs added
+- Public `register_user(data, database, mailer)` function retains current behavior

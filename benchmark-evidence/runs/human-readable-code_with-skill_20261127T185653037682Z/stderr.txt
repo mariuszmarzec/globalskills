@@ -1,0 +1,88 @@
+
+> orchestrator · freeLLMAPI
+→ Skill "human-readable-code" 
+> orchestrator · freeLLMAPI
+→ Read invoice.py 
+> orchestrator · freeLLMAPI
+✱ Glob "**/test*.py" in . · 1 match
+> orchestrator · freeLLMAPI
+→ Read tests/test_invoice.py 
+> orchestrator · freeLLMAPI
+← Edit invoice.py
+Index: invoice.py
+===================================================================
+--- invoice.py
++++ invoice.py
+@@ -1,5 +1,6 @@
+-def create_invoice(items, discount_code=None, tax_rate=0.0):
++def calculate_subtotal(items):
++    """Calculate the line-item subtotal amount from a list of items."""
+     subtotal = 0.0
+     for item in items:
+         quantity = item["quantity"]
+         unit_price = item["unit_price"]
+@@ -7,21 +8,34 @@
+             raise ValueError("quantity cannot be negative")
+         if unit_price < 0:
+             raise ValueError("unit_price cannot be negative")
+         subtotal += quantity * unit_price
++    return subtotal
+ 
++
++def calculate_discount(subtotal, discount_code):
++    """Calculate the discount amount given a subtotal and optional discount code."""
+     discount = 0.0
+     if discount_code is not None:
+         if discount_code == "SAVE10":
+             discount = subtotal * 0.10
+         elif discount_code == "SAVE20" and subtotal >= 100.0:
+             discount = subtotal * 0.20
++    return discount
+ 
++
++def calculate_tax(taxable_amount, tax_rate):
++    """Calculate the tax amount given a taxable amount and tax rate."""
++    return round(taxable_amount * tax_rate, 2)
++
++
++def create_invoice(items, discount_code=None, tax_rate=0.0):
++    subtotal = calculate_subtotal(items)
++    discount = calculate_discount(subtotal, discount_code)
+     taxable_amount = subtotal - discount
+     if taxable_amount < 0:
+         taxable_amount = 0.0
+-
+-    tax = round(taxable_amount * tax_rate, 2)
++    tax = calculate_tax(taxable_amount, tax_rate)
+     total = round(taxable_amount + tax, 2)
+     return {
+         "subtotal": round(subtotal, 2),
+         "discount": round(discount, 2),
+
+> orchestrator · freeLLMAPI
+$ cd /tmp/skill-bench-invoice-refactor-with/workspace && python -m pytest tests/test_invoice.py -v
+zsh:1: command not found: python
+> orchestrator · freeLLMAPI
+$ cd /tmp/skill-bench-invoice-refactor-with/workspace && python3 -m pytest tests/test_invoice.py -v
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /tmp/skill-bench-invoice-refactor-with/workspace
+plugins: anyio-4.14.2, cov-7.1.0
+collecting ... collected 6 items
+
+tests/test_invoice.py::CreateInvoiceTests::test_calculates_subtotal_discount_tax_and_total PASSED [ 16%]
+tests/test_invoice.py::CreateInvoiceTests::test_empty_invoice_is_zero PASSED [ 33%]
+tests/test_invoice.py::CreateInvoiceTests::test_rejects_negative_quantity PASSED [ 50%]
+tests/test_invoice.py::CreateInvoiceTests::test_rejects_negative_unit_price PASSED [ 66%]
+tests/test_invoice.py::CreateInvoiceTests::test_save_twenty_applies_at_threshold PASSED [ 83%]
+tests/test_invoice.py::CreateInvoiceTests::test_save_twenty_requires_minimum_subtotal PASSED [100%]
+
+============================== 6 passed in 0.01s ===============================
+> orchestrator · freeLLMAPI
+→ Read invoice.py 
+> orchestrator · freeLLMAPI
+$ cd /tmp/skill-bench-invoice-refactor-with/workspace && python3 -c "from invoice import create_invoice; print(create_invoice.__annotations__); result = create_invoice([{'quantity': 1, 'unit_price': 10.0}], discount_code=None, tax_rate=0.0); print('Result:', result)"
+{}
+Result: {'subtotal': 10.0, 'discount': 0.0, 'tax': 0.0, 'total': 10.0}
+> orchestrator · freeLLMAPI

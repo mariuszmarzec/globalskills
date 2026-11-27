@@ -1,0 +1,14 @@
+BASELINE MODE — NO SKILL
+Do not invoke or attempt to invoke the native skill tool for `human-readable-code`. Do not infer its content from its name or this task. Proceed using only the task and repository context.
+
+Refactor `invoice.py` to make the main invoice flow easier for another developer to understand. Preserve the public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature and all current behavior.
+
+The requested extraction list is exactly these three calculation operations:
+
+1. `calculate_subtotal(items)` returns only the line-item subtotal amount.
+2. `calculate_discount(subtotal, discount_code)` returns only the discount amount.
+3. `calculate_tax(taxable_amount, tax_rate)` returns only the tax amount as one scalar number.
+
+Keep the simple `taxable_amount` calculation and final `total` calculation inline in `create_invoice`. The entry point must call the three helpers in sequence and assemble the result. Do not create a `calculate_tax_and_total`, `calculate_total_and_tax`, or other combined helper. Do not return tax and total together from any helper. Do not create extra helpers for `taxable_amount` or `total`.
+
+Do not use arbitrary line-count rules, add classes/interfaces, introduce dependencies, or create tiny forwarding wrappers. Do not change the tests. Run the existing test suite and keep the change scoped to `invoice.py`.

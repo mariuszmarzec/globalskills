@@ -1,0 +1,49 @@
+Now I understand the code and tests. Let me refactor `invoice.py` by extracting the three calculation helpers as requested.
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final state of the refactored file:
+The refactoring is complete. Let me verify the public API signature remains unchanged by checking it can be imported and called correctly:
+**Task Complete**
+
+## Summary
+
+I refactored `invoice.py` to improve readability by extracting exactly the three calculation helpers as requested:
+
+1. **`calculate_subtotal(items)`** - Returns the line-item subtotal amount (lines 1-12)
+2. **`calculate_discount(subtotal, discount_code)`** - Returns the discount amount (lines 15-23)  
+3. **`calculate_tax(taxable_amount, tax_rate)`** - Returns the tax amount as a scalar (lines 26-28)
+
+The `create_invoice` entry point now:
+- Calls the three helpers in sequence: `calculate_subtotal` → `calculate_discount` → `calculate_tax`
+- Keeps `taxable_amount` calculation inline (simple subtraction with boundary check)
+- Keeps `total` calculation inline (simple addition with rounding)
+- Preserves the exact public signature: `create_invoice(items, discount_code=None, tax_rate=0.0)`
+- Maintains all validation logic for negative quantities and unit prices in `calculate_subtotal`
+
+**Verification:**
+- All 6 existing tests pass
+- Public API signature is unchanged
+- All behavior is preserved
+
+```text
+Task: Refactor invoice.py to extract three calculation helpers (calculate_subtotal, calculate_discount, calculate_tax) while keeping taxable_amount and total inline in create_invoice.
+
+Role:
+ coder
+ 
+Initial tier:
+ CHEAP
+ 
+Model:
+ freeLLMAPI
+ 
+Reason: Simple refactoring task - extracting three helpers, running tests. Low complexity and low risk.
+ 
+Escalated:
+ NO
+ 
+Steps:
+ 5
+ 
+Result:
+ SUCCESS
+```
