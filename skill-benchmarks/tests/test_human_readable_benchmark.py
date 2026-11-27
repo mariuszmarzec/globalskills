@@ -15,7 +15,7 @@ from benchmark import compose_mode_prompt, skill_activation_check, write_mode_ar
 
 class NativeSkillActivationTests(unittest.TestCase):
     def test_with_skill_requires_exact_native_tool_invocation(self) -> None:
-        stderr = '\\n→ \\x1b[0mSkill "human-readable-code" \\n'
+        stderr = '\n→ \x1b[0mSkill "human-readable-code" \n'
         result = skill_activation_check(stderr, "human-readable-code", "with-skill")
         self.assertTrue(result["passed"])
         self.assertEqual("native-skill-activation", result["name"])
