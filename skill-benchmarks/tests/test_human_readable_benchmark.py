@@ -47,7 +47,7 @@ class NativeSkillActivationTests(unittest.TestCase):
 
 
 class HumanReadableBenchmarkPromptTests(unittest.TestCase):
-    def test_prompt_loads_skill_only_when_available(self) -> None:
+    def test_prompt_defines_three_scalar_invoice_operations(self) -> None:
         prompt_path = (
             HERE.parent
             / "cases"
@@ -57,12 +57,15 @@ class HumanReadableBenchmarkPromptTests(unittest.TestCase):
         )
         prompt = prompt_path.read_text(encoding="utf-8").lower()
 
-        self.assertIn("available-skills", prompt)
-        self.assertIn("human-readable-code", prompt)
-        self.assertIn("native", prompt)
-        self.assertIn("skill", prompt)
-        self.assertIn("without-skill baseline", prompt)
-        self.assertIn("continue without a skill", prompt)
+        self.assertIn("exactly these three calculation operations", prompt)
+        self.assertIn("calculate_subtotal(items)", prompt)
+        self.assertIn("calculate_discount(subtotal, discount_code)", prompt)
+        self.assertIn("calculate_tax(taxable_amount, tax_rate)", prompt)
+        self.assertIn("returns only the tax amount as one scalar number", prompt)
+        self.assertIn("keep the simple", prompt)
+        self.assertIn("inline in", prompt)
+        self.assertIn("do not create a", prompt)
+        self.assertIn("calculate_tax_and_total", prompt)
 
 
 class TestableDesignBenchmarkPromptTests(unittest.TestCase):
