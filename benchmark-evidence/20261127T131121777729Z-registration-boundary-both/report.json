@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "selector": "registration-boundary",
+    "requested_mode": "both",
+    "model": null,
+    "config": "config.json",
+    "started_at": "2026-11-27T13:11:21.778037+00:00",
+    "finished_at": "2026-11-27T13:12:46.151057+00:00"
+  },
+  "summary": {
+    "runs": 2,
+    "passed_runs": 2,
+    "failed_runs": 0,
+    "cases": 1,
+    "skills": 1
+  },
+  "evaluation": {
+    "target_mode": "with-skill",
+    "runs": 1,
+    "passed_runs": 1,
+    "failed_runs": 0,
+    "passed": true,
+    "note": "In both mode, without-skill is a diagnostic baseline and does not determine the command exit status."
+  },
+  "impact": {
+    "cases_compared": 1,
+    "skill_helped": 0,
+    "skill_harmed": 0,
+    "case_passes_without_skill": 1,
+    "case_fails_with_and_without_skill": 0,
+    "comparison_unavailable": 0
+  },
+  "comparisons": [
+    {
+      "case": "registration-boundary",
+      "comparison_available": true,
+      "without_skill_passed": true,
+      "with_skill_passed": true,
+      "impact_signal": "case_passes_without_skill",
+      "without_skill_passed_checks": 8,
+      "with_skill_passed_checks": 8,
+      "passed_checks_delta": 0,
+      "without_skill_failed_checks": [],
+      "with_skill_failed_checks": [],
+      "check_deltas": []
+    }
+  ],
+  "results": [
+    {
+      "case": "registration-boundary",
+      "skill": "testable-design",
+      "mode": "with-skill",
+      "adapter": "opencode",
+      "model": null,
+      "timeout_seconds": 600,
+      "agent_returncode": 0,
+      "agent_duration_seconds": 32.269,
+      "duration_seconds": 32.358,
+      "passed": true,
+      "verifier": {
+        "passed": true,
+        "mode": "with-skill",
+        "checks": [
+          {
+            "name": "valid-python",
+            "passed": true,
+            "expected": "production and test files parse",
+            "actual": "valid",
+            "evidence": "ast.parse(registration.py, test_registration.py)"
+          },
+          {
+            "name": "explicit-pure-policy-helper",
+            "passed": true,
+            "expected": "prepare_registration(data) and register_user(data, database, mailer) exist",
+            "actual": "prepare_registration, register_user",
+            "evidence": "top-level function definitions"
+          },
+          {
+            "name": "validation-independent-of-effects",
+            "passed": true,
+            "expected": "prepare_registration has no persistence, mail, time, filesystem, or output effects",
+            "actual": "no external-effect references",
+            "evidence": "AST inspection of prepare_registration"
+          },
+          {
+            "name": "entry-point-orchestrates-boundaries",
+            "passed": true,
+            "expected": "register_user uses prepare_registration, then persists and sends welcome email",
+            "actual": "delegation present",
+            "evidence": "AST calls and collaborator operations"
+          },
+          {
+            "name": "direct-helper-tests",
+            "passed": true,
+            "expected": "at least two distinct test methods directly call prepare_registration",
+            "actual": "test_prepare_registration_valid_input@46, test_prepare_registration_normalizes_whitespace_and_case@53, test_prepare_registration_empty_name_raises@58, test_prepare_registration_missing_name_raises@63, test_prepare_registration_invalid_email_no_at_raises@68, test_prepare_registration_invalid_email_starts_with_at_raises@73, test_prepare_registration_invalid_email_ends_with_at_raises@78",
+            "evidence": "AST inspection of test method bodies, excluding nested scopes"
+          },
+          {
+            "name": "no-mock-heavy-test-setup",
+            "passed": true,
+            "expected": "use lightweight fakes rather than mocks",
+            "actual": "no mock framework usage",
+            "evidence": "test source scan"
+          },
+          {
+            "name": "registration-tests",
+            "passed": true,
+            "expected": "all registration tests pass",
+            "actual": "OK",
+            "evidence": "python -m unittest discover -s tests -v"
+          },
+          {
+            "name": "native-skill-activation",
+            "passed": true,
+            "expected": "native Skill tool invocation for \"testable-design\"",
+            "actual": "native Skill tool invocation for \"testable-design\" observed",
+            "evidence": "OpenCode stderr tool trace"
+          }
+        ],
+        "returncode": 0
+      },
+      "skill_activation": {
+        "name": "native-skill-activation",
+        "passed": true,
+        "expected": "native Skill tool invocation for \"testable-design\"",
+        "actual": "native Skill tool invocation for \"testable-design\" observed",
+        "evidence": "OpenCode stderr tool trace"
+      },
+      "command": [
+        "opencode",
+        "run",
+        "--auto",
+        "MANDATORY FIRST ACTION \u2014 SKILL ACTIVATION\nBefore any Glob, Read, Shell, search, or file operation, your first tool call must invoke the native skill tool with ID `testable-design`. Wait for the skill content and follow it. Do not continue if the tool is unavailable or activation fails; state SKILL_ACTIVATION_FAILURE instead.\n\nBefore editing, inspect the skills listed in OpenCode's available-skills description. If `testable-design` is listed, load it with the native `skill` tool using ID `testable-design` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill. Do not infer the skill's content from its name or from the task wording.\n\nRefactor registration.py so input normalization and registration validation can be tested without a database or email sender. Keep the public register_user(data, database, mailer) function and its current behavior. Extract a pure helper named prepare_registration(data) that returns the normalized name and email, or raises ValueError for invalid input. Keep persistence and the welcome message in register_user.\n\nAdd tests covering normalized input and invalid email/name cases. Keep the existing lightweight fake-based integration tests. Do not add interfaces, classes, mocks, network dependencies, or test-only public APIs. Run the tests and keep the change scoped to registration.py and tests/test_registration.py."
+      ],
+      "artifact_dir": "cases/registration-boundary/with-skill"
+    },
+    {
+      "case": "registration-boundary",
+      "skill": "testable-design",
+      "mode": "without-skill",
+      "adapter": "opencode",
+      "model": null,
+      "timeout_seconds": 600,
+      "agent_returncode": 0,
+      "agent_duration_seconds": 52.179,
+      "duration_seconds": 52.261,
+      "passed": true,
+      "verifier": {
+        "passed": true,
+        "mode": "without-skill",
+        "checks": [
+          {
+            "name": "valid-python",
+            "passed": true,
+            "expected": "production and test files parse",
+            "actual": "valid",
+            "evidence": "ast.parse(registration.py, test_registration.py)"
+          },
+          {
+            "name": "explicit-pure-policy-helper",
+            "passed": true,
+            "expected": "prepare_registration(data) and register_user(data, database, mailer) exist",
+            "actual": "prepare_registration, register_user",
+            "evidence": "top-level function definitions"
+          },
+          {
+            "name": "validation-independent-of-effects",
+            "passed": true,
+            "expected": "prepare_registration has no persistence, mail, time, filesystem, or output effects",
+            "actual": "no external-effect references",
+            "evidence": "AST inspection of prepare_registration"
+          },
+          {
+            "name": "entry-point-orchestrates-boundaries",
+            "passed": true,
+            "expected": "register_user uses prepare_registration, then persists and sends welcome email",
+            "actual": "delegation present",
+            "evidence": "AST calls and collaborator operations"
+          },
+          {
+            "name": "direct-helper-tests",
+            "passed": true,
+            "expected": "at least two distinct test methods directly call prepare_registration",
+            "actual": "test_normalizes_name_and_email@46, test_strips_and_lowercases_email@53, test_raises_value_error_for_empty_name@57, test_raises_value_error_for_whitespace_only_name@62, test_raises_value_error_for_missing_name_key@67, test_raises_value_error_for_email_without_at@72, test_raises_value_error_for_email_starting_with_at@77, test_raises_value_error_for_email_ending_with_at@82",
+            "evidence": "AST inspection of test method bodies, excluding nested scopes"
+          },
+          {
+            "name": "no-mock-heavy-test-setup",
+            "passed": true,
+            "expected": "use lightweight fakes rather than mocks",
+            "actual": "no mock framework usage",
+            "evidence": "test source scan"
+          },
+          {
+            "name": "registration-tests",
+            "passed": true,
+            "expected": "all registration tests pass",
+            "actual": "OK",
+            "evidence": "python -m unittest discover -s tests -v"
+          },
+          {
+            "name": "native-skill-activation",
+            "passed": true,
+            "expected": "no native Skill tool invocation for \"testable-design\"",
+            "actual": "no native Skill tool invocation for \"testable-design\" observed",
+            "evidence": "OpenCode stderr tool trace"
+          }
+        ],
+        "returncode": 0
+      },
+      "skill_activation": {
+        "name": "native-skill-activation",
+        "passed": true,
+        "expected": "no native Skill tool invocation for \"testable-design\"",
+        "actual": "no native Skill tool invocation for \"testable-design\" observed",
+        "evidence": "OpenCode stderr tool trace"
+      },
+      "command": [
+        "opencode",
+        "run",
+        "--auto",
+        "BASELINE MODE \u2014 NO SKILL\nDo not invoke or attempt to invoke the native skill tool for `testable-design`. Do not infer its content from its name or this task. Proceed using only the task and repository context.\n\nBefore editing, inspect the skills listed in OpenCode's available-skills description. If `testable-design` is listed, load it with the native `skill` tool using ID `testable-design` before changing any files, then follow its relevant guidance. If it is not listed (the without-skill baseline), do not attempt to load it; continue without a skill. Do not infer the skill's content from its name or from the task wording.\n\nRefactor registration.py so input normalization and registration validation can be tested without a database or email sender. Keep the public register_user(data, database, mailer) function and its current behavior. Extract a pure helper named prepare_registration(data) that returns the normalized name and email, or raises ValueError for invalid input. Keep persistence and the welcome message in register_user.\n\nAdd tests covering normalized input and invalid email/name cases. Keep the existing lightweight fake-based integration tests. Do not add interfaces, classes, mocks, network dependencies, or test-only public APIs. Run the tests and keep the change scoped to registration.py and tests/test_registration.py."
+      ],
+      "artifact_dir": "cases/registration-boundary/without-skill"
+    }
+  ]
+}

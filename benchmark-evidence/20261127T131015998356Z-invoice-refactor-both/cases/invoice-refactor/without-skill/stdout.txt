@@ -1,0 +1,52 @@
+I'll start by reading the current `invoice.py` file to understand its structure, then refactor it according to the requirements.
+Now let me check if there are any tests to understand the expected behavior:
+Now I understand the code and tests. Let me refactor `invoice.py` by extracting the three calculation operations as requested:
+
+1. `calculate_subtotal(items)` - extracts the subtotal calculation loop
+2. `calculate_discount(subtotal, discount_code)` - extracts the discount logic
+3. `calculate_tax(taxable_amount, tax_rate)` - extracts the tax calculation
+
+The `taxable_amount` and `total` calculations will remain inline in `create_invoice`.
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the final refactored code:
+The refactoring is complete. Let me verify there are no other files that might need to be checked:
+The refactoring is complete. 
+
+**Summary:**
+
+I refactored `invoice.py` by extracting exactly the three calculation operations as requested:
+
+1. **`calculate_subtotal(items)`** - Returns the line-item subtotal amount (lines 1-12)
+2. **`calculate_discount(subtotal, discount_code)`** - Returns the discount amount (lines 15-23)  
+3. **`calculate_tax(taxable_amount, tax_rate)`** - Returns the tax amount as a scalar (lines 26-28)
+
+The `taxable_amount` calculation (subtotal - discount with floor at 0) and `total` calculation (taxable_amount + tax) remain inline in `create_invoice` as specified.
+
+The entry point `create_invoice` now calls the three helpers in sequence:
+```python
+subtotal = calculate_subtotal(items)
+discount = calculate_discount(subtotal, discount_code)
+...
+tax = calculate_tax(taxable_amount, tax_rate)
+total = round(taxable_amount + tax, 2)
+```
+
+All 6 existing tests pass, confirming the refactored code preserves all current behavior.
+
+---
+
+**Task:** Refactor `invoice.py` to extract three calculation helpers
+ 
+**Role:** orchestrator
+ 
+**Initial tier:** CHEAP
+ 
+**Model:** freeLLMAPI
+ 
+**Reason:** Simple refactoring task - extract functions from existing code without changing behavior
+ 
+**Escalated:** NO
+ 
+**Steps:** 3
+ 
+**Result:** SUCCESS

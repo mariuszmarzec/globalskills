@@ -1,0 +1,44 @@
+Now let me read the `invoice.py` file to understand the current implementation.
+Now let me check if there are any tests for this module to understand the expected behavior.
+Now I understand the code and tests. Let me refactor `invoice.py` according to the requirements:
+
+1. Extract `calculate_subtotal(items)` - for line-item subtotal calculation with validation
+2. Extract `calculate_discount(subtotal, discount_code)` - for discount amount calculation
+3. Extract `calculate_tax(taxable_amount, tax_rate)` - for tax calculation
+4. Keep `taxable_amount` and `total` calculations inline in `create_invoice`
+Now let me run the existing test suite to verify the refactored code preserves all behavior:
+All 6 tests pass. Let me verify the refactored code:
+The refactoring is complete. Let me verify the public API signature remains unchanged by checking it can be imported and called correctly:
+The public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature is preserved. All tests pass. The refactoring is complete.
+
+---
+
+**Task:** Refactor `invoice.py` to make the main invoice flow easier for another developer to understand.
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** A straightforward refactoring task that extracts three well-defined calculation operations from a single file. The cognitive complexity is low since the business logic is linear and well-contained.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Read the existing `invoice.py` and tests to understand current behavior
+2. Extract the three calculation helpers as specified
+3. Run tests to verify behavior is preserved
+
+**Result:** SUCCESS
+
+All 6 tests pass. The refactored code:
+- Preserves the public `create_invoice(items, discount_code=None, tax_rate=0.0)` signature
+- Adds `calculate_subtotal(items)` for line-item subtotal calculation
+- Adds `calculate_discount(subtotal, discount_code)` for discount amount calculation  
+- Adds `calculate_tax(taxable_amount, tax_rate)` for tax calculation
+- Keeps `taxable_amount` and `total` calculations inline in `create_invoice`
+- Includes docstrings for all functions
+- No combined helper methods were created
+- No extra helpers for simple arithmetic operations
+- Tests were not modified
