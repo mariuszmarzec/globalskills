@@ -54,7 +54,11 @@ installed project-skill contents.
    supplied allowlist. Never invent a repository, infer a new owner, or expand
    the allowlist.
 7. If two or more repositories are genuinely required, include all of them.
-   Do not arbitrarily choose one primary repository.
+   Do not arbitrarily choose one primary repository. Preserve the user's
+   explicit ordering or primary-project emphasis when clear. Otherwise put the
+   repository owning the main entry point/contract first, followed by dependent
+   repositories in dependency order. If no such order can be established,
+   use a stable lexicographic order; never omit a target.
 8. If the target is ambiguous, contradictory, absent from the allowlist, or
    cannot be established from the supplied evidence, return an empty list and
    confidence "low". Do not guess.
