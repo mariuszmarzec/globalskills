@@ -1,0 +1,63 @@
+{
+  "passed": true,
+  "mode": "with-skill",
+  "checks": [
+    {
+      "name": "valid-python",
+      "passed": true,
+      "expected": "production and test files parse",
+      "actual": "valid",
+      "evidence": "ast.parse(registration.py, test_registration.py)"
+    },
+    {
+      "name": "explicit-pure-policy-helper",
+      "passed": true,
+      "expected": "prepare_registration(data) and register_user(data, database, mailer) exist",
+      "actual": "prepare_registration, register_user",
+      "evidence": "top-level function definitions"
+    },
+    {
+      "name": "validation-independent-of-effects",
+      "passed": true,
+      "expected": "prepare_registration has no persistence, mail, time, filesystem, or output effects",
+      "actual": "no external-effect references",
+      "evidence": "AST inspection of prepare_registration"
+    },
+    {
+      "name": "entry-point-orchestrates-boundaries",
+      "passed": true,
+      "expected": "register_user uses prepare_registration, then persists and sends welcome email",
+      "actual": "delegation present",
+      "evidence": "AST calls and collaborator operations"
+    },
+    {
+      "name": "direct-helper-tests",
+      "passed": true,
+      "expected": "at least two distinct test methods directly call prepare_registration",
+      "actual": "test_normalizes_input_and_validates@46, test_valid_email_and_name@53, test_invalid_email_fails@60, test_email_starts_with_at_fails@65, test_email_ends_with_at_fails@70, test_empty_name_fails@75, test_whitespace_only_name_fails@80, test_missing_name_fails@85, test_missing_email_fails@90",
+      "evidence": "AST inspection of test method bodies, excluding nested scopes"
+    },
+    {
+      "name": "no-mock-heavy-test-setup",
+      "passed": true,
+      "expected": "use lightweight fakes rather than mocks",
+      "actual": "no mock framework usage",
+      "evidence": "test source scan"
+    },
+    {
+      "name": "registration-tests",
+      "passed": true,
+      "expected": "all registration tests pass",
+      "actual": "OK",
+      "evidence": "python -m unittest discover -s tests -v"
+    },
+    {
+      "name": "native-skill-activation",
+      "passed": true,
+      "expected": "native Skill tool invocation for \"testable-design\"",
+      "actual": "native Skill tool invocation for \"testable-design\" observed",
+      "evidence": "OpenCode stderr tool trace"
+    }
+  ],
+  "returncode": 0
+}

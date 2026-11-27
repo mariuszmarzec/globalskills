@@ -1,0 +1,34 @@
+I have a clear picture. Let me check the test runner environment before delegating.
+Clean repo, Python 3.12 + pytest available. Let me confirm the baseline suite passes before delegating the change.
+Baseline suite is green (6 passed). This is a small, precisely specified single-file refactor — CHEAP complexity, LOW risk, but it touches invoice/payment-style calculations so I'll verify with the full suite after. I'll delegate the bounded edit to a CHEAP-tier coder with the exact target content to keep fidelity, then verify independently.
+I've delegated the `invoice.py` refactor to a CHEAP-tier coder (exact target content specified to preserve behavior, with the required test-suite run). It's running in the background; I'll independently verify the result once it reports.
+Delegated the refactor to the coder; I'll verify the diff and re-run the test suite when it completes.
+The refactor succeeded — all 6 tests pass. Let me independently verify the final state:
+Verification complete. The refactored `invoice.py` extracts exactly the three required calculation operations as specified:
+
+1. `calculate_subtotal(items)` — computes the line-item subtotal with validation
+2. `calculate_discount(subtotal, discount_code)` — computes the discount amount based on code rules
+3. `calculate_tax(taxable_amount, tax_rate)` — returns the tax as a single scalar
+
+`taxable_amount` calculation and `total` calculation remain inline in `create_invoice`, which now reads like a clear sequential pipeline of the three helper calls. No combined helpers created, no extra helpers added, no test changes.
+
+---
+
+**Task:** Refactor `invoice.py` to extract three calculation helpers (calculate_subtotal, calculate_discount, calculate_tax) while keeping taxable_amount and total inline in create_invoice.
+
+**Role:** coder-cheap (with independent verification by orchestrator)
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI (LiteLLM) via OpenCode task delegation
+
+**Reason:** Single-file, precisely specified extraction refactor; low complexity; scope clearly bounded to invoice.py with existing test suite as oracle.
+
+**Escalated:** NO
+
+**Steps:** 3
+1. Read codebase and tests
+2. Delegate CHEAP-agent with exact target content specification  
+3. Independently verify final file and test suite passes
+
+**Result:** SUCCESS

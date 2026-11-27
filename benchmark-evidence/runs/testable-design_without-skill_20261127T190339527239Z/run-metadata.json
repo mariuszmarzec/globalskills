@@ -1,0 +1,34 @@
+{
+  "source_sha": "e3d67db12fed63a3d7f0f5d3d135c22c11db8148",
+  "source_pr": "https://github.com/mariuszmarzec/globalskills/pull/172",
+  "benchmark_date": "2026-11-27",
+  "run_dir": "testable-design_without-skill_20261127T190339527239Z",
+  "skill": "testable-design",
+  "mode": "without-skill",
+  "case": "registration-boundary",
+  "timestamp": "20261127T190339527239Z",
+  "files": {
+    "command.txt": "2652ff3cb4412aa7e535266539395ae4fd9252761874352d96a23e1fe531f087",
+    "git-diff.txt": "6369a2fdc7c12288f621678416b58650fde650cdce4373f32023cad753bee76f",
+    "git-log.txt": "fd843cedd06a2993f84028c8bda8ebfce4c9085228d9b5fc8ae215131b721df0",
+    "git-show.txt": "721044d99a676a41c4422693c2af6d47cd9a7f6c6babc20324a98e82fd50519b",
+    "git-status.txt": "97499a730c387028e0c1a9f99b8c638f283c5e2488a6bd8b8ba4d6b16ff1717d",
+    "manifest.json": "c524fe62c2c4ece23853992cb96ff7973d8d3a7ab881e56982a62640ff232506",
+    "prompt.txt": "39aaff81771cd359209af1bce782a9aced27c75d262c6da7b32624de04ba24f7",
+    "report.json": "538f0e34498d35d1378648059c492f0a03db0d439ef428041221faeb0e596643",
+    "report.md": "0c14aeb64b8801e8085694dda1fb7a662919239e049acd7e828ac847ebe5e041",
+    "stderr.txt": "595935a35fed000b8733fe8217552fe39121aba5b83b8f4ef10dc7e63adcc461",
+    "stdout.txt": "35d9b7f2a1c6d1fb054fff2192a703253499f5ca687d2952337a637afa8b66d5",
+    "verifier.json": "a625ec12eb61c70c42400f962d264521169c272a52de93ac5f07db8532402db2"
+  },
+  "redaction_applied": true,
+  "redaction_procedure": "benchmark-evidence/redaction.py",
+  "agent_returncode": 0,
+  "verifier_returncode": 1,
+  "native_skill_activation_check": {
+    "passed": false,
+    "expected": "no native Skill tool invocation for \"testable-design\"",
+    "actual": "native Skill tool invocation for \"testable-design\" observed"
+  },
+  "overall_passed": false
+}

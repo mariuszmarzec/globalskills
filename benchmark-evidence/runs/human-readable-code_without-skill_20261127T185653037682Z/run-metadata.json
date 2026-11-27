@@ -1,0 +1,34 @@
+{
+  "source_sha": "e3d67db12fed63a3d7f0f5d3d135c22c11db8148",
+  "source_pr": "https://github.com/mariuszmarzec/globalskills/pull/172",
+  "benchmark_date": "2026-11-27",
+  "run_dir": "human-readable-code_without-skill_20261127T185653037682Z",
+  "skill": "human-readable-code",
+  "mode": "without-skill",
+  "case": "invoice-refactor",
+  "timestamp": "20261127T185653037682Z",
+  "files": {
+    "command.txt": "1e266ae8e97b58fe55aeff885b29bb921c2ce0a5babe61212ac48fa3401da38b",
+    "git-diff.txt": "8f27e8b398019935b20a64ae1944d19f9b5d5f809b86fe41e2c1762dc7223cd4",
+    "git-log.txt": "a587c0cb088a8ce55b4eea13534ed53160e938120edd1c996e09a831dfd61ab3",
+    "git-show.txt": "a0b71b375bbac87c6ba2442dd6ba8926a7c109b5deca4ad3f3e62c686f303953",
+    "git-status.txt": "293320d32277e05551d56a0eb892a483a334a1b4768b83d449e478146814885b",
+    "manifest.json": "d4a5445ab0520a2cba345a5ccf756c75fe92b9db3b3b8abfd73690866e79e77b",
+    "prompt.txt": "3631e277f842dbf5a67770abc4db3c7190ebee64d67e9ffbd4d5289606fa0511",
+    "report.json": "2dbe28ae42847abc673d9a91cb98ade807e0f9545c02412809802c1d87b1333e",
+    "report.md": "b0908b250f91f402c88c3b3f85c426d3f7bfb404008b091ed552eada0e9ac3aa",
+    "stderr.txt": "94c5d3068130215b3bd7ef9a997efe77ebc4a97a688574d64597b21413dcbe98",
+    "stdout.txt": "1d7758a04d8fba9861ebf20d119064dd4bccee2c51fec8bd9526bd1607eb01c6",
+    "verifier.json": "a7df0c5afd52c5c6217fe16ca70a1c9deecadd7005ea145abe570ef2fa6968f2"
+  },
+  "redaction_applied": true,
+  "redaction_procedure": "benchmark-evidence/redaction.py",
+  "agent_returncode": 0,
+  "verifier_returncode": 0,
+  "native_skill_activation_check": {
+    "passed": true,
+    "expected": "no native Skill tool invocation for \"human-readable-code\"",
+    "actual": "no native Skill tool invocation for \"human-readable-code\" observed"
+  },
+  "overall_passed": true
+}

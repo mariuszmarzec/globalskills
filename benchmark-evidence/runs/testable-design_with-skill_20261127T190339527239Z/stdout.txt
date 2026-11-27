@@ -1,0 +1,59 @@
+Now I understand the task. I need to:
+1. Extract a pure helper `prepare_registration(data)` that normalizes input and validates it
+2. Keep the public `register_user` function and its current behavior
+3. Add tests for the new helper covering normalized input and invalid cases
+4. Keep existing integration tests
+
+Let me implement the changes:
+All 11 tests pass. Let me verify the final state of both files:
+All tests pass. The refactoring is complete:
+
+**Summary:**
+
+1. **Extracted `prepare_registration(data)`** - A pure helper function that:
+   - Normalizes name (strips whitespace) and email (strips whitespace, lowercases)
+   - Validates that name is not empty/whitespace-only
+   - Validates that email contains "@" but doesn't start or end with "@"
+   - Returns a tuple `(name, email)` on success
+   - Raises `ValueError` for invalid input
+
+2. **Refactored `register_user(data, database, mailer)`** - Now:
+   - Calls `prepare_registration(data)` to get normalized name/email
+   - Creates the user dict with `created_at` timestamp
+   - Persists to database and sends welcome message
+   - Returns the user
+
+3. **Added tests for `prepare_registration`** covering:
+   - Normalized input (whitespace trimming, email lowercasing)
+   - Valid email/name cases
+   - Invalid email (no "@" character)
+   - Email starting with "@"
+   - Email ending with "@"
+   - Empty name
+   - Whitespace-only name
+   - Missing name field
+   - Missing email field
+
+4. **Kept existing integration tests** using `FakeDatabase` and `FakeMailer`
+
+5. **No new interfaces, classes, mocks, or dependencies** - used lightweight fakes as before
+
+All 11 tests pass.
+
+---
+
+**Task:** Refactor registration.py to extract pure helper for testable input validation
+
+**Role:** coder
+
+**Initial tier:** CHEAP
+
+**Model:** freeLLMAPI
+
+**Reason:** Simple refactoring to improve testability by separating validation logic from side effects
+
+**Escalated:** NO
+
+**Steps:** 3
+
+**Result:** SUCCESS
