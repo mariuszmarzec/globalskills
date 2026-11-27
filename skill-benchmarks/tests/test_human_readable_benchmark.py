@@ -10,7 +10,40 @@ import unittest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from benchmark import write_mode_artifacts
+from benchmark import compose_mode_prompt, skill_activation_check, write_mode_artifacts
+
+
+class NativeSkillActivationTests(unittest.TestCase):
+    def test_with_skill_requires_exact_native_tool_invocation(self) -> None:
+        stderr = '\\n→ \\x1b[0mSkill "human-readable-code" \\n'
+        result = skill_activation_check(stderr, "human-readable-code", "with-skill")
+        self.assertTrue(result["passed"])
+        self.assertEqual("native-skill-activation", result["name"])
+
+    def test_with_skill_fails_when_tool_was_not_invoked(self) -> None:
+        stderr = '> orchestrator · freeLLMAPI\\n→ Read invoice.py\\n'
+        result = skill_activation_check(stderr, "human-readable-code", "with-skill")
+        self.assertFalse(result["passed"])
+
+    def test_without_skill_passes_when_tool_was_not_invoked(self) -> None:
+        stderr = "Permission denied: skill\\n→ Read invoice.py\\n"
+        result = skill_activation_check(stderr, "human-readable-code", "without-skill")
+        self.assertTrue(result["passed"])
+
+    def test_without_skill_fails_if_native_tool_was_invoked(self) -> None:
+        stderr = '→ Skill "human-readable-code"\\n'
+        result = skill_activation_check(stderr, "human-readable-code", "without-skill")
+        self.assertFalse(result["passed"])
+
+    def test_mode_prompt_requires_skill_as_first_action_only_with_skill(self) -> None:
+        with_prompt = compose_mode_prompt("Refactor the fixture.", "human-readable-code", "with-skill")
+        without_prompt = compose_mode_prompt("Refactor the fixture.", "human-readable-code", "without-skill")
+        self.assertIn("MANDATORY FIRST ACTION", with_prompt)
+        self.assertIn("first tool call", with_prompt)
+        self.assertIn("native skill tool", with_prompt)
+        self.assertIn("BASELINE MODE", without_prompt)
+        self.assertIn("Do not invoke or attempt to invoke", without_prompt)
+        self.assertNotIn("MANDATORY FIRST ACTION", without_prompt)
 
 
 class HumanReadableBenchmarkPromptTests(unittest.TestCase):
